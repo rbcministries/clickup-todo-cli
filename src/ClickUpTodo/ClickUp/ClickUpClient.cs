@@ -53,6 +53,14 @@ public sealed class ClickUpClient : IDisposable
         => Guard("GetLists", async () =>
             Named((await _client.V2.Folder[folderId].List.GetAsync(cancellationToken: ct))?.Lists, l => l.Id, l => l.Name));
 
+    /// <summary>A single list's id and name — used to validate a directly-entered list id.</summary>
+    public Task<NamedEntity> GetListAsync(string listId, CancellationToken ct = default)
+        => Guard("GetList", async () =>
+        {
+            var list = await _client.V2.List[listId].GetAsync(cancellationToken: ct);
+            return new NamedEntity(list?.Id ?? listId, list?.Name ?? "(unnamed list)");
+        });
+
     /// <summary>The available statuses for a list's workflow, ordered by ClickUp's order index.</summary>
     public Task<IReadOnlyList<StatusOption>> GetListStatusesAsync(string listId, CancellationToken ct = default)
         => Guard("GetList", async () =>

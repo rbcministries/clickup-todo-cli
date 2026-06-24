@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 
@@ -67,17 +68,13 @@ public static class SetupWizard
         Console.WriteLine($"  Workspace: {workspace.Name}");
         Console.WriteLine();
 
-        // 3. Personal Tasks list selection (flattened space/folder/list hierarchy).
-        Console.WriteLine("  Loading lists…");
-        var lists = await LoadAllListsAsync(client, workspace.Id, ct);
-        if (lists.Count == 0)
+        // 3. Personal Tasks list selection.
+        var personal = await ChoosePersonalListAsync(client, workspace.Id, ct);
+        if (personal is null)
         {
-            Console.WriteLine("  No lists found in this workspace. Aborting.");
+            Console.WriteLine("  No list selected. Aborting.");
             return false;
         }
-
-        var personal = ChooseFromMenu(
-            "  Which list is your \"Personal Tasks\" list?", lists, l => l.Label);
         Console.WriteLine($"  Personal Tasks list: {personal.Label}");
         Console.WriteLine();
 
@@ -107,20 +104,94 @@ public static class SetupWizard
     /// <summary>A flattened list entry with a breadcrumb label for display.</summary>
     private sealed record ListChoice(string Id, string Name, string Label);
 
-    private static async Task<List<ListChoice>> LoadAllListsAsync(
+    /// <summary>
+    /// Lets the user identify their Personal Tasks list either by pasting a list URL/id directly
+    /// (fast), or by browsing a single chosen space. We deliberately do NOT enumerate every space's
+    /// folders up front — large workspaces have dozens of spaces and that trips ClickUp's rate limit.
+    /// </summary>
+    private static async Task<ListChoice?> ChoosePersonalListAsync(
         ClickUpClient client, string workspaceId, CancellationToken ct)
     {
-        var result = new List<ListChoice>();
-        foreach (var space in await client.GetSpacesAsync(workspaceId, ct))
-        {
-            foreach (var list in await client.GetFolderlessListsAsync(space.Id, ct))
-                result.Add(new ListChoice(list.Id, list.Name, $"{space.Name} / {list.Name}"));
+        Console.WriteLine("  Now choose your \"Personal Tasks\" list.");
+        Console.WriteLine("  Tip: open the list in ClickUp and copy its URL, or paste its id directly.");
+        Console.Write("  Paste a list URL/id, or press Enter to browse by space: ");
+        var direct = Console.ReadLine();
 
-            foreach (var folder in await client.GetFoldersAsync(space.Id, ct))
-                foreach (var list in await client.GetListsInFolderAsync(folder.Id, ct))
-                    result.Add(new ListChoice(list.Id, list.Name, $"{space.Name} / {folder.Name} / {list.Name}"));
+        if (!string.IsNullOrWhiteSpace(direct))
+        {
+            var listId = ExtractListId(direct);
+            try
+            {
+                var info = await client.GetListAsync(listId, ct);
+                return new ListChoice(info.Id, info.Name, info.Name);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  Couldn't load list '{listId}' ({ex.Message}). Let's browse instead.");
+            }
         }
+
+        // Browse: pick one space, then enumerate only that space's lists (folderless + per folder).
+        var spaces = await client.GetSpacesAsync(workspaceId, ct);
+        if (spaces.Count == 0)
+        {
+            Console.WriteLine("  No spaces found in this workspace.");
+            return null;
+        }
+
+        var space = spaces.Count == 1
+            ? spaces[0]
+            : ChooseFromMenu("  Which space is your list in?", spaces, s => s.Name);
+
+        Console.WriteLine($"  Loading lists in {space.Name}…");
+        var lists = await LoadListsInSpaceAsync(client, space, ct);
+        if (lists.Count == 0)
+        {
+            Console.WriteLine("  No lists found in that space.");
+            return null;
+        }
+
+        return ChooseFromMenu("  Which list is your \"Personal Tasks\" list?", lists, l => l.Label);
+    }
+
+    private static async Task<List<ListChoice>> LoadListsInSpaceAsync(
+        ClickUpClient client, NamedEntity space, CancellationToken ct)
+    {
+        var result = new List<ListChoice>();
+        foreach (var list in await client.GetFolderlessListsAsync(space.Id, ct))
+            result.Add(new ListChoice(list.Id, list.Name, $"{space.Name} / {list.Name}"));
+
+        foreach (var folder in await client.GetFoldersAsync(space.Id, ct))
+            foreach (var list in await client.GetListsInFolderAsync(folder.Id, ct))
+                result.Add(new ListChoice(list.Id, list.Name, $"{space.Name} / {folder.Name} / {list.Name}"));
+
         return result;
+    }
+
+    /// <summary>
+    /// Extracts a numeric ClickUp list id from a pasted URL or raw id. ClickUp list URLs vary:
+    /// <c>.../v/l/901401775377</c>, <c>.../v/li/901401775377</c>, or a composite view segment like
+    /// <c>.../9014107164/v/l/6-901401775377-1</c> (where 9014107164 is the workspace id, not the list).
+    /// </summary>
+    internal static string ExtractListId(string input)
+    {
+        input = input.Trim();
+
+        // A bare id was pasted.
+        if (Regex.IsMatch(input, @"^\d+$"))
+            return input;
+
+        // Prefer the segment after /v/l/ or /v/li/, then take its longest numeric run (the list id),
+        // which avoids grabbing the workspace id earlier in the path.
+        var segment = Regex.Match(input, @"/v/li?/([^/?#]+)");
+        var search = segment.Success ? segment.Groups[1].Value : input;
+
+        var longest = Regex.Matches(search, @"\d+")
+            .Select(m => m.Value)
+            .OrderByDescending(n => n.Length)
+            .FirstOrDefault();
+
+        return string.IsNullOrEmpty(longest) ? input : longest;
     }
 
     // ── Console input helpers ──────────────────────────────────────────────
