@@ -56,7 +56,7 @@ public sealed class TodoApp
         Application.Init(driverName);
         try
         {
-            _status = $"Loading… (driver: {Application.Driver?.GetType().Name ?? "default"})";
+            _status = $"Loading… (driver: {driverName ?? "default (ansi)"})";
             Build();
 
             // Workaround for #3: the screen can lag behind state changes (input/commands run

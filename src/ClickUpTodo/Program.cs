@@ -44,6 +44,14 @@ if (!string.IsNullOrEmpty(driverName) && !validDrivers.Contains(driverName))
     return 1;
 }
 
+// `--repro`: launch a bare Terminal.Gui ListView (no network/refresh/heartbeat) to isolate the
+// input-repaint latency (#3) from the rest of the app.
+if (args.Contains("--repro"))
+{
+    ClickUpTodo.Tui.BareRepro.Run(driverName);
+    return 0;
+}
+
 // First run (or after --reset): collect a token and pick the workspace + Personal Tasks list.
 var token = tokenStore.Load();
 var config = configStore.Load();
