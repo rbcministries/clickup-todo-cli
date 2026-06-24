@@ -58,6 +58,17 @@ public sealed class TodoApp
         {
             _status = $"Loading… (driver: {Application.Driver?.GetType().Name ?? "default"})";
             Build();
+
+            // Workaround for #3: the screen can lag behind state changes (input/commands run
+            // immediately, but the repaint is deferred). Force a periodic repaint (~20 fps) so the
+            // cursor/selection stays visually in sync. Terminal.Gui only writes changed cells, so an
+            // idle redraw is cheap.
+            Application.AddTimeout(TimeSpan.FromMilliseconds(50), () =>
+            {
+                Application.LayoutAndDraw();
+                return true;
+            });
+
             _refresh = new RefreshService(
                 fetch: ct => _tasks.LoadAsync(ct),
                 intervalSeconds: _config.RefreshSeconds,
