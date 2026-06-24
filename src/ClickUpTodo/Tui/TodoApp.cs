@@ -40,6 +40,7 @@ public sealed class TodoApp
     private List<TaskItem> _pinned = [];
     private List<TaskItem> _todo = [];
     private string _status = "Loading…";
+    private string _signature = "";
 
     public TodoApp(TaskService tasks, AppConfig config, ConfigStore configStore)
     {
@@ -339,7 +340,29 @@ public sealed class TodoApp
     {
         _all = tasks;
         _status = $"Updated {DateTime.Now:HH:mm:ss} · {tasks.Count} task(s) · refresh every {_config.RefreshSeconds}s";
+
+        // Rebuilding both ListViews (SetSource) forces a full reset + redraw. Doing that on every
+        // background refresh — even when nothing changed — causes periodic redraws that compete with
+        // keyboard/mouse input and make selection feel laggy. Skip the rebuild when the visible task
+        // set is unchanged and just update the (cheap) status line.
+        var signature = BuildSignature(tasks);
+        if (signature == _signature)
+        {
+            _statusLabel.Text = _status;
+            return;
+        }
+        _signature = signature;
         RenderPanes();
+    }
+
+    /// <summary>A cheap fingerprint of what's actually rendered, so no-op refreshes skip a redraw.</summary>
+    private static string BuildSignature(IReadOnlyList<TaskItem> tasks)
+    {
+        var sb = new System.Text.StringBuilder(tasks.Count * 24);
+        foreach (var t in tasks)
+            sb.Append(t.Id).Append(':').Append(t.StatusName).Append(':').Append(t.Name)
+              .Append(':').Append(t.DueDateMs).Append('|');
+        return sb.ToString();
     }
 
     private void RenderPanes()
