@@ -104,7 +104,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · Tab pane · Space status · Enter open · Ctrl+P pin · Ctrl+R refresh · F1 help · Ctrl+Q/Esc quit · type to search",
+            Text = "↑/↓ move · Tab pane · Space status · Enter open · Ctrl+P pin · Ctrl+R refresh · F1 help · F2 settings · Ctrl+Q/Esc quit · type to search",
         };
 
         _window.Add(_focusFrame, _todoFrame, _statusLabel, help);
@@ -169,7 +169,26 @@ public sealed class TodoApp
                 key.Handled = true;
                 ShowHelp();
                 break;
+            case KeyCode.F2:
+                key.Handled = true;
+                OpenSettings();
+                break;
         }
+    }
+
+    private void OpenSettings()
+    {
+        var result = SettingsDialog.Show(_config.RefreshSeconds, _config.ExcludedStatuses);
+        if (result is null)
+            return;
+
+        _config.RefreshSeconds = result.RefreshSeconds;
+        _config.ExcludedStatuses = result.ExcludedStatuses;
+        _configStore.Save(_config);
+
+        _refresh.IntervalSeconds = result.RefreshSeconds;
+        Flash($"Settings saved · refresh {result.RefreshSeconds}s · {result.ExcludedStatuses.Count} status(es) excluded");
+        _refresh.RequestRefresh();
     }
 
     private void ToggleFocus()
@@ -317,6 +336,7 @@ public sealed class TodoApp
                 + "  Ctrl+P      Pin / unpin the focused task\n"
                 + "  Ctrl+R      Refresh now\n"
                 + "  F1          This help\n"
+                + "  F2          Settings (refresh rate, excluded statuses)\n"
                 + "  Ctrl+Q/Esc  Quit\n"
                 + "\n"
                 + "  Esc or Enter to close this help.",
