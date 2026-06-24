@@ -103,7 +103,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · Tab switch pane · Space set status · P pin/unpin · Enter open · R refresh · ? help · Q quit",
+            Text = "↑/↓ move · Tab pane · Space status · Enter open · Ctrl+P pin · Ctrl+R refresh · F1 help · Ctrl+Q/Esc quit · type to search",
         };
 
         _window.Add(_focusFrame, _todoFrame, _statusLabel, help);
@@ -121,42 +121,50 @@ public sealed class TodoApp
 
     private void OnListKey(object? sender, Key key)
     {
+        // Command shortcuts use modifier chords / function keys. Bare letters are intentionally left
+        // unhandled so the ListView's type-ahead search (keyed on the task title) keeps working —
+        // that's why these aren't plain P/R/Q/? (those get swallowed by type-ahead).
+        if (key.IsCtrl)
+        {
+            switch (key.KeyCode & ~KeyCode.CtrlMask)
+            {
+                case KeyCode.P:
+                    key.Handled = true;
+                    TogglePin();
+                    break;
+                case KeyCode.R:
+                    key.Handled = true;
+                    Flash("Refreshing…");
+                    _refresh.RequestRefresh();
+                    break;
+                case KeyCode.Q:
+                case KeyCode.C: // Ctrl+C as a quit alias (the OS/terminal may intercept it first).
+                    key.Handled = true;
+                    Application.RequestStop();
+                    break;
+            }
+            return;
+        }
+
         switch (key.KeyCode)
         {
             case KeyCode.Space:
                 key.Handled = true;
                 OpenStatusPicker();
-                return;
+                break;
             case KeyCode.Enter:
                 key.Handled = true;
                 OpenInBrowser();
-                return;
+                break;
             case KeyCode.Tab:
                 key.Handled = true;
                 ToggleFocus();
-                return;
+                break;
             case KeyCode.Esc:
                 key.Handled = true;
                 Application.RequestStop();
-                return;
-        }
-
-        switch (char.ToLowerInvariant((char)key.AsRune.Value))
-        {
-            case 'q':
-                key.Handled = true;
-                Application.RequestStop();
                 break;
-            case 'r':
-                key.Handled = true;
-                Flash("Refreshing…");
-                _refresh.RequestRefresh();
-                break;
-            case 'p':
-                key.Handled = true;
-                TogglePin();
-                break;
-            case '?':
+            case KeyCode.F1:
                 key.Handled = true;
                 ShowHelp();
                 break;
@@ -300,13 +308,15 @@ public sealed class TodoApp
             Height = Dim.Fill(1),
             Text =
                 "\n"
-                + "  ↑ / ↓      Move between tasks\n"
-                + "  Tab        Switch between Focus and To-Do panes\n"
-                + "  Space      Set the focused task's status\n"
-                + "  P          Pin / unpin the focused task\n"
-                + "  Enter      Open the task in your browser\n"
-                + "  R          Refresh now\n"
-                + "  Q / Esc    Quit\n"
+                + "  ↑ / ↓       Move between tasks\n"
+                + "  (type)      Search tasks by title (type-ahead)\n"
+                + "  Tab         Switch between Focus and To-Do panes\n"
+                + "  Space       Set the focused task's status\n"
+                + "  Enter       Open the task in your browser\n"
+                + "  Ctrl+P      Pin / unpin the focused task\n"
+                + "  Ctrl+R      Refresh now\n"
+                + "  F1          This help\n"
+                + "  Ctrl+Q/Esc  Quit\n"
                 + "\n"
                 + "  Esc or Enter to close this help.",
         };
@@ -369,12 +379,13 @@ public sealed class TodoApp
 
     private static string Format(TaskItem task)
     {
-        var status = string.IsNullOrWhiteSpace(task.StatusName) ? "" : $"[{task.StatusName}] ";
+        // Title leads so the ListView's type-ahead search matches on the task title.
+        var status = string.IsNullOrWhiteSpace(task.StatusName) ? "" : $"  [{task.StatusName}]";
         var list = string.IsNullOrWhiteSpace(task.ListName) ? "" : $"  · {task.ListName}";
         var due = task.DueDateMs is { } ms
             ? $"  · due {DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime:MMM d}"
             : "";
-        return $"{status}{task.Name}{list}{due}";
+        return $"{task.Name}{status}{list}{due}";
     }
 
     private static string Short(Exception ex) => ex is ClickUpApiException c ? c.Message : ex.Message;
