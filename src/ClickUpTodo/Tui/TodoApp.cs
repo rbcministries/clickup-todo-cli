@@ -50,11 +50,13 @@ public sealed class TodoApp
         _pinnedIds = [.. config.PinnedTaskIds];
     }
 
-    public void Run()
+    public void Run(string? driverName = null)
     {
-        Application.Init();
+        // driverName lets the user A/B Terminal.Gui drivers to work around input latency (#3).
+        Application.Init(driverName);
         try
         {
+            _status = $"Loading… (driver: {Application.Driver?.GetType().Name ?? "default"})";
             Build();
             _refresh = new RefreshService(
                 fetch: ct => _tasks.LoadAsync(ct),

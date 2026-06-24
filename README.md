@@ -120,6 +120,21 @@ Unit tests (config/token storage) always run. Integration tests hit the real Cli
 - `CLICKUP_TOKEN` — your personal token (enables the basic API tests)
 - `CLICKUP_WORKSPACE_ID`, `CLICKUP_LIST_ID` — optional, enable the task/status tests
 
+## Troubleshooting
+
+**Sluggish key response (arrows/Tab feel delayed).** This comes from Terminal.Gui's console
+driver, not the app. Try forcing a different driver to find the most responsive one on your
+terminal:
+
+```bash
+clickup-todo --driver v2net     # cross-platform driver
+clickup-todo --driver v2win     # Windows driver (default on Windows)
+clickup-todo --driver net       # legacy System.Console driver
+```
+
+You can also set `CLICKUP_TODO_DRIVER` (e.g. `CLICKUP_TODO_DRIVER=v2net`). The active driver is shown
+in the status line at startup. See [issue #3](https://github.com/rbcministries/clickup-todo-cli/issues/3).
+
 ## License
 
 [MIT](LICENSE) © RBC Ministries

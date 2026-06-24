@@ -21,12 +21,18 @@ if (args.Any(a => a is "--help" or "-h" or "-?"))
 {
     Console.WriteLine("clickup-todo — a keyboard-driven ClickUp to-do list.");
     Console.WriteLine();
-    Console.WriteLine("Usage: clickup-todo [--reset]");
-    Console.WriteLine("  (no args)   Launch the to-do UI (runs first-time setup if needed).");
-    Console.WriteLine("  --reset     Forget the saved token and settings.");
-    Console.WriteLine("  --help      Show this help.");
+    Console.WriteLine("Usage: clickup-todo [--reset] [--driver <name>]");
+    Console.WriteLine("  (no args)        Launch the to-do UI (runs first-time setup if needed).");
+    Console.WriteLine("  --reset          Forget the saved token and settings.");
+    Console.WriteLine("  --driver <name>  Force a Terminal.Gui console driver (e.g. v2net, v2win, net).");
+    Console.WriteLine("                   Use to work around input latency; also CLICKUP_TODO_DRIVER env var.");
+    Console.WriteLine("  --help           Show this help.");
     return 0;
 }
+
+// Optional console-driver override to experiment with input latency (#3): --driver <name> or the
+// CLICKUP_TODO_DRIVER env var. Null means Terminal.Gui's default for the platform.
+var driverName = GetOption(args, "--driver") ?? Environment.GetEnvironmentVariable("CLICKUP_TODO_DRIVER");
 
 // First run (or after --reset): collect a token and pick the workspace + Personal Tasks list.
 var token = tokenStore.Load();
@@ -58,5 +64,18 @@ catch (Exception ex)
 }
 
 var taskService = new TaskService(client, config, userId);
-new TodoApp(taskService, config, configStore).Run();
+new TodoApp(taskService, config, configStore).Run(driverName);
 return 0;
+
+// Reads "--opt value" or "--opt=value" from args.
+static string? GetOption(string[] argv, string name)
+{
+    for (var i = 0; i < argv.Length; i++)
+    {
+        if (argv[i] == name && i + 1 < argv.Length)
+            return argv[i + 1];
+        if (argv[i].StartsWith(name + "=", StringComparison.Ordinal))
+            return argv[i][(name.Length + 1)..];
+    }
+    return null;
+}
