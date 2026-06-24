@@ -1,0 +1,63 @@
+name: Auto-implement issues
+
+# Agentic hourly implementation of GitHub issues via the /implement-issue command.
+#
+# SAFE BY DEFAULT: this job does nothing until you opt in. To enable it:
+#   1. Add a repo secret  ANTHROPIC_API_KEY   (or CLAUDE_CODE_OAUTH_TOKEN — see below).
+#   2. Add a repo variable ENABLE_AUTO_IMPLEMENT = true
+#      (Settings → Secrets and variables → Actions → Variables).
+#   3. (Recommended) groom the backlog first with the /review-issues command so
+#      sequencing labels exist.
+# Until both exist, scheduled runs are skipped. You can always run it on demand
+# from the Actions tab ("Run workflow").
+#
+# NOTE: confirm the input names against the installed claude-code-action version
+# (this targets anthropics/claude-code-action@v1) and tune --max-turns/model for
+# your cost budget. The job opens a draft PR per run; it never merges anything.
+
+on:
+  schedule:
+    - cron: "0 * * * *" # hourly, on the hour (UTC)
+  workflow_dispatch: {}
+
+# Don't let a slow run overlap the next hourly tick.
+concurrency:
+  group: auto-implement
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  implement:
+    # Opt-in gate — the workflow is inert until you set this repo variable to "true".
+    if: ${{ vars.ENABLE_AUTO_IMPLEMENT == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore tools (Kiota) and packages
+        run: |
+          dotnet tool restore
+          dotnet restore clickup-todo.slnx
+
+      - name: Run /implement-issue
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Alternatively, authenticate with a Claude subscription token instead
+          # of an API key by setting this and removing anthropic_api_key:
+          # claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: "/implement-issue"
+          claude_args: "--max-turns 60"
+        env:
+          GH_TOKEN: ${{ github.token }}
