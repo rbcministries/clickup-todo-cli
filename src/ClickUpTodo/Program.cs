@@ -46,7 +46,8 @@ if (!string.IsNullOrEmpty(driverName) && !validDrivers.Contains(driverName))
 
 // `--repro[-*]`: launch a bare Terminal.Gui ListView to isolate the input-repaint latency (#3).
 // Variants add one suspect at a time: --repro (bare), --repro-heartbeat, --repro-refresh, --repro-both.
-var reproMode = args.Contains("--repro-both") ? "both"
+var reproMode = args.Contains("--repro-panes") ? "panes"
+    : args.Contains("--repro-both") ? "both"
     : args.Contains("--repro-refresh") ? "refresh"
     : args.Contains("--repro-heartbeat") ? "heartbeat"
     : args.Contains("--repro") ? "bare"
