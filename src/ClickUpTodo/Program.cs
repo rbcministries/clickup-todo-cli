@@ -44,11 +44,16 @@ if (!string.IsNullOrEmpty(driverName) && !validDrivers.Contains(driverName))
     return 1;
 }
 
-// `--repro`: launch a bare Terminal.Gui ListView (no network/refresh/heartbeat) to isolate the
-// input-repaint latency (#3) from the rest of the app.
-if (args.Contains("--repro"))
+// `--repro[-*]`: launch a bare Terminal.Gui ListView to isolate the input-repaint latency (#3).
+// Variants add one suspect at a time: --repro (bare), --repro-heartbeat, --repro-refresh, --repro-both.
+var reproMode = args.Contains("--repro-both") ? "both"
+    : args.Contains("--repro-refresh") ? "refresh"
+    : args.Contains("--repro-heartbeat") ? "heartbeat"
+    : args.Contains("--repro") ? "bare"
+    : null;
+if (reproMode is not null)
 {
-    ClickUpTodo.Tui.BareRepro.Run(driverName);
+    ClickUpTodo.Tui.BareRepro.Run(driverName, reproMode);
     return 0;
 }
 
