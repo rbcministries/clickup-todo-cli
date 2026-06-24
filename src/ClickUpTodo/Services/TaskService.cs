@@ -22,7 +22,20 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
         foreach (var task in assigned.Concat(personal))
             byId[task.Id] = task;
 
-        return byId.Values.OrderBy(t => t, TaskOrder.Instance).ToList();
+        return ExcludeByStatus(byId.Values, config.ExcludedStatuses)
+            .OrderBy(t => t, TaskOrder.Instance)
+            .ToList();
+    }
+
+    /// <summary>Filters out tasks whose status is in the excluded set (case-insensitive).</summary>
+    internal static IEnumerable<TaskItem> ExcludeByStatus(IEnumerable<TaskItem> tasks, IEnumerable<string> excluded)
+    {
+        var set = new HashSet<string>(
+            excluded.Where(s => !string.IsNullOrWhiteSpace(s)),
+            StringComparer.OrdinalIgnoreCase);
+        return set.Count == 0
+            ? tasks
+            : tasks.Where(t => string.IsNullOrWhiteSpace(t.StatusName) || !set.Contains(t.StatusName));
     }
 
     /// <summary>The available statuses for a list, cached after first fetch.</summary>
