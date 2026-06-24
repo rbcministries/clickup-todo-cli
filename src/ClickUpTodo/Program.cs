@@ -33,8 +33,8 @@ if (args.Any(a => a is "--help" or "-h" or "-?"))
     return 0;
 }
 
-// Optional console-driver override to experiment with input latency (#3): --driver <name> or the
-// CLICKUP_TODO_DRIVER env var. Null means Terminal.Gui's default for the platform.
+// Optional console-driver override (--driver <name> or the CLICKUP_TODO_DRIVER env var). Lets the
+// user pick a Terminal.Gui driver if one behaves better on their terminal. Null = platform default.
 var validDrivers = new[] { "windows", "dotnet", "ansi" };
 var driverName = (GetOption(args, "--driver") ?? Environment.GetEnvironmentVariable("CLICKUP_TODO_DRIVER"))
     ?.Trim().ToLowerInvariant();
@@ -42,22 +42,6 @@ if (!string.IsNullOrEmpty(driverName) && !validDrivers.Contains(driverName))
 {
     Console.Error.WriteLine($"Unknown driver '{driverName}'. Valid drivers: {string.Join(", ", validDrivers)} (default: ansi).");
     return 1;
-}
-
-// `--repro[-*]`: launch a bare Terminal.Gui ListView to isolate the input-repaint latency (#3).
-// Variants add one suspect at a time: --repro (bare), --repro-heartbeat, --repro-refresh, --repro-both.
-var reproMode = args.Contains("--repro-panes-nohb") ? "panes-nohb"
-    : args.Contains("--repro-panes-single") ? "panes-single"
-    : args.Contains("--repro-panes") ? "panes"
-    : args.Contains("--repro-both") ? "both"
-    : args.Contains("--repro-refresh") ? "refresh"
-    : args.Contains("--repro-heartbeat") ? "heartbeat"
-    : args.Contains("--repro") ? "bare"
-    : null;
-if (reproMode is not null)
-{
-    ClickUpTodo.Tui.BareRepro.Run(driverName, reproMode);
-    return 0;
 }
 
 // First run (or after --reset): collect a token and pick the workspace + Personal Tasks list.
