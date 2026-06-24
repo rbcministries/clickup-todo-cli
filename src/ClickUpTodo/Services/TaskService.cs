@@ -48,8 +48,20 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
         return statuses;
     }
 
-    public Task SetStatusAsync(string taskId, string statusName, CancellationToken ct = default)
+    /// <summary>
+    /// Sets a task's status and returns the <b>confirmed</b> status name from the write response
+    /// (or null if the API omitted it), so the UI can show the server-confirmed value.
+    /// </summary>
+    public Task<string?> SetStatusAsync(string taskId, string statusName, CancellationToken ct = default)
         => client.SetTaskStatusAsync(taskId, statusName, ct);
+
+    /// <summary>
+    /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying
+    /// <paramref name="newStatus"/>, leaving every other task and the overall order untouched. Pure
+    /// (the input list is not mutated) so the TUI can update one record in place without a reload.
+    /// </summary>
+    public static IReadOnlyList<TaskItem> ApplyStatusChange(IReadOnlyList<TaskItem> tasks, string taskId, string? newStatus)
+        => tasks.Select(t => t.Id == taskId ? t with { StatusName = newStatus } : t).ToList();
 
     /// <summary>Stable ordering: by due date (soonest first, undated last), then by name.</summary>
     private sealed class TaskOrder : IComparer<TaskItem>

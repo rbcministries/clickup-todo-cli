@@ -44,6 +44,9 @@ public sealed class TodoApp
     private IReadOnlyList<TaskItem> _all = [];
     // Parallel to the ListView's rows: the task on each row, or null for a header/separator row.
     private readonly List<TaskItem?> _rows = [];
+    // The ListView's backing collection, kept so a single row can be updated in place (without
+    // SetSource, which would reset the list and the cursor).
+    private ObservableCollection<string> _display = [];
     private string _status = "Loading…";
     private string _signature = "";
 
@@ -301,23 +304,51 @@ public sealed class TodoApp
 
     private void ApplyStatus(TaskItem task, string status)
     {
+        // Optimistic: show the new status immediately (no wait, no full reload). The actual write
+        // happens off the UI thread; on success we confirm with the server's returned status, on
+        // failure we revert this one row.
+        UpdateTaskRow(task with { StatusName = status }, sending: true);
         Flash($"Setting '{status}'…");
+
         _ = Task.Run(async () =>
         {
             try
             {
-                await _tasks.SetStatusAsync(task.Id, status);
+                var confirmed = await _tasks.SetStatusAsync(task.Id, status);
                 Application.Invoke(() =>
                 {
-                    Flash($"Set '{task.Name}' to '{status}'.");
-                    _refresh.RequestRefresh();
+                    var final = confirmed ?? status;
+                    UpdateTaskRow(task with { StatusName = final }, sending: false);
+                    Flash($"Set '{task.Name}' to '{final}'.");
                 });
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => Flash($"Could not set status: {Short(ex)}"));
+                Application.Invoke(() =>
+                {
+                    UpdateTaskRow(task, sending: false); // revert the optimistic change
+                    Flash($"Could not set status: {Short(ex)}");
+                });
             }
         });
+    }
+
+    /// <summary>
+    /// Updates a single task's row in place — both the canonical snapshot (<see cref="_all"/>) and
+    /// the visible ListView row — without rebuilding the list (no SetSource, so the cursor and
+    /// scroll position stay put). Keeping <see cref="_all"/> and <see cref="_signature"/> in sync
+    /// means the next periodic background refresh reconciles silently when the server agrees.
+    /// </summary>
+    private void UpdateTaskRow(TaskItem updated, bool sending)
+    {
+        _all = TaskService.ApplyStatusChange(_all, updated.Id, updated.StatusName);
+        _signature = BuildSignature(_all);
+
+        var index = _rows.FindIndex(r => r?.Id == updated.Id);
+        if (index < 0 || index >= _display.Count)
+            return;
+        _rows[index] = updated;
+        _display[index] = sending ? $"{Format(updated)}  (sending…)" : Format(updated);
     }
 
     private static void ShowHelp()
@@ -398,26 +429,26 @@ public sealed class TodoApp
         var todo = _all.Where(t => !_pinnedIds.Contains(t.Id)).ToList();
 
         _rows.Clear();
-        var display = new ObservableCollection<string>();
+        _display = new ObservableCollection<string>();
 
         if (pinned.Count > 0)
         {
-            AddHeader(display, $"{FocusHeaderPrefix} ({pinned.Count})");
+            AddHeader(_display, $"{FocusHeaderPrefix} ({pinned.Count})");
             foreach (var t in pinned)
-                AddTask(display, t);
-            AddHeader(display, $"{TodoHeaderPrefix} ({todo.Count}) ─");
+                AddTask(_display, t);
+            AddHeader(_display, $"{TodoHeaderPrefix} ({todo.Count}) ─");
         }
         foreach (var t in todo)
-            AddTask(display, t);
+            AddTask(_display, t);
 
-        _list.SetSource(display);
+        _list.SetSource(_display);
         _frame.Title = $"Tasks — {pinned.Count} pinned · {todo.Count} to-do";
 
         // Restore the cursor onto the same task, or the first task row.
         var target = keepTaskId is not null ? _rows.FindIndex(r => r?.Id == keepTaskId) : -1;
         if (target < 0)
             target = _rows.FindIndex(r => r is not null);
-        if (target >= 0 && display.Count > 0)
+        if (target >= 0 && _display.Count > 0)
             _list.SelectedItem = target;
 
         _statusLabel.Text = _status;

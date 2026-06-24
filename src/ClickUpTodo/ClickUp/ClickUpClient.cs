@@ -95,12 +95,17 @@ public sealed class ClickUpClient : IDisposable
                 cfg.QueryParameters.Archived = false;
             }, ct), ct));
 
-    /// <summary>Set a task's status. <paramref name="statusName"/> must be one of its list's statuses.</summary>
-    public Task SetTaskStatusAsync(string taskId, string statusName, CancellationToken ct = default)
+    /// <summary>
+    /// Set a task's status. <paramref name="statusName"/> must be one of its list's statuses.
+    /// Returns the <b>confirmed</b> status name from the write response (ClickUp's
+    /// <c>PUT /task/{id}</c> returns the updated task), or null if the response omits it — so the
+    /// caller can display the server-confirmed value without a read-after-write round-trip.
+    /// </summary>
+    public Task<string?> SetTaskStatusAsync(string taskId, string statusName, CancellationToken ct = default)
         => Guard("UpdateTask", async () =>
         {
-            await _client.V2.Task[taskId].PutAsync(new UpdateTaskRequest { Status = statusName }, cancellationToken: ct);
-            return true;
+            var updated = await _client.V2.Task[taskId].PutAsync(new UpdateTaskRequest { Status = statusName }, cancellationToken: ct);
+            return updated?.Status?.StatusProp;
         });
 
     // ── Mapping & plumbing ──────────────────────────────────────────────────
