@@ -19,6 +19,12 @@ public sealed class AppConfig
     /// <summary>How often the task list polls ClickUp, in seconds.</summary>
     public int RefreshSeconds { get; set; } = 60;
 
+    /// <summary>
+    /// Task statuses to hide from the list (case-insensitive). Defaults to the common
+    /// "done but irrelevant" statuses; editable from the in-app settings menu.
+    /// </summary>
+    public List<string> ExcludedStatuses { get; set; } = ["won't do", "cancelled"];
+
     /// <summary>Task ids pinned to the "Current Focus" pane, so focus survives restarts.</summary>
     public List<string> PinnedTaskIds { get; set; } = [];
 
