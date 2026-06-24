@@ -20,9 +20,11 @@ public static class BareRepro
 
     public static void Run(string? driverName, string mode)
     {
-        if (mode == "panes")
+        if (mode.StartsWith("panes", StringComparison.Ordinal))
         {
-            RunPanes(driverName);
+            // panes = two panes + heartbeat; panes-nohb = two panes, no heartbeat;
+            // panes-single = one pane + heartbeat.
+            RunPanes(driverName, heartbeat: mode != "panes-nohb", twoPanes: mode != "panes-single");
             return;
         }
 
@@ -62,27 +64,40 @@ public static class BareRepro
         }
     }
 
-    private static void RunPanes(string? driverName)
+    private static void RunPanes(string? driverName, bool heartbeat, bool twoPanes)
     {
         Application.Init(driverName);
         using var cts = new CancellationTokenSource();
         try
         {
-            var win = new Window { Title = "PANES repro — mirrors the real two-pane layout — Ctrl+Q quits" };
+            var win = new Window { Title = $"PANES repro (two={twoPanes} heartbeat={heartbeat}) — Ctrl+Q quits" };
 
-            var focusFrame = new FrameView { Title = "★ Current Focus", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Absolute(7) };
-            var focusList = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
-            focusFrame.Add(focusList);
+            ListView? focusList = null;
+            View topOfTodo = win;
+            if (twoPanes)
+            {
+                var focusFrame = new FrameView { Title = "★ Current Focus", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Absolute(7) };
+                focusList = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
+                focusFrame.Add(focusList);
+                focusList.SetSource(new ObservableCollection<string>(["Pinned item one — sample focus task"]));
+                win.Add(focusFrame);
+                topOfTodo = focusFrame;
+            }
 
-            var todoFrame = new FrameView { Title = "To-Do", X = 0, Y = Pos.Bottom(focusFrame), Width = Dim.Fill(), Height = Dim.Fill(2) };
+            var todoFrame = new FrameView
+            {
+                Title = "To-Do",
+                X = 0,
+                Y = twoPanes ? Pos.Bottom(topOfTodo) : 0,
+                Width = Dim.Fill(),
+                Height = Dim.Fill(2),
+            };
             var todoList = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
             todoFrame.Add(todoList);
+            todoList.SetSource(Items(0, 80));
 
             var statusLabel = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = "panes repro" };
             var help = new Label { X = 1, Y = Pos.AnchorEnd(1), Width = Dim.Fill(1), Text = "↑/↓ move · Tab pane · type to search · Ctrl+Q quit" };
-
-            focusList.SetSource(new ObservableCollection<string>(["Pinned item one — sample focus task"]));
-            todoList.SetSource(Items(0, 80));
 
             void OnKey(object? _, Key key)
             {
@@ -96,20 +111,20 @@ public static class BareRepro
                 {
                     case KeyCode.Tab:
                         key.Handled = true;
-                        if (focusList.HasFocus) todoList.SetFocus(); else focusList.SetFocus();
+                        if (focusList is not null && focusList.HasFocus) todoList.SetFocus();
+                        else focusList?.SetFocus();
                         break;
                     case KeyCode.Esc:
                         key.Handled = true; Application.RequestStop(); break;
-                    // Mirror the real app: these shortcuts are "handled" (no-op here).
                     case KeyCode.Space or KeyCode.Enter or KeyCode.F1 or KeyCode.F2:
                         key.Handled = true; break;
                 }
             }
-            focusList.KeyDown += OnKey;
             todoList.KeyDown += OnKey;
+            if (focusList is not null) focusList.KeyDown += OnKey;
 
-            // Match the real app: heartbeat + background refresh that rebuilds the list via Invoke.
-            Application.AddTimeout(TimeSpan.FromMilliseconds(50), () => { Application.LayoutAndDraw(); return true; });
+            if (heartbeat)
+                Application.AddTimeout(TimeSpan.FromMilliseconds(50), () => { Application.LayoutAndDraw(); return true; });
             StartRefreshSim(cts, gen => Application.Invoke(() =>
             {
                 var sel = todoList.SelectedItem;
@@ -117,7 +132,7 @@ public static class BareRepro
                 if (sel is int i && i < 80) todoList.SelectedItem = i;
             }));
 
-            win.Add(focusFrame, todoFrame, statusLabel, help);
+            win.Add(todoFrame, statusLabel, help);
             todoList.SetFocus();
             Application.Run(win);
             win.Dispose();
