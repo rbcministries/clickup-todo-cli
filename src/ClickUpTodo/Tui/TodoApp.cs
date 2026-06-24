@@ -17,28 +17,33 @@ using Terminal.Gui.Views;
 namespace ClickUpTodo.Tui;
 
 /// <summary>
-/// The keyboard-driven terminal UI: a pinned "Current Focus" pane above the full to-do list,
-/// refreshed in the background on the configured interval. Selection is preserved by task id
+/// The keyboard-driven terminal UI: a single task list with a pinned "Current Focus" section at the
+/// top, refreshed in the background on the configured interval. Selection is preserved by task id
 /// across refreshes so the list stays visually static between updates.
+/// <para>
+/// This uses ONE ListView (with header rows) rather than two panes: a second focusable pane made
+/// repaints visibly laggy in Terminal.Gui 2.4 (see issue #3), while a single list is snappy.
+/// </para>
 /// </summary>
 public sealed class TodoApp
 {
+    private const string FocusHeaderPrefix = "★ CURRENT FOCUS";
+    private const string TodoHeaderPrefix = "─ TO-DO";
+
     private readonly TaskService _tasks;
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly HashSet<string> _pinnedIds;
 
     private Window _window = null!;
-    private FrameView _focusFrame = null!;
-    private FrameView _todoFrame = null!;
-    private ListView _focusList = null!;
-    private ListView _todoList = null!;
+    private FrameView _frame = null!;
+    private ListView _list = null!;
     private Label _statusLabel = null!;
     private RefreshService _refresh = null!;
 
     private IReadOnlyList<TaskItem> _all = [];
-    private List<TaskItem> _pinned = [];
-    private List<TaskItem> _todo = [];
+    // Parallel to the ListView's rows: the task on each row, or null for a header/separator row.
+    private readonly List<TaskItem?> _rows = [];
     private string _status = "Loading…";
     private string _signature = "";
 
@@ -52,23 +57,12 @@ public sealed class TodoApp
 
     public void Run(string? driverName = null)
     {
-        // driverName lets the user A/B Terminal.Gui drivers to work around input latency (#3).
+        // driverName lets the user pick a Terminal.Gui driver (windows/dotnet/ansi); null = default.
         Application.Init(driverName);
         try
         {
             _status = $"Loading… (driver: {driverName ?? "default (ansi)"})";
             Build();
-
-            // Workaround for #3: the screen can lag behind state changes (input/commands run
-            // immediately, but the repaint is deferred). Force a periodic repaint (~20 fps) so the
-            // cursor/selection stays visually in sync. Terminal.Gui only writes changed cells, so an
-            // idle redraw is cheap.
-            Application.AddTimeout(TimeSpan.FromMilliseconds(50), () =>
-            {
-                Application.LayoutAndDraw();
-                return true;
-            });
-
             _refresh = new RefreshService(
                 fetch: ct => _tasks.LoadAsync(ct),
                 intervalSeconds: _config.RefreshSeconds,
@@ -89,27 +83,17 @@ public sealed class TodoApp
     {
         _window = new Window { Title = $"ClickUp To-Do — {_config.WorkspaceName}" };
 
-        _focusFrame = new FrameView
+        _frame = new FrameView
         {
-            Title = "★ Current Focus",
+            Title = "Tasks",
             X = 0,
             Y = 0,
             Width = Dim.Fill(),
-            Height = Dim.Absolute(7),
-        };
-        _focusList = NewList();
-        _focusFrame.Add(_focusList);
-
-        _todoFrame = new FrameView
-        {
-            Title = "To-Do",
-            X = 0,
-            Y = Pos.Bottom(_focusFrame),
-            Width = Dim.Fill(),
             Height = Dim.Fill(2),
         };
-        _todoList = NewList();
-        _todoFrame.Add(_todoList);
+        _list = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
+        _list.KeyDown += OnListKey;
+        _frame.Add(_list);
 
         _statusLabel = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = _status };
         var help = new Label
@@ -117,27 +101,19 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · Tab pane · Space status · Enter open · Ctrl+P pin · Ctrl+R refresh · F1 help · F2 settings · Ctrl+Q/Esc quit · type to search",
+            Text = "↑/↓ move · Space status · Enter open · Ctrl+P pin · Ctrl+R refresh · F1 help · F2 settings · Ctrl+Q quit · type to search",
         };
 
-        _window.Add(_focusFrame, _todoFrame, _statusLabel, help);
-        _todoList.SetFocus();
-    }
-
-    private ListView NewList()
-    {
-        var list = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
-        list.KeyDown += OnListKey;
-        return list;
+        _window.Add(_frame, _statusLabel, help);
+        _list.SetFocus();
     }
 
     // ── Key handling ─────────────────────────────────────────────────────────
 
     private void OnListKey(object? sender, Key key)
     {
-        // Command shortcuts use modifier chords / function keys. Bare letters are intentionally left
-        // unhandled so the ListView's type-ahead search (keyed on the task title) keeps working —
-        // that's why these aren't plain P/R/Q/? (those get swallowed by type-ahead).
+        // Command shortcuts use modifier chords / function keys. Bare letters are left unhandled so
+        // the ListView's type-ahead search (keyed on the task title) keeps working.
         if (key.IsCtrl)
         {
             switch (key.KeyCode & ~KeyCode.CtrlMask)
@@ -170,10 +146,6 @@ public sealed class TodoApp
                 key.Handled = true;
                 OpenInBrowser();
                 break;
-            case KeyCode.Tab:
-                key.Handled = true;
-                ToggleFocus();
-                break;
             case KeyCode.Esc:
                 key.Handled = true;
                 Application.RequestStop();
@@ -204,25 +176,9 @@ public sealed class TodoApp
         _refresh.RequestRefresh();
     }
 
-    private void ToggleFocus()
-    {
-        if (_focusList.HasFocus && _todo.Count > 0)
-            _todoList.SetFocus();
-        else if (_pinned.Count > 0)
-            _focusList.SetFocus();
-        else
-            _todoList.SetFocus();
-    }
-
+    /// <summary>The task on the selected row, or null if a header row (or nothing) is selected.</summary>
     private TaskItem? CurrentTask()
-    {
-        if (_focusList.HasFocus)
-            return Pick(_pinned, _focusList.SelectedItem);
-        return Pick(_todo, _todoList.SelectedItem);
-
-        static TaskItem? Pick(List<TaskItem> items, int? index)
-            => index is int i && i >= 0 && i < items.Count ? items[i] : null;
-    }
+        => _list.SelectedItem is int i && i >= 0 && i < _rows.Count ? _rows[i] : null;
 
     // ── Actions ────────────────────────────────────────────────────────────
 
@@ -232,13 +188,19 @@ public sealed class TodoApp
         if (task is null)
             return;
 
-        if (!_pinnedIds.Remove(task.Id))
+        bool nowPinned;
+        if (_pinnedIds.Remove(task.Id))
+            nowPinned = false;
+        else
+        {
             _pinnedIds.Add(task.Id);
+            nowPinned = true;
+        }
 
         _config.PinnedTaskIds = [.. _pinnedIds];
         _configStore.Save(_config);
-        RenderPanes();
-        Flash(_pinnedIds.Contains(task.Id) ? $"Pinned: {task.Name}" : $"Unpinned: {task.Name}");
+        Render(keepTaskId: task.Id);
+        Flash(nowPinned ? $"Pinned: {task.Name}" : $"Unpinned: {task.Name}");
     }
 
     private void OpenInBrowser()
@@ -343,10 +305,9 @@ public sealed class TodoApp
                 "\n"
                 + "  ↑ / ↓       Move between tasks\n"
                 + "  (type)      Search tasks by title (type-ahead)\n"
-                + "  Tab         Switch between Focus and To-Do panes\n"
                 + "  Space       Set the focused task's status\n"
                 + "  Enter       Open the task in your browser\n"
-                + "  Ctrl+P      Pin / unpin the focused task\n"
+                + "  Ctrl+P      Pin / unpin (pinned tasks group at the top)\n"
                 + "  Ctrl+R      Refresh now\n"
                 + "  F1          This help\n"
                 + "  F2          Settings (refresh rate, excluded statuses)\n"
@@ -356,7 +317,7 @@ public sealed class TodoApp
         };
         dialog.KeyDown += (_, key) =>
         {
-            if (key.KeyCode is KeyCode.Esc or KeyCode.Enter || char.ToLowerInvariant((char)key.AsRune.Value) == 'q')
+            if (key.KeyCode is KeyCode.Esc or KeyCode.Enter)
             {
                 key.Handled = true;
                 Application.RequestStop();
@@ -374,10 +335,8 @@ public sealed class TodoApp
         _all = tasks;
         _status = $"Updated {DateTime.Now:HH:mm:ss} · {tasks.Count} task(s) · refresh every {_config.RefreshSeconds}s";
 
-        // Rebuilding both ListViews (SetSource) forces a full reset + redraw. Doing that on every
-        // background refresh — even when nothing changed — causes periodic redraws that compete with
-        // keyboard/mouse input and make selection feel laggy. Skip the rebuild when the visible task
-        // set is unchanged and just update the (cheap) status line.
+        // Rebuilding the ListView (SetSource) forces a full reset + redraw. Skip it when the visible
+        // task set is unchanged and just update the (cheap) status line.
         var signature = BuildSignature(tasks);
         if (signature == _signature)
         {
@@ -385,7 +344,7 @@ public sealed class TodoApp
             return;
         }
         _signature = signature;
-        RenderPanes();
+        Render(keepTaskId: CurrentTask()?.Id);
     }
 
     /// <summary>A cheap fingerprint of what's actually rendered, so no-op refreshes skip a redraw.</summary>
@@ -398,33 +357,48 @@ public sealed class TodoApp
         return sb.ToString();
     }
 
-    private void RenderPanes()
+    /// <summary>Rebuilds the single list (focus section + to-do section) and restores the cursor.</summary>
+    private void Render(string? keepTaskId)
     {
-        // Capture the focused selection so the cursor stays put across the rebuild.
-        var focusedPinned = _focusList.HasFocus;
-        var keepId = CurrentTask()?.Id;
+        var pinned = _all.Where(t => _pinnedIds.Contains(t.Id)).ToList();
+        var todo = _all.Where(t => !_pinnedIds.Contains(t.Id)).ToList();
 
-        _pinned = _all.Where(t => _pinnedIds.Contains(t.Id)).ToList();
-        _todo = _all.Where(t => !_pinnedIds.Contains(t.Id)).ToList();
+        _rows.Clear();
+        var display = new ObservableCollection<string>();
 
-        _focusList.SetSource(new ObservableCollection<string>(_pinned.Select(Format)));
-        _todoList.SetSource(new ObservableCollection<string>(_todo.Select(Format)));
+        if (pinned.Count > 0)
+        {
+            AddHeader(display, $"{FocusHeaderPrefix} ({pinned.Count})");
+            foreach (var t in pinned)
+                AddTask(display, t);
+            AddHeader(display, $"{TodoHeaderPrefix} ({todo.Count}) ─");
+        }
+        foreach (var t in todo)
+            AddTask(display, t);
 
-        _focusFrame.Title = $"★ Current Focus ({_pinned.Count})";
-        _todoFrame.Title = $"To-Do ({_todo.Count})";
-        Restore(_focusList, _pinned, focusedPinned ? keepId : null);
-        Restore(_todoList, _todo, focusedPinned ? null : keepId);
+        _list.SetSource(display);
+        _frame.Title = $"Tasks — {pinned.Count} pinned · {todo.Count} to-do";
+
+        // Restore the cursor onto the same task, or the first task row.
+        var target = keepTaskId is not null ? _rows.FindIndex(r => r?.Id == keepTaskId) : -1;
+        if (target < 0)
+            target = _rows.FindIndex(r => r is not null);
+        if (target >= 0 && display.Count > 0)
+            _list.SelectedItem = target;
 
         _statusLabel.Text = _status;
+    }
 
-        static void Restore(ListView list, List<TaskItem> items, string? id)
-        {
-            if (id is null || items.Count == 0)
-                return;
-            var index = items.FindIndex(t => t.Id == id);
-            if (index >= 0)
-                list.SelectedItem = index;
-        }
+    private void AddHeader(ObservableCollection<string> display, string text)
+    {
+        _rows.Add(null);
+        display.Add(text);
+    }
+
+    private void AddTask(ObservableCollection<string> display, TaskItem task)
+    {
+        _rows.Add(task);
+        display.Add(Format(task));
     }
 
     private void Flash(string message)
