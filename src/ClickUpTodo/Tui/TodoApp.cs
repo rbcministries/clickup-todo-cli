@@ -101,7 +101,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · Space status · Enter open · Ctrl+P pin · Ctrl+R refresh · F1 help · F2 settings · Ctrl+Q quit · type to search",
+            Text = "↑/↓ move · Tab next section · Space status · Enter open · Ctrl+P pin · Ctrl+R refresh · F1 help · F2 settings · Ctrl+Q quit · type to search",
         };
 
         _window.Add(_frame, _statusLabel, help);
@@ -146,6 +146,10 @@ public sealed class TodoApp
                 key.Handled = true;
                 OpenInBrowser();
                 break;
+            case KeyCode.Tab:
+                key.Handled = true;
+                JumpToNextSection();
+                break;
             case KeyCode.Esc:
                 key.Handled = true;
                 Application.RequestStop();
@@ -179,6 +183,35 @@ public sealed class TodoApp
     /// <summary>The task on the selected row, or null if a header row (or nothing) is selected.</summary>
     private TaskItem? CurrentTask()
         => _list.SelectedItem is int i && i >= 0 && i < _rows.Count ? _rows[i] : null;
+
+    /// <summary>
+    /// Moves the cursor to the first task row beneath the next header (sections are delimited by the
+    /// header rows tracked as null entries in <see cref="_rows"/>). Wraps to the first section.
+    /// </summary>
+    private void JumpToNextSection()
+    {
+        var headers = Enumerable.Range(0, _rows.Count).Where(i => _rows[i] is null).ToList();
+        if (headers.Count == 0)
+            return; // no sections (e.g. nothing pinned)
+
+        var current = _list.SelectedItem ?? 0;
+        var nextHeader = headers.FirstOrDefault(h => h > current, headers[0]);
+
+        // First selectable (task) row at/after the header; wrap to the first section if the last is empty.
+        var target = FirstTaskAtOrAfter(nextHeader + 1);
+        if (target < 0)
+            target = FirstTaskAtOrAfter(headers[0] + 1);
+        if (target >= 0)
+            _list.SelectedItem = target;
+
+        int FirstTaskAtOrAfter(int start)
+        {
+            for (var i = start; i < _rows.Count; i++)
+                if (_rows[i] is not null)
+                    return i;
+            return -1;
+        }
+    }
 
     // ── Actions ────────────────────────────────────────────────────────────
 
@@ -305,6 +338,7 @@ public sealed class TodoApp
                 "\n"
                 + "  ↑ / ↓       Move between tasks\n"
                 + "  (type)      Search tasks by title (type-ahead)\n"
+                + "  Tab         Jump to the first task in the next section\n"
                 + "  Space       Set the focused task's status\n"
                 + "  Enter       Open the task in your browser\n"
                 + "  Ctrl+P      Pin / unpin (pinned tasks group at the top)\n"
