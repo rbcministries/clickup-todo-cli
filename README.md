@@ -120,6 +120,21 @@ Unit tests (config/token storage) always run. Integration tests hit the real Cli
 - `CLICKUP_TOKEN` — your personal token (enables the basic API tests)
 - `CLICKUP_WORKSPACE_ID`, `CLICKUP_LIST_ID` — optional, enable the task/status tests
 
+## Troubleshooting
+
+**Sluggish key response (arrows/Tab feel delayed).** This comes from Terminal.Gui's console
+driver, not the app. The default driver is `ansi` (pure ANSI escape sequences); on Windows the
+native `windows` driver usually has snappier input:
+
+```bash
+clickup-todo --driver windows   # native Win32 input — try this first on Windows
+clickup-todo --driver dotnet    # System.Console cross-platform driver
+clickup-todo --driver ansi      # pure ANSI driver (default)
+```
+
+You can also set `CLICKUP_TODO_DRIVER` (e.g. `CLICKUP_TODO_DRIVER=windows`). The active driver is
+shown in the status line at startup. See [issue #3](https://github.com/rbcministries/clickup-todo-cli/issues/3).
+
 ## License
 
 [MIT](LICENSE) © RBC Ministries
