@@ -24,15 +24,25 @@ if (args.Any(a => a is "--help" or "-h" or "-?"))
     Console.WriteLine("Usage: clickup-todo [--reset] [--driver <name>]");
     Console.WriteLine("  (no args)        Launch the to-do UI (runs first-time setup if needed).");
     Console.WriteLine("  --reset          Forget the saved token and settings.");
-    Console.WriteLine("  --driver <name>  Force a Terminal.Gui console driver (e.g. v2net, v2win, net).");
-    Console.WriteLine("                   Use to work around input latency; also CLICKUP_TODO_DRIVER env var.");
+    Console.WriteLine("  --driver <name>  Force a Terminal.Gui console driver. One of:");
+    Console.WriteLine("                     windows  native Win32 input (try this if input feels laggy)");
+    Console.WriteLine("                     dotnet   System.Console cross-platform driver");
+    Console.WriteLine("                     ansi     pure ANSI escape-sequence driver (default)");
+    Console.WriteLine("                   Also settable via the CLICKUP_TODO_DRIVER env var.");
     Console.WriteLine("  --help           Show this help.");
     return 0;
 }
 
 // Optional console-driver override to experiment with input latency (#3): --driver <name> or the
 // CLICKUP_TODO_DRIVER env var. Null means Terminal.Gui's default for the platform.
-var driverName = GetOption(args, "--driver") ?? Environment.GetEnvironmentVariable("CLICKUP_TODO_DRIVER");
+var validDrivers = new[] { "windows", "dotnet", "ansi" };
+var driverName = (GetOption(args, "--driver") ?? Environment.GetEnvironmentVariable("CLICKUP_TODO_DRIVER"))
+    ?.Trim().ToLowerInvariant();
+if (!string.IsNullOrEmpty(driverName) && !validDrivers.Contains(driverName))
+{
+    Console.Error.WriteLine($"Unknown driver '{driverName}'. Valid drivers: {string.Join(", ", validDrivers)} (default: ansi).");
+    return 1;
+}
 
 // First run (or after --reset): collect a token and pick the workspace + Personal Tasks list.
 var token = tokenStore.Load();

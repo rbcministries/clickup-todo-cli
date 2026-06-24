@@ -123,17 +123,17 @@ Unit tests (config/token storage) always run. Integration tests hit the real Cli
 ## Troubleshooting
 
 **Sluggish key response (arrows/Tab feel delayed).** This comes from Terminal.Gui's console
-driver, not the app. Try forcing a different driver to find the most responsive one on your
-terminal:
+driver, not the app. The default driver is `ansi` (pure ANSI escape sequences); on Windows the
+native `windows` driver usually has snappier input:
 
 ```bash
-clickup-todo --driver v2net     # cross-platform driver
-clickup-todo --driver v2win     # Windows driver (default on Windows)
-clickup-todo --driver net       # legacy System.Console driver
+clickup-todo --driver windows   # native Win32 input — try this first on Windows
+clickup-todo --driver dotnet    # System.Console cross-platform driver
+clickup-todo --driver ansi      # pure ANSI driver (default)
 ```
 
-You can also set `CLICKUP_TODO_DRIVER` (e.g. `CLICKUP_TODO_DRIVER=v2net`). The active driver is shown
-in the status line at startup. See [issue #3](https://github.com/rbcministries/clickup-todo-cli/issues/3).
+You can also set `CLICKUP_TODO_DRIVER` (e.g. `CLICKUP_TODO_DRIVER=windows`). The active driver is
+shown in the status line at startup. See [issue #3](https://github.com/rbcministries/clickup-todo-cli/issues/3).
 
 ## License
 
