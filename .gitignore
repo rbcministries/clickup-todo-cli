@@ -16,6 +16,9 @@ nupkg/
 .idea/
 .vs/
 
+# Per-issue git worktrees created by the /implement-issue agent
+.claude/worktrees/
+
 # OS
 Thumbs.db
 .DS_Store
