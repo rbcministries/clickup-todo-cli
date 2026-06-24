@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ClickUpTodo</RootNamespace>
+    <AssemblyName>clickup-todo</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Pack as a .NET global tool: `dotnet tool install -g clickup-todo` -> run `clickup-todo` -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>clickup-todo</ToolCommandName>
+    <PackageId>ClickUpTodo.Cli</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>RBC Ministries</Authors>
+    <Company>RBC Ministries</Company>
+    <Description>A lightweight, keyboard-driven terminal to-do list for ClickUp tasks assigned to you and on your Personal Tasks list.</Description>
+    <PackageTags>clickup;todo;cli;tui;terminal</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/rbcministries/clickup-todo-cli</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/rbcministries/clickup-todo-cli</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Kiota.Bundle" Version="2.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.9" />
+    <PackageReference Include="Terminal.Gui" Version="2.4.10" />
+  </ItemGroup>
+
+</Project>

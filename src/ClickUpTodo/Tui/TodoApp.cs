@@ -1,0 +1,381 @@
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using ClickUpTodo.ClickUp;
+using ClickUpTodo.Configuration;
+using ClickUpTodo.Services;
+using Terminal.Gui.App;
+using Terminal.Gui.Drivers;
+using Terminal.Gui.Input;
+using Terminal.Gui.ViewBase;
+using Terminal.Gui.Views;
+
+// Terminal.Gui 2.4 deprecates the static `Application` facade in favour of an instance-based
+// API that is not yet stable or documented. The static API remains the supported v2 pattern,
+// so we intentionally use it and silence the deprecation here until the instance API settles.
+#pragma warning disable CS0618
+
+namespace ClickUpTodo.Tui;
+
+/// <summary>
+/// The keyboard-driven terminal UI: a pinned "Current Focus" pane above the full to-do list,
+/// refreshed in the background on the configured interval. Selection is preserved by task id
+/// across refreshes so the list stays visually static between updates.
+/// </summary>
+public sealed class TodoApp
+{
+    private readonly TaskService _tasks;
+    private readonly AppConfig _config;
+    private readonly ConfigStore _configStore;
+    private readonly HashSet<string> _pinnedIds;
+
+    private Window _window = null!;
+    private FrameView _focusFrame = null!;
+    private FrameView _todoFrame = null!;
+    private ListView _focusList = null!;
+    private ListView _todoList = null!;
+    private Label _statusLabel = null!;
+    private RefreshService _refresh = null!;
+
+    private IReadOnlyList<TaskItem> _all = [];
+    private List<TaskItem> _pinned = [];
+    private List<TaskItem> _todo = [];
+    private string _status = "Loading…";
+
+    public TodoApp(TaskService tasks, AppConfig config, ConfigStore configStore)
+    {
+        _tasks = tasks;
+        _config = config;
+        _configStore = configStore;
+        _pinnedIds = [.. config.PinnedTaskIds];
+    }
+
+    public void Run()
+    {
+        Application.Init();
+        try
+        {
+            Build();
+            _refresh = new RefreshService(
+                fetch: ct => _tasks.LoadAsync(ct),
+                intervalSeconds: _config.RefreshSeconds,
+                onUpdate: tasks => Application.Invoke(() => OnTasksLoaded(tasks)),
+                onError: ex => Application.Invoke(() => Flash($"Refresh failed: {Short(ex)}")));
+            _refresh.Start();
+            Application.Run(_window);
+        }
+        finally
+        {
+            _refresh?.Dispose();
+            _window?.Dispose();
+            Application.Shutdown();
+        }
+    }
+
+    private void Build()
+    {
+        _window = new Window { Title = $"ClickUp To-Do — {_config.WorkspaceName}" };
+
+        _focusFrame = new FrameView
+        {
+            Title = "★ Current Focus",
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = Dim.Absolute(7),
+        };
+        _focusList = NewList();
+        _focusFrame.Add(_focusList);
+
+        _todoFrame = new FrameView
+        {
+            Title = "To-Do",
+            X = 0,
+            Y = Pos.Bottom(_focusFrame),
+            Width = Dim.Fill(),
+            Height = Dim.Fill(2),
+        };
+        _todoList = NewList();
+        _todoFrame.Add(_todoList);
+
+        _statusLabel = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = _status };
+        var help = new Label
+        {
+            X = 1,
+            Y = Pos.AnchorEnd(1),
+            Width = Dim.Fill(1),
+            Text = "↑/↓ move · Tab switch pane · Space set status · P pin/unpin · Enter open · R refresh · ? help · Q quit",
+        };
+
+        _window.Add(_focusFrame, _todoFrame, _statusLabel, help);
+        _todoList.SetFocus();
+    }
+
+    private ListView NewList()
+    {
+        var list = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
+        list.KeyDown += OnListKey;
+        return list;
+    }
+
+    // ── Key handling ─────────────────────────────────────────────────────────
+
+    private void OnListKey(object? sender, Key key)
+    {
+        switch (key.KeyCode)
+        {
+            case KeyCode.Space:
+                key.Handled = true;
+                OpenStatusPicker();
+                return;
+            case KeyCode.Enter:
+                key.Handled = true;
+                OpenInBrowser();
+                return;
+            case KeyCode.Tab:
+                key.Handled = true;
+                ToggleFocus();
+                return;
+            case KeyCode.Esc:
+                key.Handled = true;
+                Application.RequestStop();
+                return;
+        }
+
+        switch (char.ToLowerInvariant((char)key.AsRune.Value))
+        {
+            case 'q':
+                key.Handled = true;
+                Application.RequestStop();
+                break;
+            case 'r':
+                key.Handled = true;
+                Flash("Refreshing…");
+                _refresh.RequestRefresh();
+                break;
+            case 'p':
+                key.Handled = true;
+                TogglePin();
+                break;
+            case '?':
+                key.Handled = true;
+                ShowHelp();
+                break;
+        }
+    }
+
+    private void ToggleFocus()
+    {
+        if (_focusList.HasFocus && _todo.Count > 0)
+            _todoList.SetFocus();
+        else if (_pinned.Count > 0)
+            _focusList.SetFocus();
+        else
+            _todoList.SetFocus();
+    }
+
+    private TaskItem? CurrentTask()
+    {
+        if (_focusList.HasFocus)
+            return Pick(_pinned, _focusList.SelectedItem);
+        return Pick(_todo, _todoList.SelectedItem);
+
+        static TaskItem? Pick(List<TaskItem> items, int? index)
+            => index is int i && i >= 0 && i < items.Count ? items[i] : null;
+    }
+
+    // ── Actions ────────────────────────────────────────────────────────────
+
+    private void TogglePin()
+    {
+        var task = CurrentTask();
+        if (task is null)
+            return;
+
+        if (!_pinnedIds.Remove(task.Id))
+            _pinnedIds.Add(task.Id);
+
+        _config.PinnedTaskIds = [.. _pinnedIds];
+        _configStore.Save(_config);
+        RenderPanes();
+        Flash(_pinnedIds.Contains(task.Id) ? $"Pinned: {task.Name}" : $"Unpinned: {task.Name}");
+    }
+
+    private void OpenInBrowser()
+    {
+        var task = CurrentTask();
+        if (string.IsNullOrWhiteSpace(task?.Url))
+        {
+            Flash("No URL for this task.");
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(task.Url) { UseShellExecute = true });
+            Flash($"Opened: {task.Name}");
+        }
+        catch (Exception ex)
+        {
+            Flash($"Could not open browser: {Short(ex)}");
+        }
+    }
+
+    private void OpenStatusPicker()
+    {
+        var task = CurrentTask();
+        if (task is null)
+            return;
+        if (string.IsNullOrWhiteSpace(task.ListId))
+        {
+            Flash("This task has no list, so its statuses can't be loaded.");
+            return;
+        }
+
+        Flash("Loading statuses…");
+        // Fetch statuses off the UI thread, then show the modal back on it.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
+                Application.Invoke(() =>
+                {
+                    if (statuses.Count == 0)
+                    {
+                        Flash("No statuses available for this list.");
+                        return;
+                    }
+
+                    var chosen = StatusPicker.Show(task.Name, statuses, task.StatusName);
+                    if (chosen is null || string.Equals(chosen, task.StatusName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Flash("Status unchanged.");
+                        return;
+                    }
+
+                    ApplyStatus(task, chosen);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not load statuses: {Short(ex)}"));
+            }
+        });
+    }
+
+    private void ApplyStatus(TaskItem task, string status)
+    {
+        Flash($"Setting '{status}'…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _tasks.SetStatusAsync(task.Id, status);
+                Application.Invoke(() =>
+                {
+                    Flash($"Set '{task.Name}' to '{status}'.");
+                    _refresh.RequestRefresh();
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not set status: {Short(ex)}"));
+            }
+        });
+    }
+
+    private static void ShowHelp()
+    {
+        var dialog = new Dialog
+        {
+            Title = "Keyboard shortcuts",
+            Width = Dim.Percent(70),
+            Height = Dim.Percent(70),
+        };
+        var body = new Label
+        {
+            X = 1,
+            Y = 0,
+            Width = Dim.Fill(1),
+            Height = Dim.Fill(1),
+            Text =
+                "\n"
+                + "  ↑ / ↓      Move between tasks\n"
+                + "  Tab        Switch between Focus and To-Do panes\n"
+                + "  Space      Set the focused task's status\n"
+                + "  P          Pin / unpin the focused task\n"
+                + "  Enter      Open the task in your browser\n"
+                + "  R          Refresh now\n"
+                + "  Q / Esc    Quit\n"
+                + "\n"
+                + "  Esc or Enter to close this help.",
+        };
+        dialog.KeyDown += (_, key) =>
+        {
+            if (key.KeyCode is KeyCode.Esc or KeyCode.Enter || char.ToLowerInvariant((char)key.AsRune.Value) == 'q')
+            {
+                key.Handled = true;
+                Application.RequestStop();
+            }
+        };
+        dialog.Add(body);
+        Application.Run(dialog);
+        dialog.Dispose();
+    }
+
+    // ── Rendering ────────────────────────────────────────────────────────────
+
+    private void OnTasksLoaded(IReadOnlyList<TaskItem> tasks)
+    {
+        _all = tasks;
+        _status = $"Updated {DateTime.Now:HH:mm:ss} · {tasks.Count} task(s) · refresh every {_config.RefreshSeconds}s";
+        RenderPanes();
+    }
+
+    private void RenderPanes()
+    {
+        // Capture the focused selection so the cursor stays put across the rebuild.
+        var focusedPinned = _focusList.HasFocus;
+        var keepId = CurrentTask()?.Id;
+
+        _pinned = _all.Where(t => _pinnedIds.Contains(t.Id)).ToList();
+        _todo = _all.Where(t => !_pinnedIds.Contains(t.Id)).ToList();
+
+        _focusList.SetSource(new ObservableCollection<string>(_pinned.Select(Format)));
+        _todoList.SetSource(new ObservableCollection<string>(_todo.Select(Format)));
+
+        _focusFrame.Title = $"★ Current Focus ({_pinned.Count})";
+        _todoFrame.Title = $"To-Do ({_todo.Count})";
+        Restore(_focusList, _pinned, focusedPinned ? keepId : null);
+        Restore(_todoList, _todo, focusedPinned ? null : keepId);
+
+        _statusLabel.Text = _status;
+
+        static void Restore(ListView list, List<TaskItem> items, string? id)
+        {
+            if (id is null || items.Count == 0)
+                return;
+            var index = items.FindIndex(t => t.Id == id);
+            if (index >= 0)
+                list.SelectedItem = index;
+        }
+    }
+
+    private void Flash(string message)
+    {
+        _status = message;
+        _statusLabel.Text = message;
+    }
+
+    private static string Format(TaskItem task)
+    {
+        var status = string.IsNullOrWhiteSpace(task.StatusName) ? "" : $"[{task.StatusName}] ";
+        var list = string.IsNullOrWhiteSpace(task.ListName) ? "" : $"  · {task.ListName}";
+        var due = task.DueDateMs is { } ms
+            ? $"  · due {DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime:MMM d}"
+            : "";
+        return $"{status}{task.Name}{list}{due}";
+    }
+
+    private static string Short(Exception ex) => ex is ClickUpApiException c ? c.Message : ex.Message;
+}

@@ -1,0 +1,21 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+
+# NuGet
+*.nupkg
+nupkg/
+
+# Kiota generation log (the generated client itself IS committed)
+**/Generated/.kiota.log
+
+# Rider / VS
+.idea/
+.vs/
+
+# OS
+Thumbs.db
+.DS_Store

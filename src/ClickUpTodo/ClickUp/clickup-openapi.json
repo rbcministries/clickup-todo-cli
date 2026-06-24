@@ -1,0 +1,282 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "ClickUp API v2 (clickup-todo-cli subset)",
+    "version": "2.0.0",
+    "description": "A curated, corrected subset of the official ClickUp API v2 reference, containing only the operations clickup-todo-cli uses. The official upstream spec (https://developer.clickup.com/openapi/clickup-api-v2-reference.json, verified 2026-06-24) uses inline, partly-malformed schemas with broken $refs that generate broken C# via Kiota (e.g. 'folders' as a single object instead of an array, duplicated per-endpoint task types, untyped 'status', double-typed id indexers, missing 'last_page' on team tasks). Pulling the official spec does NOT fix this. This file re-expresses the same v2 endpoints with shared component $ref schemas and correct types so Kiota emits a clean, typed client. ClickUp also publishes a v3 spec (https://developer.clickup.com/openapi/ClickUp_PUBLIC_API_V3.yaml) which is a different API surface — see the repo's OpenAPI follow-up issue. Source of truth for scripts/regen-client.ps1."
+  },
+  "servers": [
+    { "url": "https://api.clickup.com/api" }
+  ],
+  "paths": {
+    "/v2/user": {
+      "get": {
+        "operationId": "GetAuthorizedUser",
+        "summary": "Get the authorized user.",
+        "responses": {
+          "200": {
+            "description": "The authorized user.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UserResponse" } } }
+          }
+        }
+      }
+    },
+    "/v2/team": {
+      "get": {
+        "operationId": "GetAuthorizedTeams",
+        "summary": "Get the Workspaces (teams) available to the authorized user.",
+        "responses": {
+          "200": {
+            "description": "The available Workspaces.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WorkspacesResponse" } } }
+          }
+        }
+      }
+    },
+    "/v2/team/{team_id}/task": {
+      "get": {
+        "operationId": "GetFilteredTeamTasks",
+        "summary": "Get tasks across a Workspace that match the given filters.",
+        "parameters": [
+          { "name": "team_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          {
+            "name": "assignees[]",
+            "in": "query",
+            "description": "Filter by assignee ClickUp user ids.",
+            "required": false,
+            "style": "form",
+            "explode": true,
+            "schema": { "type": "array", "items": { "type": "string" } }
+          },
+          { "name": "page", "in": "query", "description": "Page to fetch (starts at 0).", "schema": { "type": "integer" } },
+          { "name": "include_closed", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "subtasks", "in": "query", "schema": { "type": "boolean" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching tasks (paginated, 100 per page).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TasksResponse" } } }
+          }
+        }
+      }
+    },
+    "/v2/team/{team_id}/space": {
+      "get": {
+        "operationId": "GetSpaces",
+        "summary": "Get the Spaces in a Workspace.",
+        "parameters": [
+          { "name": "team_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "archived", "in": "query", "schema": { "type": "boolean" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Spaces in the Workspace.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SpacesResponse" } } }
+          }
+        }
+      }
+    },
+    "/v2/space/{space_id}/folder": {
+      "get": {
+        "operationId": "GetFolders",
+        "summary": "Get the Folders in a Space.",
+        "parameters": [
+          { "name": "space_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "archived", "in": "query", "schema": { "type": "boolean" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Folders in the Space.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FoldersResponse" } } }
+          }
+        }
+      }
+    },
+    "/v2/space/{space_id}/list": {
+      "get": {
+        "operationId": "GetFolderlessLists",
+        "summary": "Get the Lists in a Space that are not in a Folder.",
+        "parameters": [
+          { "name": "space_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "archived", "in": "query", "schema": { "type": "boolean" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The folderless Lists in the Space.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ListsResponse" } } }
+          }
+        }
+      }
+    },
+    "/v2/folder/{folder_id}/list": {
+      "get": {
+        "operationId": "GetLists",
+        "summary": "Get the Lists in a Folder.",
+        "parameters": [
+          { "name": "folder_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "archived", "in": "query", "schema": { "type": "boolean" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The Lists in the Folder.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ListsResponse" } } }
+          }
+        }
+      }
+    },
+    "/v2/list/{list_id}": {
+      "get": {
+        "operationId": "GetList",
+        "summary": "Get a List, including its available statuses.",
+        "parameters": [
+          { "name": "list_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The List.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/List" } } }
+          }
+        }
+      }
+    },
+    "/v2/list/{list_id}/task": {
+      "get": {
+        "operationId": "GetTasks",
+        "summary": "Get the tasks in a List.",
+        "parameters": [
+          { "name": "list_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "page", "in": "query", "description": "Page to fetch (starts at 0).", "schema": { "type": "integer" } },
+          { "name": "include_closed", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "subtasks", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "archived", "in": "query", "schema": { "type": "boolean" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tasks in the List (paginated, 100 per page).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TasksResponse" } } }
+          }
+        }
+      }
+    },
+    "/v2/task/{task_id}": {
+      "put": {
+        "operationId": "UpdateTask",
+        "summary": "Update a task (used here to set its status).",
+        "parameters": [
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateTaskRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated task.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "format": "int64" },
+          "username": { "type": "string", "nullable": true },
+          "email": { "type": "string", "nullable": true }
+        }
+      },
+      "UserResponse": {
+        "type": "object",
+        "properties": { "user": { "$ref": "#/components/schemas/User" } }
+      },
+      "Workspace": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      },
+      "WorkspacesResponse": {
+        "type": "object",
+        "properties": { "teams": { "type": "array", "items": { "$ref": "#/components/schemas/Workspace" } } }
+      },
+      "Space": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      },
+      "SpacesResponse": {
+        "type": "object",
+        "properties": { "spaces": { "type": "array", "items": { "$ref": "#/components/schemas/Space" } } }
+      },
+      "Folder": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" }
+        }
+      },
+      "FoldersResponse": {
+        "type": "object",
+        "properties": { "folders": { "type": "array", "items": { "$ref": "#/components/schemas/Folder" } } }
+      },
+      "Status": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string" },
+          "color": { "type": "string", "nullable": true },
+          "orderindex": { "type": "integer", "nullable": true },
+          "type": { "type": "string", "nullable": true }
+        }
+      },
+      "TaskList": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string", "nullable": true }
+        }
+      },
+      "List": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "statuses": { "type": "array", "items": { "$ref": "#/components/schemas/Status" } }
+        }
+      },
+      "ListsResponse": {
+        "type": "object",
+        "properties": { "lists": { "type": "array", "items": { "$ref": "#/components/schemas/List" } } }
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "url": { "type": "string", "nullable": true },
+          "due_date": { "type": "string", "nullable": true },
+          "date_updated": { "type": "string", "nullable": true },
+          "archived": { "type": "boolean", "nullable": true },
+          "status": { "$ref": "#/components/schemas/Status" },
+          "list": { "$ref": "#/components/schemas/TaskList" }
+        }
+      },
+      "TasksResponse": {
+        "type": "object",
+        "properties": {
+          "tasks": { "type": "array", "items": { "$ref": "#/components/schemas/Task" } },
+          "last_page": { "type": "boolean", "nullable": true }
+        }
+      },
+      "UpdateTaskRequest": {
+        "type": "object",
+        "properties": { "status": { "type": "string" } }
+      }
+    }
+  }
+}
