@@ -1,6 +1,6 @@
-# clickup-todo
+# ClickUp Simple CLI
 
-A lightweight, keyboard-driven terminal to-do list for [ClickUp](https://clickup.com) — built in
+A lightweight, keyboard-driven terminal task list for [ClickUp](https://clickup.com) — built in
 .NET so it's easy to run and maintain, without loading the full memory-hungry web app just to triage
 your tasks.
 
@@ -9,11 +9,11 @@ the ClickUp REST API on a configurable interval, and lets you change a task's st
 a "Current Focus" pane — all from the keyboard.
 
 ```
-┌ ClickUp To-Do — Acme Workspace ─────────────────────────────────────────────┐
+┌ ClickUp Simple CLI — Acme Workspace ────────────────────────────────────────┐
 │┌ ★ Current Focus (1) ───────────────────────────────────────────────────────┐│
 ││ [in progress] Ship the Q3 report  · Personal Tasks  · due Jul 1             ││
 │└──────────────────────────────────────────────────────────────────────────-─┘│
-│┌ To-Do (12) ──────────────────────────────────────────────────────────────-─┐│
+│┌ TASKS (12) ──────────────────────────────────────────────────────────────-─┐│
 ││ [to do] Review onboarding PR  · Engineering                                 ││
 ││ [to do] Reply to vendor email  · Personal Tasks  · due Jun 28               ││
 ││ …                                                                           ││
@@ -72,7 +72,7 @@ Run `clickup-todo --reset` to forget the token and settings and start over.
 | Key       | Action                                            |
 | --------- | ------------------------------------------------- |
 | `↑` / `↓` | Move between tasks                                |
-| `Tab`     | Switch between the **Current Focus** and **To-Do** panes |
+| `Tab`     | Switch between the **Current Focus** and **Tasks** sections |
 | `Space`   | Set the focused task's status (from its list's statuses) |
 | `P`       | Pin / unpin the focused task to the Focus pane    |
 | `Enter`   | Open the focused task in your browser             |

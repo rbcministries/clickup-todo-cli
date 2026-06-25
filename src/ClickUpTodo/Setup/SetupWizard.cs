@@ -13,8 +13,8 @@ public static class SetupWizard
     public static async Task<bool> RunAsync(ConfigStore configStore, TokenStore tokenStore, CancellationToken ct = default)
     {
         Console.WriteLine();
-        Console.WriteLine("  ClickUp To-Do — first-time setup");
-        Console.WriteLine("  ────────────────────────────────");
+        Console.WriteLine($"  {AppBranding.SetupHeading}");
+        Console.WriteLine("  " + new string('─', AppBranding.SetupHeading.Length));
         Console.WriteLine();
         Console.WriteLine("  You'll need a ClickUp personal API token.");
         Console.WriteLine("  Get one at: ClickUp -> Settings -> Apps -> API Token (starts with 'pk_').");
