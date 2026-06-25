@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
+using ClickUpTodo.Focus;
 using ClickUpTodo.Services;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
@@ -33,7 +34,7 @@ public sealed class TodoApp
     private readonly TaskService _tasks;
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
-    private readonly HashSet<string> _pinnedIds;
+    private readonly IFocusStore _focus;
 
     private Window _window = null!;
     private FrameView _frame = null!;
@@ -52,12 +53,12 @@ public sealed class TodoApp
     private string _status = "Loading…";
     private string _signature = "";
 
-    public TodoApp(TaskService tasks, AppConfig config, ConfigStore configStore)
+    public TodoApp(TaskService tasks, AppConfig config, ConfigStore configStore, IFocusStore focus)
     {
         _tasks = tasks;
         _config = config;
         _configStore = configStore;
-        _pinnedIds = [.. config.PinnedTaskIds];
+        _focus = focus;
     }
 
     public void Run(string? driverName = null)
@@ -225,20 +226,30 @@ public sealed class TodoApp
         var task = CurrentTask();
         if (task is null)
             return;
+        // The pin write goes through IFocusStore (local today, possibly network-backed later), so
+        // run it off the key handler and apply the result back on the UI thread. The local store
+        // completes synchronously, so this stays snappy.
+        _ = TogglePinAsync(task);
+    }
 
+    private async Task TogglePinAsync(TaskItem task)
+    {
         bool nowPinned;
-        if (_pinnedIds.Remove(task.Id))
-            nowPinned = false;
-        else
+        try
         {
-            _pinnedIds.Add(task.Id);
-            nowPinned = true;
+            nowPinned = await _focus.ToggleAsync(task.Id);
+        }
+        catch (Exception ex)
+        {
+            Application.Invoke(() => Flash($"Could not update focus: {Short(ex)}"));
+            return;
         }
 
-        _config.PinnedTaskIds = [.. _pinnedIds];
-        _configStore.Save(_config);
-        Render(keepTaskId: task.Id);
-        Flash(nowPinned ? $"Pinned: {task.Name}" : $"Unpinned: {task.Name}");
+        Application.Invoke(() =>
+        {
+            Render(keepTaskId: task.Id);
+            Flash(nowPinned ? $"Pinned: {task.Name}" : $"Unpinned: {task.Name}");
+        });
     }
 
     private void OpenInBrowser()
@@ -446,8 +457,8 @@ public sealed class TodoApp
     /// <summary>Rebuilds the single list (focus section + to-do section) and restores the cursor.</summary>
     private void Render(string? keepTaskId)
     {
-        var pinned = _all.Where(t => _pinnedIds.Contains(t.Id)).ToList();
-        var todo = _all.Where(t => !_pinnedIds.Contains(t.Id)).ToList();
+        var pinned = _all.Where(t => _focus.IsPinned(t.Id)).ToList();
+        var todo = _all.Where(t => !_focus.IsPinned(t.Id)).ToList();
 
         _rows.Clear();
         _display = new ObservableCollection<string>();
