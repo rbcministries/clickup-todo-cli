@@ -95,6 +95,14 @@ public sealed class StatusBadgeListSource : IListDataSource
     private static void OverlayBadge(ListView listView, Badge badge, int col, int row, int width, int viewportX, string text)
     {
         var end = Math.Min(badge.Start + badge.Length, text.Length);
+
+        // The driver's current attribute is global, shared state. The stock wrapper just rendered
+        // this row's text and left that base attribute current; switching to the badge attribute and
+        // leaving it set would taint the next row's space-padding (the stock wrapper pads to width
+        // with whatever attribute is current), bleeding this badge's background onto rows below it
+        // (see #34). Capture the base attribute and restore it once we're done.
+        var baseAttr = listView.SetAttribute(badge.Attr);
+
         var displayCol = 0; // display column within the full, unscrolled line
         for (var i = 0; i < end;)
         {
@@ -106,13 +114,14 @@ public sealed class StatusBadgeListSource : IListDataSource
                 if (x >= 0 && x + runeWidth <= width)
                 {
                     listView.Move(col + x, row);
-                    listView.SetAttribute(badge.Attr);
                     listView.AddRune(rune);
                 }
             }
             displayCol += runeWidth;
             i += consumed;
         }
+
+        listView.SetAttribute(baseAttr);
     }
 
     public void Dispose() => _inner.Dispose();
