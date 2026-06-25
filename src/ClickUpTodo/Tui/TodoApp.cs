@@ -47,6 +47,8 @@ public sealed class TodoApp
     // The ListView's backing collection, kept so a single row can be updated in place (without
     // SetSource, which would reset the list and the cursor).
     private ObservableCollection<string> _display = [];
+    // Per-row status-badge color overlay, parallel to _display (null = header row or no/!valid color).
+    private List<StatusBadgeListSource.Badge?> _badges = [];
     private string _status = "Loading…";
     private string _signature = "";
 
@@ -358,7 +360,11 @@ public sealed class TodoApp
         if (index < 0 || index >= _display.Count)
             return;
         _rows[index] = updated;
-        _display[index] = sending ? $"{Format(updated)}  (sending…)" : Format(updated);
+        var (text, badge) = BuildRow(updated);
+        _badges[index] = badge;
+        // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
+        // redraws just this row; the parallel _badges entry is read during that redraw.
+        _display[index] = sending ? $"{text}  (sending…)" : text;
     }
 
     private static void ShowHelp()
@@ -445,18 +451,22 @@ public sealed class TodoApp
 
         _rows.Clear();
         _display = new ObservableCollection<string>();
+        _badges = new List<StatusBadgeListSource.Badge?>();
 
         if (pinned.Count > 0)
         {
-            AddHeader(_display, $"{FocusHeaderPrefix} ({pinned.Count})");
+            AddHeader($"{FocusHeaderPrefix} ({pinned.Count})");
             foreach (var t in pinned)
-                AddTask(_display, t);
-            AddHeader(_display, $"{TodoHeaderPrefix} ({todo.Count}) ─");
+                AddTask(t);
+            AddHeader($"{TodoHeaderPrefix} ({todo.Count}) ─");
         }
         foreach (var t in todo)
-            AddTask(_display, t);
+            AddTask(t);
 
-        _list.SetSource(_display);
+        // A custom source that draws text like the stock wrapper but overlays each [status] badge
+        // with its ClickUp color. Assigning Source (rather than SetSource) lets us pass our source;
+        // the ListView disposes the previous one.
+        _list.Source = new StatusBadgeListSource(_display, _badges);
         _frame.Title = $"Tasks — {pinned.Count} pinned · {todo.Count} to-do";
 
         // Restore the cursor onto the same task, or the first task row.
@@ -469,33 +479,32 @@ public sealed class TodoApp
         _statusLabel.Text = _status;
     }
 
-    private void AddHeader(ObservableCollection<string> display, string text)
+    private void AddHeader(string text)
     {
         _rows.Add(null);
-        display.Add(text);
+        _display.Add(text);
+        _badges.Add(null);
     }
 
-    private void AddTask(ObservableCollection<string> display, TaskItem task)
+    private void AddTask(TaskItem task)
     {
+        var (text, badge) = BuildRow(task);
         _rows.Add(task);
-        display.Add(Format(task));
+        _display.Add(text);
+        _badges.Add(badge);
+    }
+
+    /// <summary>The display text and (optional) status-color badge overlay for a task row.</summary>
+    private static (string Text, StatusBadgeListSource.Badge? Badge) BuildRow(TaskItem task)
+    {
+        var row = TaskRowFormatter.Format(task);
+        return (row.Text, StatusBadgeListSource.TryCreate(row.BadgeStart, row.BadgeLength, task.StatusColor));
     }
 
     private void Flash(string message)
     {
         _status = message;
         _statusLabel.Text = message;
-    }
-
-    private static string Format(TaskItem task)
-    {
-        // Title leads so the ListView's type-ahead search matches on the task title.
-        var status = string.IsNullOrWhiteSpace(task.StatusName) ? "" : $"  [{task.StatusName}]";
-        var list = string.IsNullOrWhiteSpace(task.ListName) ? "" : $"  · {task.ListName}";
-        var due = task.DueDateMs is { } ms
-            ? $"  · due {DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime:MMM d}"
-            : "";
-        return $"{task.Name}{status}{list}{due}";
     }
 
     private static string Short(Exception ex) => ex is ClickUpApiException c ? c.Message : ex.Message;
