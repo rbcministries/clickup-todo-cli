@@ -135,6 +135,18 @@ clickup-todo --driver ansi      # pure ANSI driver (default)
 You can also set `CLICKUP_TODO_DRIVER` (e.g. `CLICKUP_TODO_DRIVER=windows`). The active driver is
 shown in the status line at startup. See [issue #3](https://github.com/rbcministries/clickup-todo-cli/issues/3).
 
+## Other great CLI tools
+
+This project is a focused, always-on triage **dashboard**. If you need a broader,
+command-driven ClickUp CLI (scripting, full CRUD, agent automation), these are well worth a look:
+
+| Tool | What it is | Notable features | Language |
+| --- | --- | --- | --- |
+| [krodak/clickup-cli](https://github.com/krodak/clickup-cli) (`cup`) | Full-featured CLI for humans **and** AI agents | Near-complete API coverage (tasks, subtasks, dependencies, comments, chat, time tracking, sprints, custom fields, webhooks); interactive pickers in a TTY + clean JSON/Markdown when piped; multiple profiles; ships a Claude Code skill (`cup skill`) | TypeScript |
+| [triptechtravel/clickup-cli](https://github.com/triptechtravel/clickup-cli) | Developer-workflow CLI with deep Git integration | Auto-detects task IDs from branch names and links PRs/branches/commits; sprint dashboard; time tracking and timesheets; Docs support; comments with @mentions; server-side search; JSON output | Go |
+| [sensor-industries/clickup-cli](https://github.com/sensor-industries/clickup-cli) | Lightweight task-authoring CLI | Create/update/delete tasks; comments; checklists and items; set priority, estimates, assignees, sprint points, and custom fields; markdown descriptions from a file | JavaScript |
+| [fantasticrabbit/ClickupCLI](https://github.com/fantasticrabbit/ClickupCLI) | General-purpose API CLI with OAuth2 sign-in | Browser-based OAuth2 auth flow (or manual token); get task (with subtasks and custom IDs); get list; local team/port config | Go |
+
 ## License
 
 [MIT](LICENSE) © RBC Ministries
