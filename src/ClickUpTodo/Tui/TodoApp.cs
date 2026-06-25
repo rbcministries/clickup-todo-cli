@@ -104,7 +104,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · Tab next section · Space status · Enter open · Ctrl+P pin · Ctrl+R refresh · F1 help · F2 settings · Ctrl+Q quit · type to search",
+            Text = "↑/↓ move · Tab next section · Space status · Enter detail · Ctrl+B browser · Ctrl+P pin · Ctrl+R refresh · F1 help · F2 settings · Ctrl+Q quit · type to search",
         };
 
         _window.Add(_frame, _statusLabel, help);
@@ -130,6 +130,10 @@ public sealed class TodoApp
                     Flash("Refreshing…");
                     _refresh.RequestRefresh();
                     break;
+                case KeyCode.B:
+                    key.Handled = true;
+                    OpenInBrowser();
+                    break;
                 case KeyCode.Q:
                 case KeyCode.C: // Ctrl+C as a quit alias (the OS/terminal may intercept it first).
                     key.Handled = true;
@@ -147,7 +151,7 @@ public sealed class TodoApp
                 break;
             case KeyCode.Enter:
                 key.Handled = true;
-                OpenInBrowser();
+                OpenDetail();
                 break;
             case KeyCode.Tab:
                 key.Handled = true;
@@ -257,6 +261,36 @@ public sealed class TodoApp
         {
             Flash($"Could not open browser: {Short(ex)}");
         }
+    }
+
+    private void OpenDetail()
+    {
+        var task = CurrentTask();
+        if (task is null)
+            return;
+
+        Flash("Loading details…");
+        // Fetch the detail + comments off the UI thread, then show the modal back on it. The
+        // background dashboard refresh keeps running while the modal is open.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var detail = await _tasks.GetTaskDetailAsync(task.Id);
+                var comments = await _tasks.GetTaskCommentsAsync(task.Id);
+                Application.Invoke(() =>
+                {
+                    var openBrowser = TaskDetailView.Show(detail, comments);
+                    Flash($"Closed detail: {task.Name}");
+                    if (openBrowser)
+                        OpenInBrowser();
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not load task detail: {Short(ex)}"));
+            }
+        });
     }
 
     private void OpenStatusPicker()
@@ -371,7 +405,8 @@ public sealed class TodoApp
                 + "  (type)      Search tasks by title (type-ahead)\n"
                 + "  Tab         Jump to the first task in the next section\n"
                 + "  Space       Set the focused task's status\n"
-                + "  Enter       Open the task in your browser\n"
+                + "  Enter       Open the task detail view (description, comments, attributes)\n"
+                + "  Ctrl+B      Open the task in your browser\n"
                 + "  Ctrl+P      Pin / unpin (pinned tasks group at the top)\n"
                 + "  Ctrl+R      Refresh now\n"
                 + "  F1          This help\n"
