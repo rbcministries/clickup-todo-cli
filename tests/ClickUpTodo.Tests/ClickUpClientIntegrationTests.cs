@@ -12,6 +12,7 @@ public sealed class ClickUpClientIntegrationTests
     private static string? Token => Environment.GetEnvironmentVariable("CLICKUP_TOKEN");
     private static string? WorkspaceId => Environment.GetEnvironmentVariable("CLICKUP_WORKSPACE_ID");
     private static string? ListId => Environment.GetEnvironmentVariable("CLICKUP_LIST_ID");
+    private static string? TaskId => Environment.GetEnvironmentVariable("CLICKUP_TASK_ID");
 
     [SkippableFact]
     public async Task GetMe_ReturnsAuthenticatedUser()
@@ -61,6 +62,35 @@ public sealed class ClickUpClientIntegrationTests
 
         Assert.NotEmpty(statuses);
         Assert.All(statuses, s => Assert.False(string.IsNullOrWhiteSpace(s.Name)));
+    }
+
+    [SkippableFact]
+    public async Task SetTaskStatus_ReturnsConfirmedStatusFromWriteResponse()
+    {
+        Skip.If(
+            string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(ListId) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN, CLICKUP_LIST_ID and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var statuses = await client.GetListStatusesAsync(ListId!);
+        Skip.If(statuses.Count < 2, "List needs at least two statuses to flip between for this test.");
+
+        var current = (await client.GetListTasksAsync(ListId!)).FirstOrDefault(t => t.Id == TaskId);
+        Skip.If(current is null, "CLICKUP_TASK_ID is not an open task on CLICKUP_LIST_ID.");
+
+        var target = statuses.First(s => !string.Equals(s.Name, current!.StatusName, StringComparison.OrdinalIgnoreCase));
+        try
+        {
+            // The write response should carry the new status — no read-after-write needed.
+            var confirmed = await client.SetTaskStatusAsync(TaskId!, target.Name);
+            Assert.Equal(target.Name, confirmed, ignoreCase: true);
+        }
+        finally
+        {
+            // Restore the original status so the test is idempotent.
+            if (!string.IsNullOrWhiteSpace(current!.StatusName))
+                await client.SetTaskStatusAsync(TaskId!, current.StatusName!);
+        }
     }
 
     [SkippableFact]
