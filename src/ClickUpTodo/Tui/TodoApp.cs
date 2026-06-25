@@ -246,7 +246,13 @@ public sealed class TodoApp
     private void OpenInBrowser()
     {
         var task = CurrentTask();
-        if (string.IsNullOrWhiteSpace(task?.Url))
+        LaunchBrowser(task?.Url, task?.Name);
+    }
+
+    /// <summary>Opens a task URL in the system browser, or flashes why it couldn't.</summary>
+    private void LaunchBrowser(string? url, string? name)
+    {
+        if (string.IsNullOrWhiteSpace(url))
         {
             Flash("No URL for this task.");
             return;
@@ -254,8 +260,8 @@ public sealed class TodoApp
 
         try
         {
-            Process.Start(new ProcessStartInfo(task.Url) { UseShellExecute = true });
-            Flash($"Opened: {task.Name}");
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            Flash($"Opened: {name}");
         }
         catch (Exception ex)
         {
@@ -282,8 +288,10 @@ public sealed class TodoApp
                 {
                     var openBrowser = TaskDetailView.Show(detail, comments);
                     Flash($"Closed detail: {task.Name}");
+                    // Use the URL we already fetched rather than re-reading the selected row, which a
+                    // background refresh could have reordered while the modal was open.
                     if (openBrowser)
-                        OpenInBrowser();
+                        LaunchBrowser(detail.Url, detail.Name);
                 });
             }
             catch (Exception ex)

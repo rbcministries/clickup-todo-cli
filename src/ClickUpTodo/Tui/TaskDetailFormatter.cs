@@ -30,7 +30,7 @@ public static class TaskDetailFormatter
     public static string Description(TaskDetail task)
         => string.IsNullOrWhiteSpace(task.Description) ? "(no description)" : task.Description!.Trim();
 
-    /// <summary>The Comments tab body: one block per comment, newest first (ClickUp's order).</summary>
+    /// <summary>The Comments tab body: one block per comment, in the order ClickUp returns them.</summary>
     public static string Comments(IReadOnlyList<CommentItem> comments)
     {
         if (comments.Count == 0)
