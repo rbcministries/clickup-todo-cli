@@ -270,36 +270,46 @@ public sealed class TodoApp
             return;
         }
 
+        // Fast path: statuses were warmed by the background prefetch — open instantly, no round-trip.
+        if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
+        {
+            ShowStatusPicker(task, cached);
+            return;
+        }
+
+        // Cold path: fetch off the UI thread with a loading indicator, then show the modal back on it.
         Flash("Loading statuses…");
-        // Fetch statuses off the UI thread, then show the modal back on it.
         _ = Task.Run(async () =>
         {
             try
             {
                 var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
-                Application.Invoke(() =>
-                {
-                    if (statuses.Count == 0)
-                    {
-                        Flash("No statuses available for this list.");
-                        return;
-                    }
-
-                    var chosen = StatusPicker.Show(task.Name, statuses, task.StatusName);
-                    if (chosen is null || string.Equals(chosen, task.StatusName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        Flash("Status unchanged.");
-                        return;
-                    }
-
-                    ApplyStatus(task, chosen);
-                });
+                Application.Invoke(() => ShowStatusPicker(task, statuses));
             }
             catch (Exception ex)
             {
                 Application.Invoke(() => Flash($"Could not load statuses: {Short(ex)}"));
             }
         });
+    }
+
+    /// <summary>Shows the status picker for a task and applies the choice. Must run on the UI thread.</summary>
+    private void ShowStatusPicker(TaskItem task, IReadOnlyList<StatusOption> statuses)
+    {
+        if (statuses.Count == 0)
+        {
+            Flash("No statuses available for this list.");
+            return;
+        }
+
+        var chosen = StatusPicker.Show(task.Name, statuses, task.StatusName);
+        if (chosen is null || string.Equals(chosen, task.StatusName, StringComparison.OrdinalIgnoreCase))
+        {
+            Flash("Status unchanged.");
+            return;
+        }
+
+        ApplyStatus(task, chosen);
     }
 
     private void ApplyStatus(TaskItem task, string status)
@@ -399,6 +409,11 @@ public sealed class TodoApp
     {
         _all = tasks;
         _status = $"Updated {DateTime.Now:HH:mm:ss} · {tasks.Count} task(s) · refresh every {_config.RefreshSeconds}s";
+
+        // Warm the status cache for the lists currently on screen (best-effort, off the UI thread), so
+        // pressing Space opens the picker from cache instead of paying a round-trip (#10).
+        var visibleLists = tasks.Where(t => !string.IsNullOrWhiteSpace(t.ListId)).Select(t => t.ListId!);
+        _ = _tasks.PrefetchStatusesAsync(visibleLists);
 
         // Rebuilding the ListView (SetSource) forces a full reset + redraw. Skip it when the visible
         // task set is unchanged and just update the (cheap) status line.
