@@ -159,6 +159,19 @@
       }
     },
     "/v2/task/{task_id}": {
+      "get": {
+        "operationId": "GetTask",
+        "summary": "Get a single task with its full detail (description, tags, assignees, dates, custom fields).",
+        "parameters": [
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The task.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } }
+          }
+        }
+      },
       "put": {
         "operationId": "UpdateTask",
         "summary": "Update a task (used here to set its status).",
@@ -173,6 +186,21 @@
           "200": {
             "description": "The updated task.",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } }
+          }
+        }
+      }
+    },
+    "/v2/task/{task_id}/comment": {
+      "get": {
+        "operationId": "GetTaskComments",
+        "summary": "Get the comments on a task (most recent first).",
+        "parameters": [
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The task's comments.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommentsResponse" } } }
           }
         }
       }
@@ -257,14 +285,61 @@
         "type": "object",
         "properties": {
           "id": { "type": "string" },
+          "custom_id": { "type": "string", "nullable": true },
           "name": { "type": "string" },
           "url": { "type": "string", "nullable": true },
+          "text_content": { "type": "string", "nullable": true },
+          "description": { "type": "string", "nullable": true },
           "due_date": { "type": "string", "nullable": true },
+          "date_created": { "type": "string", "nullable": true },
           "date_updated": { "type": "string", "nullable": true },
           "archived": { "type": "boolean", "nullable": true },
           "status": { "$ref": "#/components/schemas/Status" },
-          "list": { "$ref": "#/components/schemas/TaskList" }
+          "priority": { "$ref": "#/components/schemas/Priority" },
+          "list": { "$ref": "#/components/schemas/TaskList" },
+          "tags": { "type": "array", "items": { "$ref": "#/components/schemas/Tag" } },
+          "assignees": { "type": "array", "items": { "$ref": "#/components/schemas/User" } },
+          "custom_fields": { "type": "array", "items": { "$ref": "#/components/schemas/CustomField" } }
         }
+      },
+      "Priority": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "nullable": true },
+          "priority": { "type": "string", "nullable": true },
+          "color": { "type": "string", "nullable": true }
+        }
+      },
+      "Tag": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "tag_fg": { "type": "string", "nullable": true },
+          "tag_bg": { "type": "string", "nullable": true }
+        }
+      },
+      "CustomField": {
+        "type": "object",
+        "description": "A task custom field. Only the stable identity fields are typed; the loosely-typed 'value' (which varies wildly by field type) is intentionally left to Kiota's AdditionalData and not surfaced yet — see the rich-value follow-up issue.",
+        "properties": {
+          "id": { "type": "string", "nullable": true },
+          "name": { "type": "string", "nullable": true },
+          "type": { "type": "string", "nullable": true }
+        }
+      },
+      "Comment": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "comment_text": { "type": "string", "nullable": true },
+          "user": { "$ref": "#/components/schemas/User" },
+          "date": { "type": "string", "nullable": true },
+          "resolved": { "type": "boolean", "nullable": true }
+        }
+      },
+      "CommentsResponse": {
+        "type": "object",
+        "properties": { "comments": { "type": "array", "items": { "$ref": "#/components/schemas/Comment" } } }
       },
       "TasksResponse": {
         "type": "object",
