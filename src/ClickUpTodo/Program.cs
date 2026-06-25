@@ -1,5 +1,6 @@
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
+using ClickUpTodo.Focus;
 using ClickUpTodo.Services;
 using ClickUpTodo.Setup;
 using ClickUpTodo.Tui;
@@ -74,7 +75,8 @@ catch (Exception ex)
 }
 
 var taskService = new TaskService(client, config, userId);
-new TodoApp(taskService, config, configStore).Run(driverName);
+var focusStore = new LocalFocusStore(config, configStore);
+new TodoApp(taskService, config, configStore, focusStore).Run(driverName);
 return 0;
 
 // Reads "--opt value" or "--opt=value" from args.
