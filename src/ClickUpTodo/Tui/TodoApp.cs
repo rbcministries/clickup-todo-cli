@@ -4,6 +4,7 @@ using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
 using ClickUpTodo.Services;
+using ClickUpTodo.Tui.Screens;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
@@ -25,11 +26,17 @@ namespace ClickUpTodo.Tui;
 /// This uses ONE ListView (with header rows) rather than two panes: a second focusable pane made
 /// repaints visibly laggy in Terminal.Gui 2.4 (see issue #3), while a single list is snappy.
 /// </para>
+/// <para>
+/// Secondary views (Settings, the status picker, Help) open as full-window <see cref="Screen"/>s
+/// swapped into this same toplevel — not nested modal <c>Dialog</c>s on their own
+/// <c>Application.Run</c> loop (see <see cref="ShowScreen"/>/#38). A nested run-loop competes with
+/// the background refresh's redraws and feels laggy, the same way the second pane did in #3.
+/// </para>
 /// </summary>
 public sealed class TodoApp
 {
     private const string FocusHeaderPrefix = "★ CURRENT FOCUS";
-    private const string TodoHeaderPrefix = "─ TO-DO";
+    private static readonly string TasksHeaderPrefix = $"─ {AppBranding.TasksSectionLabel}";
 
     private readonly TaskService _tasks;
     private readonly AppConfig _config;
@@ -41,6 +48,9 @@ public sealed class TodoApp
     private ListView _list = null!;
     private Label _statusLabel = null!;
     private RefreshService _refresh = null!;
+    // The full-window screen currently swapped in over the list (Settings / status picker / Help),
+    // or null when the list is showing. Only one screen is open at a time.
+    private Screen? _activeScreen;
 
     private IReadOnlyList<TaskItem> _all = [];
     // Parallel to the ListView's rows: the task on each row, or null for a header/separator row.
@@ -87,7 +97,7 @@ public sealed class TodoApp
 
     private void Build()
     {
-        _window = new Window { Title = $"ClickUp To-Do — {_config.WorkspaceName}" };
+        _window = new Window { Title = AppBranding.WindowTitle(_config.WorkspaceName) };
 
         _frame = new FrameView
         {
@@ -107,7 +117,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · Tab next section · Space status · Enter open · Ctrl+P pin · Ctrl+R refresh · F1 help · F2 settings · F3 filter/sort/group · Ctrl+Q quit · type to search",
+            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · Ctrl+Q quit · type to search",
         };
 
         _window.Add(_frame, _statusLabel, help);
@@ -133,6 +143,10 @@ public sealed class TodoApp
                     Flash("Refreshing…");
                     _refresh.RequestRefresh();
                     break;
+                case KeyCode.B:
+                    key.Handled = true;
+                    OpenInBrowser();
+                    break;
                 case KeyCode.Q:
                 case KeyCode.C: // Ctrl+C as a quit alias (the OS/terminal may intercept it first).
                     key.Handled = true;
@@ -150,7 +164,7 @@ public sealed class TodoApp
                 break;
             case KeyCode.Enter:
                 key.Handled = true;
-                OpenInBrowser();
+                OpenDetail();
                 break;
             case KeyCode.Tab:
                 key.Handled = true;
@@ -206,17 +220,77 @@ public sealed class TodoApp
 
     private void OpenSettings()
     {
-        var result = SettingsDialog.Show(_config.RefreshSeconds, _config.ExcludedStatuses);
-        if (result is null)
+        if (_activeScreen is not null)
             return;
 
-        _config.RefreshSeconds = result.RefreshSeconds;
-        _config.ExcludedStatuses = result.ExcludedStatuses;
-        _configStore.Save(_config);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.ExcludedStatuses);
+        ShowScreen(screen, () =>
+        {
+            var result = screen.Result;
+            if (result is null)
+                return;
 
-        _refresh.IntervalSeconds = result.RefreshSeconds;
-        Flash($"Settings saved · refresh {result.RefreshSeconds}s · {result.ExcludedStatuses.Count} status(es) excluded");
-        _refresh.RequestRefresh();
+            _config.RefreshSeconds = result.RefreshSeconds;
+            _config.ExcludedStatuses = result.ExcludedStatuses;
+            _configStore.Save(_config);
+
+            _refresh.IntervalSeconds = result.RefreshSeconds;
+            Flash($"Settings saved · refresh {result.RefreshSeconds}s · {result.ExcludedStatuses.Count} status(es) excluded");
+            _refresh.RequestRefresh();
+        });
+    }
+
+    // ── Screen navigation seam ─────────────────────────────────────────────────
+    // Swaps a full-window screen in over the list within the single toplevel (no nested
+    // Application.Run). #17's detail view builds on this. See the class header / #38.
+
+    /// <summary>
+    /// Mounts a screen over the task list: hides the list frame, adds the screen to the window, and
+    /// focuses it. When the screen raises <see cref="Screen.Closed"/>, <paramref name="onClosed"/>
+    /// runs (to read any result) and then the list is restored. No-ops if a screen is already open.
+    /// </summary>
+    private void ShowScreen(Screen screen, Action onClosed)
+    {
+        if (_activeScreen is not null)
+            return;
+
+        _activeScreen = screen;
+
+        EventHandler? handler = null;
+        handler = (_, _) =>
+        {
+            // Guard against a double-fire (e.g. two Esc presses before teardown runs).
+            if (_activeScreen != screen)
+                return;
+            screen.Closed -= handler;
+            // Defer teardown out of the screen's own key handler: disposing the view mid-keypress
+            // can leave Terminal.Gui's input/focus machinery pointing at a freed view. Running on the
+            // next loop iteration lets the current input cycle finish first.
+            Application.Invoke(() =>
+            {
+                onClosed();      // read the screen's result while it's still intact
+                CloseScreen();   // then tear it down and restore the list
+            });
+        };
+        screen.Closed += handler;
+
+        _frame.Visible = false;
+        _window.Add(screen);
+        screen.OnShown();
+    }
+
+    /// <summary>Tears down the active screen and restores the list with its cursor intact.</summary>
+    private void CloseScreen()
+    {
+        if (_activeScreen is null)
+            return;
+
+        var screen = _activeScreen;
+        _activeScreen = null;
+        _window.Remove(screen);
+        screen.Dispose();
+        _frame.Visible = true;
+        _list.SetFocus();
     }
 
     /// <summary>The task on the selected row, or null if a header row (or nothing) is selected.</summary>
@@ -288,7 +362,13 @@ public sealed class TodoApp
     private void OpenInBrowser()
     {
         var task = CurrentTask();
-        if (string.IsNullOrWhiteSpace(task?.Url))
+        LaunchBrowser(task?.Url, task?.Name);
+    }
+
+    /// <summary>Opens a task URL in the system browser, or flashes why it couldn't.</summary>
+    private void LaunchBrowser(string? url, string? name)
+    {
+        if (string.IsNullOrWhiteSpace(url))
         {
             Flash("No URL for this task.");
             return;
@@ -296,13 +376,49 @@ public sealed class TodoApp
 
         try
         {
-            Process.Start(new ProcessStartInfo(task.Url) { UseShellExecute = true });
-            Flash($"Opened: {task.Name}");
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            Flash($"Opened: {name}");
         }
         catch (Exception ex)
         {
             Flash($"Could not open browser: {Short(ex)}");
         }
+    }
+
+    private void OpenDetail()
+    {
+        var task = CurrentTask();
+        if (task is null || _activeScreen is not null)
+            return;
+
+        Flash("Loading details…");
+        // Fetch the detail + comments off the UI thread, then swap in the detail screen back on it.
+        // The background dashboard refresh keeps running while the screen is open.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var detail = await _tasks.GetTaskDetailAsync(task.Id);
+                var comments = await _tasks.GetTaskCommentsAsync(task.Id);
+                Application.Invoke(() =>
+                {
+                    if (_activeScreen is not null)
+                        return;
+                    var screen = new TaskDetailScreen(detail, comments);
+                    ShowScreen(screen, () =>
+                    {
+                        // Use the URL we already fetched rather than re-reading the (possibly
+                        // reordered) selected row after a background refresh.
+                        if (screen.OpenBrowserRequested)
+                            LaunchBrowser(detail.Url, detail.Name);
+                    });
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not load task detail: {Short(ex)}"));
+            }
+        });
     }
 
     private void OpenStatusPicker()
@@ -348,14 +464,21 @@ public sealed class TodoApp
             return;
         }
 
-        var chosen = StatusPicker.Show(task.Name, statuses, task.StatusName);
-        if (chosen is null || string.Equals(chosen, task.StatusName, StringComparison.OrdinalIgnoreCase))
-        {
-            Flash("Status unchanged.");
+        if (_activeScreen is not null)
             return;
-        }
 
-        ApplyStatus(task, chosen);
+        var screen = new StatusPickerScreen(task.Name, statuses, task.StatusName);
+        ShowScreen(screen, () =>
+        {
+            var chosen = screen.Chosen;
+            if (chosen is null || string.Equals(chosen, task.StatusName, StringComparison.OrdinalIgnoreCase))
+            {
+                Flash("Status unchanged.");
+                return;
+            }
+
+            ApplyStatus(task, chosen);
+        });
     }
 
     private void ApplyStatus(TaskItem task, string status)
@@ -411,47 +534,11 @@ public sealed class TodoApp
         _display[index] = sending ? $"{text}  (sending…)" : text;
     }
 
-    private static void ShowHelp()
+    private void ShowHelp()
     {
-        var dialog = new Dialog
-        {
-            Title = "Keyboard shortcuts",
-            Width = Dim.Percent(70),
-            Height = Dim.Percent(70),
-        };
-        var body = new Label
-        {
-            X = 1,
-            Y = 0,
-            Width = Dim.Fill(1),
-            Height = Dim.Fill(1),
-            Text =
-                "\n"
-                + "  ↑ / ↓       Move between tasks\n"
-                + "  (type)      Search tasks by title (type-ahead)\n"
-                + "  Tab         Jump to the first task in the next section\n"
-                + "  Space       Set the focused task's status\n"
-                + "  Enter       Open the task in your browser\n"
-                + "  Ctrl+P      Pin / unpin (pinned tasks group at the top)\n"
-                + "  Ctrl+R      Refresh now\n"
-                + "  F1          This help\n"
-                + "  F2          Settings (refresh rate, excluded statuses)\n"
-                + "  F3          Filter / sort / group the task list\n"
-                + "  Ctrl+Q/Esc  Quit\n"
-                + "\n"
-                + "  Esc or Enter to close this help.",
-        };
-        dialog.KeyDown += (_, key) =>
-        {
-            if (key.KeyCode is KeyCode.Esc or KeyCode.Enter)
-            {
-                key.Handled = true;
-                Application.RequestStop();
-            }
-        };
-        dialog.Add(body);
-        Application.Run(dialog);
-        dialog.Dispose();
+        if (_activeScreen is not null)
+            return;
+        ShowScreen(new HelpScreen(), static () => { });
     }
 
     // ── Rendering ────────────────────────────────────────────────────────────

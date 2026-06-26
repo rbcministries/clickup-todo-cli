@@ -94,6 +94,36 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task GetTaskDetail_ReturnsRichTask()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var detail = await client.GetTaskDetailAsync(TaskId!);
+
+        Assert.Equal(TaskId, detail.Id);
+        Assert.False(string.IsNullOrWhiteSpace(detail.Name));
+        // Tags/assignees/custom-field collections are always materialized (never null).
+        Assert.NotNull(detail.Tags);
+        Assert.NotNull(detail.Assignees);
+        Assert.NotNull(detail.CustomFields);
+    }
+
+    [SkippableFact]
+    public async Task GetTaskComments_ReturnsComments()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var comments = await client.GetTaskCommentsAsync(TaskId!);
+
+        // May legitimately be empty, but every returned comment must have an id.
+        Assert.All(comments, c => Assert.False(string.IsNullOrWhiteSpace(c.Id)));
+    }
+
+    [SkippableFact]
     public async Task BadToken_IsReportedAsAuthFailure()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token), "Set CLICKUP_TOKEN to run ClickUp integration tests.");

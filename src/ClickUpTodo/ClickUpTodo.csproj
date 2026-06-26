@@ -16,7 +16,8 @@
     <Version>0.1.0</Version>
     <Authors>RBC Ministries</Authors>
     <Company>RBC Ministries</Company>
-    <Description>A lightweight, keyboard-driven terminal to-do list for ClickUp tasks assigned to you and on your Personal Tasks list.</Description>
+    <Product>ClickUp Simple CLI</Product>
+    <Description>ClickUp Simple CLI — a lightweight, keyboard-driven terminal task list for ClickUp tasks assigned to you and on your Personal Tasks list.</Description>
     <PackageTags>clickup;todo;cli;tui;terminal</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/rbcministries/clickup-todo-cli</PackageProjectUrl>

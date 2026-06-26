@@ -108,6 +108,28 @@ public sealed class ClickUpClient : IDisposable
             return updated?.Status?.StatusProp;
         });
 
+    /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>
+    public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
+        => Guard("GetTask", async () =>
+        {
+            var t = await _client.V2.Task[taskId].GetAsync(cancellationToken: ct)
+                    ?? throw new InvalidOperationException($"ClickUp returned no task for id '{taskId}'.");
+            return MapDetail(t);
+        });
+
+    /// <summary>The comments on a task, mapped to the stable <see cref="CommentItem"/> shape.</summary>
+    public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
+        => Guard("GetTaskComments", async () =>
+        {
+            var comments = (await _client.V2.Task[taskId].Comment.GetAsync(cancellationToken: ct))?.Comments ?? [];
+            return (IReadOnlyList<CommentItem>)comments.Select(c => new CommentItem(
+                Id: c.Id ?? "",
+                Author: DisplayName(c.User),
+                DateMs: ParseMs(c.Date),
+                Text: c.CommentText ?? "",
+                Resolved: c.Resolved == true)).ToList();
+        });
+
     // ── Mapping & plumbing ──────────────────────────────────────────────────
 
     private static TaskItem Map(TaskObject t) => new()
@@ -115,13 +137,50 @@ public sealed class ClickUpClient : IDisposable
         Id = t.Id ?? "",
         Name = t.Name ?? "(untitled)",
         Url = t.Url,
-        DueDateMs = long.TryParse(t.DueDate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms) ? ms : null,
-        UpdatedMs = long.TryParse(t.DateUpdated, NumberStyles.Integer, CultureInfo.InvariantCulture, out var upd) ? upd : null,
+        DueDateMs = ParseMs(t.DueDate),
+        UpdatedMs = ParseMs(t.DateUpdated),
         ListId = t.List?.Id,
         ListName = t.List?.Name,
         StatusName = t.Status?.StatusProp,
         StatusColor = t.Status?.Color,
     };
+
+    private static TaskDetail MapDetail(TaskObject t) => new()
+    {
+        Id = t.Id ?? "",
+        CustomId = t.CustomId,
+        Name = t.Name ?? "(untitled)",
+        Url = t.Url,
+        StatusName = t.Status?.StatusProp,
+        StatusColor = t.Status?.Color,
+        ListId = t.List?.Id,
+        ListName = t.List?.Name,
+        // ClickUp's text_content is the rendered plain text; description is the raw (often markdown)
+        // source. Prefer the plain text for a terminal, falling back to the raw form.
+        Description = !string.IsNullOrWhiteSpace(t.TextContent) ? t.TextContent : t.Description,
+        Priority = t.Priority?.PriorityProp,
+        DueDateMs = ParseMs(t.DueDate),
+        CreatedMs = ParseMs(t.DateCreated),
+        UpdatedMs = ParseMs(t.DateUpdated),
+        Tags = t.Tags?.Select(tag => tag.Name ?? "").Where(n => n.Length > 0).ToList() ?? [],
+        Assignees = t.Assignees?.Select(DisplayName).Where(n => n.Length > 0).ToList() ?? [],
+        CustomFields = t.CustomFields?
+            .Where(f => !string.IsNullOrWhiteSpace(f.Name))
+            .Select(f => new CustomFieldItem(f.Name!, f.Type))
+            .ToList() ?? [],
+    };
+
+    /// <summary>Best display name for a user: username, then email, then numeric id.</summary>
+    private static string DisplayName(User? user)
+        => user is null
+            ? ""
+            : !string.IsNullOrWhiteSpace(user.Username) ? user.Username!
+            : !string.IsNullOrWhiteSpace(user.Email) ? user.Email!
+            : user.Id?.ToString(CultureInfo.InvariantCulture) ?? "";
+
+    /// <summary>Parses a ClickUp epoch-milliseconds string, or null when absent/unparseable.</summary>
+    private static long? ParseMs(string? value)
+        => long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms) ? ms : null;
 
     /// <summary>Walks a paginated task endpoint until ClickUp reports the last page.</summary>
     private static async Task<List<TaskItem>> PageAsync(Func<int, Task<TasksResponse?>> fetchPage, CancellationToken ct)
