@@ -612,11 +612,11 @@ public sealed class TodoApp
         foreach (var group in groups)
         {
             // A header per named group when grouping; otherwise keep today's behaviour — the single
-            // "TO-DO" header only appears when there's a pinned section above it to separate from.
+            // tasks-section header only appears when there's a pinned section above it to separate from.
             if (grouped)
                 AddHeader($"─ {(group.Label ?? "").ToUpperInvariant()} ({group.Tasks.Count}) ─");
             else if (pinned.Count > 0)
-                AddHeader($"{TodoHeaderPrefix} ({todoCount}) ─");
+                AddHeader($"{TasksHeaderPrefix} ({todoCount}) ─");
 
             foreach (var t in group.Tasks)
                 AddTask(t);
