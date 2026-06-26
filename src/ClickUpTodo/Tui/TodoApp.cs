@@ -117,7 +117,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · Tab next section · Space status · Enter open · Ctrl+P pin · Ctrl+R refresh · F1 help · F2 settings · Ctrl+Q quit · type to search",
+            Text = "↑/↓ move · Tab next section · Space status · Enter detail · Ctrl+B browser · Ctrl+P pin · Ctrl+R refresh · F1 help · F2 settings · Ctrl+Q quit · type to search",
         };
 
         _window.Add(_frame, _statusLabel, help);
@@ -143,6 +143,10 @@ public sealed class TodoApp
                     Flash("Refreshing…");
                     _refresh.RequestRefresh();
                     break;
+                case KeyCode.B:
+                    key.Handled = true;
+                    OpenInBrowser();
+                    break;
                 case KeyCode.Q:
                 case KeyCode.C: // Ctrl+C as a quit alias (the OS/terminal may intercept it first).
                     key.Handled = true;
@@ -160,7 +164,7 @@ public sealed class TodoApp
                 break;
             case KeyCode.Enter:
                 key.Handled = true;
-                OpenInBrowser();
+                OpenDetail();
                 break;
             case KeyCode.Tab:
                 key.Handled = true;
@@ -325,7 +329,13 @@ public sealed class TodoApp
     private void OpenInBrowser()
     {
         var task = CurrentTask();
-        if (string.IsNullOrWhiteSpace(task?.Url))
+        LaunchBrowser(task?.Url, task?.Name);
+    }
+
+    /// <summary>Opens a task URL in the system browser, or flashes why it couldn't.</summary>
+    private void LaunchBrowser(string? url, string? name)
+    {
+        if (string.IsNullOrWhiteSpace(url))
         {
             Flash("No URL for this task.");
             return;
@@ -333,13 +343,49 @@ public sealed class TodoApp
 
         try
         {
-            Process.Start(new ProcessStartInfo(task.Url) { UseShellExecute = true });
-            Flash($"Opened: {task.Name}");
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            Flash($"Opened: {name}");
         }
         catch (Exception ex)
         {
             Flash($"Could not open browser: {Short(ex)}");
         }
+    }
+
+    private void OpenDetail()
+    {
+        var task = CurrentTask();
+        if (task is null || _activeScreen is not null)
+            return;
+
+        Flash("Loading details…");
+        // Fetch the detail + comments off the UI thread, then swap in the detail screen back on it.
+        // The background dashboard refresh keeps running while the screen is open.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var detail = await _tasks.GetTaskDetailAsync(task.Id);
+                var comments = await _tasks.GetTaskCommentsAsync(task.Id);
+                Application.Invoke(() =>
+                {
+                    if (_activeScreen is not null)
+                        return;
+                    var screen = new TaskDetailScreen(detail, comments);
+                    ShowScreen(screen, () =>
+                    {
+                        // Use the URL we already fetched rather than re-reading the (possibly
+                        // reordered) selected row after a background refresh.
+                        if (screen.OpenBrowserRequested)
+                            LaunchBrowser(detail.Url, detail.Name);
+                    });
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not load task detail: {Short(ex)}"));
+            }
+        });
     }
 
     private void OpenStatusPicker()

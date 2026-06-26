@@ -16,6 +16,38 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         public IDictionary<string, object> AdditionalData { get; set; }
         /// <summary>The archived property</summary>
         public bool? Archived { get; set; }
+        /// <summary>The assignees property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.User>? Assignees { get; set; }
+#nullable restore
+#else
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.User> Assignees { get; set; }
+#endif
+        /// <summary>The custom_fields property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.CustomField>? CustomFields { get; set; }
+#nullable restore
+#else
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.CustomField> CustomFields { get; set; }
+#endif
+        /// <summary>The custom_id property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public string? CustomId { get; set; }
+#nullable restore
+#else
+        public string CustomId { get; set; }
+#endif
+        /// <summary>The date_created property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public string? DateCreated { get; set; }
+#nullable restore
+#else
+        public string DateCreated { get; set; }
+#endif
         /// <summary>The date_updated property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -23,6 +55,14 @@ namespace ClickUpTodo.ClickUp.Generated.Models
 #nullable restore
 #else
         public string DateUpdated { get; set; }
+#endif
+        /// <summary>The description property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public string? Description { get; set; }
+#nullable restore
+#else
+        public string Description { get; set; }
 #endif
         /// <summary>The due_date property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
@@ -56,6 +96,14 @@ namespace ClickUpTodo.ClickUp.Generated.Models
 #else
         public string Name { get; set; }
 #endif
+        /// <summary>The priority property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public global::ClickUpTodo.ClickUp.Generated.Models.Priority? Priority { get; set; }
+#nullable restore
+#else
+        public global::ClickUpTodo.ClickUp.Generated.Models.Priority Priority { get; set; }
+#endif
         /// <summary>The status property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -63,6 +111,22 @@ namespace ClickUpTodo.ClickUp.Generated.Models
 #nullable restore
 #else
         public global::ClickUpTodo.ClickUp.Generated.Models.Status Status { get; set; }
+#endif
+        /// <summary>The tags property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.Tag>? Tags { get; set; }
+#nullable restore
+#else
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.Tag> Tags { get; set; }
+#endif
+        /// <summary>The text_content property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public string? TextContent { get; set; }
+#nullable restore
+#else
+        public string TextContent { get; set; }
 #endif
         /// <summary>The url property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
@@ -98,12 +162,20 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             return new Dictionary<string, Action<IParseNode>>
             {
                 { "archived", n => { Archived = n.GetBoolValue(); } },
+                { "assignees", n => { Assignees = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.User>(global::ClickUpTodo.ClickUp.Generated.Models.User.CreateFromDiscriminatorValue)?.AsList(); } },
+                { "custom_fields", n => { CustomFields = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.CustomField>(global::ClickUpTodo.ClickUp.Generated.Models.CustomField.CreateFromDiscriminatorValue)?.AsList(); } },
+                { "custom_id", n => { CustomId = n.GetStringValue(); } },
+                { "date_created", n => { DateCreated = n.GetStringValue(); } },
                 { "date_updated", n => { DateUpdated = n.GetStringValue(); } },
+                { "description", n => { Description = n.GetStringValue(); } },
                 { "due_date", n => { DueDate = n.GetStringValue(); } },
                 { "id", n => { Id = n.GetStringValue(); } },
                 { "list", n => { List = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.TaskList>(global::ClickUpTodo.ClickUp.Generated.Models.TaskList.CreateFromDiscriminatorValue); } },
                 { "name", n => { Name = n.GetStringValue(); } },
+                { "priority", n => { Priority = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Priority>(global::ClickUpTodo.ClickUp.Generated.Models.Priority.CreateFromDiscriminatorValue); } },
                 { "status", n => { Status = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Status>(global::ClickUpTodo.ClickUp.Generated.Models.Status.CreateFromDiscriminatorValue); } },
+                { "tags", n => { Tags = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.Tag>(global::ClickUpTodo.ClickUp.Generated.Models.Tag.CreateFromDiscriminatorValue)?.AsList(); } },
+                { "text_content", n => { TextContent = n.GetStringValue(); } },
                 { "url", n => { Url = n.GetStringValue(); } },
             };
         }
@@ -115,12 +187,20 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
             writer.WriteBoolValue("archived", Archived);
+            writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.User>("assignees", Assignees);
+            writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.CustomField>("custom_fields", CustomFields);
+            writer.WriteStringValue("custom_id", CustomId);
+            writer.WriteStringValue("date_created", DateCreated);
             writer.WriteStringValue("date_updated", DateUpdated);
+            writer.WriteStringValue("description", Description);
             writer.WriteStringValue("due_date", DueDate);
             writer.WriteStringValue("id", Id);
             writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.TaskList>("list", List);
             writer.WriteStringValue("name", Name);
+            writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Priority>("priority", Priority);
             writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Status>("status", Status);
+            writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.Tag>("tags", Tags);
+            writer.WriteStringValue("text_content", TextContent);
             writer.WriteStringValue("url", Url);
             writer.WriteAdditionalData(AdditionalData);
         }

@@ -59,6 +59,14 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     public Task<string?> SetStatusAsync(string taskId, string statusName, CancellationToken ct = default)
         => client.SetTaskStatusAsync(taskId, statusName, ct);
 
+    /// <summary>Full detail for a single task, fetched on demand for the detail view (#17).</summary>
+    public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
+        => client.GetTaskDetailAsync(taskId, ct);
+
+    /// <summary>The comments on a task, for the detail view's Comments tab (#17).</summary>
+    public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
+        => client.GetTaskCommentsAsync(taskId, ct);
+
     /// <summary>
     /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying
     /// <paramref name="newStatus"/>, leaving every other task and the overall order untouched. Pure
