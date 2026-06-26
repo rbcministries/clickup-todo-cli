@@ -1,3 +1,4 @@
+using ClickUpTodo;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
@@ -20,10 +21,10 @@ if (args.Any(a => a is "--reset" or "--logout"))
 
 if (args.Any(a => a is "--help" or "-h" or "-?"))
 {
-    Console.WriteLine("clickup-todo — a keyboard-driven ClickUp to-do list.");
+    Console.WriteLine($"clickup-todo — {AppBranding.DisplayName}, a keyboard-driven ClickUp task list.");
     Console.WriteLine();
     Console.WriteLine("Usage: clickup-todo [--reset] [--driver <name>]");
-    Console.WriteLine("  (no args)        Launch the to-do UI (runs first-time setup if needed).");
+    Console.WriteLine("  (no args)        Launch the task UI (runs first-time setup if needed).");
     Console.WriteLine("  --reset          Forget the saved token and settings.");
     Console.WriteLine("  --driver <name>  Force a Terminal.Gui console driver. One of:");
     Console.WriteLine("                     windows  native Win32 input (try this if input feels laggy)");

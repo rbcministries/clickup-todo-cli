@@ -36,7 +36,7 @@ namespace ClickUpTodo.Tui;
 public sealed class TodoApp
 {
     private const string FocusHeaderPrefix = "★ CURRENT FOCUS";
-    private const string TodoHeaderPrefix = "─ TO-DO";
+    private static readonly string TasksHeaderPrefix = $"─ {AppBranding.TasksSectionLabel}";
 
     private readonly TaskService _tasks;
     private readonly AppConfig _config;
@@ -97,7 +97,7 @@ public sealed class TodoApp
 
     private void Build()
     {
-        _window = new Window { Title = $"ClickUp To-Do — {_config.WorkspaceName}" };
+        _window = new Window { Title = AppBranding.WindowTitle(_config.WorkspaceName) };
 
         _frame = new FrameView
         {
@@ -511,7 +511,7 @@ public sealed class TodoApp
             AddHeader($"{FocusHeaderPrefix} ({pinned.Count})");
             foreach (var t in pinned)
                 AddTask(t);
-            AddHeader($"{TodoHeaderPrefix} ({todo.Count}) ─");
+            AddHeader($"{TasksHeaderPrefix} ({todo.Count}) ─");
         }
         foreach (var t in todo)
             AddTask(t);
@@ -520,7 +520,7 @@ public sealed class TodoApp
         // with its ClickUp color. Assigning Source (rather than SetSource) lets us pass our source;
         // the ListView disposes the previous one.
         _list.Source = new StatusBadgeListSource(_display, _badges);
-        _frame.Title = $"Tasks — {pinned.Count} pinned · {todo.Count} to-do";
+        _frame.Title = $"Tasks — {pinned.Count} pinned · {todo.Count} other";
 
         // Restore the cursor onto the same task, or the first task row.
         var target = keepTaskId is not null ? _rows.FindIndex(r => r?.Id == keepTaskId) : -1;
