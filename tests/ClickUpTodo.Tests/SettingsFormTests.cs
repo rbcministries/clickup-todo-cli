@@ -28,6 +28,10 @@ public sealed class SettingsFormTests
         => Assert.Equal(42, SettingsForm.ParseRefreshSeconds(text, fallback: 42));
 
     [Fact]
+    public void ParseRefreshSeconds_AcceptsWhitespacePaddedIntegers()
+        => Assert.Equal(60, SettingsForm.ParseRefreshSeconds("  60  ", fallback: 99));
+
+    [Fact]
     public void CanAdd_AllowsANewNonBlankStatus()
         => Assert.True(SettingsForm.CanAdd(["cancelled"], "won't do"));
 
@@ -37,6 +41,10 @@ public sealed class SettingsFormTests
     [InlineData("   ")]
     public void CanAdd_RejectsBlank(string? candidate)
         => Assert.False(SettingsForm.CanAdd([], candidate));
+
+    [Fact]
+    public void CanAdd_AcceptsATrimmedButDistinctCandidate()
+        => Assert.True(SettingsForm.CanAdd(["cancelled"], "  done  "));
 
     [Fact]
     public void CanAdd_RejectsCaseInsensitiveDuplicate()
