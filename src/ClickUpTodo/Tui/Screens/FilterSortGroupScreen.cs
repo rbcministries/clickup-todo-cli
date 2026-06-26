@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Services;
-using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
@@ -11,45 +10,40 @@ using Terminal.Gui.Views;
 // supported v2 pattern; silence the deprecation until the instance-based API stabilizes.
 #pragma warning disable CS0618
 
-namespace ClickUpTodo.Tui;
+namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>
-/// A modal editor for the F3 view: build filter rules (field / operator / value), pick a sort field
-/// and direction, and pick a group field. Returns the new <see cref="ViewSettings"/> on Save, or
-/// null on Cancel. All semantics live in the pure <see cref="TaskView"/> engine — this is only the
-/// presentation, kept thin so it can move to a full-window screen later (#38).
+/// A full-window screen to edit the F3 view: build filter rules (field / operator / value), pick a
+/// sort field + direction, and a group field. On Save it exposes the new <see cref="ViewSettings"/>
+/// via <see cref="Result"/> and closes; Cancel/Esc close with <see cref="Result"/> left null. All
+/// semantics live in the pure <see cref="TaskView"/> engine and <see cref="FilterSortGroupForm"/> —
+/// this is only presentation, swapped into the dashboard's single toplevel like the other screens (#38).
 /// </summary>
-public static class FilterSortGroupDialog
+public sealed class FilterSortGroupScreen : Screen
 {
-    private static readonly TaskField[] Fields =
-        [TaskField.Status, TaskField.List, TaskField.LastActivity, TaskField.Due];
+    private readonly ListView _fieldList;
 
-    private static readonly FilterOp[] Ops =
-        [FilterOp.Is, FilterOp.IsNot, FilterOp.GreaterThan, FilterOp.LessThan, FilterOp.GreaterOrEqual, FilterOp.LessOrEqual];
+    /// <summary>The saved view, or null if the screen was cancelled.</summary>
+    public ViewSettings? Result { get; private set; }
 
-    public static ViewSettings? Show(ViewSettings current)
+    public FilterSortGroupScreen(ViewSettings current)
     {
+        Title = "Filter · Sort · Group";
+
         // Work on a copy so Cancel leaves the caller's settings untouched.
         var working = current.Filters.Select(r => r with { }).ToList();
         var direction = current.SortDirection;
 
-        var dialog = new Dialog
-        {
-            Title = "Filter · Sort · Group",
-            Width = Dim.Percent(85),
-            Height = Dim.Percent(85),
-        };
-
         // ── Left column: build a filter, then the active-filter list ──────────
         var addHeader = new Label { X = 1, Y = 0, Text = "─ Add a filter ─" };
         var fieldLabel = new Label { X = 1, Y = 1, Text = "Field:" };
-        var fieldList = new ListView { X = 1, Y = 2, Width = 26, Height = 4 };
-        fieldList.SetSource(new ObservableCollection<string>(Fields.Select(TaskFieldInfo.DisplayName)));
-        fieldList.SelectedItem = 0;
+        _fieldList = new ListView { X = 1, Y = 2, Width = 26, Height = 4 };
+        _fieldList.SetSource(new ObservableCollection<string>(FilterSortGroupForm.Fields.Select(TaskFieldInfo.DisplayName)));
+        _fieldList.SelectedItem = 0;
 
         var opLabel = new Label { X = 1, Y = 6, Text = "Operator:" };
         var opList = new ListView { X = 1, Y = 7, Width = 26, Height = 6 };
-        opList.SetSource(new ObservableCollection<string>(Ops.Select(TaskFieldInfo.OpSymbol)));
+        opList.SetSource(new ObservableCollection<string>(FilterSortGroupForm.Ops.Select(TaskFieldInfo.OpSymbol)));
         opList.SelectedItem = 0;
 
         var valueLabel = new Label { X = 1, Y = 13, Text = "Value (name, or yyyy-mm-dd):" };
@@ -68,8 +62,8 @@ public static class FilterSortGroupDialog
         var sortHeader = new Label { X = rightX, Y = 0, Text = "─ Sort ─" };
         var sortLabel = new Label { X = rightX, Y = 1, Text = "Sort by:" };
         var sortList = new ListView { X = rightX, Y = 2, Width = Dim.Fill(2), Height = 6 };
-        sortList.SetSource(new ObservableCollection<string>(FieldChoices()));
-        sortList.SelectedItem = FieldToIndex(current.SortField);
+        sortList.SetSource(new ObservableCollection<string>(FilterSortGroupForm.FieldChoices()));
+        sortList.SelectedItem = FilterSortGroupForm.FieldToIndex(current.SortField);
 
         var dirButton = new Button { X = rightX, Y = 9, Text = DirectionText(direction) };
         dirButton.Accepting += (_, _) =>
@@ -81,40 +75,33 @@ public static class FilterSortGroupDialog
         var groupHeader = new Label { X = rightX, Y = 11, Text = "─ Group ─" };
         var groupLabel = new Label { X = rightX, Y = 12, Text = "Group by:" };
         var groupList = new ListView { X = rightX, Y = 13, Width = Dim.Fill(2), Height = 6 };
-        groupList.SetSource(new ObservableCollection<string>(FieldChoices()));
-        groupList.SelectedItem = FieldToIndex(current.GroupField);
+        groupList.SetSource(new ObservableCollection<string>(FilterSortGroupForm.FieldChoices()));
+        groupList.SelectedItem = FilterSortGroupForm.FieldToIndex(current.GroupField);
 
         var hint = new Label
         {
             X = 1,
             Y = Pos.AnchorEnd(2),
             Width = Dim.Fill(1),
-            Text = "Tab moves · Enter in Value adds · Del removes selected filter",
+            Text = "Tab moves · Enter in Value adds · Del removes selected filter · Esc cancels",
         };
 
-        void Add()
+        void AddFilter()
         {
-            var field = Fields[Clamp(fieldList.SelectedItem, Fields.Length)];
-            var op = Ops[Clamp(opList.SelectedItem, Ops.Length)];
-            var value = valueField.Text?.Trim() ?? "";
-            if (string.IsNullOrWhiteSpace(value))
+            var field = FilterSortGroupForm.Fields[FilterSortGroupForm.Clamp(_fieldList.SelectedItem, FilterSortGroupForm.Fields.Count)];
+            var op = FilterSortGroupForm.Ops[FilterSortGroupForm.Clamp(opList.SelectedItem, FilterSortGroupForm.Ops.Count)];
+            if (!FilterSortGroupForm.TryBuildRule(field, op, valueField.Text, out var rule, out var error))
             {
-                hint.Text = "Enter a value before adding a filter.";
+                hint.Text = error!;
                 return;
             }
-            if (!TaskFieldInfo.IsNumeric(field) && op is not (FilterOp.Is or FilterOp.IsNot))
-            {
-                hint.Text = $"{TaskFieldInfo.DisplayName(field)} only supports IS / IS NOT.";
-                return;
-            }
-            var rule = new FilterRule { Field = field, Op = op, Value = value };
-            working.Add(rule);
-            filterDisplay.Add(TaskFieldInfo.Describe(rule));
+            working.Add(rule!);
+            filterDisplay.Add(TaskFieldInfo.Describe(rule!));
             valueField.Text = "";
             valueField.SetFocus();
         }
 
-        void Remove()
+        void RemoveFilter()
         {
             if (filtersList.SelectedItem is int i && i >= 0 && i < working.Count)
             {
@@ -123,14 +110,14 @@ public static class FilterSortGroupDialog
             }
         }
 
-        addButton.Accepting += (_, _) => Add();
-        removeButton.Accepting += (_, _) => Remove();
+        addButton.Accepting += (_, _) => AddFilter();
+        removeButton.Accepting += (_, _) => RemoveFilter();
         valueField.KeyDown += (_, key) =>
         {
             if (key.KeyCode == KeyCode.Enter)
             {
                 key.Handled = true;
-                Add();
+                AddFilter();
             }
         };
         filtersList.KeyDown += (_, key) =>
@@ -138,27 +125,26 @@ public static class FilterSortGroupDialog
             if (key.KeyCode is KeyCode.Delete or KeyCode.Backspace)
             {
                 key.Handled = true;
-                Remove();
+                RemoveFilter();
             }
         };
 
-        ViewSettings? result = null;
         var save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var cancel = new Button { X = Pos.Right(save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         var clear = new Button { X = Pos.Right(cancel) + 2, Y = Pos.AnchorEnd(1), Text = "Clear all" };
 
         save.Accepting += (_, _) =>
         {
-            result = new ViewSettings
+            Result = new ViewSettings
             {
                 Filters = working,
-                SortField = IndexToField(sortList.SelectedItem),
+                SortField = FilterSortGroupForm.IndexToField(sortList.SelectedItem),
                 SortDirection = direction,
-                GroupField = IndexToField(groupList.SelectedItem),
+                GroupField = FilterSortGroupForm.IndexToField(groupList.SelectedItem),
             };
-            Application.RequestStop();
+            Close();
         };
-        cancel.Accepting += (_, _) => Application.RequestStop();
+        cancel.Accepting += (_, _) => Close();
         clear.Accepting += (_, _) =>
         {
             working.Clear();
@@ -169,30 +155,25 @@ public static class FilterSortGroupDialog
             dirButton.Text = DirectionText(direction);
         };
 
-        dialog.Add(
-            addHeader, fieldLabel, fieldList, opLabel, opList, valueLabel, valueField, addButton, removeButton,
+        // Esc cancels from anywhere on the screen (Result stays null).
+        KeyDown += (_, key) =>
+        {
+            if (key.KeyCode == KeyCode.Esc)
+            {
+                key.Handled = true;
+                Close();
+            }
+        };
+
+        Add([
+            addHeader, fieldLabel, _fieldList, opLabel, opList, valueLabel, valueField, addButton, removeButton,
             activeHeader, filtersList,
             sortHeader, sortLabel, sortList, dirButton, groupHeader, groupLabel, groupList,
-            hint, save, cancel, clear);
-
-        fieldList.SetFocus();
-        Application.Run(dialog);
-        dialog.Dispose();
-        return result;
+            hint, save, cancel, clear,
+        ]);
     }
 
-    // "(none)" first, then the four fields — shared by the sort and group pickers.
-    private static IEnumerable<string> FieldChoices()
-        => new[] { "(none)" }.Concat(Fields.Select(TaskFieldInfo.DisplayName));
-
-    private static int FieldToIndex(TaskField? field)
-        => field is null ? 0 : Array.IndexOf(Fields, field.Value) + 1;
-
-    private static TaskField? IndexToField(int? selected)
-        => selected is int i && i >= 1 && i <= Fields.Length ? Fields[i - 1] : null;
-
-    private static int Clamp(int? selected, int count)
-        => selected is int i && i >= 0 && i < count ? i : 0;
+    public override void OnShown() => _fieldList.SetFocus();
 
     private static string DirectionText(SortDirection direction)
         => $"Direction: {(direction == SortDirection.Ascending ? "Ascending" : "Descending")}";

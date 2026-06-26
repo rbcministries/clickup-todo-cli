@@ -191,7 +191,15 @@ public sealed class TodoApp
 
     private void OpenViewSettings()
     {
-        var result = FilterSortGroupDialog.Show(_config.View);
+        if (_activeScreen is not null)
+            return;
+
+        var screen = new FilterSortGroupScreen(_config.View);
+        ShowScreen(screen, () => ApplyViewSettings(screen.Result));
+    }
+
+    private void ApplyViewSettings(ViewSettings? result)
+    {
         if (result is null)
             return;
 
