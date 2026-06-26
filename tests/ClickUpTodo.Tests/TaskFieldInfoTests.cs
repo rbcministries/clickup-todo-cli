@@ -34,6 +34,16 @@ public sealed class TaskFieldInfoTests
         Assert.Equal(6, ops.Count);
     }
 
+    [Theory]
+    [InlineData(FilterOp.Is, "IS")]
+    [InlineData(FilterOp.IsNot, "IS NOT")]
+    [InlineData(FilterOp.GreaterThan, ">")]
+    [InlineData(FilterOp.LessThan, "<")]
+    [InlineData(FilterOp.GreaterOrEqual, "GEQ")]
+    [InlineData(FilterOp.LessOrEqual, "LEQ")]
+    public void OpSymbol_RendersEachOperator(FilterOp op, string expected)
+        => Assert.Equal(expected, TaskFieldInfo.OpSymbol(op));
+
     [Fact]
     public void Describe_RendersFieldOpValue()
         => Assert.Equal("Status IS Done", TaskFieldInfo.Describe(new FilterRule { Field = TaskField.Status, Op = FilterOp.Is, Value = "Done" }));
@@ -50,6 +60,13 @@ public sealed class TaskFieldInfoTests
     {
         Assert.True(TaskFieldInfo.TryParseNumeric("2026-07-01", out var ms));
         Assert.Equal(DateTimeOffset.Parse("2026-07-01T00:00:00Z").ToUnixTimeMilliseconds(), ms);
+    }
+
+    [Fact]
+    public void TryParseNumeric_IsoDateTime_IsParsedAsUtc()
+    {
+        Assert.True(TaskFieldInfo.TryParseNumeric("2026-07-01T09:30:00Z", out var ms));
+        Assert.Equal(DateTimeOffset.Parse("2026-07-01T09:30:00Z").ToUnixTimeMilliseconds(), ms);
     }
 
     [Theory]

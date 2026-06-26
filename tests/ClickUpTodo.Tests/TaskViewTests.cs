@@ -84,6 +84,29 @@ public sealed class TaskViewTests
     }
 
     [Fact]
+    public void Filter_NumericIs_MatchesExactMs_NullExcluded()
+    {
+        var target = Ms("2026-07-01T00:00:00Z");
+        TaskItem[] tasks = [Task("1", "a", due: target), Task("2", "b", due: target + 1), Task("3", "c", due: null)];
+
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Due, FilterOp.Is, "2026-07-01")]);
+
+        Assert.Equal(["1"], result.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Filter_NumericIsNot_KeepsNullValues()
+    {
+        var target = Ms("2026-07-01T00:00:00Z");
+        TaskItem[] tasks = [Task("1", "a", due: target), Task("2", "b", due: target + 1), Task("3", "c", due: null)];
+
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Due, FilterOp.IsNot, "2026-07-01")]);
+
+        // The exact-match task is excluded; a different date and an undated task both survive.
+        Assert.Equal(["2", "3"], result.Select(t => t.Id));
+    }
+
+    [Fact]
     public void Filter_NumericRule_AcceptsRawEpochMs()
     {
         var cutoff = Ms("2026-07-05T00:00:00Z");
