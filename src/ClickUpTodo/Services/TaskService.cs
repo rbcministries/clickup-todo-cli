@@ -7,9 +7,11 @@ namespace ClickUpTodo.Services;
 /// Fetches and merges the user's actionable tasks (assigned-to-me ∪ Personal Tasks list),
 /// de-duplicated and stably ordered, and resolves per-list status options on demand (cached).
 /// </summary>
-public sealed class TaskService(ClickUpClient client, AppConfig config, long userId)
+public sealed class TaskService(ClickUpClient client, AppConfig config, long userId, TimeProvider? timeProvider = null)
 {
-    private readonly Dictionary<string, IReadOnlyList<StatusOption>> _statusCache = new();
+    // Per-list status options, cached with a long TTL (statuses rarely change) and warmed by
+    // PrefetchStatusesAsync so the picker opens from cache in the common case.
+    private readonly StatusCache _statusCache = new(client.GetListStatusesAsync, timeProvider);
 
     /// <summary>Merged, de-duplicated, stably-ordered task snapshot.</summary>
     public async Task<IReadOnlyList<TaskItem>> LoadAsync(CancellationToken ct = default)
@@ -38,15 +40,17 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
             : tasks.Where(t => string.IsNullOrWhiteSpace(t.StatusName) || !set.Contains(t.StatusName));
     }
 
-    /// <summary>The available statuses for a list, cached after first fetch.</summary>
-    public async Task<IReadOnlyList<StatusOption>> GetStatusesForListAsync(string listId, CancellationToken ct = default)
-    {
-        if (_statusCache.TryGetValue(listId, out var cached))
-            return cached;
-        var statuses = await client.GetListStatusesAsync(listId, ct);
-        _statusCache[listId] = statuses;
-        return statuses;
-    }
+    /// <summary>The available statuses for a list, served from the TTL cache or fetched on demand.</summary>
+    public Task<IReadOnlyList<StatusOption>> GetStatusesForListAsync(string listId, CancellationToken ct = default)
+        => _statusCache.GetAsync(listId, ct);
+
+    /// <summary>A list's statuses if cached and still fresh, without a fetch (for opening the picker instantly).</summary>
+    public bool TryGetCachedStatuses(string listId, out IReadOnlyList<StatusOption> statuses)
+        => _statusCache.TryGetFresh(listId, out statuses);
+
+    /// <summary>Warms the status cache for the given lists (best-effort) so the picker opens from cache.</summary>
+    public Task PrefetchStatusesAsync(IEnumerable<string> listIds, CancellationToken ct = default)
+        => _statusCache.PrefetchAsync(listIds, ct);
 
     /// <summary>
     /// Sets a task's status and returns the <b>confirmed</b> status name from the write response

@@ -2,7 +2,9 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
+using ClickUpTodo.Focus;
 using ClickUpTodo.Services;
+using ClickUpTodo.Tui.Screens;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
@@ -24,6 +26,12 @@ namespace ClickUpTodo.Tui;
 /// This uses ONE ListView (with header rows) rather than two panes: a second focusable pane made
 /// repaints visibly laggy in Terminal.Gui 2.4 (see issue #3), while a single list is snappy.
 /// </para>
+/// <para>
+/// Secondary views (Settings, the status picker, Help) open as full-window <see cref="Screen"/>s
+/// swapped into this same toplevel — not nested modal <c>Dialog</c>s on their own
+/// <c>Application.Run</c> loop (see <see cref="ShowScreen"/>/#38). A nested run-loop competes with
+/// the background refresh's redraws and feels laggy, the same way the second pane did in #3.
+/// </para>
 /// </summary>
 public sealed class TodoApp
 {
@@ -33,13 +41,16 @@ public sealed class TodoApp
     private readonly TaskService _tasks;
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
-    private readonly HashSet<string> _pinnedIds;
+    private readonly IFocusStore _focus;
 
     private Window _window = null!;
     private FrameView _frame = null!;
     private ListView _list = null!;
     private Label _statusLabel = null!;
     private RefreshService _refresh = null!;
+    // The full-window screen currently swapped in over the list (Settings / status picker / Help),
+    // or null when the list is showing. Only one screen is open at a time.
+    private Screen? _activeScreen;
 
     private IReadOnlyList<TaskItem> _all = [];
     // Parallel to the ListView's rows: the task on each row, or null for a header/separator row.
@@ -47,15 +58,17 @@ public sealed class TodoApp
     // The ListView's backing collection, kept so a single row can be updated in place (without
     // SetSource, which would reset the list and the cursor).
     private ObservableCollection<string> _display = [];
+    // Per-row status-badge color overlay, parallel to _display (null = header row or no/!valid color).
+    private List<StatusBadgeListSource.Badge?> _badges = [];
     private string _status = "Loading…";
     private string _signature = "";
 
-    public TodoApp(TaskService tasks, AppConfig config, ConfigStore configStore)
+    public TodoApp(TaskService tasks, AppConfig config, ConfigStore configStore, IFocusStore focus)
     {
         _tasks = tasks;
         _config = config;
         _configStore = configStore;
-        _pinnedIds = [.. config.PinnedTaskIds];
+        _focus = focus;
     }
 
     public void Run(string? driverName = null)
@@ -174,17 +187,77 @@ public sealed class TodoApp
 
     private void OpenSettings()
     {
-        var result = SettingsDialog.Show(_config.RefreshSeconds, _config.ExcludedStatuses);
-        if (result is null)
+        if (_activeScreen is not null)
             return;
 
-        _config.RefreshSeconds = result.RefreshSeconds;
-        _config.ExcludedStatuses = result.ExcludedStatuses;
-        _configStore.Save(_config);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.ExcludedStatuses);
+        ShowScreen(screen, () =>
+        {
+            var result = screen.Result;
+            if (result is null)
+                return;
 
-        _refresh.IntervalSeconds = result.RefreshSeconds;
-        Flash($"Settings saved · refresh {result.RefreshSeconds}s · {result.ExcludedStatuses.Count} status(es) excluded");
-        _refresh.RequestRefresh();
+            _config.RefreshSeconds = result.RefreshSeconds;
+            _config.ExcludedStatuses = result.ExcludedStatuses;
+            _configStore.Save(_config);
+
+            _refresh.IntervalSeconds = result.RefreshSeconds;
+            Flash($"Settings saved · refresh {result.RefreshSeconds}s · {result.ExcludedStatuses.Count} status(es) excluded");
+            _refresh.RequestRefresh();
+        });
+    }
+
+    // ── Screen navigation seam ─────────────────────────────────────────────────
+    // Swaps a full-window screen in over the list within the single toplevel (no nested
+    // Application.Run). #17's detail view builds on this. See the class header / #38.
+
+    /// <summary>
+    /// Mounts a screen over the task list: hides the list frame, adds the screen to the window, and
+    /// focuses it. When the screen raises <see cref="Screen.Closed"/>, <paramref name="onClosed"/>
+    /// runs (to read any result) and then the list is restored. No-ops if a screen is already open.
+    /// </summary>
+    private void ShowScreen(Screen screen, Action onClosed)
+    {
+        if (_activeScreen is not null)
+            return;
+
+        _activeScreen = screen;
+
+        EventHandler? handler = null;
+        handler = (_, _) =>
+        {
+            // Guard against a double-fire (e.g. two Esc presses before teardown runs).
+            if (_activeScreen != screen)
+                return;
+            screen.Closed -= handler;
+            // Defer teardown out of the screen's own key handler: disposing the view mid-keypress
+            // can leave Terminal.Gui's input/focus machinery pointing at a freed view. Running on the
+            // next loop iteration lets the current input cycle finish first.
+            Application.Invoke(() =>
+            {
+                onClosed();      // read the screen's result while it's still intact
+                CloseScreen();   // then tear it down and restore the list
+            });
+        };
+        screen.Closed += handler;
+
+        _frame.Visible = false;
+        _window.Add(screen);
+        screen.OnShown();
+    }
+
+    /// <summary>Tears down the active screen and restores the list with its cursor intact.</summary>
+    private void CloseScreen()
+    {
+        if (_activeScreen is null)
+            return;
+
+        var screen = _activeScreen;
+        _activeScreen = null;
+        _window.Remove(screen);
+        screen.Dispose();
+        _frame.Visible = true;
+        _list.SetFocus();
     }
 
     /// <summary>The task on the selected row, or null if a header row (or nothing) is selected.</summary>
@@ -227,20 +300,30 @@ public sealed class TodoApp
         var task = CurrentTask();
         if (task is null)
             return;
+        // The pin write goes through IFocusStore (local today, possibly network-backed later), so
+        // run it off the key handler and apply the result back on the UI thread. The local store
+        // completes synchronously, so this stays snappy.
+        _ = TogglePinAsync(task);
+    }
 
+    private async Task TogglePinAsync(TaskItem task)
+    {
         bool nowPinned;
-        if (_pinnedIds.Remove(task.Id))
-            nowPinned = false;
-        else
+        try
         {
-            _pinnedIds.Add(task.Id);
-            nowPinned = true;
+            nowPinned = await _focus.ToggleAsync(task.Id);
+        }
+        catch (Exception ex)
+        {
+            Application.Invoke(() => Flash($"Could not update focus: {Short(ex)}"));
+            return;
         }
 
-        _config.PinnedTaskIds = [.. _pinnedIds];
-        _configStore.Save(_config);
-        Render(keepTaskId: task.Id);
-        Flash(nowPinned ? $"Pinned: {task.Name}" : $"Unpinned: {task.Name}");
+        Application.Invoke(() =>
+        {
+            Render(keepTaskId: task.Id);
+            Flash(nowPinned ? $"Pinned: {task.Name}" : $"Unpinned: {task.Name}");
+        });
     }
 
     private void OpenInBrowser()
@@ -272,12 +355,12 @@ public sealed class TodoApp
     private void OpenDetail()
     {
         var task = CurrentTask();
-        if (task is null)
+        if (task is null || _activeScreen is not null)
             return;
 
         Flash("Loading details…");
-        // Fetch the detail + comments off the UI thread, then show the modal back on it. The
-        // background dashboard refresh keeps running while the modal is open.
+        // Fetch the detail + comments off the UI thread, then swap in the detail screen back on it.
+        // The background dashboard refresh keeps running while the screen is open.
         _ = Task.Run(async () =>
         {
             try
@@ -286,12 +369,16 @@ public sealed class TodoApp
                 var comments = await _tasks.GetTaskCommentsAsync(task.Id);
                 Application.Invoke(() =>
                 {
-                    var openBrowser = TaskDetailView.Show(detail, comments);
-                    Flash($"Closed detail: {task.Name}");
-                    // Use the URL we already fetched rather than re-reading the selected row, which a
-                    // background refresh could have reordered while the modal was open.
-                    if (openBrowser)
-                        LaunchBrowser(detail.Url, detail.Name);
+                    if (_activeScreen is not null)
+                        return;
+                    var screen = new TaskDetailScreen(detail, comments);
+                    ShowScreen(screen, () =>
+                    {
+                        // Use the URL we already fetched rather than re-reading the (possibly
+                        // reordered) selected row after a background refresh.
+                        if (screen.OpenBrowserRequested)
+                            LaunchBrowser(detail.Url, detail.Name);
+                    });
                 });
             }
             catch (Exception ex)
@@ -312,35 +399,52 @@ public sealed class TodoApp
             return;
         }
 
+        // Fast path: statuses were warmed by the background prefetch — open instantly, no round-trip.
+        if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
+        {
+            ShowStatusPicker(task, cached);
+            return;
+        }
+
+        // Cold path: fetch off the UI thread with a loading indicator, then show the modal back on it.
         Flash("Loading statuses…");
-        // Fetch statuses off the UI thread, then show the modal back on it.
         _ = Task.Run(async () =>
         {
             try
             {
                 var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
-                Application.Invoke(() =>
-                {
-                    if (statuses.Count == 0)
-                    {
-                        Flash("No statuses available for this list.");
-                        return;
-                    }
-
-                    var chosen = StatusPicker.Show(task.Name, statuses, task.StatusName);
-                    if (chosen is null || string.Equals(chosen, task.StatusName, StringComparison.OrdinalIgnoreCase))
-                    {
-                        Flash("Status unchanged.");
-                        return;
-                    }
-
-                    ApplyStatus(task, chosen);
-                });
+                Application.Invoke(() => ShowStatusPicker(task, statuses));
             }
             catch (Exception ex)
             {
                 Application.Invoke(() => Flash($"Could not load statuses: {Short(ex)}"));
             }
+        });
+    }
+
+    /// <summary>Shows the status picker for a task and applies the choice. Must run on the UI thread.</summary>
+    private void ShowStatusPicker(TaskItem task, IReadOnlyList<StatusOption> statuses)
+    {
+        if (statuses.Count == 0)
+        {
+            Flash("No statuses available for this list.");
+            return;
+        }
+
+        if (_activeScreen is not null)
+            return;
+
+        var screen = new StatusPickerScreen(task.Name, statuses, task.StatusName);
+        ShowScreen(screen, () =>
+        {
+            var chosen = screen.Chosen;
+            if (chosen is null || string.Equals(chosen, task.StatusName, StringComparison.OrdinalIgnoreCase))
+            {
+                Flash("Status unchanged.");
+                return;
+            }
+
+            ApplyStatus(task, chosen);
         });
     }
 
@@ -390,50 +494,18 @@ public sealed class TodoApp
         if (index < 0 || index >= _display.Count)
             return;
         _rows[index] = updated;
-        _display[index] = sending ? $"{Format(updated)}  (sending…)" : Format(updated);
+        var (text, badge) = BuildRow(updated);
+        _badges[index] = badge;
+        // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
+        // redraws just this row; the parallel _badges entry is read during that redraw.
+        _display[index] = sending ? $"{text}  (sending…)" : text;
     }
 
-    private static void ShowHelp()
+    private void ShowHelp()
     {
-        var dialog = new Dialog
-        {
-            Title = "Keyboard shortcuts",
-            Width = Dim.Percent(70),
-            Height = Dim.Percent(70),
-        };
-        var body = new Label
-        {
-            X = 1,
-            Y = 0,
-            Width = Dim.Fill(1),
-            Height = Dim.Fill(1),
-            Text =
-                "\n"
-                + "  ↑ / ↓       Move between tasks\n"
-                + "  (type)      Search tasks by title (type-ahead)\n"
-                + "  Tab         Jump to the first task in the next section\n"
-                + "  Space       Set the focused task's status\n"
-                + "  Enter       Open the task detail view (description, comments, attributes)\n"
-                + "  Ctrl+B      Open the task in your browser\n"
-                + "  Ctrl+P      Pin / unpin (pinned tasks group at the top)\n"
-                + "  Ctrl+R      Refresh now\n"
-                + "  F1          This help\n"
-                + "  F2          Settings (refresh rate, excluded statuses)\n"
-                + "  Ctrl+Q/Esc  Quit\n"
-                + "\n"
-                + "  Esc or Enter to close this help.",
-        };
-        dialog.KeyDown += (_, key) =>
-        {
-            if (key.KeyCode is KeyCode.Esc or KeyCode.Enter)
-            {
-                key.Handled = true;
-                Application.RequestStop();
-            }
-        };
-        dialog.Add(body);
-        Application.Run(dialog);
-        dialog.Dispose();
+        if (_activeScreen is not null)
+            return;
+        ShowScreen(new HelpScreen(), static () => { });
     }
 
     // ── Rendering ────────────────────────────────────────────────────────────
@@ -442,6 +514,11 @@ public sealed class TodoApp
     {
         _all = tasks;
         _status = $"Updated {DateTime.Now:HH:mm:ss} · {tasks.Count} task(s) · refresh every {_config.RefreshSeconds}s";
+
+        // Warm the status cache for the lists currently on screen (best-effort, off the UI thread), so
+        // pressing Space opens the picker from cache instead of paying a round-trip (#10).
+        var visibleLists = tasks.Where(t => !string.IsNullOrWhiteSpace(t.ListId)).Select(t => t.ListId!);
+        _ = _tasks.PrefetchStatusesAsync(visibleLists);
 
         // Rebuilding the ListView (SetSource) forces a full reset + redraw. Skip it when the visible
         // task set is unchanged and just update the (cheap) status line.
@@ -468,23 +545,27 @@ public sealed class TodoApp
     /// <summary>Rebuilds the single list (focus section + to-do section) and restores the cursor.</summary>
     private void Render(string? keepTaskId)
     {
-        var pinned = _all.Where(t => _pinnedIds.Contains(t.Id)).ToList();
-        var todo = _all.Where(t => !_pinnedIds.Contains(t.Id)).ToList();
+        var pinned = _all.Where(t => _focus.IsPinned(t.Id)).ToList();
+        var todo = _all.Where(t => !_focus.IsPinned(t.Id)).ToList();
 
         _rows.Clear();
         _display = new ObservableCollection<string>();
+        _badges = new List<StatusBadgeListSource.Badge?>();
 
         if (pinned.Count > 0)
         {
-            AddHeader(_display, $"{FocusHeaderPrefix} ({pinned.Count})");
+            AddHeader($"{FocusHeaderPrefix} ({pinned.Count})");
             foreach (var t in pinned)
-                AddTask(_display, t);
-            AddHeader(_display, $"{TodoHeaderPrefix} ({todo.Count}) ─");
+                AddTask(t);
+            AddHeader($"{TodoHeaderPrefix} ({todo.Count}) ─");
         }
         foreach (var t in todo)
-            AddTask(_display, t);
+            AddTask(t);
 
-        _list.SetSource(_display);
+        // A custom source that draws text like the stock wrapper but overlays each [status] badge
+        // with its ClickUp color. Assigning Source (rather than SetSource) lets us pass our source;
+        // the ListView disposes the previous one.
+        _list.Source = new StatusBadgeListSource(_display, _badges);
         _frame.Title = $"Tasks — {pinned.Count} pinned · {todo.Count} to-do";
 
         // Restore the cursor onto the same task, or the first task row.
@@ -497,33 +578,32 @@ public sealed class TodoApp
         _statusLabel.Text = _status;
     }
 
-    private void AddHeader(ObservableCollection<string> display, string text)
+    private void AddHeader(string text)
     {
         _rows.Add(null);
-        display.Add(text);
+        _display.Add(text);
+        _badges.Add(null);
     }
 
-    private void AddTask(ObservableCollection<string> display, TaskItem task)
+    private void AddTask(TaskItem task)
     {
+        var (text, badge) = BuildRow(task);
         _rows.Add(task);
-        display.Add(Format(task));
+        _display.Add(text);
+        _badges.Add(badge);
+    }
+
+    /// <summary>The display text and (optional) status-color badge overlay for a task row.</summary>
+    private static (string Text, StatusBadgeListSource.Badge? Badge) BuildRow(TaskItem task)
+    {
+        var row = TaskRowFormatter.Format(task);
+        return (row.Text, StatusBadgeListSource.TryCreate(row.BadgeStart, row.BadgeLength, task.StatusColor));
     }
 
     private void Flash(string message)
     {
         _status = message;
         _statusLabel.Text = message;
-    }
-
-    private static string Format(TaskItem task)
-    {
-        // Title leads so the ListView's type-ahead search matches on the task title.
-        var status = string.IsNullOrWhiteSpace(task.StatusName) ? "" : $"  [{task.StatusName}]";
-        var list = string.IsNullOrWhiteSpace(task.ListName) ? "" : $"  · {task.ListName}";
-        var due = task.DueDateMs is { } ms
-            ? $"  · due {DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime:MMM d}"
-            : "";
-        return $"{task.Name}{status}{list}{due}";
     }
 
     private static string Short(Exception ex) => ex is ClickUpApiException c ? c.Message : ex.Message;

@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
-using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
+using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
@@ -9,28 +9,29 @@ using Terminal.Gui.Views;
 // supported v2 pattern; silence the deprecation until the instance-based API stabilizes.
 #pragma warning disable CS0618
 
-namespace ClickUpTodo.Tui;
+namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>The result of editing settings, or null when the user cancels.</summary>
 public sealed record SettingsResult(int RefreshSeconds, List<string> ExcludedStatuses);
 
 /// <summary>
-/// A modal settings editor: change the refresh interval and manage the list of excluded statuses.
-/// Returns the new values on Save, or null on Cancel.
+/// A full-window settings screen: change the refresh interval and manage the list of excluded
+/// statuses. On Save it exposes the new values via <see cref="Result"/> and closes; Cancel/Esc close
+/// with <see cref="Result"/> left null. The host reads <see cref="Result"/> in its close handler.
 /// </summary>
-public static class SettingsDialog
+public sealed class SettingsScreen : Screen
 {
-    public static SettingsResult? Show(int refreshSeconds, IReadOnlyList<string> excludedStatuses)
+    private readonly TextField _refreshField;
+
+    /// <summary>The saved settings, or null if the screen was cancelled.</summary>
+    public SettingsResult? Result { get; private set; }
+
+    public SettingsScreen(int refreshSeconds, IReadOnlyList<string> excludedStatuses)
     {
-        var dialog = new Dialog
-        {
-            Title = "Settings",
-            Width = Dim.Percent(70),
-            Height = Dim.Percent(75),
-        };
+        Title = "Settings";
 
         var refreshLabel = new Label { X = 1, Y = 1, Text = "Refresh interval (seconds):" };
-        var refreshField = new TextField
+        _refreshField = new TextField
         {
             X = Pos.Right(refreshLabel) + 1,
             Y = 1,
@@ -53,26 +54,24 @@ public static class SettingsDialog
         var addButton = new Button { X = Pos.Right(addField) + 1, Y = Pos.Bottom(statusList), Text = "Add" };
         var removeButton = new Button { X = Pos.Right(addButton) + 1, Y = Pos.Bottom(statusList), Text = "Remove" };
 
-        void Add()
+        // Named to avoid shadowing the inherited View.Add when called unqualified below.
+        void AddStatus()
         {
             var text = addField.Text?.Trim();
-            if (!string.IsNullOrWhiteSpace(text) &&
-                !statuses.Any(s => string.Equals(s, text, StringComparison.OrdinalIgnoreCase)))
-            {
-                statuses.Add(text);
-            }
+            if (SettingsForm.CanAdd(statuses, text))
+                statuses.Add(text!);
             addField.Text = "";
             addField.SetFocus();
         }
 
-        void Remove()
+        void RemoveStatus()
         {
             if (statusList.SelectedItem is int i && i >= 0 && i < statuses.Count)
                 statuses.RemoveAt(i);
         }
 
-        addButton.Accepting += (_, _) => Add();
-        removeButton.Accepting += (_, _) => Remove();
+        addButton.Accepting += (_, _) => AddStatus();
+        removeButton.Accepting += (_, _) => RemoveStatus();
 
         // Enter in the add field adds; Delete in the list removes the selected status.
         addField.KeyDown += (_, key) =>
@@ -80,7 +79,7 @@ public static class SettingsDialog
             if (key.KeyCode == KeyCode.Enter)
             {
                 key.Handled = true;
-                Add();
+                AddStatus();
             }
         };
         statusList.KeyDown += (_, key) =>
@@ -88,7 +87,7 @@ public static class SettingsDialog
             if (key.KeyCode is KeyCode.Delete or KeyCode.Backspace)
             {
                 key.Handled = true;
-                Remove();
+                RemoveStatus();
             }
         };
 
@@ -97,26 +96,30 @@ public static class SettingsDialog
             X = 1,
             Y = Pos.Bottom(addField),
             Width = Dim.Fill(1),
-            Text = "Tab moves · Enter in box adds · Del removes selected",
+            Text = "Tab moves · Enter in box adds · Del removes selected · Esc cancels",
         };
 
-        SettingsResult? result = null;
         var save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var cancel = new Button { X = Pos.Right(save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         save.Accepting += (_, _) =>
         {
-            var seconds = int.TryParse(refreshField.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var s)
-                ? Math.Clamp(s, 10, 3600)
-                : refreshSeconds;
-            result = new SettingsResult(seconds, [.. statuses]);
-            Application.RequestStop();
+            Result = new SettingsResult(SettingsForm.ParseRefreshSeconds(_refreshField.Text, refreshSeconds), [.. statuses]);
+            Close();
         };
-        cancel.Accepting += (_, _) => Application.RequestStop();
+        cancel.Accepting += (_, _) => Close();
 
-        dialog.Add(refreshLabel, refreshField, excludedLabel, statusList, addField, addButton, removeButton, hint, save, cancel);
-        refreshField.SetFocus();
-        Application.Run(dialog);
-        dialog.Dispose();
-        return result;
+        // Esc cancels from anywhere on the screen (Result stays null).
+        KeyDown += (_, key) =>
+        {
+            if (key.KeyCode == KeyCode.Esc)
+            {
+                key.Handled = true;
+                Close();
+            }
+        };
+
+        Add([refreshLabel, _refreshField, excludedLabel, statusList, addField, addButton, removeButton, hint, save, cancel]);
     }
+
+    public override void OnShown() => _refreshField.SetFocus();
 }

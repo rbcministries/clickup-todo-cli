@@ -59,12 +59,16 @@ consume the detail DTO + comments), so the DTOs are shaped to be rich enough for
 - `Header(TaskDetail)`, `Description(TaskDetail)`, `Comments(IReadOnlyList<CommentItem>)`,
   `OtherAttributes(TaskDetail)` → strings. No Terminal.Gui dependency.
 
-### TUI (`Tui/TaskDetailView.cs`) — modal, build-verified only
-- `Dialog` with a header `Label`, a `TabView` (Description / Comments / Other) of read-only
-  scrollable `TextView`s, and a hint line. Tab cycles tabs; ↑/↓/PgUp/PgDn scroll; Esc/Enter close;
-  Ctrl+B returns a "open browser" signal to the caller.
-- `TaskDetailView.Show(...)` returns an enum/bool indicating whether to open the browser, so the
-  process-launch stays in `TodoApp` (matches existing `OpenInBrowser`).
+### TUI (`Tui/Screens/TaskDetailScreen.cs`) — full-window screen, build-verified only
+> **Updated after the #38 pivot:** #17 and #38 superseded the original modal-`Dialog` plan — the
+> detail view is now a full-window **screen** on the shared seam #41 introduced, not a nested
+> `Application.Run` modal. (The first cut of this PR was a `Dialog`; it was reworked onto the seam.)
+- `TaskDetailScreen : Screen` (the #38 base `FrameView`) with a header `Label`, a `Tabs` control
+  (Description / Comments / Other) of read-only scrollable `TextView`s, and a hint line. Tab cycles
+  tabs; ↑/↓/PgUp/PgDn scroll; Esc returns to the list; Ctrl+B sets `OpenBrowserRequested`.
+- The host (`TodoApp.OpenDetail`) fetches detail+comments off the UI thread, then `ShowScreen(...)`s
+  it and, in the close handler, reads `OpenBrowserRequested` and launches the browser from the
+  already-fetched `detail.Url` — so the process-launch stays in `TodoApp` (matches `OpenInBrowser`).
 
 ### Dashboard wiring (`Tui/TodoApp.cs`)
 - Enter → load detail + comments off the UI thread (with a "Loading…" flash), then show the modal;
