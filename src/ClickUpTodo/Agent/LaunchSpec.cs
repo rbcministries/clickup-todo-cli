@@ -24,10 +24,14 @@ public sealed record LaunchSpec(
     string? WorkingDirectory,
     string DisplayName);
 
-/// <summary>Outcome of a launch attempt, shaped for display in the TUI status line.</summary>
-public sealed record LaunchResult(bool Success, string? LaunchedWith, string? Error)
+/// <summary>
+/// Outcome of a launch attempt, shaped for display in the TUI status line. On success,
+/// <see cref="LaunchedWith"/> is the terminal name only; any non-fatal warning (e.g. the configured
+/// <c>claude</c> executable wasn't on the current PATH) is carried separately in <see cref="Note"/>.
+/// </summary>
+public sealed record LaunchResult(bool Success, string? LaunchedWith, string? Error, string? Note = null)
 {
-    public static LaunchResult Ok(string launchedWith) => new(true, launchedWith, null);
+    public static LaunchResult Ok(string launchedWith, string? note = null) => new(true, launchedWith, null, note);
 
     public static LaunchResult Fail(string error) => new(false, null, error);
 }

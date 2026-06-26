@@ -7,7 +7,6 @@ public enum PreferredTerminal
     WindowsTerminal,
     Pwsh,
     PowerShell,
-    Cmd,
 }
 
 /// <summary>

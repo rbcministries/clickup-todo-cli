@@ -15,8 +15,11 @@ The epic says S2 "can proceed in parallel with S1" and the launcher consumes a
   platform implementations selected via `RuntimeInformation.IsOSPlatform`.
 - **Windows (primary):** prefer Windows Terminal —
   `wt.exe new-tab pwsh -NoExit -Command "claude (Get-Content -Raw '<file>')"`.
-  Fallback chain when `wt` is absent: `pwsh` → `powershell` → `cmd start`,
-  each launching the same. `-Raw` feeds the multi-line JSON as one argument.
+  Fallback chain when `wt` is absent: `pwsh` → `powershell`. `-Raw` feeds the
+  multi-line JSON as one argument. (The `cmd start` last resort from the issue
+  is deferred to **#45** — `powershell.exe` is always in-box so the chain
+  always resolves, and nesting the `&`/parenthesis pwsh command through
+  `cmd.exe` is unreliable + unverifiable headlessly.)
 - **macOS:** `osascript` driving Terminal to run `claude "$(cat '<file>')"`.
 - **Linux:** honor `$TERMINAL`, else probe `x-terminal-emulator` →
   `gnome-terminal` → `konsole`, running `claude "$(cat '<file>')"`.
@@ -57,10 +60,11 @@ TerminalLauncherOptions options)`
 
 - `OSPlatformKind { Windows, MacOS, Linux, Unknown }`
 - `LaunchSpec(string FileName, IReadOnlyList<string> Arguments, string? WorkingDirectory, string DisplayName)`
-- `LaunchResult` — `Success`, `LaunchedWith`, `Error` (+ `Ok`/`Fail` factories).
+- `LaunchResult` — `Success`, `LaunchedWith` (terminal name only), `Error`,
+  `Note` (non-fatal warning, e.g. claude-not-on-PATH) (+ `Ok`/`Fail` factories).
 - `TerminalLauncherOptions` — `ClaudeExecutable` ("claude"), `ExtraArgs` ([]),
   `Preferred` (Auto). Intentionally lean; #27 extends + wires to `AppConfig`/F2.
-- `PreferredTerminal { Auto, WindowsTerminal, Pwsh, PowerShell, Cmd }`.
+- `PreferredTerminal { Auto, WindowsTerminal, Pwsh, PowerShell }`.
 
 ### Thin shell — `TerminalLauncher : ITerminalLauncher`
 

@@ -30,19 +30,27 @@ public sealed class TerminalLauncherTests
     [Fact]
     public void Windows_PrefersWindowsTerminal_ThenFallsBackInOrder()
     {
-        var specs = Plan(OSPlatformKind.Windows, Present("wt", "pwsh", "powershell", "cmd"));
+        var specs = Plan(OSPlatformKind.Windows, Present("wt", "pwsh", "powershell"));
 
         Assert.Equal(
-            ["Windows Terminal", "PowerShell (pwsh)", "Windows PowerShell", "Command Prompt"],
+            ["Windows Terminal", "PowerShell (pwsh)", "Windows PowerShell"],
             specs.Select(s => s.DisplayName));
     }
 
     [Fact]
     public void Windows_SkipsAbsentTerminals()
     {
-        var specs = Plan(OSPlatformKind.Windows, Present("pwsh", "cmd")); // no wt, no powershell
+        var specs = Plan(OSPlatformKind.Windows, Present("powershell")); // no wt, no pwsh
 
-        Assert.Equal(["pwsh", "cmd"], specs.Select(s => s.FileName));
+        Assert.Equal(["powershell"], specs.Select(s => s.FileName));
+    }
+
+    [Fact]
+    public void Windows_CmdIsNotAFallback()
+    {
+        // cmd alone yields no candidate: the wt→pwsh→powershell chain (powershell.exe is always
+        // in-box) is the supported set; the fragile `cmd /c start` nesting is deliberately omitted (#45).
+        Assert.Empty(Plan(OSPlatformKind.Windows, Present("cmd")));
     }
 
     [Fact]
@@ -67,36 +75,39 @@ public sealed class TerminalLauncherTests
     }
 
     [Fact]
-    public void Windows_Cmd_UsesStartWithEmptyTitle()
-    {
-        var spec = Plan(OSPlatformKind.Windows, Present("cmd"))[0];
-
-        Assert.Equal("cmd", spec.FileName);
-        Assert.Equal(["/c", "start", "", "pwsh", "-NoExit", "-Command"], spec.Arguments.Take(6));
-    }
-
-    [Fact]
     public void Windows_Preferred_PinsTerminalToFront_KeepingFallback()
     {
         var options = Defaults with { Preferred = PreferredTerminal.Pwsh };
 
-        var specs = Plan(OSPlatformKind.Windows, Present("wt", "pwsh", "cmd"), options);
+        var specs = Plan(OSPlatformKind.Windows, Present("wt", "pwsh"), options);
 
         Assert.Equal("pwsh", specs[0].FileName);
-        Assert.Equal(["pwsh", "wt", "cmd"], specs.Select(s => s.FileName)); // preference first, rest follow
+        Assert.Equal(["pwsh", "wt"], specs.Select(s => s.FileName)); // preference first, rest follow
     }
 
     [Fact]
-    public void Windows_Command_HonorsCustomExecutableAndExtraArgs()
+    public void Windows_Command_HonorsCustomExecutableAndExtraArgs_InOrder()
     {
         var options = Defaults with { ClaudeExecutable = "claude.cmd", ExtraArgs = ["--model", "opus"] };
 
         var command = Plan(OSPlatformKind.Windows, Present("pwsh"), options)[0].Arguments[^1];
 
-        Assert.Contains("'claude.cmd'", command);
-        Assert.Contains("'--model'", command);
-        Assert.Contains("'opus'", command);
-        Assert.Contains("(Get-Content -Raw '/tmp/clickup-todo/agent-prompt.txt')", command);
+        // Extra args land between the executable and the prompt argument, in order.
+        Assert.Equal(
+            "& 'claude.cmd' '--model' 'opus' (Get-Content -Raw '/tmp/clickup-todo/agent-prompt.txt')",
+            command);
+    }
+
+    [Fact]
+    public void Posix_Command_PlacesExtraArgsBeforePromptArgument()
+    {
+        var options = Defaults with { ExtraArgs = ["--model", "opus"] };
+
+        var inner = Plan(OSPlatformKind.Linux, Present("konsole"), options)[0].Arguments[3];
+
+        Assert.Equal(
+            "'claude' '--model' 'opus' \"$(cat '/tmp/clickup-todo/agent-prompt.txt')\"",
+            inner);
     }
 
     // ── macOS ────────────────────────────────────────────────────────────────
@@ -128,6 +139,18 @@ public sealed class TerminalLauncherTests
 
         Assert.Equal("alacritty", specs[0].FileName);
         Assert.Equal(["-e", "bash", "-lc"], specs[0].Arguments.Take(3));
+    }
+
+    [Fact]
+    public void Linux_TerminalEnv_UsesCorrectSeparatorForKnownTerminal()
+    {
+        // A user-set TERMINAL=gnome-terminal must get `--`, not the deprecated/removed `-e`.
+        var env = (string k) => k == "TERMINAL" ? "gnome-terminal" : null;
+
+        var spec = Plan(OSPlatformKind.Linux, Present("gnome-terminal"), env: env)[0];
+
+        Assert.Equal("gnome-terminal", spec.FileName);
+        Assert.Equal(["--", "bash", "-lc"], spec.Arguments.Take(3));
     }
 
     [Fact]
@@ -270,7 +293,7 @@ public sealed class TerminalLauncherTests
     }
 
     [Fact]
-    public async Task Launch_NotesWhenClaudeNotOnPath()
+    public async Task Launch_NotesWhenClaudeNotOnPath_WithoutPollutingTerminalName()
     {
         // pwsh present (so a terminal starts) but `claude` absent from PATH.
         var launcher = Launcher(OSPlatformKind.Windows, Present("pwsh"), _ => true);
@@ -278,6 +301,31 @@ public sealed class TerminalLauncherTests
         var result = await launcher.LaunchAsync(PromptFile, null, Defaults);
 
         Assert.True(result.Success);
-        Assert.Contains("not found on PATH", result.LaunchedWith);
+        Assert.Equal("PowerShell (pwsh)", result.LaunchedWith); // clean terminal name only
+        Assert.Contains("not found on PATH", result.Note);      // warning lives in Note
+    }
+
+    [Fact]
+    public async Task Launch_NoNote_WhenClaudeIsOnPath()
+    {
+        var launcher = Launcher(OSPlatformKind.Windows, Present("pwsh", "claude"), _ => true);
+
+        var result = await launcher.LaunchAsync(PromptFile, null, Defaults);
+
+        Assert.True(result.Success);
+        Assert.Null(result.Note);
+    }
+
+    [Fact]
+    public async Task Launch_HonorsCancellation_BeforeStartingAProcess()
+    {
+        var started = false;
+        var launcher = Launcher(OSPlatformKind.Windows, Present("pwsh"), _ => { started = true; return true; });
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => launcher.LaunchAsync(PromptFile, null, Defaults, cts.Token));
+        Assert.False(started); // cancelled before any process was started
     }
 }

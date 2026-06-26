@@ -26,7 +26,13 @@ public static class TerminalCommandPlanner
             _ => [],
         };
 
-    // ── Windows: Windows Terminal → pwsh → powershell → cmd, all running the same pwsh command ──
+    // ── Windows: Windows Terminal → pwsh → powershell, all running the same pwsh command ──
+    //
+    // No `cmd /c start "" pwsh …` last resort: Windows PowerShell (powershell.exe) ships in-box on
+    // every supported Windows, so this chain always resolves a real terminal. Nesting the pwsh
+    // command (which contains `&` and parentheses) through cmd.exe is unreliable — cmd.exe's parsing
+    // differs from the CommandLineToArgvW escaping that ProcessStartInfo.ArgumentList applies, and it
+    // can't be verified headlessly. A robust cmd-based last resort is tracked as a follow-up (#45).
 
     private static IReadOnlyList<LaunchSpec> PlanWindows(
         Func<string, bool> exists, string file, string? cwd, TerminalLauncherOptions options)
@@ -39,7 +45,6 @@ public static class TerminalCommandPlanner
             PreferredTerminal.WindowsTerminal,
             PreferredTerminal.Pwsh,
             PreferredTerminal.PowerShell,
-            PreferredTerminal.Cmd,
         };
 
         // Honor an explicit preference by moving it to the front of the chain (fallback preserved).
@@ -58,8 +63,6 @@ public static class TerminalCommandPlanner
                     "pwsh", ["-NoExit", "-Command", command], cwd, "PowerShell (pwsh)"),
                 PreferredTerminal.PowerShell when exists("powershell") => new LaunchSpec(
                     "powershell", ["-NoExit", "-Command", command], cwd, "Windows PowerShell"),
-                PreferredTerminal.Cmd when exists("cmd") => new LaunchSpec(
-                    "cmd", ["/c", "start", "", "pwsh", "-NoExit", "-Command", command], cwd, "Command Prompt"),
                 _ => null,
             };
             if (spec is not null)
@@ -91,17 +94,26 @@ public static class TerminalCommandPlanner
 
         var configured = getEnv("TERMINAL");
         if (!string.IsNullOrWhiteSpace(configured) && exists(configured))
-            specs.Add(new LaunchSpec(configured, ["-e", "bash", "-lc", inner], cwd, configured));
+            specs.Add(new LaunchSpec(configured, [ExecSeparator(configured), "bash", "-lc", inner], cwd, configured));
 
-        // gnome-terminal dropped `-e` in favor of `--`; the others still take `-e`.
-        foreach (var (name, sep) in new[] { ("x-terminal-emulator", "-e"), ("gnome-terminal", "--"), ("konsole", "-e") })
+        foreach (var name in new[] { "x-terminal-emulator", "gnome-terminal", "konsole" })
         {
             if (exists(name))
-                specs.Add(new LaunchSpec(name, [sep, "bash", "-lc", inner], cwd, name));
+                specs.Add(new LaunchSpec(name, [ExecSeparator(name), "bash", "-lc", inner], cwd, name));
         }
 
         return specs;
     }
+
+    /// <summary>
+    /// The "run this command" separator for a Linux terminal. gnome-terminal dropped <c>-e</c> in
+    /// favor of <c>--</c>; everything else (and an unknown <c>$TERMINAL</c>) takes <c>-e</c>.
+    /// </summary>
+    private static string ExecSeparator(string terminal) => terminal switch
+    {
+        "gnome-terminal" => "--",
+        _ => "-e",
+    };
 
     // ── Command construction (file-indirected; prompt content never inlined) ──
 

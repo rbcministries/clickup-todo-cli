@@ -49,10 +49,10 @@ public sealed class TerminalLauncher : ITerminalLauncher
             ct.ThrowIfCancellationRequested();
             if (_start(spec))
             {
-                var claudeNote = _exists(options.ClaudeExecutable)
+                var note = _exists(options.ClaudeExecutable)
                     ? null
-                    : $" (note: '{options.ClaudeExecutable}' was not found on PATH — it must be available in the new terminal)";
-                return Task.FromResult(LaunchResult.Ok(spec.DisplayName + claudeNote));
+                    : $"'{options.ClaudeExecutable}' was not found on PATH — it must be available in the new terminal.";
+                return Task.FromResult(LaunchResult.Ok(spec.DisplayName, note));
             }
         }
 
