@@ -116,6 +116,7 @@ public sealed class ClickUpClient : IDisposable
         Name = t.Name ?? "(untitled)",
         Url = t.Url,
         DueDateMs = long.TryParse(t.DueDate, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms) ? ms : null,
+        UpdatedMs = long.TryParse(t.DateUpdated, NumberStyles.Integer, CultureInfo.InvariantCulture, out var upd) ? upd : null,
         ListId = t.List?.Id,
         ListName = t.List?.Name,
         StatusName = t.Status?.StatusProp,

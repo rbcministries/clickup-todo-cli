@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ClickUpTodo.Configuration;
 
@@ -12,6 +13,8 @@ public sealed class ConfigStore
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        // Persist enums (the F3 view's fields/operators) as readable strings, not ordinals.
+        Converters = { new JsonStringEnumConverter() },
     };
 
     public string DirectoryPath { get; }
