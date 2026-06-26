@@ -117,7 +117,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · Tab next section · Space status · Enter detail · Ctrl+B browser · Ctrl+P pin · Ctrl+R refresh · F1 help · F2 settings · Ctrl+Q quit · type to search",
+            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · Ctrl+Q quit · type to search",
         };
 
         _window.Add(_frame, _statusLabel, help);
@@ -182,7 +182,48 @@ public sealed class TodoApp
                 key.Handled = true;
                 OpenSettings();
                 break;
+            case KeyCode.F3:
+                key.Handled = true;
+                OpenViewSettings();
+                break;
         }
+    }
+
+    private void OpenViewSettings()
+    {
+        if (_activeScreen is not null)
+            return;
+
+        var screen = new FilterSortGroupScreen(_config.View);
+        ShowScreen(screen, () => ApplyViewSettings(screen.Result));
+    }
+
+    private void ApplyViewSettings(ViewSettings? result)
+    {
+        if (result is null)
+            return;
+
+        _config.View = result;
+        _configStore.Save(_config);
+        Flash(ViewSummary(result));
+        // The view changed but the underlying task set didn't, so re-render directly rather than
+        // waiting on a refresh (BuildSignature would otherwise treat it as a no-op).
+        Render(keepTaskId: CurrentTask()?.Id);
+    }
+
+    /// <summary>A one-line description of the active view for the status line.</summary>
+    private static string ViewSummary(ViewSettings view)
+    {
+        if (view.IsDefault)
+            return "View reset to default.";
+        var parts = new List<string>();
+        if (view.Filters.Count > 0)
+            parts.Add($"{view.Filters.Count} filter(s)");
+        if (view.SortField is { } sf)
+            parts.Add($"sort {TaskFieldInfo.DisplayName(sf)} {(view.SortDirection == SortDirection.Ascending ? "↑" : "↓")}");
+        if (view.GroupField is { } gf)
+            parts.Add($"group by {TaskFieldInfo.DisplayName(gf)}");
+        return "View: " + string.Join(" · ", parts);
     }
 
     private void OpenSettings()
@@ -538,35 +579,62 @@ public sealed class TodoApp
         var sb = new System.Text.StringBuilder(tasks.Count * 24);
         foreach (var t in tasks)
             sb.Append(t.Id).Append(':').Append(t.StatusName).Append(':').Append(t.Name)
-              .Append(':').Append(t.DueDateMs).Append('|');
+              .Append(':').Append(t.DueDateMs).Append(':').Append(t.UpdatedMs).Append('|');
         return sb.ToString();
+    }
+
+    /// <summary>The frame title, with a compact indicator of the active F3 view.</summary>
+    private static string BuildFrameTitle(int pinnedCount, int todoCount, ViewSettings view)
+    {
+        var title = $"Tasks — {pinnedCount} pinned · {todoCount} to-do";
+        var flags = new List<string>();
+        if (view.Filters.Count > 0)
+            flags.Add("filtered");
+        if (view.SortField is { } sf)
+            flags.Add($"sort {TaskFieldInfo.DisplayName(sf)} {(view.SortDirection == SortDirection.Ascending ? "↑" : "↓")}");
+        if (view.GroupField is { } gf)
+            flags.Add($"grouped by {TaskFieldInfo.DisplayName(gf)}");
+        return flags.Count > 0 ? $"{title} · {string.Join(" · ", flags)}" : title;
     }
 
     /// <summary>Rebuilds the single list (focus section + to-do section) and restores the cursor.</summary>
     private void Render(string? keepTaskId)
     {
-        var pinned = _all.Where(t => _focus.IsPinned(t.Id)).ToList();
-        var todo = _all.Where(t => !_focus.IsPinned(t.Id)).ToList();
+        // Pinned tasks are shown as today (unaffected by filters/grouping — explicit pins shouldn't
+        // vanish); the filter/sort/group view (F3) applies to the non-pinned set. Sort applies to both.
+        var view = _config.View;
+        var pinned = TaskView.Sort(_all.Where(t => _focus.IsPinned(t.Id)), view.SortField, view.SortDirection);
+        var groups = TaskView.Apply(_all.Where(t => !_focus.IsPinned(t.Id)), view);
+        var todoCount = groups.Sum(g => g.Tasks.Count);
+        var grouped = view.GroupField is not null;
 
         _rows.Clear();
         _display = new ObservableCollection<string>();
         _badges = new List<StatusBadgeListSource.Badge?>();
 
         if (pinned.Count > 0)
-        {
             AddHeader($"{FocusHeaderPrefix} ({pinned.Count})");
-            foreach (var t in pinned)
-                AddTask(t);
-            AddHeader($"{TasksHeaderPrefix} ({todo.Count}) ─");
-        }
-        foreach (var t in todo)
+        foreach (var t in pinned)
             AddTask(t);
+
+        foreach (var group in groups)
+        {
+            // A header per named group when grouping; otherwise keep today's behaviour — the single
+            // tasks-section header only appears when there's a pinned section above it to separate from.
+            if (grouped)
+                AddHeader($"─ {(group.Label ?? "").ToUpperInvariant()} ({group.Tasks.Count}) ─");
+            else if (pinned.Count > 0)
+                AddHeader($"{TasksHeaderPrefix} ({todoCount}) ─");
+
+            foreach (var t in group.Tasks)
+                AddTask(t);
+        }
 
         // A custom source that draws text like the stock wrapper but overlays each [status] badge
         // with its ClickUp color. Assigning Source (rather than SetSource) lets us pass our source;
         // the ListView disposes the previous one.
         _list.Source = new StatusBadgeListSource(_display, _badges);
-        _frame.Title = $"Tasks — {pinned.Count} pinned · {todo.Count} other";
+        _frame.Title = BuildFrameTitle(pinned.Count, todoCount, view);
 
         // Restore the cursor onto the same task, or the first task row.
         var target = keepTaskId is not null ? _rows.FindIndex(r => r?.Id == keepTaskId) : -1;

@@ -28,6 +28,9 @@ public sealed class AppConfig
     /// <summary>Task ids pinned to the "Current Focus" pane, so focus survives restarts.</summary>
     public List<string> PinnedTaskIds { get; set; } = [];
 
+    /// <summary>The active filter/sort/group view (F3), persisted so it survives restarts.</summary>
+    public ViewSettings View { get; set; } = new();
+
     /// <summary>True once the setup wizard has completed at least once.</summary>
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(WorkspaceId) && !string.IsNullOrWhiteSpace(PersonalTasksListId);

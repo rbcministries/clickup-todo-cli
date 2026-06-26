@@ -26,6 +26,9 @@ public sealed record TaskItem
 
     /// <summary>Due date as Unix epoch milliseconds, or null when undated.</summary>
     public long? DueDateMs { get; init; }
+
+    /// <summary>Last-activity time (ClickUp <c>date_updated</c>) as Unix epoch milliseconds, or null.</summary>
+    public long? UpdatedMs { get; init; }
 }
 
 /// <summary>A single custom field on a task. Only the field's identity (name/type) is surfaced;
