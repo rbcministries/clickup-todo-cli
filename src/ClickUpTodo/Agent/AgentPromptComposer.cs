@@ -102,12 +102,19 @@ public static class AgentPromptComposer
         return JsonSerializer.Serialize(payload, JsonOptions);
     }
 
-    /// <summary>Truncates to <paramref name="max"/> chars (appending <c>…</c>); empty → null (omitted).</summary>
+    /// <summary>
+    /// Truncates to at most <paramref name="max"/> chars then appends <c>…</c>; empty → null
+    /// (omitted). The cut steps back off a trailing high surrogate so truncation never splits a
+    /// surrogate pair (which would leave a stray replacement char before the ellipsis).
+    /// </summary>
     private static string? Truncate(string? value, int max)
     {
         if (string.IsNullOrEmpty(value))
             return null;
-        return value.Length <= max ? value : string.Concat(value.AsSpan(0, max), "…");
+        if (value.Length <= max)
+            return value;
+        var cut = char.IsHighSurrogate(value[max - 1]) ? max - 1 : max;
+        return string.Concat(value.AsSpan(0, cut), "…");
     }
 
     /// <summary>Reduces a task id to a filesystem-safe token for the temp filename.</summary>

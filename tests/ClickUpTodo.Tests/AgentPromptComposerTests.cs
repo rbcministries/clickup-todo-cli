@@ -240,4 +240,71 @@ public sealed class AgentPromptComposerTests
                 Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Fact]
+    public void WritePromptFile_DefaultDirectory_IsUnderTempClickUpTodo()
+    {
+        // Exercise the production default (directory: null) — writes under <temp>/clickup-todo.
+        var path = AgentPromptComposer.WritePromptFile(Task(), [], "x");
+        try
+        {
+            Assert.Equal(Path.Combine(Path.GetTempPath(), "clickup-todo"), Path.GetDirectoryName(path));
+            Assert.True(File.Exists(path));
+        }
+        finally
+        {
+            File.Delete(path); // leave the shared temp dir itself in place
+        }
+    }
+
+    [Fact]
+    public void WritePromptFile_SanitizesTaskId_NoPathTraversal()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "clickup-todo-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            // A hostile id with separators + traversal must not escape the target directory.
+            var path = AgentPromptComposer.WritePromptFile(Task(id: "../../etc/p w?d"), [], "x", dir);
+
+            Assert.Equal(dir, Path.GetDirectoryName(path));
+            var name = Path.GetFileName(path);
+            Assert.DoesNotContain("..", name);
+            Assert.DoesNotContain('/', name);
+            Assert.DoesNotContain('\\', name);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // ── guards / defensive ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void NullTask_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => AgentPromptComposer.Compose(null!, [], "p"));
+        Assert.Throws<ArgumentNullException>(() => AgentPromptComposer.WritePromptFile(null!, [], "p"));
+    }
+
+    [Fact]
+    public void NullComments_TreatedAsEmptyArray()
+    {
+        using var doc = JsonDocument.Parse(AgentPromptComposer.BuildJson(Task(), null!));
+        Assert.Empty(doc.RootElement.GetProperty("comments").EnumerateArray());
+    }
+
+    [Fact]
+    public void Description_TruncationDoesNotSplitSurrogatePair()
+    {
+        const int max = AgentPromptComposer.MaxDescriptionLength;
+        // Place a 2-code-unit emoji so the naive cut at `max` would land mid-surrogate.
+        var value = new string('x', max - 1) + "😀" + new string('y', 5);
+
+        var desc = TaskOf(Task(description: value)).GetProperty("description").GetString()!;
+
+        Assert.Equal(new string('x', max - 1) + "…", desc); // stepped back off the high surrogate
+        Assert.DoesNotContain('�', desc);              // no replacement char artifact
+    }
 }
