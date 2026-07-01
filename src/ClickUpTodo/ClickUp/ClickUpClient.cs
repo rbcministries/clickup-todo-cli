@@ -140,6 +140,7 @@ public sealed class ClickUpClient : IDisposable
         Id = t.Id ?? "",
         Name = t.Name ?? "(untitled)",
         Url = t.Url,
+        ParentId = string.IsNullOrWhiteSpace(t.Parent) ? null : t.Parent,
         DueDateMs = ParseMs(t.DueDate),
         UpdatedMs = ParseMs(t.DateUpdated),
         ListId = t.List?.Id,
@@ -158,6 +159,10 @@ public sealed class ClickUpClient : IDisposable
         StatusColor = t.Status?.Color,
         ListId = t.List?.Id,
         ListName = t.List?.Name,
+        Lists = t.Locations?
+            .Select(l => new NamedEntity(l.Id ?? "", l.Name ?? ""))
+            .Where(l => !string.IsNullOrWhiteSpace(l.Name))
+            .ToList() ?? [],
         // ClickUp's text_content is the rendered plain text; description is the raw (often markdown)
         // source. Prefer the plain text for a terminal, falling back to the raw form.
         Description = !string.IsNullOrWhiteSpace(t.TextContent) ? t.TextContent : t.Description,

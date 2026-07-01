@@ -288,6 +288,7 @@
           "custom_id": { "type": "string", "nullable": true },
           "name": { "type": "string" },
           "url": { "type": "string", "nullable": true },
+          "parent": { "type": "string", "nullable": true },
           "text_content": { "type": "string", "nullable": true },
           "description": { "type": "string", "nullable": true },
           "due_date": { "type": "string", "nullable": true },
@@ -297,6 +298,7 @@
           "status": { "$ref": "#/components/schemas/Status" },
           "priority": { "$ref": "#/components/schemas/Priority" },
           "list": { "$ref": "#/components/schemas/TaskList" },
+          "locations": { "type": "array", "items": { "$ref": "#/components/schemas/TaskList" } },
           "tags": { "type": "array", "items": { "$ref": "#/components/schemas/Tag" } },
           "assignees": { "type": "array", "items": { "$ref": "#/components/schemas/User" } },
           "custom_fields": { "type": "array", "items": { "$ref": "#/components/schemas/CustomField" } }

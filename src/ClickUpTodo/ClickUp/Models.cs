@@ -26,6 +26,12 @@ public sealed record TaskItem
     public string? ListId { get; init; }
     public string? ListName { get; init; }
 
+    /// <summary>
+    /// The id of this task's parent task (ClickUp <c>parent</c>) when it's a subtask, else null. Used
+    /// by the F4 subtasks view (#46) to nest a subtask beneath its parent.
+    /// </summary>
+    public string? ParentId { get; init; }
+
     /// <summary>Due date as Unix epoch milliseconds, or null when undated.</summary>
     public long? DueDateMs { get; init; }
 
@@ -71,6 +77,13 @@ public sealed record TaskDetail
     public string? StatusColor { get; init; }
     public string? ListId { get; init; }
     public string? ListName { get; init; }
+
+    /// <summary>
+    /// Additional list membership from ClickUp's "Tasks in Multiple Lists" feature (the task
+    /// response's <c>locations</c>), distinct from the home <see cref="ListName"/>. Empty for the
+    /// common single-list case.
+    /// </summary>
+    public IReadOnlyList<NamedEntity> Lists { get; init; } = [];
 
     /// <summary>Plain-text description (ClickUp <c>text_content</c>, falling back to <c>description</c>).</summary>
     public string? Description { get; init; }

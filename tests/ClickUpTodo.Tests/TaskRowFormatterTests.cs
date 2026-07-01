@@ -59,4 +59,38 @@ public sealed class TaskRowFormatterTests
 
         Assert.Equal(0, row.BadgeLength);
     }
+
+    [Fact]
+    public void Format_Indented_PrefixesTwoSpacesPerDepth()
+    {
+        var task = new TaskItem { Id = "1", Name = "Subtask" };
+
+        Assert.StartsWith("  Subtask", TaskRowFormatter.Format(task, depth: 1).Text);
+        Assert.StartsWith("    Subtask", TaskRowFormatter.Format(task, depth: 2).Text);
+    }
+
+    [Fact]
+    public void Format_Indented_BadgeSpanShiftsToStayExact()
+    {
+        var task = new TaskItem { Id = "1", Name = "Subtask", StatusName = "to do" };
+
+        var flat = TaskRowFormatter.Format(task);
+        var nested = TaskRowFormatter.Format(task, depth: 2);
+
+        // The badge span must still land exactly on the status bracket after indenting.
+        Assert.Equal("[to do]", nested.Text.Substring(nested.BadgeStart, nested.BadgeLength));
+        Assert.Equal(flat.BadgeStart + 4, nested.BadgeStart); // two indent units = 4 chars
+    }
+
+    [Fact]
+    public void Format_ContextParent_AppendsMarker()
+    {
+        var task = new TaskItem { Id = "1", Name = "Parent not mine", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, depth: 0, isContextParent: true);
+
+        Assert.Contains("(parent — not assigned to you)", row.Text);
+        // Marker sits after the row body, so the badge span is unaffected.
+        Assert.Equal("[to do]", row.Text.Substring(row.BadgeStart, row.BadgeLength));
+    }
 }

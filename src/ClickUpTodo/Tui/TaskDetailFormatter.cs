@@ -61,6 +61,11 @@ public static class TaskDetailFormatter
     {
         var sb = new StringBuilder();
         sb.Append("List:          ").Append(Coalesce(task.ListName)).Append('\n');
+        // ClickUp's "Tasks in Multiple Lists": show the full membership only when the task belongs to
+        // more than its home list; otherwise the single "List:" line above already covers it.
+        var lists = ListMembership(task);
+        if (lists.Count > 1)
+            sb.Append("Lists:         ").Append(string.Join(", ", lists)).Append('\n');
         sb.Append("Priority:      ").Append(Coalesce(task.Priority)).Append('\n');
         sb.Append("Status:        ").Append(Coalesce(task.StatusName)).Append('\n');
         sb.Append("Created:       ").Append(FormatDateOrDash(task.CreatedMs)).Append('\n');
@@ -228,6 +233,38 @@ public static class TaskDetailFormatter
 
     private static string Truncate(string value)
         => value.Length <= MaxValueLength ? value : value[..MaxValueLength] + "…";
+
+    /// <summary>
+    /// The task's full list membership: the home list unioned with its <c>locations</c>
+    /// (ClickUp multiple-lists), home-first and de-duplicated. An entry is dropped if its id was
+    /// already seen, or (when it has no id — ClickUp only reliably returns a list's name) if its
+    /// display name was already seen. Names are the universal fallback key, so identical labels
+    /// collapse regardless of id: two lists that render the same name are indistinguishable in this
+    /// line, so showing one avoids meaningless duplicates. Robust to whether ClickUp includes the
+    /// home list in <c>locations</c>.
+    /// </summary>
+    private static IReadOnlyList<string> ListMembership(TaskDetail task)
+    {
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var names = new List<string>();
+
+        void Add(string? id, string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return;
+            if (!string.IsNullOrEmpty(id) && !seenIds.Add(id))
+                return;
+            if (!seenNames.Add(name!))
+                return;
+            names.Add(name!);
+        }
+
+        Add(task.ListId, task.ListName);
+        foreach (var l in task.Lists)
+            Add(l.Id, l.Name);
+        return names;
+    }
 
     private static string Coalesce(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value!;
 
