@@ -182,6 +182,17 @@ public sealed class TaskDetailFormatterTests
     }
 
     [Fact]
+    public void OtherAttributes_MultipleLists_DedupesHomeEchoedByNameWithoutId()
+    {
+        // ClickUp reliably returns a list's name but not always its id; MapDetail maps a missing id
+        // to "". A location echoing the home list by name only must still collapse to one entry.
+        var text = TaskDetailFormatter.OtherAttributes(
+            Sample(listId: "L1", lists: [new NamedEntity("", "Personal Tasks"), new NamedEntity("L2", "Engineering")]));
+        Assert.Contains("Lists:         Personal Tasks, Engineering", text);
+        Assert.DoesNotContain("Personal Tasks, Personal Tasks", text);
+    }
+
+    [Fact]
     public void OtherAttributes_MultipleLists_IgnoresBlankNamedLocations()
     {
         var text = TaskDetailFormatter.OtherAttributes(

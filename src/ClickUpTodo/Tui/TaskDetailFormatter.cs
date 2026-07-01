@@ -86,9 +86,12 @@ public static class TaskDetailFormatter
 
     /// <summary>
     /// The task's full list membership: the home list unioned with its <c>locations</c>
-    /// (ClickUp multiple-lists), home-first and de-duplicated by id (falling back to name when a
-    /// location carries no id, so genuinely distinct same-named lists are both kept). Robust to
-    /// whether ClickUp includes the home list in <c>locations</c>.
+    /// (ClickUp multiple-lists), home-first and de-duplicated. An entry is dropped if its id was
+    /// already seen, or (when it has no id — ClickUp only reliably returns a list's name) if its
+    /// display name was already seen. Names are the universal fallback key, so identical labels
+    /// collapse regardless of id: two lists that render the same name are indistinguishable in this
+    /// line, so showing one avoids meaningless duplicates. Robust to whether ClickUp includes the
+    /// home list in <c>locations</c>.
     /// </summary>
     private static IReadOnlyList<string> ListMembership(TaskDetail task)
     {
@@ -100,15 +103,10 @@ public static class TaskDetailFormatter
         {
             if (string.IsNullOrWhiteSpace(name))
                 return;
-            if (!string.IsNullOrEmpty(id))
-            {
-                if (!seenIds.Add(id))
-                    return;
-            }
-            else if (!seenNames.Add(name!))
-            {
+            if (!string.IsNullOrEmpty(id) && !seenIds.Add(id))
                 return;
-            }
+            if (!seenNames.Add(name!))
+                return;
             names.Add(name!);
         }
 
