@@ -110,9 +110,10 @@ public sealed class TodoApp
     private async Task<IReadOnlyList<TaskItem>> FetchAsync(CancellationToken ct)
     {
         var tasks = await _tasks.LoadAsync(ct);
-        // Only resolve context parents when they'll actually be rendered: subtasks shown AND ungrouped
-        // (grouping wins over nesting in Render), so we don't pay N extra round-trips for nothing.
-        _contextParents = _config.View.ShowSubtasks && _config.View.GroupField is null
+        // Resolve context parents whenever the subtasks view is on: they're rendered as headers whether
+        // or not an F3 group is active now that grouping and nesting compose (#57). Off → skip the
+        // extra round-trips.
+        _contextParents = _config.View.ShowSubtasks
             ? await _tasks.ResolveContextParentsAsync(tasks, ct)
             : EmptyParents;
         return tasks;
@@ -686,9 +687,10 @@ public sealed class TodoApp
         var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
         var grouped = view.GroupField is not null;
-        // Nesting and field-grouping are two ways of grouping the same rows, so grouping wins: subtasks
-        // only nest when shown and no F3 group is active (grouped → subtasks stay flat within groups). (#46)
-        var nest = view.ShowSubtasks && !grouped;
+        // Grouping and nesting compose: within each F3 group, subtasks nest under their parent when
+        // both fall in the same group; a subtask whose parent lands in a different group renders flat
+        // within its own group (SubtaskArranger, run per-group, yields exactly this). (#46, #57)
+        var nest = view.ShowSubtasks;
 
         _rows.Clear();
         _display = new ObservableCollection<string>();
@@ -700,21 +702,15 @@ public sealed class TodoApp
         foreach (var t in pinned)
             AddTask(t);
 
-        foreach (var group in groups)
+        // The single tasks-section header only appears (when ungrouped) to separate the to-do rows
+        // from a pinned section above them.
+        var ungroupedTasksHeader = pinned.Count > 0 ? $"{TasksHeaderPrefix} ({todoCount}) ─" : null;
+        foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader))
         {
-            // A header per named group when grouping; otherwise keep today's behaviour — the single
-            // tasks-section header only appears when there's a pinned section above it to separate from.
-            if (grouped)
-                AddHeader($"─ {(group.Label ?? "").ToUpperInvariant()} ({group.Tasks.Count}) ─");
-            else if (pinned.Count > 0)
-                AddHeader($"{TasksHeaderPrefix} ({todoCount}) ─");
-
-            if (nest)
-                foreach (var row in SubtaskArranger.Arrange(group.Tasks, _contextParents))
-                    AddTask(row.Task, row.Depth, row.IsContextParent);
+            if (row.IsHeader)
+                AddHeader(row.HeaderText!);
             else
-                foreach (var t in group.Tasks)
-                    AddTask(t);
+                AddTask(row.Task!, row.Depth, row.IsContextParent);
         }
 
         // A custom source that draws text like the stock wrapper but overlays each [status] badge
