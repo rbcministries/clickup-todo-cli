@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace ClickUpTodo.ClickUp;
 
 // Stable domain records the rest of the app consumes. The Kiota-generated client produces a
@@ -24,6 +26,12 @@ public sealed record TaskItem
     public string? ListId { get; init; }
     public string? ListName { get; init; }
 
+    /// <summary>
+    /// The id of this task's parent task (ClickUp <c>parent</c>) when it's a subtask, else null. Used
+    /// by the F4 subtasks view (#46) to nest a subtask beneath its parent.
+    /// </summary>
+    public string? ParentId { get; init; }
+
     /// <summary>Due date as Unix epoch milliseconds, or null when undated.</summary>
     public long? DueDateMs { get; init; }
 
@@ -34,9 +42,25 @@ public sealed record TaskItem
     public long? UpdatedMs { get; init; }
 }
 
-/// <summary>A single custom field on a task. Only the field's identity (name/type) is surfaced;
-/// the loosely-typed value is intentionally not rendered yet (tracked as a follow-up).</summary>
-public sealed record CustomFieldItem(string Name, string? Type);
+/// <summary>One selectable option of a drop-down or labels custom field. Drop-down options carry a
+/// <see cref="Name"/>; labels options carry a label (mapped into <see cref="Name"/> too). A task's
+/// value references an option by <see cref="Id"/> or (for older drop-downs) by <see cref="OrderIndex"/>.</summary>
+public sealed record CustomFieldOption(string? Id, string? Name, double? OrderIndex);
+
+/// <summary>A single custom field on a task. <see cref="Name"/>/<see cref="Type"/> are the stable
+/// identity; <see cref="Value"/> is the loosely-typed value (varies by field type) surfaced as a
+/// neutral <see cref="JsonElement"/>, and <see cref="Options"/> are the drop-down/label option
+/// definitions used to map a selected id/orderindex to its label. Interpreting the value per type is
+/// the (pure, testable) job of <c>TaskDetailFormatter.CustomFieldValue</c>.</summary>
+public sealed record CustomFieldItem(
+    string Name,
+    string? Type,
+    JsonElement? Value = null,
+    IReadOnlyList<CustomFieldOption>? Options = null)
+{
+    /// <summary>The field's options, never null (empty when the field has none).</summary>
+    public IReadOnlyList<CustomFieldOption> Options { get; init; } = Options ?? [];
+}
 
 /// <summary>A comment on a task, as shown in the detail view's Comments tab.</summary>
 public sealed record CommentItem(string Id, string Author, long? DateMs, string Text, bool Resolved);
@@ -56,6 +80,13 @@ public sealed record TaskDetail
     public string? StatusColor { get; init; }
     public string? ListId { get; init; }
     public string? ListName { get; init; }
+
+    /// <summary>
+    /// Additional list membership from ClickUp's "Tasks in Multiple Lists" feature (the task
+    /// response's <c>locations</c>), distinct from the home <see cref="ListName"/>. Empty for the
+    /// common single-list case.
+    /// </summary>
+    public IReadOnlyList<NamedEntity> Lists { get; init; } = [];
 
     /// <summary>Plain-text description (ClickUp <c>text_content</c>, falling back to <c>description</c>).</summary>
     public string? Description { get; init; }

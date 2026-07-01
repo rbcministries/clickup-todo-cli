@@ -30,6 +30,8 @@ public sealed class HelpScreen : Screen
                 + "  Ctrl+R      Refresh now\n"
                 + "  F1          This help\n"
                 + "  F2          Settings (refresh rate, excluded statuses)\n"
+                + "  F3          Filter / sort / group the list\n"
+                + "  F4          Show / hide subtasks (shown nested under their parent)\n"
                 + "  Ctrl+Q/Esc  Quit\n"
                 + "\n"
                 + "  Settings, the status picker, the task detail, and this help open as full-window\n"
