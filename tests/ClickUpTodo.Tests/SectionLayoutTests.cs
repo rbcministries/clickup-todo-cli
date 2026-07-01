@@ -123,6 +123,27 @@ public sealed class SectionLayoutTests
     }
 
     [Fact]
+    public void GroupedAndNested_ContextParentWithChildrenInDifferentGroups_InjectedOncePerGroup()
+    {
+        // group-by-status: P (not assigned to the user) has one child in "To Do" and one in "Done".
+        // The context header rides along with its children, so it appears once inside each group.
+        var groups = new[]
+        {
+            new TaskGroup("To Do", new[] { Task("c1", parent: "P") }),
+            new TaskGroup("Done", new[] { Task("c2", parent: "P") }),
+        };
+        var context = new Dictionary<string, TaskItem> { ["P"] = Task("P") };
+
+        var rows = Build(groups, grouped: true, nest: true, context: context);
+
+        Assert.Equal(["TO DO", "P", "c1", "DONE", "P", "c2"],
+            rows.Select(r => r.IsHeader ? StripHeader(r.HeaderText!) : r.Task!.Id));
+        // Both P rows are context-parent headers; each child nests under the header in its own group.
+        Assert.Equal(2, rows.Count(r => !r.IsHeader && r.Task!.Id == "P" && r.IsContextParent));
+        Assert.All(rows.Where(r => !r.IsHeader && r.Task!.Id is "c1" or "c2"), r => Assert.Equal(1, r.Depth));
+    }
+
+    [Fact]
     public void GroupedAndNested_GroupHeaderCount_ExcludesInjectedContextParent()
     {
         var groups = new[] { new TaskGroup("Done", new[] { Task("c", parent: "P") }) };
