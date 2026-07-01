@@ -7,6 +7,12 @@ public enum PreferredTerminal
     WindowsTerminal,
     Pwsh,
     PowerShell,
+
+    /// <summary>
+    /// Open a new window via <c>cmd /c start</c> hosting a PowerShell process (the last-resort
+    /// fallback from #45). Requires a PowerShell host to be present, since the payload runs there.
+    /// </summary>
+    Cmd,
 }
 
 /// <summary>

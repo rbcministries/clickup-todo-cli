@@ -46,11 +46,69 @@ public sealed class TerminalLauncherTests
     }
 
     [Fact]
-    public void Windows_CmdIsNotAFallback()
+    public void Windows_Cmd_RequiresPowerShellHost()
     {
-        // cmd alone yields no candidate: the wt→pwsh→powershell chain (powershell.exe is always
-        // in-box) is the supported set; the fragile `cmd /c start` nesting is deliberately omitted (#45).
+        // cmd alone yields no candidate: `-EncodedCommand` needs a PowerShell host, and bare cmd.exe
+        // can't run the file-reading claude invocation. So cmd only appears alongside pwsh/powershell.
         Assert.Empty(Plan(OSPlatformKind.Windows, Present("cmd")));
+    }
+
+    [Fact]
+    public void Windows_Cmd_IsLastResortFallback()
+    {
+        var specs = Plan(OSPlatformKind.Windows, Present("wt", "pwsh", "powershell", "cmd"));
+
+        Assert.Equal(
+            ["Windows Terminal", "PowerShell (pwsh)", "Windows PowerShell", "Command Prompt (cmd)"],
+            specs.Select(s => s.DisplayName));
+    }
+
+    [Fact]
+    public void Windows_Cmd_UsesStartToOpenNewWindow_HostingPwshWhenPresent()
+    {
+        var spec = Plan(OSPlatformKind.Windows, Present("cmd", "pwsh")).Single(s => s.FileName == "cmd");
+
+        // `cmd /c start "" pwsh -NoExit -EncodedCommand <base64>` — the "" is start's window title.
+        Assert.Equal(
+            ["/c", "start", "", "pwsh", "-NoExit", "-EncodedCommand"],
+            spec.Arguments.Take(6));
+        Assert.Equal(7, spec.Arguments.Count);
+    }
+
+    [Fact]
+    public void Windows_Cmd_FallsBackToPowerShellHost_WhenNoPwsh()
+    {
+        var spec = Plan(OSPlatformKind.Windows, Present("cmd", "powershell")).Single(s => s.FileName == "cmd");
+
+        Assert.Equal("powershell", spec.Arguments[3]);
+    }
+
+    [Fact]
+    public void Windows_Cmd_EncodesPwshPayload_SoItSurvivesCmdParsing()
+    {
+        var specs = Plan(OSPlatformKind.Windows, Present("pwsh", "cmd"));
+        var direct = specs.Single(s => s.FileName == "pwsh").Arguments[^1];   // `& 'claude' … (Get-Content -Raw '…')`
+        var encoded = specs.Single(s => s.FileName == "cmd").Arguments[^1];   // the -EncodedCommand base64
+
+        // The base64 blob carries no cmd/start-special characters, so cmd.exe can't mis-tokenize it.
+        Assert.DoesNotContain(encoded, c => c is '&' or '(' or ')' or '\'' or '"' or ' ');
+
+        // Decoding it (Base64 → UTF-16LE) reproduces the exact pwsh command the direct candidate runs.
+        var decoded = System.Text.Encoding.Unicode.GetString(Convert.FromBase64String(encoded));
+        Assert.Equal(direct, decoded);
+        Assert.Contains("Get-Content -Raw", decoded);
+        Assert.Contains(PromptFile, decoded);
+    }
+
+    [Fact]
+    public void Windows_Cmd_Preferred_PinsToFront_KeepingFallback()
+    {
+        var options = Defaults with { Preferred = PreferredTerminal.Cmd };
+
+        var specs = Plan(OSPlatformKind.Windows, Present("cmd", "powershell", "wt"), options);
+
+        Assert.Equal("Command Prompt (cmd)", specs[0].DisplayName);
+        Assert.Contains("Windows Terminal", specs.Select(s => s.DisplayName)); // fallback preserved
     }
 
     [Fact]
@@ -226,9 +284,10 @@ public sealed class TerminalLauncherTests
     public void WorkingDirectory_FlowsOntoEverySpec()
     {
         var specs = TerminalCommandPlanner.Plan(
-            OSPlatformKind.Windows, Present("wt", "pwsh"), NoEnv, PromptFile, "/work/dir", Defaults);
+            OSPlatformKind.Windows, Present("wt", "pwsh", "cmd"), NoEnv, PromptFile, "/work/dir", Defaults);
 
-        Assert.All(specs, s => Assert.Equal("/work/dir", s.WorkingDirectory));
+        Assert.Contains(specs, s => s.FileName == "cmd"); // cmd candidate is in the set …
+        Assert.All(specs, s => Assert.Equal("/work/dir", s.WorkingDirectory)); // … and carries the cwd too
     }
 
     [Fact]
