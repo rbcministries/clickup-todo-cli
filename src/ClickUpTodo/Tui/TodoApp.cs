@@ -46,6 +46,9 @@ public sealed class TodoApp
     // Composes the seed prompt + launches an interactive `claude` session for the detail view's A
     // keybinding (#26). Zero-config defaults today; #27 (S4) will populate its options from AppConfig.
     private readonly AgentDispatcher _agent = new(new TerminalLauncher());
+    // True while a dispatch is in flight, so a rapid second submit doesn't launch a duplicate session.
+    // Only touched on the UI thread (set in DispatchAgent, cleared via Application.Invoke).
+    private bool _dispatching;
 
     private Window _window = null!;
     private FrameView _frame = null!;
@@ -493,17 +496,27 @@ public sealed class TodoApp
     /// </summary>
     private void DispatchAgent(TaskDetail detail, IReadOnlyList<CommentItem> comments, string prompt)
     {
+        // Re-entrancy guard: a second Enter before the first launch finishes would spawn a duplicate
+        // claude session. This runs on the UI thread (invoked from the screen's key handler) and is
+        // cleared back on the UI thread via Application.Invoke, so the plain bool needs no locking.
+        if (_dispatching)
+        {
+            Flash("A Claude session is already launching…");
+            return;
+        }
+        _dispatching = true;
+
         Flash($"Launching Claude for '{detail.Name}'…");
         _ = Task.Run(async () =>
         {
             try
             {
                 var result = await _agent.DispatchAsync(detail, comments, prompt);
-                Application.Invoke(() => Flash(result.StatusMessage));
+                Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => Flash($"Could not launch Claude: {Short(ex)}"));
+                Application.Invoke(() => { _dispatching = false; Flash($"Could not launch Claude: {Short(ex)}"); });
             }
         });
     }
