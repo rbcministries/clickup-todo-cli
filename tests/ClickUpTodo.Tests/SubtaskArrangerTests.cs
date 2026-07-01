@@ -104,6 +104,35 @@ public sealed class SubtaskArrangerTests
     }
 
     [Fact]
+    public void Arrange_ContextParent_ScatteredChildren_CollapseUnderHeaderAtFirstChild()
+    {
+        // The two children of context parent P are separated by an unrelated top-level task.
+        TaskItem[] tasks = [Task("c1", parent: "P"), Task("other"), Task("c2", parent: "P")];
+        var context = new Dictionary<string, TaskItem> { ["P"] = Task("P") };
+
+        var rows = Arrange(tasks, context);
+
+        // Both children collapse under the injected header at the first child's position.
+        Assert.Equal(["P", "c1", "c2", "other"], rows.Select(r => r.Task.Id));
+        Assert.Equal([0, 1, 1, 0], rows.Select(r => r.Depth));
+        Assert.True(rows[0].IsContextParent);
+    }
+
+    [Fact]
+    public void Arrange_ContextParent_WithGrandchild_IndentsGrandchildDeeper()
+    {
+        // c is a child of context parent P; g is a child of c → g nests two levels under the header.
+        TaskItem[] tasks = [Task("c", parent: "P"), Task("g", parent: "c")];
+        var context = new Dictionary<string, TaskItem> { ["P"] = Task("P") };
+
+        var rows = Arrange(tasks, context);
+
+        Assert.Equal(["P", "c", "g"], rows.Select(r => r.Task.Id));
+        Assert.Equal([0, 1, 2], rows.Select(r => r.Depth));
+        Assert.True(rows[0].IsContextParent);
+    }
+
+    [Fact]
     public void Arrange_ParentPresentInSnapshot_DoesNotUseContextHeader()
     {
         TaskItem[] tasks = [Task("p"), Task("c", parent: "p")];

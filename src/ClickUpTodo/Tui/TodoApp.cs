@@ -63,8 +63,9 @@ public sealed class TodoApp
     // Per-row nesting depth, parallel to _display, so an in-place row update keeps its indent (#46).
     private List<int> _depths = [];
     // Parents of assigned subtasks that aren't themselves in the snapshot, shown as context headers in
-    // the nested subtasks view (F4). Resolved off the UI thread only while NestSubtasks is on.
-    private IReadOnlyDictionary<string, TaskItem> _contextParents = EmptyParents;
+    // the subtasks view (F4). Resolved off the UI thread (FetchAsync) while ShowSubtasks is on and read
+    // on the UI thread during Render, so it's volatile to publish the reference safely across threads.
+    private volatile IReadOnlyDictionary<string, TaskItem> _contextParents = EmptyParents;
     private static readonly IReadOnlyDictionary<string, TaskItem> EmptyParents = new Dictionary<string, TaskItem>();
     private string _status = "Loading…";
     private string _signature = "";
@@ -109,7 +110,9 @@ public sealed class TodoApp
     private async Task<IReadOnlyList<TaskItem>> FetchAsync(CancellationToken ct)
     {
         var tasks = await _tasks.LoadAsync(ct);
-        _contextParents = _config.View.ShowSubtasks
+        // Only resolve context parents when they'll actually be rendered: subtasks shown AND ungrouped
+        // (grouping wins over nesting in Render), so we don't pay N extra round-trips for nothing.
+        _contextParents = _config.View.ShowSubtasks && _config.View.GroupField is null
             ? await _tasks.ResolveContextParentsAsync(tasks, ct)
             : EmptyParents;
         return tasks;

@@ -109,6 +109,8 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
             try
             {
                 var d = await client.GetTaskDetailAsync(id, ct);
+                // ParentId is intentionally left null: a context parent is a header for its subtask, so
+                // it's always rendered at the top level (it isn't nested under its own parent here).
                 result[id] = new TaskItem
                 {
                     Id = d.Id,
