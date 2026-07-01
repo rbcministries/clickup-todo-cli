@@ -29,6 +29,7 @@ public sealed class ViewSettingsConfigTests : IDisposable
                 SortField = TaskField.LastActivity,
                 SortDirection = SortDirection.Descending,
                 GroupField = TaskField.List,
+                NestSubtasks = true,
             },
         };
 
@@ -43,6 +44,7 @@ public sealed class ViewSettingsConfigTests : IDisposable
         Assert.Equal(TaskField.LastActivity, loaded.View.SortField);
         Assert.Equal(SortDirection.Descending, loaded.View.SortDirection);
         Assert.Equal(TaskField.List, loaded.View.GroupField);
+        Assert.True(loaded.View.NestSubtasks);
     }
 
     [Fact]
@@ -54,6 +56,15 @@ public sealed class ViewSettingsConfigTests : IDisposable
         Assert.Empty(view.Filters);
         Assert.Null(view.SortField);
         Assert.Null(view.GroupField);
+        Assert.False(view.NestSubtasks);
+    }
+
+    [Fact]
+    public void NestSubtasks_MakesViewNonDefault()
+    {
+        var view = new ViewSettings { NestSubtasks = true };
+
+        Assert.False(view.IsDefault);
     }
 
     [Fact]
