@@ -60,7 +60,9 @@ public sealed class AgentDispatchSettings
     public TerminalLauncherOptions ToLauncherOptions() => new()
     {
         ClaudeExecutable = string.IsNullOrWhiteSpace(ClaudeExecutable) ? "claude" : ClaudeExecutable.Trim(),
-        ExtraArgs = [.. ExtraArgs],
+        // Trim and drop blanks so hand-edited config.json values are cleaned the same way the F2
+        // dialog's ParseExtraArgs cleans typed input (and the executable is coalesced above).
+        ExtraArgs = [.. ExtraArgs.Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim())],
         Preferred = PreferredTerminal,
     };
 

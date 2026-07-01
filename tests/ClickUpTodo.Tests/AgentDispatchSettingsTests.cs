@@ -66,6 +66,24 @@ public sealed class AgentDispatchSettingsTests
     public void ToLauncherOptions_TrimsExecutable()
         => Assert.Equal("claude-x", new AgentDispatchSettings { ClaudeExecutable = "  claude-x  " }.ToLauncherOptions().ClaudeExecutable);
 
+    [Fact]
+    public void ToLauncherOptions_TrimsAndDropsBlankExtraArgs()
+    {
+        var opts = new AgentDispatchSettings { ExtraArgs = ["  --model ", "", "  ", "opus"] }.ToLauncherOptions();
+        Assert.Equal(["--model", "opus"], opts.ExtraArgs);
+    }
+
+    [Fact]
+    public void ToLauncherOptions_ExtraArgsIsADistinctList()
+    {
+        var settings = new AgentDispatchSettings { ExtraArgs = ["--model"] };
+        var opts = settings.ToLauncherOptions();
+
+        settings.ExtraArgs.Add("mutated");
+
+        Assert.Equal(["--model"], opts.ExtraArgs); // isolated from later mutation of the source list
+    }
+
     // ── ResolveWorkingDirectory ────────────────────────────────────────────────────
 
     [Fact]
