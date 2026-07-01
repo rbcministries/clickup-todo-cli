@@ -12,7 +12,7 @@ public static class FilterSortGroupForm
 {
     /// <summary>The filterable/sortable/groupable fields, in display order.</summary>
     public static readonly IReadOnlyList<TaskField> Fields =
-        [TaskField.Status, TaskField.List, TaskField.LastActivity, TaskField.Due, TaskField.Priority];
+        [TaskField.Status, TaskField.List, TaskField.Created, TaskField.LastActivity, TaskField.Due, TaskField.Priority];
 
     /// <summary>All operators, in display order (validity per field is enforced by <see cref="TryBuildRule"/>).</summary>
     public static readonly IReadOnlyList<FilterOp> Ops =

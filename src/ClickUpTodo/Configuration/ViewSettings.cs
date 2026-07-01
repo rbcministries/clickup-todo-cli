@@ -6,6 +6,9 @@ public enum TaskField
     Status,
     List,
 
+    /// <summary>Creation timestamp (ClickUp <c>date_created</c>), epoch ms.</summary>
+    Created,
+
     /// <summary>Last-activity timestamp (ClickUp <c>date_updated</c>), epoch ms.</summary>
     LastActivity,
 
@@ -18,7 +21,7 @@ public enum TaskField
 
 /// <summary>
 /// A filter comparison. <see cref="Is"/>/<see cref="IsNot"/> apply to every field; the ordering
-/// operators apply only to numeric/date fields (Last activity, Due).
+/// operators apply only to numeric/date fields (Created, Last activity, Due).
 /// </summary>
 public enum FilterOp
 {
@@ -67,6 +70,12 @@ public sealed class ViewSettings
     /// <summary>The field to group by, or null for a single ungrouped section.</summary>
     public TaskField? GroupField { get; set; }
 
+    /// <summary>
+    /// When true, subtasks are shown nested (indented) directly beneath their parent (F4, #46). When
+    /// false (the default) subtasks are hidden from the main list so it stays a flat top-level view.
+    /// </summary>
+    public bool ShowSubtasks { get; set; }
+
     /// <summary>True when nothing is configured, so the default order/sectioning applies.</summary>
-    public bool IsDefault => Filters.Count == 0 && SortField is null && GroupField is null;
+    public bool IsDefault => Filters.Count == 0 && SortField is null && GroupField is null && !ShowSubtasks;
 }

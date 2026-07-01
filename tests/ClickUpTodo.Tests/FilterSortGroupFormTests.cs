@@ -20,6 +20,13 @@ public sealed class FilterSortGroupFormTests
     }
 
     [Fact]
+    public void Fields_IncludesCreated()
+    {
+        Assert.Contains(TaskField.Created, FilterSortGroupForm.Fields);
+        Assert.Contains("Created", FilterSortGroupForm.FieldChoices());
+    }
+
+    [Fact]
     public void FieldIndex_RoundTrips()
     {
         Assert.Equal(0, FilterSortGroupForm.FieldToIndex(null));
