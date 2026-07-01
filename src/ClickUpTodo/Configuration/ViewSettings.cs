@@ -64,6 +64,12 @@ public sealed class ViewSettings
     /// <summary>The field to group by, or null for a single ungrouped section.</summary>
     public TaskField? GroupField { get; set; }
 
+    /// <summary>
+    /// When true, subtasks are shown nested (indented) directly beneath their parent (F4, #46). When
+    /// false (the default) subtasks are hidden from the main list so it stays a flat top-level view.
+    /// </summary>
+    public bool ShowSubtasks { get; set; }
+
     /// <summary>True when nothing is configured, so the default order/sectioning applies.</summary>
-    public bool IsDefault => Filters.Count == 0 && SortField is null && GroupField is null;
+    public bool IsDefault => Filters.Count == 0 && SortField is null && GroupField is null && !ShowSubtasks;
 }

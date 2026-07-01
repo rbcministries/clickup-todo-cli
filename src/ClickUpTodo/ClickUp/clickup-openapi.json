@@ -288,6 +288,7 @@
           "custom_id": { "type": "string", "nullable": true },
           "name": { "type": "string" },
           "url": { "type": "string", "nullable": true },
+          "parent": { "type": "string", "nullable": true },
           "text_content": { "type": "string", "nullable": true },
           "description": { "type": "string", "nullable": true },
           "due_date": { "type": "string", "nullable": true },

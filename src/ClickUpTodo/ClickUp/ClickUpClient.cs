@@ -137,6 +137,7 @@ public sealed class ClickUpClient : IDisposable
         Id = t.Id ?? "",
         Name = t.Name ?? "(untitled)",
         Url = t.Url,
+        ParentId = string.IsNullOrWhiteSpace(t.Parent) ? null : t.Parent,
         DueDateMs = ParseMs(t.DueDate),
         UpdatedMs = ParseMs(t.DateUpdated),
         ListId = t.List?.Id,

@@ -104,6 +104,14 @@ namespace ClickUpTodo.ClickUp.Generated.Models
 #else
         public string Name { get; set; }
 #endif
+        /// <summary>The parent property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public string? Parent { get; set; }
+#nullable restore
+#else
+        public string Parent { get; set; }
+#endif
         /// <summary>The priority property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -181,6 +189,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
                 { "list", n => { List = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.TaskList>(global::ClickUpTodo.ClickUp.Generated.Models.TaskList.CreateFromDiscriminatorValue); } },
                 { "locations", n => { Locations = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.TaskList>(global::ClickUpTodo.ClickUp.Generated.Models.TaskList.CreateFromDiscriminatorValue)?.AsList(); } },
                 { "name", n => { Name = n.GetStringValue(); } },
+                { "parent", n => { Parent = n.GetStringValue(); } },
                 { "priority", n => { Priority = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Priority>(global::ClickUpTodo.ClickUp.Generated.Models.Priority.CreateFromDiscriminatorValue); } },
                 { "status", n => { Status = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Status>(global::ClickUpTodo.ClickUp.Generated.Models.Status.CreateFromDiscriminatorValue); } },
                 { "tags", n => { Tags = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.Tag>(global::ClickUpTodo.ClickUp.Generated.Models.Tag.CreateFromDiscriminatorValue)?.AsList(); } },
@@ -207,6 +216,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.TaskList>("list", List);
             writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.TaskList>("locations", Locations);
             writer.WriteStringValue("name", Name);
+            writer.WriteStringValue("parent", Parent);
             writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Priority>("priority", Priority);
             writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Status>("status", Status);
             writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.Tag>("tags", Tags);

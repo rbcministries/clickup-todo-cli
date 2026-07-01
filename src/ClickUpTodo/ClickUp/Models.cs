@@ -24,6 +24,12 @@ public sealed record TaskItem
     public string? ListId { get; init; }
     public string? ListName { get; init; }
 
+    /// <summary>
+    /// The id of this task's parent task (ClickUp <c>parent</c>) when it's a subtask, else null. Used
+    /// by the F4 subtasks view (#46) to nest a subtask beneath its parent.
+    /// </summary>
+    public string? ParentId { get; init; }
+
     /// <summary>Due date as Unix epoch milliseconds, or null when undated.</summary>
     public long? DueDateMs { get; init; }
 
