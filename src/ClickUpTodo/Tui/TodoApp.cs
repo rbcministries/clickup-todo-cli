@@ -280,7 +280,7 @@ public sealed class TodoApp
         if (_activeScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.ExcludedStatuses);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.ExcludedStatuses, _config.AgentDispatch);
         ShowScreen(screen, () =>
         {
             var result = screen.Result;
@@ -289,6 +289,7 @@ public sealed class TodoApp
 
             _config.RefreshSeconds = result.RefreshSeconds;
             _config.ExcludedStatuses = result.ExcludedStatuses;
+            _config.AgentDispatch = result.AgentDispatch;
             _configStore.Save(_config);
 
             _refresh.IntervalSeconds = result.RefreshSeconds;
