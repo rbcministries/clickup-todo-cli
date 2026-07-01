@@ -36,14 +36,17 @@ public static class AgentPromptComposer
     };
 
     /// <summary>
-    /// Builds the full prompt text: <c>{userPrompt}\n\n{Preamble}\n\n{json}</c>. Uses <c>\n</c>
-    /// throughout so the output is identical across platforms.
+    /// Builds the full prompt text: <c>{userPrompt}\n\n{preamble}\n\n{json}</c>. Uses <c>\n</c>
+    /// throughout so the output is identical across platforms. A blank <paramref name="preamble"/>
+    /// (the default) uses the fixed <see cref="Preamble"/>; a non-blank value overrides it (#27).
     /// </summary>
-    public static string Compose(TaskDetail task, IReadOnlyList<CommentItem> comments, string userPrompt)
+    public static string Compose(
+        TaskDetail task, IReadOnlyList<CommentItem> comments, string userPrompt, string? preamble = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         var prompt = (userPrompt ?? string.Empty).Trim();
-        return $"{prompt}\n\n{Preamble}\n\n{BuildJson(task, comments)}";
+        var lead = string.IsNullOrWhiteSpace(preamble) ? Preamble : preamble.Trim();
+        return $"{prompt}\n\n{lead}\n\n{BuildJson(task, comments)}";
     }
 
     /// <summary>
@@ -53,7 +56,8 @@ public static class AgentPromptComposer
     /// reclaims it.
     /// </summary>
     public static string WritePromptFile(
-        TaskDetail task, IReadOnlyList<CommentItem> comments, string userPrompt, string? directory = null)
+        TaskDetail task, IReadOnlyList<CommentItem> comments, string userPrompt,
+        string? directory = null, string? preamble = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         var dir = string.IsNullOrWhiteSpace(directory)
@@ -63,7 +67,7 @@ public static class AgentPromptComposer
 
         var fileName = $"agent-prompt-{SafeToken(task.Id)}-{Guid.NewGuid():N}.txt";
         var path = Path.Combine(dir, fileName);
-        File.WriteAllText(path, Compose(task, comments, userPrompt));
+        File.WriteAllText(path, Compose(task, comments, userPrompt, preamble));
         return path;
     }
 

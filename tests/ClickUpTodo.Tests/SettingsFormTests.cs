@@ -53,4 +53,32 @@ public sealed class SettingsFormTests
     [Fact]
     public void CanAdd_ComparesAgainstTheTrimmedCandidate()
         => Assert.False(SettingsForm.CanAdd(["cancelled"], "  cancelled  "));
+
+    // ── agent-dispatch extra args (#27) ─────────────────────────────────────────
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ParseExtraArgs_BlankYieldsEmpty(string? text)
+        => Assert.Empty(SettingsForm.ParseExtraArgs(text));
+
+    [Fact]
+    public void ParseExtraArgs_SplitsOnWhitespaceAndDropsBlanks()
+        => Assert.Equal(["--model", "opus", "--verbose"], SettingsForm.ParseExtraArgs("  --model   opus\t--verbose "));
+
+    [Fact]
+    public void FormatExtraArgs_JoinsWithSpaces()
+        => Assert.Equal("--model opus", SettingsForm.FormatExtraArgs(["--model", "opus"]));
+
+    [Fact]
+    public void FormatExtraArgs_SkipsBlankEntries()
+        => Assert.Equal("--model opus", SettingsForm.FormatExtraArgs(["--model", "  ", "opus"]));
+
+    [Fact]
+    public void ExtraArgs_RoundTripThroughFormatThenParse()
+    {
+        string[] args = ["--model", "opus", "--dangerously-skip-permissions"];
+        Assert.Equal(args, SettingsForm.ParseExtraArgs(SettingsForm.FormatExtraArgs(args)));
+    }
 }
