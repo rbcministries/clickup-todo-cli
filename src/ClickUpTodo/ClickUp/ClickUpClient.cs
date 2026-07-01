@@ -64,6 +64,38 @@ public sealed class ClickUpClient : IDisposable
             return new NamedEntity(list?.Id ?? listId, list?.Name ?? "(unnamed list)");
         });
 
+    /// <summary>
+    /// A list's own color chip (ClickUp's <c>status.color</c>, e.g. <c>#e16b16</c>), or null when the
+    /// list has no color set. ClickUp stores the list color under a field named <c>status</c> that the
+    /// generated model doesn't map, so it's read defensively from Kiota's <see cref="IParsable"/>
+    /// additional data; any shape we can't read yields null (callers fall back to a generated hue).
+    /// </summary>
+    public Task<string?> GetListColorAsync(string listId, CancellationToken ct = default)
+        => Guard("GetList", async () =>
+            ExtractListColor(await _client.V2.List[listId].GetAsync(cancellationToken: ct)));
+
+    /// <summary>
+    /// Pulls <c>status.color</c> out of a list's unmapped additional data. Kiota represents nested
+    /// objects as <see cref="UntypedObject"/>; we also tolerate a raw <see cref="JsonElement"/> in case
+    /// the serializer shape changes. Returns null (rather than throwing) for any unexpected shape.
+    /// </summary>
+    internal static string? ExtractListColor(global::ClickUpTodo.ClickUp.Generated.Models.List? list)
+    {
+        if (list?.AdditionalData is null || !list.AdditionalData.TryGetValue("status", out var raw) || raw is null)
+            return null;
+
+        var color = raw switch
+        {
+            UntypedObject obj => (obj.GetValue().TryGetValue("color", out var c) ? c : null) is UntypedString s
+                ? s.GetValue()
+                : null,
+            JsonElement el when el.ValueKind == JsonValueKind.Object && el.TryGetProperty("color", out var c)
+                => c.GetString(),
+            _ => null,
+        };
+        return string.IsNullOrWhiteSpace(color) ? null : color;
+    }
+
     /// <summary>The available statuses for a list's workflow, ordered by ClickUp's order index.</summary>
     public Task<IReadOnlyList<StatusOption>> GetListStatusesAsync(string listId, CancellationToken ct = default)
         => Guard("GetList", async () =>
@@ -153,6 +185,7 @@ public sealed class ClickUpClient : IDisposable
             StatusColor = t.Status?.Color,
             PriorityLevel = priorityLevel,
             PriorityName = ClickUpPriority.NameFromLevel(priorityLevel),
+            PriorityColor = t.Priority?.Color,
         };
     }
 
