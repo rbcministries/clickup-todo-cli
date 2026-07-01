@@ -112,6 +112,16 @@ public sealed class TerminalLauncherTests
     }
 
     [Fact]
+    public void Windows_Cmd_Preferred_ButNoPowerShellHost_YieldsNoCmdCandidate()
+    {
+        // Pinning cmd can't conjure a PowerShell host: the gate still applies and cmd is dropped,
+        // falling through to whatever else is present (here, nothing).
+        var options = Defaults with { Preferred = PreferredTerminal.Cmd };
+
+        Assert.Empty(Plan(OSPlatformKind.Windows, Present("cmd"), options));
+    }
+
+    [Fact]
     public void Windows_WindowsTerminal_BuildsNewTabPwshArgv()
     {
         var spec = Plan(OSPlatformKind.Windows, Present("wt"))[0];

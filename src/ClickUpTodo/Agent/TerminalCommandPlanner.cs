@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace ClickUpTodo.Agent;
 
 /// <summary>
@@ -160,7 +162,7 @@ public static class TerminalCommandPlanner
     /// result is <c>[A-Za-z0-9+/=]</c> only, so it survives cmd.exe's parser (and <c>start</c>) intact.
     /// </summary>
     private static string EncodePwshCommand(string command) =>
-        Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(command));
+        Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
 
     /// <summary>Escape for an AppleScript double-quoted string literal.</summary>
     private static string AppleScriptEscape(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
