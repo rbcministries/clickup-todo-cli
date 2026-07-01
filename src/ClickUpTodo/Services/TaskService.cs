@@ -75,6 +75,61 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     public static IReadOnlyList<TaskItem> ApplyStatusChange(IReadOnlyList<TaskItem> tasks, string taskId, string? newStatus)
         => tasks.Select(t => t.Id == taskId ? t with { StatusName = newStatus } : t).ToList();
 
+    /// <summary>
+    /// The distinct parent ids referenced by a subtask in <paramref name="snapshot"/> that aren't
+    /// themselves present in it — the parents the nested subtasks view (#46) must pull in as context
+    /// headers. Pure; order follows first appearance so the fetch is deterministic.
+    /// </summary>
+    internal static IReadOnlyList<string> MissingParentIds(IReadOnlyList<TaskItem> snapshot)
+    {
+        var present = new HashSet<string>(snapshot.Select(t => t.Id));
+        var missing = new List<string>();
+        var seen = new HashSet<string>();
+        foreach (var t in snapshot)
+        {
+            if (string.IsNullOrEmpty(t.ParentId) || present.Contains(t.ParentId))
+                continue;
+            if (seen.Add(t.ParentId))
+                missing.Add(t.ParentId);
+        }
+        return missing;
+    }
+
+    /// <summary>
+    /// Fetches the parents of assigned subtasks that aren't themselves in <paramref name="snapshot"/>,
+    /// mapped to <see cref="TaskItem"/> headers for the nested subtasks view. Best-effort: a parent
+    /// that can't be fetched (deleted / no access) is skipped rather than failing the whole load.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, TaskItem>> ResolveContextParentsAsync(
+        IReadOnlyList<TaskItem> snapshot, CancellationToken ct = default)
+    {
+        var result = new Dictionary<string, TaskItem>();
+        foreach (var id in MissingParentIds(snapshot))
+        {
+            try
+            {
+                var d = await client.GetTaskDetailAsync(id, ct);
+                result[id] = new TaskItem
+                {
+                    Id = d.Id,
+                    Name = d.Name,
+                    Url = d.Url,
+                    StatusName = d.StatusName,
+                    StatusColor = d.StatusColor,
+                    ListId = d.ListId,
+                    ListName = d.ListName,
+                    DueDateMs = d.DueDateMs,
+                    UpdatedMs = d.UpdatedMs,
+                };
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort: a parent we can't fetch just won't get a context header.
+            }
+        }
+        return result;
+    }
+
     /// <summary>Stable ordering: by due date (soonest first, undated last), then by name.</summary>
     private sealed class TaskOrder : IComparer<TaskItem>
     {

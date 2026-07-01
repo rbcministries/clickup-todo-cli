@@ -60,6 +60,12 @@ public sealed class TodoApp
     private ObservableCollection<string> _display = [];
     // Per-row status-badge color overlay, parallel to _display (null = header row or no/!valid color).
     private List<StatusBadgeListSource.Badge?> _badges = [];
+    // Per-row nesting depth, parallel to _display, so an in-place row update keeps its indent (#46).
+    private List<int> _depths = [];
+    // Parents of assigned subtasks that aren't themselves in the snapshot, shown as context headers in
+    // the nested subtasks view (F4). Resolved off the UI thread only while NestSubtasks is on.
+    private IReadOnlyDictionary<string, TaskItem> _contextParents = EmptyParents;
+    private static readonly IReadOnlyDictionary<string, TaskItem> EmptyParents = new Dictionary<string, TaskItem>();
     private string _status = "Loading…";
     private string _signature = "";
 
@@ -80,7 +86,7 @@ public sealed class TodoApp
             _status = $"Loading… (driver: {driverName ?? "default (ansi)"})";
             Build();
             _refresh = new RefreshService(
-                fetch: ct => _tasks.LoadAsync(ct),
+                fetch: FetchAsync,
                 intervalSeconds: _config.RefreshSeconds,
                 onUpdate: tasks => Application.Invoke(() => OnTasksLoaded(tasks)),
                 onError: ex => Application.Invoke(() => Flash($"Refresh failed: {Short(ex)}")));
@@ -93,6 +99,20 @@ public sealed class TodoApp
             _window?.Dispose();
             Application.Shutdown();
         }
+    }
+
+    /// <summary>
+    /// Background fetch for the refresh loop: loads the task snapshot and, when the nested subtasks
+    /// view is on, resolves any parents not in the snapshot so they can be shown as context headers.
+    /// Runs off the UI thread; <see cref="_contextParents"/> is set before the result is marshalled in.
+    /// </summary>
+    private async Task<IReadOnlyList<TaskItem>> FetchAsync(CancellationToken ct)
+    {
+        var tasks = await _tasks.LoadAsync(ct);
+        _contextParents = _config.View.ShowSubtasks
+            ? await _tasks.ResolveContextParentsAsync(tasks, ct)
+            : EmptyParents;
+        return tasks;
     }
 
     private void Build()
@@ -117,7 +137,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · Ctrl+Q quit · type to search",
+            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · Ctrl+Q quit · type to search",
         };
 
         _window.Add(_frame, _statusLabel, help);
@@ -186,7 +206,33 @@ public sealed class TodoApp
                 key.Handled = true;
                 OpenViewSettings();
                 break;
+            case KeyCode.F4:
+                key.Handled = true;
+                ToggleShowSubtasks();
+                break;
         }
+    }
+
+    /// <summary>Toggles the subtasks view (F4, #46) — hidden vs. shown nested — and persists it.</summary>
+    private void ToggleShowSubtasks()
+    {
+        if (_activeScreen is not null)
+            return;
+
+        var on = !_config.View.ShowSubtasks;
+        _config.View.ShowSubtasks = on;
+        _configStore.Save(_config);
+        Flash(on ? "Subtasks shown, nested under their parent (F4)." : "Subtasks hidden (F4).");
+
+        // Re-render immediately (in-snapshot parents nest without waiting on the network), keep the
+        // stored signature in sync, then — when turning on — refresh to pull in parents not assigned
+        // to me as context headers; that fetch changes the signature again and re-renders when it lands.
+        if (!on)
+            _contextParents = EmptyParents;
+        Render(keepTaskId: CurrentTask()?.Id);
+        _signature = CurrentSignature(_all);
+        if (on)
+            _refresh.RequestRefresh();
     }
 
     private void OpenViewSettings()
@@ -434,6 +480,13 @@ public sealed class TodoApp
         var task = CurrentTask();
         if (task is null)
             return;
+        // A context-parent header (a parent not assigned to me, shown only so its subtask can nest
+        // beneath it) is context, not my work — don't change its status. (#46)
+        if (_contextParents.ContainsKey(task.Id))
+        {
+            Flash("This is a parent shown for context (not assigned to you) — status unchanged.");
+            return;
+        }
         if (string.IsNullOrWhiteSpace(task.ListId))
         {
             Flash("This task has no list, so its statuses can't be loaded.");
@@ -529,13 +582,14 @@ public sealed class TodoApp
     private void UpdateTaskRow(TaskItem updated, bool sending)
     {
         _all = TaskService.ApplyStatusChange(_all, updated.Id, updated.StatusName);
-        _signature = BuildSignature(_all);
+        _signature = CurrentSignature(_all);
 
         var index = _rows.FindIndex(r => r?.Id == updated.Id);
         if (index < 0 || index >= _display.Count)
             return;
         _rows[index] = updated;
-        var (text, badge) = BuildRow(updated);
+        // Rebuild at the row's existing depth so an in-place update keeps its nesting indent (#46).
+        var (text, badge) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0);
         _badges[index] = badge;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
@@ -563,7 +617,7 @@ public sealed class TodoApp
 
         // Rebuilding the ListView (SetSource) forces a full reset + redraw. Skip it when the visible
         // task set is unchanged and just update the (cheap) status line.
-        var signature = BuildSignature(tasks);
+        var signature = CurrentSignature(tasks);
         if (signature == _signature)
         {
             _statusLabel.Text = _status;
@@ -573,13 +627,28 @@ public sealed class TodoApp
         Render(keepTaskId: CurrentTask()?.Id);
     }
 
+    /// <summary>
+    /// The rendered fingerprint including the subtasks-view state, so toggling F4 or resolving new
+    /// context parents is treated as a change (not a no-op refresh) even when the task set is identical.
+    /// </summary>
+    private string CurrentSignature(IReadOnlyList<TaskItem> tasks)
+    {
+        var sb = new System.Text.StringBuilder(BuildSignature(tasks));
+        sb.Append("#sub=").Append(_config.View.ShowSubtasks);
+        if (_config.View.ShowSubtasks)
+            foreach (var id in _contextParents.Keys.OrderBy(x => x, StringComparer.Ordinal))
+                sb.Append(';').Append(id);
+        return sb.ToString();
+    }
+
     /// <summary>A cheap fingerprint of what's actually rendered, so no-op refreshes skip a redraw.</summary>
     private static string BuildSignature(IReadOnlyList<TaskItem> tasks)
     {
-        var sb = new System.Text.StringBuilder(tasks.Count * 24);
+        var sb = new System.Text.StringBuilder(tasks.Count * 28);
         foreach (var t in tasks)
             sb.Append(t.Id).Append(':').Append(t.StatusName).Append(':').Append(t.Name)
-              .Append(':').Append(t.DueDateMs).Append(':').Append(t.UpdatedMs).Append('|');
+              .Append(':').Append(t.DueDateMs).Append(':').Append(t.UpdatedMs)
+              .Append(':').Append(t.ParentId).Append('|');
         return sb.ToString();
     }
 
@@ -604,13 +673,24 @@ public sealed class TodoApp
         // vanish); the filter/sort/group view (F3) applies to the non-pinned set. Sort applies to both.
         var view = _config.View;
         var pinned = TaskView.Sort(_all.Where(t => _focus.IsPinned(t.Id)), view.SortField, view.SortDirection);
-        var groups = TaskView.Apply(_all.Where(t => !_focus.IsPinned(t.Id)), view);
+
+        // The non-pinned set feeds the F3 view. When subtasks are hidden (the default), drop them here
+        // so the main list stays a flat top-level view; pins are handled above so a pinned subtask is
+        // never hidden. (#46)
+        var nonPinned = _all.Where(t => !_focus.IsPinned(t.Id));
+        if (!view.ShowSubtasks)
+            nonPinned = nonPinned.Where(t => string.IsNullOrEmpty(t.ParentId));
+        var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
         var grouped = view.GroupField is not null;
+        // Nesting and field-grouping are two ways of grouping the same rows, so grouping wins: subtasks
+        // only nest when shown and no F3 group is active (grouped → subtasks stay flat within groups). (#46)
+        var nest = view.ShowSubtasks && !grouped;
 
         _rows.Clear();
         _display = new ObservableCollection<string>();
         _badges = new List<StatusBadgeListSource.Badge?>();
+        _depths = new List<int>();
 
         if (pinned.Count > 0)
             AddHeader($"{FocusHeaderPrefix} ({pinned.Count})");
@@ -626,8 +706,12 @@ public sealed class TodoApp
             else if (pinned.Count > 0)
                 AddHeader($"{TasksHeaderPrefix} ({todoCount}) ─");
 
-            foreach (var t in group.Tasks)
-                AddTask(t);
+            if (nest)
+                foreach (var row in SubtaskArranger.Arrange(group.Tasks, _contextParents))
+                    AddTask(row.Task, row.Depth, row.IsContextParent);
+            else
+                foreach (var t in group.Tasks)
+                    AddTask(t);
         }
 
         // A custom source that draws text like the stock wrapper but overlays each [status] badge
@@ -651,20 +735,23 @@ public sealed class TodoApp
         _rows.Add(null);
         _display.Add(text);
         _badges.Add(null);
+        _depths.Add(0);
     }
 
-    private void AddTask(TaskItem task)
+    private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false)
     {
-        var (text, badge) = BuildRow(task);
+        var (text, badge) = BuildRow(task, depth, isContextParent);
         _rows.Add(task);
         _display.Add(text);
         _badges.Add(badge);
+        _depths.Add(depth);
     }
 
     /// <summary>The display text and (optional) status-color badge overlay for a task row.</summary>
-    private static (string Text, StatusBadgeListSource.Badge? Badge) BuildRow(TaskItem task)
+    private static (string Text, StatusBadgeListSource.Badge? Badge) BuildRow(
+        TaskItem task, int depth = 0, bool isContextParent = false)
     {
-        var row = TaskRowFormatter.Format(task);
+        var row = TaskRowFormatter.Format(task, depth, isContextParent);
         return (row.Text, StatusBadgeListSource.TryCreate(row.BadgeStart, row.BadgeLength, task.StatusColor));
     }
 
