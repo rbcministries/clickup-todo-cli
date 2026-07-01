@@ -14,8 +14,8 @@ public sealed class TaskViewTests
     private static long Ms(string iso) => DateTimeOffset.Parse(iso).ToUnixTimeMilliseconds();
 
     private static TaskItem Task(
-        string id, string name, string? status = null, string? list = null, long? due = null, long? updated = null)
-        => new() { Id = id, Name = name, StatusName = status, ListName = list, DueDateMs = due, UpdatedMs = updated };
+        string id, string name, string? status = null, string? list = null, long? due = null, long? updated = null, long? created = null)
+        => new() { Id = id, Name = name, StatusName = status, ListName = list, DueDateMs = due, UpdatedMs = updated, CreatedMs = created };
 
     private static FilterRule Rule(TaskField field, FilterOp op, string value) => new() { Field = field, Op = op, Value = value };
 
@@ -128,6 +128,32 @@ public sealed class TaskViewTests
     }
 
     [Fact]
+    public void Filter_ByCreated_GreaterOrEqual_UsesEpochMs_NullExcluded()
+    {
+        TaskItem[] tasks =
+        [
+            Task("1", "a", created: Ms("2026-06-01T00:00:00Z")),
+            Task("2", "b", created: Ms("2026-06-20T00:00:00Z")),
+            Task("3", "c", created: null),
+        ];
+
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Created, FilterOp.GreaterOrEqual, "2026-06-10")]);
+
+        Assert.Equal(["2"], result.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Filter_ByCreated_IsNot_KeepsNullValues()
+    {
+        var target = Ms("2026-06-01T00:00:00Z");
+        TaskItem[] tasks = [Task("1", "a", created: target), Task("2", "b", created: target + 1), Task("3", "c", created: null)];
+
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Created, FilterOp.IsNot, "2026-06-01")]);
+
+        Assert.Equal(["2", "3"], result.Select(t => t.Id));
+    }
+
+    [Fact]
     public void Filter_MultipleRules_AreAnded()
     {
         TaskItem[] tasks =
@@ -205,6 +231,36 @@ public sealed class TaskViewTests
     }
 
     [Fact]
+    public void Sort_ByCreatedAscending_OldestFirst_NullsLast()
+    {
+        TaskItem[] tasks =
+        [
+            Task("1", "a", created: Ms("2026-06-20T00:00:00Z")),
+            Task("2", "b", created: null),
+            Task("3", "c", created: Ms("2026-06-01T00:00:00Z")),
+        ];
+
+        var result = TaskView.Sort(tasks, TaskField.Created, SortDirection.Ascending);
+
+        Assert.Equal(["3", "1", "2"], result.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Sort_ByCreatedDescending_NewestFirst_NullsStillLast()
+    {
+        TaskItem[] tasks =
+        [
+            Task("1", "a", created: Ms("2026-06-01T00:00:00Z")),
+            Task("2", "b", created: Ms("2026-06-20T00:00:00Z")),
+            Task("3", "c", created: null),
+        ];
+
+        var result = TaskView.Sort(tasks, TaskField.Created, SortDirection.Descending);
+
+        Assert.Equal(["2", "1", "3"], result.Select(t => t.Id));
+    }
+
+    [Fact]
     public void Sort_TieBreaksByNameThenId()
     {
         TaskItem[] tasks =
@@ -266,6 +322,23 @@ public sealed class TaskViewTests
         var groups = TaskView.Group(tasks, TaskField.Due);
 
         Assert.Equal(["2026-07-01", "2026-07-03", "No date"], groups.Select(g => g.Label));
+        Assert.Equal(["1", "2"], groups[0].Tasks.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Group_ByCreated_BucketsByUtcCalendarDay_NoDateLast()
+    {
+        TaskItem[] tasks =
+        [
+            Task("1", "a", created: Ms("2026-06-01T09:00:00Z")),
+            Task("2", "b", created: Ms("2026-06-01T23:00:00Z")),
+            Task("3", "c", created: Ms("2026-06-03T00:00:00Z")),
+            Task("4", "d", created: null),
+        ];
+
+        var groups = TaskView.Group(tasks, TaskField.Created);
+
+        Assert.Equal(["2026-06-01", "2026-06-03", "No date"], groups.Select(g => g.Label));
         Assert.Equal(["1", "2"], groups[0].Tasks.Select(t => t.Id));
     }
 
