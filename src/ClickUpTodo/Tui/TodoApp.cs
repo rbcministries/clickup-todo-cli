@@ -10,6 +10,7 @@ using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
+using Attribute = Terminal.Gui.Drawing.Attribute;
 
 // Terminal.Gui 2.4 deprecates the static `Application` facade in favour of an instance-based
 // API that is not yet stable or documented. The static API remains the supported v2 pattern,
@@ -53,15 +54,27 @@ public sealed class TodoApp
     private Screen? _activeScreen;
 
     private IReadOnlyList<TaskItem> _all = [];
-    // Parallel to the ListView's rows: the task on each row, or null for a header/separator row.
+    // Parallel to the ListView's rows: the task on each row, or null for a header/spacer row.
     private readonly List<TaskItem?> _rows = [];
+    // Parallel to _rows: what kind of row it is, so navigation can tell headers from blank spacers
+    // (both carry a null _rows entry) and skip to real sections. (#61)
+    private readonly List<RowKind> _kinds = [];
     // The ListView's backing collection, kept so a single row can be updated in place (without
     // SetSource, which would reset the list and the cursor).
     private ObservableCollection<string> _display = [];
     // Per-row status-badge color overlay, parallel to _display (null = header row or no/!valid color).
     private List<StatusBadgeListSource.Badge?> _badges = [];
+    // Per-row full-width header-bar attribute, parallel to _display (non-null only on header rows). (#61)
+    private List<Attribute?> _headerAttrs = [];
     // Per-row nesting depth, parallel to _display, so an in-place row update keeps its indent (#46).
     private List<int> _depths = [];
+    // Per-list color chips for List-grouped headers, resolved off the UI thread in FetchAsync and read
+    // during Render; volatile to publish the reference safely across threads. (#61)
+    private volatile IReadOnlyDictionary<string, string?> _listColors = EmptyListColors;
+    private static readonly IReadOnlyDictionary<string, string?> EmptyListColors = new Dictionary<string, string?>();
+
+    /// <summary>The kind of a rendered row: an actionable task, a section header, or a blank spacer.</summary>
+    private enum RowKind { Task, Header, Spacer }
     // Parents of assigned subtasks that aren't themselves in the snapshot, shown as context headers in
     // the subtasks view (F4). Resolved off the UI thread (FetchAsync) while ShowSubtasks is on and read
     // on the UI thread during Render, so it's volatile to publish the reference safely across threads.
@@ -115,6 +128,10 @@ public sealed class TodoApp
         _contextParents = _config.View.ShowSubtasks && _config.View.GroupField is null
             ? await _tasks.ResolveContextParentsAsync(tasks, ct)
             : EmptyParents;
+        // List colors are only needed to tint headers when grouping by List; skip the fetches otherwise.
+        _listColors = _config.View.GroupField == TaskField.List
+            ? await _tasks.ResolveListColorsAsync(tasks.Select(t => t.ListId ?? ""), ct)
+            : EmptyListColors;
         return tasks;
     }
 
@@ -345,7 +362,19 @@ public sealed class TodoApp
         var screen = _activeScreen;
         _activeScreen = null;
         _window.Remove(screen);
-        screen.Dispose();
+        // Terminal.Gui 2.4.10 can throw from View/Tabs.Dispose while tearing down a view's subviews
+        // (disposing a child mutates the parent's subview list mid-iteration → IndexOutOfRange; hit
+        // when Esc closes the tabbed detail view). The screen is already detached from the window
+        // above, so a failed Dispose is at worst a minor leak of that screen's views — never a reason
+        // to crash the app. Guard it so closing a screen can't take the process down.
+        try
+        {
+            screen.Dispose();
+        }
+        catch (Exception ex) when (ex is ArgumentOutOfRangeException or IndexOutOfRangeException)
+        {
+            Debug.WriteLine($"Screen dispose threw (Terminal.Gui teardown bug), ignoring: {ex}");
+        }
         _frame.Visible = true;
         _list.SetFocus();
     }
@@ -355,12 +384,12 @@ public sealed class TodoApp
         => _list.SelectedItem is int i && i >= 0 && i < _rows.Count ? _rows[i] : null;
 
     /// <summary>
-    /// Moves the cursor to the first task row beneath the next header (sections are delimited by the
-    /// header rows tracked as null entries in <see cref="_rows"/>). Wraps to the first section.
+    /// Moves the cursor to the first task row beneath the next header (sections are delimited by
+    /// <see cref="RowKind.Header"/> rows). Wraps to the first section.
     /// </summary>
     private void JumpToNextSection()
     {
-        var headers = Enumerable.Range(0, _rows.Count).Where(i => _rows[i] is null).ToList();
+        var headers = Enumerable.Range(0, _kinds.Count).Where(i => _kinds[i] == RowKind.Header).ToList();
         if (headers.Count == 0)
             return; // no sections (e.g. nothing pinned)
 
@@ -691,21 +720,28 @@ public sealed class TodoApp
         var nest = view.ShowSubtasks && !grouped;
 
         _rows.Clear();
+        _kinds.Clear();
         _display = new ObservableCollection<string>();
         _badges = new List<StatusBadgeListSource.Badge?>();
+        _headerAttrs = new List<Attribute?>();
         _depths = new List<int>();
+
+        // A background color per group header, by the grouped field (status/list/priority/date). Null
+        // entries (and the non-field pinned/tasks headers) fall back to the neutral bar. (#61)
+        var headerColors = GroupHeaderPalette.Resolve(view.GroupField, groups, _listColors);
 
         if (pinned.Count > 0)
             AddHeader($"{FocusHeaderPrefix} ({pinned.Count})");
         foreach (var t in pinned)
             AddTask(t);
 
-        foreach (var group in groups)
+        for (var gi = 0; gi < groups.Count; gi++)
         {
+            var group = groups[gi];
             // A header per named group when grouping; otherwise keep today's behaviour — the single
             // tasks-section header only appears when there's a pinned section above it to separate from.
             if (grouped)
-                AddHeader($"─ {(group.Label ?? "").ToUpperInvariant()} ({group.Tasks.Count}) ─");
+                AddHeader($" {(group.Label ?? "").ToUpperInvariant()} ({group.Tasks.Count})", headerColors[gi]);
             else if (pinned.Count > 0)
                 AddHeader($"{TasksHeaderPrefix} ({todoCount}) ─");
 
@@ -717,10 +753,10 @@ public sealed class TodoApp
                     AddTask(t);
         }
 
-        // A custom source that draws text like the stock wrapper but overlays each [status] badge
-        // with its ClickUp color. Assigning Source (rather than SetSource) lets us pass our source;
-        // the ListView disposes the previous one.
-        _list.Source = new StatusBadgeListSource(_display, _badges);
+        // A custom source that draws text like the stock wrapper, overlays each [status] badge with its
+        // ClickUp color, and paints each group header as a full-width color bar. Assigning Source
+        // (rather than SetSource) lets us pass our source; the ListView disposes the previous one.
+        _list.Source = new StatusBadgeListSource(_display, _badges, _headerAttrs);
         _frame.Title = BuildFrameTitle(pinned.Count, todoCount, view);
 
         // Restore the cursor onto the same task, or the first task row.
@@ -733,11 +769,30 @@ public sealed class TodoApp
         _statusLabel.Text = _status;
     }
 
-    private void AddHeader(string text)
+    /// <summary>
+    /// Appends a section header, preceded by a blank spacer row for breathing room (except at the very
+    /// top of the list). <paramref name="hexColor"/> tints the full-width bar; a null/unparseable color
+    /// falls back to the neutral bar.
+    /// </summary>
+    private void AddHeader(string text, string? hexColor = null)
     {
+        if (_display.Count > 0)
+            AddSpacer();
         _rows.Add(null);
+        _kinds.Add(RowKind.Header);
         _display.Add(text);
         _badges.Add(null);
+        _headerAttrs.Add(StatusBadgeListSource.HeaderAttr(hexColor) ?? StatusBadgeListSource.NeutralHeaderAttr);
+        _depths.Add(0);
+    }
+
+    private void AddSpacer()
+    {
+        _rows.Add(null);
+        _kinds.Add(RowKind.Spacer);
+        _display.Add("");
+        _badges.Add(null);
+        _headerAttrs.Add(null);
         _depths.Add(0);
     }
 
@@ -745,8 +800,10 @@ public sealed class TodoApp
     {
         var (text, badge) = BuildRow(task, depth, isContextParent);
         _rows.Add(task);
+        _kinds.Add(RowKind.Task);
         _display.Add(text);
         _badges.Add(badge);
+        _headerAttrs.Add(null);
         _depths.Add(depth);
     }
 
