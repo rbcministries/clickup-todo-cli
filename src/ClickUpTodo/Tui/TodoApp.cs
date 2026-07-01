@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
@@ -42,6 +43,9 @@ public sealed class TodoApp
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
+    // Composes the seed prompt + launches an interactive `claude` session for the detail view's A
+    // keybinding (#26). Zero-config defaults today; #27 (S4) will populate its options from AppConfig.
+    private readonly AgentDispatcher _agent = new(new TerminalLauncher());
 
     private Window _window = null!;
     private FrameView _frame = null!;
@@ -462,6 +466,9 @@ public sealed class TodoApp
                     if (_activeScreen is not null)
                         return;
                     var screen = new TaskDetailScreen(detail, comments);
+                    // A (in the detail view) → compose + launch an interactive claude session (#26).
+                    // The detail view stays open; dispatch runs off the UI thread so the TUI stays live.
+                    screen.AgentDispatchRequested += (_, prompt) => DispatchAgent(detail, comments, prompt);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -474,6 +481,29 @@ public sealed class TodoApp
             catch (Exception ex)
             {
                 Application.Invoke(() => Flash($"Could not load task detail: {Short(ex)}"));
+            }
+        });
+    }
+
+    /// <summary>
+    /// Composes the seed prompt for <paramref name="detail"/> and launches an interactive
+    /// <c>claude</c> session in a new terminal (#26). Runs off the UI thread (file write + process
+    /// launch), then reports the outcome on the status line; the detail view and background refresh
+    /// keep running. Working directory / claude path / preferred terminal become configurable in #27.
+    /// </summary>
+    private void DispatchAgent(TaskDetail detail, IReadOnlyList<CommentItem> comments, string prompt)
+    {
+        Flash($"Launching Claude for '{detail.Name}'…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var result = await _agent.DispatchAsync(detail, comments, prompt);
+                Application.Invoke(() => Flash(result.StatusMessage));
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not launch Claude: {Short(ex)}"));
             }
         });
     }
