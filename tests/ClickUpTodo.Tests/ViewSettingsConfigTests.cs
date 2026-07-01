@@ -46,6 +46,30 @@ public sealed class ViewSettingsConfigTests : IDisposable
     }
 
     [Fact]
+    public void SaveThenLoad_RoundTripsCreatedField()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig
+        {
+            View = new ViewSettings
+            {
+                Filters = [new FilterRule { Field = TaskField.Created, Op = FilterOp.GreaterOrEqual, Value = "2026-06-01" }],
+                SortField = TaskField.Created,
+                GroupField = TaskField.Created,
+            },
+        });
+
+        var loaded = store.Load();
+
+        Assert.Equal(TaskField.Created, loaded.View.Filters[0].Field);
+        Assert.Equal(TaskField.Created, loaded.View.SortField);
+        Assert.Equal(TaskField.Created, loaded.View.GroupField);
+
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.Contains("\"Created\"", json); // persisted by name, not ordinal
+    }
+
+    [Fact]
     public void DefaultView_IsEmptyAndDefault()
     {
         var view = new AppConfig().View;
