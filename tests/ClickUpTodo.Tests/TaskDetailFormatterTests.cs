@@ -217,7 +217,8 @@ public sealed class TaskDetailFormatterTests
         var rendered = TaskDetailFormatter.CustomFieldValue(f);
         Assert.NotNull(rendered);
         Assert.DoesNotContain("1700000000000", rendered);
-        Assert.Contains(":", rendered); // has the HH:mm portion of the date format
+        Assert.Contains(":", rendered);    // has the HH:mm portion of the date format
+        Assert.Contains("2023", rendered); // 1700000000000 ms → Nov 2023 in every timezone
     }
 
     [Fact]
@@ -253,12 +254,31 @@ public sealed class TaskDetailFormatterTests
     [Fact]
     public void CustomFieldValue_UnknownType_CompactFallback()
     {
-        // Unknown field type with a structured value → a compact, single-line, stringified value.
+        // Unknown field type with a structured value → a compact, single-line, stringified value
+        // (interior whitespace/newlines collapsed to single spaces).
         var f = Field("mystery", "{\"a\": 1,\n \"b\": 2}");
-        var rendered = TaskDetailFormatter.CustomFieldValue(f);
-        Assert.NotNull(rendered);
-        Assert.DoesNotContain("\n", rendered);
-        Assert.Contains("\"a\"", rendered);
+        Assert.Equal("{\"a\": 1, \"b\": 2}", TaskDetailFormatter.CustomFieldValue(f));
+    }
+
+    [Fact]
+    public void CustomFieldValue_Labels_EmptyArrayFallsBack()
+    {
+        Assert.Equal("[]", TaskDetailFormatter.CustomFieldValue(Field("labels", "[]")));
+    }
+
+    [Fact]
+    public void CustomFieldValue_Users_NonArrayFallsBack()
+    {
+        // A users field whose value isn't the expected array → compact fallback, no throw.
+        Assert.Equal("oops", TaskDetailFormatter.CustomFieldValue(Field("users", "\"oops\"")));
+    }
+
+    [Fact]
+    public void CustomFieldValue_EmojiRatingType_FallsBackToRawValue()
+    {
+        // "emoji" is deliberately not treated as a plain number; a bare number still renders as-is
+        // via the compact fallback, and an object shape would render compactly rather than crash.
+        Assert.Equal("5", TaskDetailFormatter.CustomFieldValue(Field("emoji", "5")));
     }
 
     [Fact]

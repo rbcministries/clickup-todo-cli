@@ -183,8 +183,17 @@ public sealed class ClickUpClient : IDisposable
     /// </summary>
     internal static CustomFieldItem MapCustomField(CustomField f)
     {
-        var (value, options) = CustomFieldReader.Read(SerializeToJson(f));
-        return new CustomFieldItem(f.Name!, f.Type, value, options);
+        try
+        {
+            var (value, options) = CustomFieldReader.Read(SerializeToJson(f));
+            return new CustomFieldItem(f.Name!, f.Type, value, options);
+        }
+        catch
+        {
+            // One malformed/unexpected field must never sink the whole task's detail — degrade to
+            // name/type only (the same shape the tab showed before values were surfaced).
+            return new CustomFieldItem(f.Name!, f.Type);
+        }
     }
 
     /// <summary>Serializes any Kiota model to a detached <see cref="JsonElement"/>. Uses the JSON

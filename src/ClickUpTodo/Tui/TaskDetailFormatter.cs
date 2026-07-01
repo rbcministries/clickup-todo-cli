@@ -108,7 +108,9 @@ public static class TaskDetailFormatter
                 "date" => DateValue(value),
                 "checkbox" => CheckboxValue(value),
                 "manual_progress" or "automatic_progress" => ProgressValue(value),
-                "number" or "currency" or "emoji" => NumberValue(value),
+                // Note: "emoji" (rating) is intentionally not here — its value shape isn't a bare
+                // number, so it falls through to the compact fallback rather than mis-render.
+                "number" or "currency" => NumberValue(value),
                 "text" or "short_text" or "url" or "email" or "phone" or "location"
                     => Truncate(ScalarString(value)),
                 _ => CompactFallback(value),
@@ -164,7 +166,7 @@ public static class TaskDetailFormatter
     {
         long? ms = value.ValueKind switch
         {
-            JsonValueKind.Number when value.TryGetInt64(out var n) => n,
+            JsonValueKind.Number when value.TryGetDouble(out var n) => (long)n,
             JsonValueKind.String when long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) => n,
             _ => null,
         };
