@@ -1,6 +1,7 @@
 using System.Globalization;
 using ClickUpTodo.ClickUp.Generated;
 using ClickUpTodo.ClickUp.Generated.Models;
+using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.Kiota.Http.HttpClientLibrary;
 using ApiException = Microsoft.Kiota.Abstractions.ApiException;
 
@@ -18,10 +19,18 @@ public sealed class ClickUpClient : IDisposable
     private readonly HttpClientRequestAdapter _adapter;
     private readonly ClickUpApiClient _client;
 
-    public ClickUpClient(string token, HttpClient? httpClient = null)
+    /// <summary>Drives the client with any Kiota auth provider (personal token or OAuth).</summary>
+    public ClickUpClient(IAuthenticationProvider authProvider, HttpClient? httpClient = null)
     {
-        _adapter = new HttpClientRequestAdapter(new ClickUpTokenAuthProvider(token), httpClient: httpClient);
+        ArgumentNullException.ThrowIfNull(authProvider);
+        _adapter = new HttpClientRequestAdapter(authProvider, httpClient: httpClient);
         _client = new ClickUpApiClient(_adapter);
+    }
+
+    /// <summary>Drives the client with a ClickUp personal API token (sent as a raw header).</summary>
+    public ClickUpClient(string token, HttpClient? httpClient = null)
+        : this(new ClickUpTokenAuthProvider(token), httpClient)
+    {
     }
 
     /// <summary>The signed-in user. Doubles as a cheap token-validation call.</summary>
