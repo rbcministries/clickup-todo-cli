@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using ClickUpTodo.ClickUp;
 
 namespace ClickUpTodo.Tui;
@@ -74,10 +76,150 @@ public static class TaskDetailFormatter
                 sb.Append("  • ").Append(f.Name);
                 if (!string.IsNullOrWhiteSpace(f.Type))
                     sb.Append("  (").Append(f.Type).Append(')');
+                var value = CustomFieldValue(f);
+                if (!string.IsNullOrWhiteSpace(value))
+                    sb.Append(": ").Append(value);
                 sb.Append('\n');
             }
         return sb.ToString().TrimEnd('\n');
     }
+
+    /// <summary>Longest custom-field value rendered on one line before it's truncated with an ellipsis.</summary>
+    private const int MaxValueLength = 200;
+
+    /// <summary>
+    /// Renders a custom field's loosely-typed value for the terminal, dispatched by the field
+    /// <see cref="CustomFieldItem.Type"/> then the JSON kind. Returns <c>null</c> when the field has
+    /// no value (so the caller shows just its name/type). Never throws — any unexpected shape falls
+    /// back to a compact stringified value. Pure (operates on the DTO only), so it is unit-tested.
+    /// </summary>
+    public static string? CustomFieldValue(CustomFieldItem field)
+    {
+        if (field.Value is not { } value || value.ValueKind == JsonValueKind.Null)
+            return null;
+
+        try
+        {
+            return (field.Type?.ToLowerInvariant()) switch
+            {
+                "drop_down" => DropDownValue(value, field.Options),
+                "labels" => LabelsValue(value, field.Options),
+                "users" => UsersValue(value),
+                "date" => DateValue(value),
+                "checkbox" => CheckboxValue(value),
+                "manual_progress" or "automatic_progress" => ProgressValue(value),
+                "number" or "currency" or "emoji" => NumberValue(value),
+                "text" or "short_text" or "url" or "email" or "phone" or "location"
+                    => Truncate(ScalarString(value)),
+                _ => CompactFallback(value),
+            };
+        }
+        catch
+        {
+            return CompactFallback(value);
+        }
+    }
+
+    // A drop-down's value is the selected option's orderindex (number) or its id (string); resolve to
+    // the option's display name via type_config.options, falling back to the raw selection.
+    private static string DropDownValue(JsonElement value, IReadOnlyList<CustomFieldOption> options)
+    {
+        CustomFieldOption? match = value.ValueKind switch
+        {
+            JsonValueKind.Number when value.TryGetDouble(out var idx)
+                => options.FirstOrDefault(o => o.OrderIndex is { } oi && oi == idx),
+            JsonValueKind.String => options.FirstOrDefault(o => o.Id == value.GetString()),
+            _ => null,
+        };
+        return match?.Name ?? ScalarString(value);
+    }
+
+    // A labels/multi-select value is an array of option ids; map each to its option name.
+    private static string LabelsValue(JsonElement value, IReadOnlyList<CustomFieldOption> options)
+    {
+        if (value.ValueKind != JsonValueKind.Array)
+            return CompactFallback(value);
+        var names = value.EnumerateArray()
+            .Select(id => id.ValueKind == JsonValueKind.String ? id.GetString() : ScalarString(id))
+            .Select(id => options.FirstOrDefault(o => o.Id == id)?.Name ?? id ?? "")
+            .Where(n => n.Length > 0);
+        var joined = string.Join(", ", names);
+        return Truncate(joined.Length > 0 ? joined : CompactFallback(value));
+    }
+
+    // A users value is an array of user objects; show username, then email, then id.
+    private static string UsersValue(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.Array)
+            return CompactFallback(value);
+        var names = value.EnumerateArray()
+            .Where(u => u.ValueKind == JsonValueKind.Object)
+            .Select(u => Prop(u, "username") ?? Prop(u, "email") ?? Prop(u, "id") ?? "")
+            .Where(n => n.Length > 0);
+        var joined = string.Join(", ", names);
+        return Truncate(joined.Length > 0 ? joined : CompactFallback(value));
+    }
+
+    private static string DateValue(JsonElement value)
+    {
+        long? ms = value.ValueKind switch
+        {
+            JsonValueKind.Number when value.TryGetInt64(out var n) => n,
+            JsonValueKind.String when long.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) => n,
+            _ => null,
+        };
+        return ms is { } v ? FormatDate(v) : ScalarString(value);
+    }
+
+    private static string CheckboxValue(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.True => "Yes",
+        JsonValueKind.False => "No",
+        JsonValueKind.String => string.Equals(value.GetString(), "true", StringComparison.OrdinalIgnoreCase) ? "Yes"
+                              : string.Equals(value.GetString(), "false", StringComparison.OrdinalIgnoreCase) ? "No"
+                              : ScalarString(value),
+        _ => ScalarString(value),
+    };
+
+    // Progress fields carry an object like { "percent_complete": 42, ... }.
+    private static string ProgressValue(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object
+            && value.TryGetProperty("percent_complete", out var pc)
+            && pc.ValueKind == JsonValueKind.Number
+            && pc.TryGetDouble(out var percent))
+            return FormatNumber(percent) + "%";
+        return CompactFallback(value);
+    }
+
+    private static string NumberValue(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.Number when value.TryGetDouble(out var n) => FormatNumber(n),
+        JsonValueKind.String when double.TryParse(value.GetString(), NumberStyles.Any, CultureInfo.InvariantCulture, out var n) => FormatNumber(n),
+        _ => ScalarString(value),
+    };
+
+    // The scalar as a human string: JSON strings without quotes, everything else via its raw text.
+    private static string ScalarString(JsonElement value)
+        => value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : value.GetRawText();
+
+    // Last-resort rendering for an unexpected shape: compact, single-line, truncated JSON.
+    private static string CompactFallback(JsonElement value)
+    {
+        var raw = value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : value.GetRawText();
+        return Truncate(string.Join(' ', raw.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)));
+    }
+
+    private static string FormatNumber(double n)
+        => n.ToString("0.############", CultureInfo.InvariantCulture);
+
+    private static string? Prop(JsonElement obj, string name)
+        => obj.TryGetProperty(name, out var p)
+            ? (p.ValueKind == JsonValueKind.String ? p.GetString() : p.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined ? null : p.GetRawText())
+            : null;
+
+    private static string Truncate(string value)
+        => value.Length <= MaxValueLength ? value : value[..MaxValueLength] + "…";
 
     private static string Coalesce(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value!;
 

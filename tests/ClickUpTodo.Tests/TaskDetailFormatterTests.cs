@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Tui;
 
@@ -141,5 +142,149 @@ public sealed class TaskDetailFormatterTests
     {
         var text = TaskDetailFormatter.OtherAttributes(Sample(customFields: []));
         Assert.Contains("(none)", text);
+    }
+
+    // ── Custom-field value rendering (issue #35) ─────────────────────────────
+
+    /// <summary>Parses a JSON literal into a detached <see cref="JsonElement"/> for a field value.</summary>
+    private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    private static CustomFieldItem Field(string type, string valueJson, params CustomFieldOption[] options)
+        => new("F", type, Json(valueJson), options);
+
+    [Fact]
+    public void CustomFieldValue_AbsentValue_ReturnsNull()
+    {
+        Assert.Null(TaskDetailFormatter.CustomFieldValue(new CustomFieldItem("F", "text")));
+        Assert.Null(TaskDetailFormatter.CustomFieldValue(Field("text", "null")));
+    }
+
+    [Fact]
+    public void CustomFieldValue_DropDown_ResolvesByOrderIndex()
+    {
+        var f = Field("drop_down", "1",
+            new CustomFieldOption("o0", "Backlog", 0),
+            new CustomFieldOption("o1", "In progress", 1));
+        Assert.Equal("In progress", TaskDetailFormatter.CustomFieldValue(f));
+    }
+
+    [Fact]
+    public void CustomFieldValue_DropDown_ResolvesById()
+    {
+        var f = Field("drop_down", "\"o1\"",
+            new CustomFieldOption("o0", "Backlog", 0),
+            new CustomFieldOption("o1", "In progress", 1));
+        Assert.Equal("In progress", TaskDetailFormatter.CustomFieldValue(f));
+    }
+
+    [Fact]
+    public void CustomFieldValue_DropDown_NoMatchFallsBackToRaw()
+    {
+        var f = Field("drop_down", "9", new CustomFieldOption("o0", "Backlog", 0));
+        Assert.Equal("9", TaskDetailFormatter.CustomFieldValue(f));
+    }
+
+    [Fact]
+    public void CustomFieldValue_Labels_MapsIdsToNames()
+    {
+        var f = Field("labels", "[\"a\", \"c\"]",
+            new CustomFieldOption("a", "Alpha", null),
+            new CustomFieldOption("b", "Beta", null),
+            new CustomFieldOption("c", "Gamma", null));
+        Assert.Equal("Alpha, Gamma", TaskDetailFormatter.CustomFieldValue(f));
+    }
+
+    [Fact]
+    public void CustomFieldValue_Labels_UsesLabelFallbackName()
+    {
+        // Options built from a labels field carry their text via `label` (mapped into Name by the reader).
+        var f = Field("labels", "[\"x\"]", new CustomFieldOption("x", "Important", null));
+        Assert.Equal("Important", TaskDetailFormatter.CustomFieldValue(f));
+    }
+
+    [Fact]
+    public void CustomFieldValue_Users_ShowsUsernames()
+    {
+        var f = Field("users", "[{\"id\":1,\"username\":\"ben\"},{\"id\":2,\"email\":\"sam@x.io\"}]");
+        Assert.Equal("ben, sam@x.io", TaskDetailFormatter.CustomFieldValue(f));
+    }
+
+    [Fact]
+    public void CustomFieldValue_Date_FormatsEpochMs()
+    {
+        // Stored as an epoch-ms string (ClickUp's shape). Rendered as a date+time, not the raw number.
+        var f = Field("date", "\"1700000000000\"");
+        var rendered = TaskDetailFormatter.CustomFieldValue(f);
+        Assert.NotNull(rendered);
+        Assert.DoesNotContain("1700000000000", rendered);
+        Assert.Contains(":", rendered); // has the HH:mm portion of the date format
+    }
+
+    [Fact]
+    public void CustomFieldValue_Checkbox()
+    {
+        Assert.Equal("Yes", TaskDetailFormatter.CustomFieldValue(Field("checkbox", "true")));
+        Assert.Equal("No", TaskDetailFormatter.CustomFieldValue(Field("checkbox", "false")));
+        Assert.Equal("Yes", TaskDetailFormatter.CustomFieldValue(Field("checkbox", "\"true\"")));
+    }
+
+    [Fact]
+    public void CustomFieldValue_Number_TrimsAndAcceptsStrings()
+    {
+        Assert.Equal("3.5", TaskDetailFormatter.CustomFieldValue(Field("number", "3.5")));
+        Assert.Equal("42", TaskDetailFormatter.CustomFieldValue(Field("number", "42.0")));
+        Assert.Equal("42", TaskDetailFormatter.CustomFieldValue(Field("currency", "\"42\"")));
+    }
+
+    [Fact]
+    public void CustomFieldValue_Progress_ShowsPercent()
+    {
+        var f = Field("automatic_progress", "{\"percent_complete\": 42, \"current\": 4}");
+        Assert.Equal("42%", TaskDetailFormatter.CustomFieldValue(f));
+    }
+
+    [Fact]
+    public void CustomFieldValue_Text_RendersString()
+    {
+        Assert.Equal("hello world", TaskDetailFormatter.CustomFieldValue(Field("short_text", "\"hello world\"")));
+        Assert.Equal("https://x.io", TaskDetailFormatter.CustomFieldValue(Field("url", "\"https://x.io\"")));
+    }
+
+    [Fact]
+    public void CustomFieldValue_UnknownType_CompactFallback()
+    {
+        // Unknown field type with a structured value → a compact, single-line, stringified value.
+        var f = Field("mystery", "{\"a\": 1,\n \"b\": 2}");
+        var rendered = TaskDetailFormatter.CustomFieldValue(f);
+        Assert.NotNull(rendered);
+        Assert.DoesNotContain("\n", rendered);
+        Assert.Contains("\"a\"", rendered);
+    }
+
+    [Fact]
+    public void CustomFieldValue_LongText_Truncated()
+    {
+        var f = Field("text", "\"" + new string('x', 500) + "\"");
+        var rendered = TaskDetailFormatter.CustomFieldValue(f)!;
+        Assert.True(rendered.Length < 500);
+        Assert.EndsWith("…", rendered);
+    }
+
+    [Fact]
+    public void OtherAttributes_RendersCustomFieldValue()
+    {
+        var field = Field("drop_down", "0", new CustomFieldOption("o0", "Backlog", 0));
+        var text = TaskDetailFormatter.OtherAttributes(Sample(customFields: [field with { Name = "Sprint" }]));
+        Assert.Contains("Sprint", text);
+        Assert.Contains(": Backlog", text);
+    }
+
+    [Fact]
+    public void OtherAttributes_OmitsValueWhenAbsent()
+    {
+        var text = TaskDetailFormatter.OtherAttributes(
+            Sample(customFields: [new("Estimate", "number")]));
+        Assert.Contains("Estimate", text);
+        Assert.DoesNotContain("Estimate  (number):", text);
     }
 }

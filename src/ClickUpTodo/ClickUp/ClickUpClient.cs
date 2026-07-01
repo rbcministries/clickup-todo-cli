@@ -1,7 +1,10 @@
 using System.Globalization;
+using System.Text.Json;
 using ClickUpTodo.ClickUp.Generated;
 using ClickUpTodo.ClickUp.Generated.Models;
+using Microsoft.Kiota.Abstractions.Serialization;
 using Microsoft.Kiota.Http.HttpClientLibrary;
+using Microsoft.Kiota.Serialization.Json;
 using ApiException = Microsoft.Kiota.Abstractions.ApiException;
 
 namespace ClickUpTodo.ClickUp;
@@ -166,9 +169,36 @@ public sealed class ClickUpClient : IDisposable
         Assignees = t.Assignees?.Select(DisplayName).Where(n => n.Length > 0).ToList() ?? [],
         CustomFields = t.CustomFields?
             .Where(f => !string.IsNullOrWhiteSpace(f.Name))
-            .Select(f => new CustomFieldItem(f.Name!, f.Type))
+            .Select(MapCustomField)
             .ToList() ?? [],
     };
+
+    /// <summary>
+    /// Maps a generated <see cref="CustomField"/> onto the stable <see cref="CustomFieldItem"/>,
+    /// including its loosely-typed <c>value</c> and <c>type_config.options</c>. The generated type
+    /// only surfaces <c>id</c>/<c>name</c>/<c>type</c>; the rest lands in Kiota's <c>AdditionalData</c>
+    /// as mixed boxed types, so we re-serialize the field to JSON (a faithful round-trip) and read
+    /// the value/options back with <see cref="System.Text.Json"/> — no dependency on the internal
+    /// <c>UntypedNode</c> shape and no generated type escaping this facade (issue #35).
+    /// </summary>
+    internal static CustomFieldItem MapCustomField(CustomField f)
+    {
+        var (value, options) = CustomFieldReader.Read(SerializeToJson(f));
+        return new CustomFieldItem(f.Name!, f.Type, value, options);
+    }
+
+    /// <summary>Serializes any Kiota model to a detached <see cref="JsonElement"/>. Uses the JSON
+    /// writer factory directly (no reliance on global serializer registration), and clones the root
+    /// so it outlives the backing <see cref="JsonDocument"/>.</summary>
+    private static JsonElement SerializeToJson(IParsable value)
+    {
+        using var writer = new JsonSerializationWriterFactory().GetSerializationWriter("application/json");
+        // WriteObjectValue (not value.Serialize) so the writer opens/closes the root JSON object.
+        writer.WriteObjectValue(null, value);
+        using var stream = writer.GetSerializedContent();
+        using var doc = JsonDocument.Parse(stream);
+        return doc.RootElement.Clone();
+    }
 
     /// <summary>Best display name for a user: username, then email, then numeric id.</summary>
     private static string DisplayName(User? user)
