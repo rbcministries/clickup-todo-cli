@@ -65,4 +65,22 @@ public sealed class ClickUpPriorityTests
     [Fact]
     public void Names_AreMostUrgentFirst()
         => Assert.Equal(["Urgent", "High", "Normal", "Low"], ClickUpPriority.Names);
+
+    [Theory]
+    [InlineData("Urgent", 1)]
+    [InlineData("low", 4)]
+    [InlineData("1", 1)]
+    [InlineData(" 4 ", 4)]
+    public void LevelFromFilterValue_AcceptsNameOrLevelString(string value, int expected)
+        => Assert.Equal(expected, ClickUpPriority.LevelFromFilterValue(value));
+
+    [Theory]
+    [InlineData("(none)")]
+    [InlineData("none")]
+    [InlineData("0")]
+    [InlineData("5")]
+    [InlineData("")]
+    [InlineData("mystery")]
+    public void LevelFromFilterValue_UnrecognisedOrOutOfRangeIsNull(string value)
+        => Assert.Null(ClickUpPriority.LevelFromFilterValue(value));
 }

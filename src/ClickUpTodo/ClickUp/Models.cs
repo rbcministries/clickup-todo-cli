@@ -40,11 +40,22 @@ public static class ClickUpPriority
     /// </summary>
     public static int? Level(string? id, string? name)
     {
-        if (int.TryParse(id?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var level)
-            && level is >= 1 and <= 4)
+        if (TryLevelString(id, out var level))
             return level;
         return LevelFromName(name);
     }
+
+    /// <summary>
+    /// Parses a user-entered priority filter value — either a name ("urgent") or a level string
+    /// ("1".."4") — to an importance level, or null when it is neither (e.g. "(none)" or a typo, which
+    /// callers treat as the no-priority bucket).
+    /// </summary>
+    public static int? LevelFromFilterValue(string? value)
+        => LevelFromName(value) ?? (TryLevelString(value, out var level) ? level : null);
+
+    private static bool TryLevelString(string? value, out int level)
+        => int.TryParse(value?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out level)
+            && level is >= 1 and <= 4;
 }
 
 // Stable domain records the rest of the app consumes. The Kiota-generated client produces a

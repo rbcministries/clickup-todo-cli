@@ -449,6 +449,17 @@ public sealed class TaskViewTests
     }
 
     [Fact]
+    public void Filter_PriorityIs_AlsoAcceptsLevelNumberValue()
+    {
+        TaskItem[] tasks = [Task("1", "a", priority: 1), Task("2", "b", priority: 2), Task("3", "c", priority: null)];
+
+        // A level string ("1") is accepted as an alternative to the name ("Urgent").
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Priority, FilterOp.Is, "1")]);
+
+        Assert.Equal(["1"], result.Select(t => t.Id));
+    }
+
+    [Fact]
     public void Filter_PriorityOrderingWithUnparseableTarget_IsNoOp()
     {
         TaskItem[] tasks = [Task("1", "a", priority: 1), Task("2", "b", priority: null)];

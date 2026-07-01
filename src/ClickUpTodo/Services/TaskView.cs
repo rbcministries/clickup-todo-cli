@@ -162,16 +162,16 @@ public static class TaskView
     }
 
     /// <summary>
-    /// Matches an ordinal (priority) rule. IS / IS NOT compare priority by name — an unrecognised
-    /// value (including "(none)") matches the no-priority bucket. Ordering operators compare by
-    /// <em>importance</em>: "higher priority than X" means more urgent, i.e. a smaller level number,
-    /// so <c>&gt; Normal</c> keeps Urgent/High. No-priority tasks never satisfy an ordering op, and an
-    /// unparseable ordering target is a no-op (mirroring the numeric path).
+    /// Matches an ordinal (priority) rule. IS / IS NOT compare priority by value — a name ("High") or
+    /// a level ("1".."4"); an unrecognised value (including "(none)") matches the no-priority bucket.
+    /// Ordering operators compare by <em>importance</em>: "higher priority than X" means more urgent,
+    /// i.e. a smaller level number, so <c>&gt; Normal</c> keeps Urgent/High. No-priority tasks never
+    /// satisfy an ordering op, and an unparseable ordering target is a no-op (mirroring the numeric path).
     /// </summary>
     private static bool MatchesOrdinal(TaskItem task, FilterRule rule)
     {
         var level = TaskFieldInfo.OrdinalValue(task, rule.Field);
-        var target = ClickUpPriority.LevelFromName(rule.Value);
+        var target = ClickUpPriority.LevelFromFilterValue(rule.Value);
 
         if (rule.Op is FilterOp.Is or FilterOp.IsNot)
         {
