@@ -15,13 +15,17 @@ public sealed class TaskDetailFormatterTests
         IReadOnlyList<string>? assignees = null,
         IReadOnlyList<CustomFieldItem>? customFields = null,
         string? description = "A description.",
-        string? customId = null) => new()
+        string? customId = null,
+        string? listId = "L1",
+        IReadOnlyList<NamedEntity>? lists = null) => new()
         {
             Id = "abc",
             CustomId = customId,
             Name = "Ship the report",
             StatusName = "in progress",
+            ListId = listId,
             ListName = "Personal Tasks",
+            Lists = lists ?? [],
             Priority = "high",
             Description = description,
             Tags = tags ?? [],
@@ -141,5 +145,47 @@ public sealed class TaskDetailFormatterTests
     {
         var text = TaskDetailFormatter.OtherAttributes(Sample(customFields: []));
         Assert.Contains("(none)", text);
+    }
+
+    [Fact]
+    public void OtherAttributes_SingleList_OmitsListsLine()
+    {
+        // No locations → only the home list; the multi-list "Lists:" line must not appear.
+        var text = TaskDetailFormatter.OtherAttributes(Sample(lists: []));
+        Assert.DoesNotContain("Lists:", text);
+    }
+
+    [Fact]
+    public void OtherAttributes_HomeListOnlyLocation_OmitsListsLine()
+    {
+        // ClickUp may echo the home list back in locations; that alone is still a single list.
+        var text = TaskDetailFormatter.OtherAttributes(
+            Sample(listId: "L1", lists: [new NamedEntity("L1", "Personal Tasks")]));
+        Assert.DoesNotContain("Lists:", text);
+    }
+
+    [Fact]
+    public void OtherAttributes_MultipleLists_RendersFullMembershipHomeFirst()
+    {
+        var text = TaskDetailFormatter.OtherAttributes(
+            Sample(listId: "L1", lists: [new NamedEntity("L2", "Engineering"), new NamedEntity("L3", "Q3 Launch")]));
+        Assert.Contains("Lists:         Personal Tasks, Engineering, Q3 Launch", text);
+    }
+
+    [Fact]
+    public void OtherAttributes_MultipleLists_DedupesHomeWhenEchoedInLocations()
+    {
+        // locations includes the home list (by id) plus one more → home listed once, home-first.
+        var text = TaskDetailFormatter.OtherAttributes(
+            Sample(listId: "L1", lists: [new NamedEntity("L1", "Personal Tasks"), new NamedEntity("L2", "Engineering")]));
+        Assert.Contains("Lists:         Personal Tasks, Engineering", text);
+    }
+
+    [Fact]
+    public void OtherAttributes_MultipleLists_IgnoresBlankNamedLocations()
+    {
+        var text = TaskDetailFormatter.OtherAttributes(
+            Sample(listId: "L1", lists: [new NamedEntity("L2", "   "), new NamedEntity("L3", "Engineering")]));
+        Assert.Contains("Lists:         Personal Tasks, Engineering", text);
     }
 }
