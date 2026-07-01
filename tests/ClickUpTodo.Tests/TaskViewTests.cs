@@ -14,8 +14,19 @@ public sealed class TaskViewTests
     private static long Ms(string iso) => DateTimeOffset.Parse(iso).ToUnixTimeMilliseconds();
 
     private static TaskItem Task(
-        string id, string name, string? status = null, string? list = null, long? due = null, long? updated = null)
-        => new() { Id = id, Name = name, StatusName = status, ListName = list, DueDateMs = due, UpdatedMs = updated };
+        string id, string name, string? status = null, string? list = null, long? due = null, long? updated = null,
+        int? priority = null)
+        => new()
+        {
+            Id = id,
+            Name = name,
+            StatusName = status,
+            ListName = list,
+            DueDateMs = due,
+            UpdatedMs = updated,
+            PriorityLevel = priority,
+            PriorityName = ClickUpPriority.NameFromLevel(priority),
+        };
 
     private static FilterRule Rule(TaskField field, FilterOp op, string value) => new() { Field = field, Op = op, Value = value };
 
@@ -296,5 +307,154 @@ public sealed class TaskViewTests
         Assert.Equal(["Admin", "Work"], groups.Select(g => g.Label));
         Assert.Equal(["3"], groups[0].Tasks.Select(t => t.Id));
         Assert.Equal(["4", "1"], groups[1].Tasks.Select(t => t.Id));
+    }
+
+    // ── Priority (ordinal) ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void Sort_ByPriorityAscending_UrgentFirst_NoPriorityLast()
+    {
+        TaskItem[] tasks =
+        [
+            Task("1", "a", priority: 3),    // Normal
+            Task("2", "b", priority: null), // none
+            Task("3", "c", priority: 1),    // Urgent
+            Task("4", "d", priority: 4),    // Low
+            Task("5", "e", priority: 2),    // High
+        ];
+
+        var result = TaskView.Sort(tasks, TaskField.Priority, SortDirection.Ascending);
+
+        // Urgent → High → Normal → Low, then no-priority last (not alphabetical).
+        Assert.Equal(["3", "5", "1", "4", "2"], result.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Sort_ByPriorityDescending_LowFirst_NoPriorityStillLast()
+    {
+        TaskItem[] tasks =
+        [
+            Task("1", "a", priority: 1),    // Urgent
+            Task("2", "b", priority: null), // none
+            Task("3", "c", priority: 4),    // Low
+            Task("4", "d", priority: 3),    // Normal
+        ];
+
+        var result = TaskView.Sort(tasks, TaskField.Priority, SortDirection.Descending);
+
+        // Low → Normal → … → Urgent, but missing values remain last regardless of direction.
+        Assert.Equal(["3", "4", "1", "2"], result.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Group_ByPriority_OrdersByImportance_NoneLast()
+    {
+        // Deliberately out of importance order to prove grouping keys off the level, not input order.
+        TaskItem[] tasks =
+        [
+            Task("1", "a", priority: 3),    // Normal
+            Task("2", "b", priority: 1),    // Urgent
+            Task("3", "c", priority: null), // none
+            Task("4", "d", priority: 3),    // Normal
+            Task("5", "e", priority: 1),    // Urgent
+        ];
+
+        var groups = TaskView.Group(tasks, TaskField.Priority);
+
+        Assert.Equal(["Urgent", "Normal", "(none)"], groups.Select(g => g.Label));
+        Assert.Equal(["2", "5"], groups[0].Tasks.Select(t => t.Id)); // within-group order preserved
+        Assert.Equal(["3"], groups[2].Tasks.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Filter_PriorityIs_MatchesByName_CaseInsensitive()
+    {
+        TaskItem[] tasks = [Task("1", "a", priority: 1), Task("2", "b", priority: 2), Task("3", "c", priority: null)];
+
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Priority, FilterOp.Is, "urgent")]);
+
+        Assert.Equal(["1"], result.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Filter_PriorityIsNone_MatchesNoPriorityTasks()
+    {
+        TaskItem[] tasks = [Task("1", "a", priority: 2), Task("2", "b", priority: null)];
+
+        // "(none)" (an unrecognised priority name) targets the no-priority bucket.
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Priority, FilterOp.Is, "(none)")]);
+
+        Assert.Equal(["2"], result.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Filter_PriorityIsNot_ExcludesMatch_KeepsOthersIncludingNone()
+    {
+        TaskItem[] tasks = [Task("1", "a", priority: 1), Task("2", "b", priority: 2), Task("3", "c", priority: null)];
+
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Priority, FilterOp.IsNot, "High")]);
+
+        Assert.Equal(["1", "3"], result.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Filter_PriorityGreaterThan_MeansMoreUrgent()
+    {
+        TaskItem[] tasks =
+        [
+            Task("1", "a", priority: 1),    // Urgent
+            Task("2", "b", priority: 2),    // High
+            Task("3", "c", priority: 3),    // Normal
+            Task("4", "d", priority: 4),    // Low
+            Task("5", "e", priority: null), // none
+        ];
+
+        // "higher than Normal" = more urgent than Normal → Urgent, High.
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Priority, FilterOp.GreaterThan, "Normal")]);
+
+        Assert.Equal(["1", "2"], result.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Filter_PriorityGreaterOrEqual_IsInclusive()
+    {
+        TaskItem[] tasks =
+        [
+            Task("1", "a", priority: 1), // Urgent
+            Task("2", "b", priority: 2), // High
+            Task("3", "c", priority: 3), // Normal
+        ];
+
+        // "at least High" → Urgent, High.
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Priority, FilterOp.GreaterOrEqual, "High")]);
+
+        Assert.Equal(["1", "2"], result.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Filter_PriorityLessThan_MeansLessUrgent_ExcludesNoPriority()
+    {
+        TaskItem[] tasks =
+        [
+            Task("1", "a", priority: 2),    // High
+            Task("2", "b", priority: 3),    // Normal
+            Task("3", "c", priority: 4),    // Low
+            Task("4", "d", priority: null), // none — never satisfies an ordering op
+        ];
+
+        // "lower than High" = less urgent than High → Normal, Low.
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Priority, FilterOp.LessThan, "High")]);
+
+        Assert.Equal(["2", "3"], result.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Filter_PriorityOrderingWithUnparseableTarget_IsNoOp()
+    {
+        TaskItem[] tasks = [Task("1", "a", priority: 1), Task("2", "b", priority: null)];
+
+        var result = TaskView.Filter(tasks, [Rule(TaskField.Priority, FilterOp.GreaterThan, "banana")]);
+
+        Assert.Equal(2, result.Count);
     }
 }

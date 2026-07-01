@@ -1,4 +1,51 @@
+using System.Globalization;
+
 namespace ClickUpTodo.ClickUp;
+
+/// <summary>
+/// Canonical ClickUp priority mapping. ClickUp exposes four fixed priorities whose importance is
+/// ordinal: <c>id</c> "1".."4" (and matching names) run Urgent → High → Normal → Low, where a
+/// <b>lower level number means more urgent</b>. Centralised here so the mapper and the F3 engine share
+/// one source of truth (kept in the domain layer to avoid a dependency from the client onto Services).
+/// </summary>
+public static class ClickUpPriority
+{
+    /// <summary>Canonical priority names, most urgent first.</summary>
+    public static readonly IReadOnlyList<string> Names = ["Urgent", "High", "Normal", "Low"];
+
+    /// <summary>Priority name → importance level (1=Urgent … 4=Low), or null when unrecognised.</summary>
+    public static int? LevelFromName(string? name) => name?.Trim().ToLowerInvariant() switch
+    {
+        "urgent" => 1,
+        "high" => 2,
+        "normal" => 3,
+        "low" => 4,
+        _ => null,
+    };
+
+    /// <summary>Importance level → canonical priority name, or null for an out-of-range level.</summary>
+    public static string? NameFromLevel(int? level) => level switch
+    {
+        1 => "Urgent",
+        2 => "High",
+        3 => "Normal",
+        4 => "Low",
+        _ => null,
+    };
+
+    /// <summary>
+    /// Derives the importance level from a ClickUp priority object's <c>id</c> (the canonical "1".."4"
+    /// string), falling back to the priority name when the id is absent/unexpected. Null when neither
+    /// yields a level (no priority set, or an unrecognised custom priority).
+    /// </summary>
+    public static int? Level(string? id, string? name)
+    {
+        if (int.TryParse(id?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var level)
+            && level is >= 1 and <= 4)
+            return level;
+        return LevelFromName(name);
+    }
+}
 
 // Stable domain records the rest of the app consumes. The Kiota-generated client produces a
 // different response type per endpoint (the spec uses inline schemas), so ClickUpClient maps all
@@ -29,6 +76,12 @@ public sealed record TaskItem
 
     /// <summary>Last-activity time (ClickUp <c>date_updated</c>) as Unix epoch milliseconds, or null.</summary>
     public long? UpdatedMs { get; init; }
+
+    /// <summary>Priority importance level: 1=Urgent, 2=High, 3=Normal, 4=Low (lower = more urgent), or null when unset.</summary>
+    public int? PriorityLevel { get; init; }
+
+    /// <summary>Canonical priority name ("Urgent"/"High"/"Normal"/"Low"), or null when unset.</summary>
+    public string? PriorityName { get; init; }
 }
 
 /// <summary>A single custom field on a task. Only the field's identity (name/type) is surfaced;

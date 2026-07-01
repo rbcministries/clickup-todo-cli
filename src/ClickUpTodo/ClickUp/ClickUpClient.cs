@@ -143,7 +143,12 @@ public sealed class ClickUpClient : IDisposable
         ListName = t.List?.Name,
         StatusName = t.Status?.StatusProp,
         StatusColor = t.Status?.Color,
+        PriorityLevel = MapPriorityLevel(t),
+        PriorityName = ClickUpPriority.NameFromLevel(MapPriorityLevel(t)),
     };
+
+    /// <summary>The importance level of a task's priority (1=Urgent … 4=Low), or null when unset.</summary>
+    private static int? MapPriorityLevel(TaskObject t) => ClickUpPriority.Level(t.Priority?.Id, t.Priority?.PriorityProp);
 
     private static TaskDetail MapDetail(TaskObject t) => new()
     {
