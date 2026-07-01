@@ -16,6 +16,13 @@ public static class TaskFieldInfo
     /// <summary>Numeric/date fields support the ordering operators; categorical fields do not.</summary>
     public static bool IsNumeric(TaskField field) => field is TaskField.Created or TaskField.LastActivity or TaskField.Due;
 
+    /// <summary>
+    /// Ordinal fields (Priority) carry an ordered set of named levels. Like numeric fields they support
+    /// the ordering operators, but they sort/group by level (not alphabetically) and render labels by
+    /// name (not <c>yyyy-MM-dd</c>) — so the engine treats them as a distinct third kind.
+    /// </summary>
+    public static bool IsOrdinal(TaskField field) => field is TaskField.Priority;
+
     public static string DisplayName(TaskField field) => field switch
     {
         TaskField.Status => "Status",
@@ -23,11 +30,12 @@ public static class TaskFieldInfo
         TaskField.Created => "Created",
         TaskField.LastActivity => "Last activity",
         TaskField.Due => "Due date",
+        TaskField.Priority => "Priority",
         _ => field.ToString(),
     };
 
-    /// <summary>Operators valid for a field: all six for numeric/date, IS / IS NOT for categorical.</summary>
-    public static IReadOnlyList<FilterOp> ValidOps(TaskField field) => IsNumeric(field)
+    /// <summary>Operators valid for a field: all six for numeric/date and ordinal, IS / IS NOT for categorical.</summary>
+    public static IReadOnlyList<FilterOp> ValidOps(TaskField field) => IsNumeric(field) || IsOrdinal(field)
         ? [FilterOp.Is, FilterOp.IsNot, FilterOp.GreaterThan, FilterOp.LessThan, FilterOp.GreaterOrEqual, FilterOp.LessOrEqual]
         : [FilterOp.Is, FilterOp.IsNot];
 
@@ -59,6 +67,13 @@ public static class TaskFieldInfo
         TaskField.Created => task.CreatedMs,
         TaskField.LastActivity => task.UpdatedMs,
         TaskField.Due => task.DueDateMs,
+        _ => null,
+    };
+
+    /// <summary>The ordinal importance level of a field (1=Urgent … 4=Low), or null for non-ordinal fields / no priority.</summary>
+    public static int? OrdinalValue(TaskItem task, TaskField field) => field switch
+    {
+        TaskField.Priority => task.PriorityLevel,
         _ => null,
     };
 
@@ -117,6 +132,9 @@ public static class TaskView
 
     private static bool Matches(TaskItem task, FilterRule rule)
     {
+        if (TaskFieldInfo.IsOrdinal(rule.Field))
+            return MatchesOrdinal(task, rule);
+
         if (TaskFieldInfo.IsNumeric(rule.Field))
         {
             // An unparseable target shouldn't silently hide everything — treat it as no-op.
@@ -146,6 +164,36 @@ public static class TaskView
     }
 
     /// <summary>
+    /// Matches an ordinal (priority) rule. IS / IS NOT compare priority by value — a name ("High") or
+    /// a level ("1".."4"); an unrecognised value (including "(none)") matches the no-priority bucket.
+    /// Ordering operators compare by <em>importance</em>: "higher priority than X" means more urgent,
+    /// i.e. a smaller level number, so <c>&gt; Normal</c> keeps Urgent/High. No-priority tasks never
+    /// satisfy an ordering op, and an unparseable ordering target is a no-op (mirroring the numeric path).
+    /// </summary>
+    private static bool MatchesOrdinal(TaskItem task, FilterRule rule)
+    {
+        var level = TaskFieldInfo.OrdinalValue(task, rule.Field);
+        var target = ClickUpPriority.LevelFromFilterValue(rule.Value);
+
+        if (rule.Op is FilterOp.Is or FilterOp.IsNot)
+        {
+            var equal = level == target; // both null (task has no priority, value is "(none)") counts as equal
+            return rule.Op == FilterOp.Is ? equal : !equal;
+        }
+
+        if (target is null || level is null)
+            return target is null; // unparseable target → no-op; no-priority task → never matches an ordering op
+        return rule.Op switch
+        {
+            FilterOp.GreaterThan => level < target,
+            FilterOp.LessThan => level > target,
+            FilterOp.GreaterOrEqual => level <= target,
+            FilterOp.LessOrEqual => level >= target,
+            _ => true,
+        };
+    }
+
+    /// <summary>
     /// Stable sort. A null <paramref name="field"/> reproduces the default order (due date soonest
     /// first, undated last, then name). Missing values always sort last, regardless of direction.
     /// </summary>
@@ -162,7 +210,15 @@ public static class TaskView
     private static int Compare(TaskItem x, TaskItem y, TaskField field, SortDirection direction)
     {
         int primary;
-        if (TaskFieldInfo.IsNumeric(field))
+        if (TaskFieldInfo.IsOrdinal(field))
+        {
+            // Sort by importance level: ascending = Urgent (level 1) first → Low; no-priority last.
+            var vx = TaskFieldInfo.OrdinalValue(x, field);
+            var vy = TaskFieldInfo.OrdinalValue(y, field);
+            primary = CompareNullableLast(vx.HasValue, vx ?? 0, vy.HasValue, vy ?? 0, direction,
+                static (a, b) => a.CompareTo(b));
+        }
+        else if (TaskFieldInfo.IsNumeric(field))
         {
             var vx = TaskFieldInfo.NumericValue(x, field);
             var vy = TaskFieldInfo.NumericValue(y, field);
@@ -200,8 +256,9 @@ public static class TaskView
     /// <summary>
     /// Partitions an already-sorted list into groups by <paramref name="field"/>, preserving
     /// within-group order. Categorical groups are ordered alphabetically; date groups by calendar
-    /// day (UTC). The missing-value bucket (<c>(none)</c> / <c>No date</c>) is always last. A null
-    /// field yields a single ungrouped <see cref="TaskGroup"/> (null label).
+    /// day (UTC); ordinal (priority) groups by importance (Urgent first). The missing-value bucket
+    /// (<c>(none)</c> / <c>No date</c>) is always last. A null field yields a single ungrouped
+    /// <see cref="TaskGroup"/> (null label).
     /// </summary>
     public static IReadOnlyList<TaskGroup> Group(IReadOnlyList<TaskItem> sortedTasks, TaskField? field)
     {
@@ -225,15 +282,22 @@ public static class TaskView
             bucket.Add(task);
         }
 
-        return order
-            .OrderBy(k => string.Equals(k, missingLabel, StringComparison.OrdinalIgnoreCase)) // missing last
-            .ThenBy(k => k, StringComparer.OrdinalIgnoreCase) // alpha, and yyyy-MM-dd sorts chronologically
+        var ordered = order.OrderBy(k => string.Equals(k, missingLabel, StringComparison.OrdinalIgnoreCase)); // missing last
+        // Ordinal groups order by importance level (Urgent → Low); others alpha (dates sort chronologically as yyyy-MM-dd).
+        var byField = TaskFieldInfo.IsOrdinal(f)
+            ? ordered.ThenBy(k => ClickUpPriority.LevelFromName(k) ?? int.MaxValue)
+            : ordered.ThenBy(k => k, StringComparer.OrdinalIgnoreCase);
+
+        return byField
             .Select(k => new TaskGroup(k, (IReadOnlyList<TaskItem>)buckets[k]))
             .ToList();
     }
 
     private static string LabelFor(TaskItem task, TaskField field, string missingLabel)
     {
+        if (TaskFieldInfo.IsOrdinal(field))
+            return ClickUpPriority.NameFromLevel(TaskFieldInfo.OrdinalValue(task, field)) ?? missingLabel;
+
         if (TaskFieldInfo.IsNumeric(field))
         {
             var v = TaskFieldInfo.NumericValue(task, field);

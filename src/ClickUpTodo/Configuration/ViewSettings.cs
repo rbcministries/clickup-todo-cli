@@ -14,6 +14,9 @@ public enum TaskField
 
     /// <summary>Due date, epoch ms.</summary>
     Due,
+
+    /// <summary>Priority importance (ordinal: Urgent → High → Normal → Low).</summary>
+    Priority,
 }
 
 /// <summary>

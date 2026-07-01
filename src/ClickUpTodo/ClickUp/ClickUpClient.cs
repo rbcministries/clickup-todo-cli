@@ -135,20 +135,26 @@ public sealed class ClickUpClient : IDisposable
 
     // ── Mapping & plumbing ──────────────────────────────────────────────────
 
-    private static TaskItem Map(TaskObject t) => new()
+    private static TaskItem Map(TaskObject t)
     {
-        Id = t.Id ?? "",
-        Name = t.Name ?? "(untitled)",
-        Url = t.Url,
-        ParentId = string.IsNullOrWhiteSpace(t.Parent) ? null : t.Parent,
-        DueDateMs = ParseMs(t.DueDate),
-        CreatedMs = ParseMs(t.DateCreated),
-        UpdatedMs = ParseMs(t.DateUpdated),
-        ListId = t.List?.Id,
-        ListName = t.List?.Name,
-        StatusName = t.Status?.StatusProp,
-        StatusColor = t.Status?.Color,
-    };
+        var priorityLevel = ClickUpPriority.Level(t.Priority?.Id, t.Priority?.PriorityProp);
+        return new()
+        {
+            Id = t.Id ?? "",
+            Name = t.Name ?? "(untitled)",
+            Url = t.Url,
+            ParentId = string.IsNullOrWhiteSpace(t.Parent) ? null : t.Parent,
+            DueDateMs = ParseMs(t.DueDate),
+            CreatedMs = ParseMs(t.DateCreated),
+            UpdatedMs = ParseMs(t.DateUpdated),
+            ListId = t.List?.Id,
+            ListName = t.List?.Name,
+            StatusName = t.Status?.StatusProp,
+            StatusColor = t.Status?.Color,
+            PriorityLevel = priorityLevel,
+            PriorityName = ClickUpPriority.NameFromLevel(priorityLevel),
+        };
+    }
 
     private static TaskDetail MapDetail(TaskObject t) => new()
     {

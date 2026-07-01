@@ -91,4 +91,20 @@ public sealed class FilterSortGroupFormTests
         Assert.Null(rule);
         Assert.Contains("IS / IS NOT", error);
     }
+
+    [Fact]
+    public void TryBuildRule_Valid_PriorityOrdering()
+    {
+        // Priority is ordinal, so ordering operators are allowed (unlike categorical fields).
+        var ok = FilterSortGroupForm.TryBuildRule(TaskField.Priority, FilterOp.GreaterOrEqual, "High", out var rule, out var error);
+
+        Assert.True(ok);
+        Assert.Null(error);
+        Assert.Equal(TaskField.Priority, rule!.Field);
+        Assert.Equal(FilterOp.GreaterOrEqual, rule.Op);
+    }
+
+    [Fact]
+    public void Fields_IncludesPriority()
+        => Assert.Contains(TaskField.Priority, FilterSortGroupForm.Fields);
 }
