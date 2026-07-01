@@ -261,9 +261,26 @@ public sealed class TaskDetailFormatterTests
     }
 
     [Fact]
-    public void CustomFieldValue_Labels_EmptyArrayFallsBack()
+    public void CustomFieldValue_Labels_EmptyArray_RendersNoValue()
     {
-        Assert.Equal("[]", TaskDetailFormatter.CustomFieldValue(Field("labels", "[]")));
+        // No labels selected → empty string, which OtherAttributes omits (not a literal "[]").
+        Assert.Equal("", TaskDetailFormatter.CustomFieldValue(Field("labels", "[]")));
+    }
+
+    [Fact]
+    public void CustomFieldValue_Users_EmptyArray_RendersNoValue()
+    {
+        Assert.Equal("", TaskDetailFormatter.CustomFieldValue(Field("users", "[]")));
+    }
+
+    [Fact]
+    public void CustomFieldValue_Location_UsesCompactFallback()
+    {
+        // A location value is an object; it renders as compact single-line JSON, not raw "text".
+        var f = Field("location", "{\"formatted_address\":\"123 Main St\"}");
+        var rendered = TaskDetailFormatter.CustomFieldValue(f)!;
+        Assert.Contains("123 Main St", rendered);
+        Assert.DoesNotContain("\n", rendered);
     }
 
     [Fact]

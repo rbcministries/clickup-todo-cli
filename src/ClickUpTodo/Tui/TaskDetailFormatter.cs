@@ -111,7 +111,9 @@ public static class TaskDetailFormatter
                 // Note: "emoji" (rating) is intentionally not here — its value shape isn't a bare
                 // number, so it falls through to the compact fallback rather than mis-render.
                 "number" or "currency" => NumberValue(value),
-                "text" or "short_text" or "url" or "email" or "phone" or "location"
+                // Note: "location" is an object ({formatted_address,…}), so it isn't here — it falls
+                // through to the compact fallback rather than dumping raw object JSON as "text".
+                "text" or "short_text" or "url" or "email" or "phone"
                     => Truncate(ScalarString(value)),
                 _ => CompactFallback(value),
             };
@@ -141,6 +143,8 @@ public static class TaskDetailFormatter
     {
         if (value.ValueKind != JsonValueKind.Array)
             return CompactFallback(value);
+        if (value.GetArrayLength() == 0)
+            return ""; // no labels selected → omitted by the caller
         var names = value.EnumerateArray()
             .Select(id => id.ValueKind == JsonValueKind.String ? id.GetString() : ScalarString(id))
             .Select(id => options.FirstOrDefault(o => o.Id == id)?.Name ?? id ?? "")
@@ -154,6 +158,8 @@ public static class TaskDetailFormatter
     {
         if (value.ValueKind != JsonValueKind.Array)
             return CompactFallback(value);
+        if (value.GetArrayLength() == 0)
+            return ""; // no users assigned → omitted by the caller
         var names = value.EnumerateArray()
             .Where(u => u.ValueKind == JsonValueKind.Object)
             .Select(u => Prop(u, "username") ?? Prop(u, "email") ?? Prop(u, "id") ?? "")
