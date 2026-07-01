@@ -60,6 +60,13 @@ public sealed record TaskDetail
     public string? ListId { get; init; }
     public string? ListName { get; init; }
 
+    /// <summary>
+    /// Additional list membership from ClickUp's "Tasks in Multiple Lists" feature (the task
+    /// response's <c>locations</c>), distinct from the home <see cref="ListName"/>. Empty for the
+    /// common single-list case.
+    /// </summary>
+    public IReadOnlyList<NamedEntity> Lists { get; init; } = [];
+
     /// <summary>Plain-text description (ClickUp <c>text_content</c>, falling back to <c>description</c>).</summary>
     public string? Description { get; init; }
     public string? Priority { get; init; }

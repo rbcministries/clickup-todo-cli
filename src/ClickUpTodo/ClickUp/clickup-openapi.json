@@ -298,6 +298,7 @@
           "status": { "$ref": "#/components/schemas/Status" },
           "priority": { "$ref": "#/components/schemas/Priority" },
           "list": { "$ref": "#/components/schemas/TaskList" },
+          "locations": { "type": "array", "items": { "$ref": "#/components/schemas/TaskList" } },
           "tags": { "type": "array", "items": { "$ref": "#/components/schemas/Tag" } },
           "assignees": { "type": "array", "items": { "$ref": "#/components/schemas/User" } },
           "custom_fields": { "type": "array", "items": { "$ref": "#/components/schemas/CustomField" } }
