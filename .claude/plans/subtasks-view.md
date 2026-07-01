@@ -2,7 +2,7 @@
 
 ## Goal / acceptance (from the issue)
 
-1. **Toggle with F4** (mirrors F1 help / F2 settings / F3 filter-sort-group). Default behaves as today.
+1. **Toggle with F4** (mirrors F1 help / F2 settings / F3 filter-sort-group).
 2. **Render subtasks indented, directly beneath their parent** when the view is on.
 3. A subtask whose **parent is not assigned to me** still appears under its parent, with the parent
    shown as a **visually-distinct header row** (pulled in purely as context).
@@ -11,12 +11,15 @@
 6. Ordering/grouping logic has unit tests.
 
 ### Open questions — decisions made here
-- **Default state:** OFF = *behaves as today* (subtasks stay in the flat, due-sorted list as ordinary
-  rows). ON (F4) = nested/indented under parent. The AC explicitly permits "hides them (or behaves as
-  today)"; "behave as today" is non-destructive, so we keep the current rows visible by default and the
-  toggle only changes the *arrangement*. Flag named **`NestSubtasks`** to name the behaviour accurately.
-- **Persist the toggle?** Yes — in `ViewSettings.NestSubtasks` (persisted in `config.json`, like the
+- **Default state:** OFF (default) = subtasks **hidden** from the main list (a flat top-level view);
+  ON (F4) = subtasks **shown nested** under their parent. This is the reading that unifies AC #1
+  ("default state hides them"), AC #2 ("*when shown*, indented under parent") and the issue's
+  open-question proposal ("hidden so the list stays flat unless asked"). It's also what a concurrent
+  session's handoff analysis independently landed on. Flag named **`ShowSubtasks`**. (Pins are never
+  hidden — the hide filter applies to the non-pinned set only.)
+- **Persist the toggle?** Yes — in `ViewSettings.ShowSubtasks` (persisted in `config.json`, like the
   other view settings).
+- **Nesting depth:** recursive (arbitrary depth), so grandchildren indent further — no one-level cap.
 - **Non-assigned parent header actions:** Enter (detail) and Ctrl+B/Ctrl+P work normally (it's a real
   task). **Space (status change) is a no-op** on a context parent (flash a note) — it's context, not my
   work.
@@ -41,7 +44,7 @@
 - `TaskItem`: add `string? ParentId`. Map `t.Parent` in `ClickUpClient.Map`.
 
 ### 2. `ViewSettings`
-- Add `public bool NestSubtasks { get; set; }` (default false). Fold into `IsDefault`.
+- Add `public bool ShowSubtasks { get; set; }` (default false). Fold into `IsDefault`.
 
 ### 3. Pure arranger — `Services/SubtaskArranger.cs`
 ```csharp
@@ -73,10 +76,10 @@ public static IReadOnlyList<ArrangedRow> Arrange(
 
 ### 6. `TodoApp` wiring
 - `_contextParents` field. The `RefreshService` fetch func resolves context parents after each load
-  **only when `NestSubtasks` is on** (off the UI thread; set before `onUpdate` marshals to UI).
-- `OnListKey`: `case KeyCode.F4` → toggle `_config.View.NestSubtasks`, persist, `Render()` immediately
+  **only when `ShowSubtasks` is on** (off the UI thread; set before `onUpdate` marshals to UI).
+- `OnListKey`: `case KeyCode.F4` → toggle `_config.View.ShowSubtasks`, persist, `Render()` immediately
   (instant nest of in-snapshot parents), then `RequestRefresh()` (pulls context parents).
-- `Render`: when `NestSubtasks && GroupField is null`, arrange the non-pinned section via
+- `Render`: when `ShowSubtasks && GroupField is null`, arrange the non-pinned section via
   `SubtaskArranger` and add rows with depth/context; otherwise existing behaviour (subtasks flat).
   **When an F3 group field is active, grouping wins and nesting yields** (can't group two ways at once)
   — documented limitation.
@@ -86,7 +89,7 @@ public static IReadOnlyList<ArrangedRow> Arrange(
 - Footer help + `HelpScreen` updated with F4.
 
 ## Phases
-1. Spec + regen + `TaskItem.ParentId` + `ViewSettings.NestSubtasks` + config test. → draft PR.
+1. Spec + regen + `TaskItem.ParentId` + `ViewSettings.ShowSubtasks` + config test. → draft PR.
 2. `SubtaskArranger` + `TaskRowFormatter` depth/context + unit tests.
 3. `TaskService` helpers + `TodoApp` F4/render/help wiring + tests.
 4. Build/test/format green, review subagent, mark ready.
