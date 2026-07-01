@@ -153,6 +153,7 @@ public sealed class ClickUpClient : IDisposable
             StatusColor = t.Status?.Color,
             PriorityLevel = priorityLevel,
             PriorityName = ClickUpPriority.NameFromLevel(priorityLevel),
+            PriorityColor = t.Priority?.Color,
         };
     }
 

@@ -103,6 +103,10 @@ public sealed record TaskItem
 
     /// <summary>Canonical priority name ("Urgent"/"High"/"Normal"/"Low"), or null when unset.</summary>
     public string? PriorityName { get; init; }
+
+    /// <summary>Priority hex colour (ClickUp <c>priority.color</c>, e.g. <c>#f50000</c>), or null when
+    /// unset. Rendered as the priority badge's background, mirroring <see cref="StatusColor"/>.</summary>
+    public string? PriorityColor { get; init; }
 }
 
 /// <summary>One selectable option of a drop-down or labels custom field. Drop-down options carry a

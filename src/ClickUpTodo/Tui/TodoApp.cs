@@ -65,8 +65,9 @@ public sealed class TodoApp
     // The ListView's backing collection, kept so a single row can be updated in place (without
     // SetSource, which would reset the list and the cursor).
     private ObservableCollection<string> _display = [];
-    // Per-row status-badge color overlay, parallel to _display (null = header row or no/!valid color).
-    private List<StatusBadgeListSource.Badge?> _badges = [];
+    // Per-row badge color overlays (status + priority), parallel to _display (empty = header row or
+    // no/invalid colors).
+    private List<IReadOnlyList<StatusBadgeListSource.Badge>> _badges = [];
     // Per-row nesting depth, parallel to _display, so an in-place row update keeps its indent (#46).
     private List<int> _depths = [];
     // Parents of assigned subtasks that aren't themselves in the snapshot, shown as context headers in
@@ -637,8 +638,8 @@ public sealed class TodoApp
             return;
         _rows[index] = updated;
         // Rebuild at the row's existing depth so an in-place update keeps its nesting indent (#46).
-        var (text, badge) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0);
-        _badges[index] = badge;
+        var (text, badges) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0);
+        _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
         _display[index] = sending ? $"{text}  (sending…)" : text;
@@ -738,7 +739,7 @@ public sealed class TodoApp
 
         _rows.Clear();
         _display = new ObservableCollection<string>();
-        _badges = new List<StatusBadgeListSource.Badge?>();
+        _badges = new List<IReadOnlyList<StatusBadgeListSource.Badge>>();
         _depths = new List<int>();
 
         if (pinned.Count > 0)
@@ -777,25 +778,30 @@ public sealed class TodoApp
     {
         _rows.Add(null);
         _display.Add(text);
-        _badges.Add(null);
+        _badges.Add([]);
         _depths.Add(0);
     }
 
     private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false)
     {
-        var (text, badge) = BuildRow(task, depth, isContextParent);
+        var (text, badges) = BuildRow(task, depth, isContextParent);
         _rows.Add(task);
         _display.Add(text);
-        _badges.Add(badge);
+        _badges.Add(badges);
         _depths.Add(depth);
     }
 
-    /// <summary>The display text and (optional) status-color badge overlay for a task row.</summary>
-    private static (string Text, StatusBadgeListSource.Badge? Badge) BuildRow(
+    /// <summary>The display text and the row's color badge overlays (status, then priority when set).</summary>
+    private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
         TaskItem task, int depth = 0, bool isContextParent = false)
     {
         var row = TaskRowFormatter.Format(task, depth, isContextParent);
-        return (row.Text, StatusBadgeListSource.TryCreate(row.BadgeStart, row.BadgeLength, task.StatusColor));
+        var badges = new List<StatusBadgeListSource.Badge>(2);
+        if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
+            badges.Add(status);
+        if (StatusBadgeListSource.TryCreate(row.PriorityStart, row.PriorityLength, task.PriorityColor) is { } priority)
+            badges.Add(priority);
+        return (row.Text, badges);
     }
 
     private void Flash(string message)
