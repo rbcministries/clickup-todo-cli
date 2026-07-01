@@ -16,7 +16,7 @@ public sealed class ClickUpOAuthTests
         var url = ClickUpOAuth.BuildAuthorizeUrl("client id", "https://localhost:1234/callback");
 
         Assert.Equal(
-            "https://app.clickup.com/api?client_id=client%20id&redirect_uri=https%3A%2F%2Flocalhost%3A1234%2Fcallback",
+            "https://app.clickup.com/api?client_id=client%20id&redirect_uri=https%3A%2F%2Flocalhost%3A1234%2Fcallback&response_type=code",
             url.AbsoluteUri);
     }
 

@@ -34,15 +34,19 @@ public sealed class ClickUpOAuth(HttpClient httpClient)
 
     /// <summary>
     /// Builds the authorization URL to open in the user's browser:
-    /// <c>https://app.clickup.com/api?client_id=…&amp;redirect_uri=…</c> (with an optional
-    /// <c>state</c>, recommended for CSRF protection). Query values are URL-escaped.
+    /// <c>https://app.clickup.com/api?client_id=…&amp;redirect_uri=…&amp;response_type=code</c> (with an
+    /// optional <c>state</c>, recommended for CSRF protection). Query values are URL-escaped.
+    /// <c>response_type=code</c> is the standard OAuth2 authorization-code grant; ClickUp defaults to
+    /// it, but it is sent explicitly for forward-compatibility.
     /// </summary>
     public static Uri BuildAuthorizeUrl(string clientId, string redirectUri, string? state = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(clientId);
         ArgumentException.ThrowIfNullOrWhiteSpace(redirectUri);
 
-        var query = $"client_id={Uri.EscapeDataString(clientId)}&redirect_uri={Uri.EscapeDataString(redirectUri)}";
+        var query = $"client_id={Uri.EscapeDataString(clientId)}"
+                  + $"&redirect_uri={Uri.EscapeDataString(redirectUri)}"
+                  + "&response_type=code";
         if (!string.IsNullOrWhiteSpace(state))
             query += $"&state={Uri.EscapeDataString(state)}";
 
