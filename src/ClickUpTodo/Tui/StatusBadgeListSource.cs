@@ -11,26 +11,27 @@ namespace ClickUpTodo.Tui;
 
 /// <summary>
 /// A <see cref="ListView"/> data source that draws each row's text exactly like the stock
-/// <see cref="ListWrapper{T}"/> (which it composes), then overlays the ClickUp status color on just
-/// the <c>[status]</c> span of the row.
+/// <see cref="ListWrapper{T}"/> (which it composes), then overlays ClickUp colors on the row's badge
+/// spans — the <c>[status]</c> and (when set) <c>[priority]</c> brackets.
 /// <para>
 /// Composing the stock wrapper — rather than re-implementing rendering — means text layout,
 /// horizontal scroll, wide-rune handling, selection highlight, marking, <see cref="ToList"/>
 /// (which backs the type-ahead navigator, see #12), and change notifications are all inherited
-/// unchanged. The only added behavior is recoloring a known character span, whose worst-case
+/// unchanged. The only added behavior is recoloring known character spans, whose worst-case
 /// failure is a mis-placed color cell, never garbled or missing text.
 /// </para>
 /// </summary>
 public sealed class StatusBadgeListSource : IListDataSource
 {
-    /// <summary>A colored span on a row: the <c>[status]</c> badge's char offset, length, and attribute.</summary>
+    /// <summary>A colored span on a row: a badge's char offset, length, and attribute.</summary>
     public readonly record struct Badge(int Start, int Length, Attribute Attr);
 
     private readonly ObservableCollection<string> _text;
-    private readonly IReadOnlyList<Badge?> _badges; // parallel to _text; null = no badge (e.g. header rows)
+    // Parallel to _text; each row's zero or more colored badge spans (empty = header row / no badges).
+    private readonly IReadOnlyList<IReadOnlyList<Badge>> _badges;
     private readonly ListWrapper<string> _inner;
 
-    public StatusBadgeListSource(ObservableCollection<string> text, IReadOnlyList<Badge?> badges)
+    public StatusBadgeListSource(ObservableCollection<string> text, IReadOnlyList<IReadOnlyList<Badge>> badges)
     {
         _text = text;
         _badges = badges;
@@ -82,9 +83,12 @@ public sealed class StatusBadgeListSource : IListDataSource
     {
         _inner.Render(listView, selected, item, col, row, width, viewportX);
 
-        var badge = item >= 0 && item < _badges.Count ? _badges[item] : null;
-        if (badge is { } b && b.Length > 0 && item >= 0 && item < _text.Count)
-            OverlayBadge(listView, b, col, row, width, viewportX, _text[item]);
+        if (item < 0 || item >= _badges.Count || item >= _text.Count)
+            return;
+        var text = _text[item];
+        foreach (var badge in _badges[item])
+            if (badge.Length > 0)
+                OverlayBadge(listView, badge, col, row, width, viewportX, text);
     }
 
     /// <summary>

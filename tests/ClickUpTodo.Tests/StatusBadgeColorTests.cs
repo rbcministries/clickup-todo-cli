@@ -76,4 +76,18 @@ public sealed class StatusBadgeColorTests
         var withWhite = StatusBadgeColor.ContrastRatio(bg, 1.0);
         Assert.Equal(withBlack >= withWhite, StatusBadgeColor.PreferDarkText(r, g, b));
     }
+
+    // The same pure helper backs the priority badge (#55): a ClickUp priority hex color maps to a
+    // readable black/white foreground exactly as status colors do. These pin the canonical palette.
+    [Theory]
+    [InlineData("#f50000", true)]  // Urgent bright red (L≈0.19) — black reads (marginally) better
+    [InlineData("#ffcc00", true)]  // High amber — dark text
+    [InlineData("#6fddff", true)]  // Normal light blue — dark text
+    [InlineData("#d8d8d8", true)]  // Low light grey — dark text
+    [InlineData("#e50000", false)] // a darker urgent red flips to light text (helper adapts)
+    public void PreferDarkText_HandlesPriorityPalette(string hex, bool expectDark)
+    {
+        Assert.True(StatusBadgeColor.TryParseHex(hex, out var r, out var g, out var b));
+        Assert.Equal(expectDark, StatusBadgeColor.PreferDarkText(r, g, b));
+    }
 }
