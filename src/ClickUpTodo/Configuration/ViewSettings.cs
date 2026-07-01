@@ -6,6 +6,9 @@ public enum TaskField
     Status,
     List,
 
+    /// <summary>Creation timestamp (ClickUp <c>date_created</c>), epoch ms.</summary>
+    Created,
+
     /// <summary>Last-activity timestamp (ClickUp <c>date_updated</c>), epoch ms.</summary>
     LastActivity,
 
@@ -15,7 +18,7 @@ public enum TaskField
 
 /// <summary>
 /// A filter comparison. <see cref="Is"/>/<see cref="IsNot"/> apply to every field; the ordering
-/// operators apply only to numeric/date fields (Last activity, Due).
+/// operators apply only to numeric/date fields (Created, Last activity, Due).
 /// </summary>
 public enum FilterOp
 {

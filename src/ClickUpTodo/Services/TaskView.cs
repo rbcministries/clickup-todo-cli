@@ -14,12 +14,13 @@ public sealed record TaskGroup(string? Label, IReadOnlyList<TaskItem> Tasks);
 public static class TaskFieldInfo
 {
     /// <summary>Numeric/date fields support the ordering operators; categorical fields do not.</summary>
-    public static bool IsNumeric(TaskField field) => field is TaskField.LastActivity or TaskField.Due;
+    public static bool IsNumeric(TaskField field) => field is TaskField.Created or TaskField.LastActivity or TaskField.Due;
 
     public static string DisplayName(TaskField field) => field switch
     {
         TaskField.Status => "Status",
         TaskField.List => "List",
+        TaskField.Created => "Created",
         TaskField.LastActivity => "Last activity",
         TaskField.Due => "Due date",
         _ => field.ToString(),
@@ -55,6 +56,7 @@ public static class TaskFieldInfo
     /// <summary>The numeric (epoch-ms) value of a field, or null for categorical fields / missing data.</summary>
     public static long? NumericValue(TaskItem task, TaskField field) => field switch
     {
+        TaskField.Created => task.CreatedMs,
         TaskField.LastActivity => task.UpdatedMs,
         TaskField.Due => task.DueDateMs,
         _ => null,

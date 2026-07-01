@@ -138,6 +138,7 @@ public sealed class ClickUpClient : IDisposable
         Name = t.Name ?? "(untitled)",
         Url = t.Url,
         DueDateMs = ParseMs(t.DueDate),
+        CreatedMs = ParseMs(t.DateCreated),
         UpdatedMs = ParseMs(t.DateUpdated),
         ListId = t.List?.Id,
         ListName = t.List?.Name,

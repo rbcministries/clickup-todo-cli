@@ -27,6 +27,9 @@ public sealed record TaskItem
     /// <summary>Due date as Unix epoch milliseconds, or null when undated.</summary>
     public long? DueDateMs { get; init; }
 
+    /// <summary>Creation time (ClickUp <c>date_created</c>) as Unix epoch milliseconds, or null.</summary>
+    public long? CreatedMs { get; init; }
+
     /// <summary>Last-activity time (ClickUp <c>date_updated</c>) as Unix epoch milliseconds, or null.</summary>
     public long? UpdatedMs { get; init; }
 }

@@ -12,10 +12,24 @@ public sealed class TaskFieldInfoTests
     [Theory]
     [InlineData(TaskField.Status, false)]
     [InlineData(TaskField.List, false)]
+    [InlineData(TaskField.Created, true)]
     [InlineData(TaskField.LastActivity, true)]
     [InlineData(TaskField.Due, true)]
     public void IsNumeric_OnlyDateFields(TaskField field, bool expected)
         => Assert.Equal(expected, TaskFieldInfo.IsNumeric(field));
+
+    [Fact]
+    public void ValidOps_Created_IncludesOrderingOperators()
+    {
+        var ops = TaskFieldInfo.ValidOps(TaskField.Created);
+
+        Assert.Contains(FilterOp.GreaterThan, ops);
+        Assert.Contains(FilterOp.LessOrEqual, ops);
+        Assert.Equal(6, ops.Count);
+    }
+
+    [Fact]
+    public void DisplayName_Created() => Assert.Equal("Created", TaskFieldInfo.DisplayName(TaskField.Created));
 
     [Fact]
     public void ValidOps_Categorical_IsAndIsNotOnly()
