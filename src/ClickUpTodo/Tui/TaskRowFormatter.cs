@@ -1,4 +1,5 @@
 using ClickUpTodo.ClickUp;
+using ClickUpTodo.Configuration;
 
 namespace ClickUpTodo.Tui;
 
@@ -32,7 +33,14 @@ public static class TaskRowFormatter
     /// True when the task is a parent pulled in purely as a header (not assigned to the user); appends
     /// a marker so it reads as context rather than actionable work.
     /// </param>
-    public static Row Format(TaskItem task, int depth = 0, bool isContextParent = false)
+    /// <param name="groupedBy">
+    /// The active F3 group field, or null when ungrouped. When set, the segment for that field is
+    /// omitted from the row because the group header above already conveys it (#67): Status/Priority
+    /// drop their badge (reporting the absent sentinel so no colour span is drawn), List drops
+    /// <c>· {list}</c>, Due drops <c>· due {date}</c>; Created/LastActivity have no row segment so
+    /// grouping by them changes nothing.
+    /// </param>
+    public static Row Format(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null)
     {
         var indent = depth > 0 ? string.Concat(Enumerable.Repeat(IndentUnit, depth)) : "";
 
@@ -41,12 +49,16 @@ public static class TaskRowFormatter
         // are present — two coloured badges make hand-computed offsets fragile.
         var text = indent + task.Name;
 
-        var (statusStart, statusLength) = AppendBadge(ref text, task.StatusName);
-        var (priorityStart, priorityLength) = AppendBadge(ref text, task.PriorityName);
+        var (statusStart, statusLength) = groupedBy == TaskField.Status
+            ? (-1, 0)
+            : AppendBadge(ref text, task.StatusName);
+        var (priorityStart, priorityLength) = groupedBy == TaskField.Priority
+            ? (-1, 0)
+            : AppendBadge(ref text, task.PriorityName);
 
-        if (!string.IsNullOrWhiteSpace(task.ListName))
+        if (groupedBy != TaskField.List && !string.IsNullOrWhiteSpace(task.ListName))
             text += $"  · {task.ListName}";
-        if (task.DueDateMs is { } ms)
+        if (groupedBy != TaskField.Due && task.DueDateMs is { } ms)
             text += $"  · due {DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime:MMM d}";
         if (isContextParent)
             text += ContextParentMarker;

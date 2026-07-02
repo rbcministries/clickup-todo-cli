@@ -1,4 +1,5 @@
 using ClickUpTodo.ClickUp;
+using ClickUpTodo.Configuration;
 using ClickUpTodo.Tui;
 
 namespace ClickUpTodo.Tests;
@@ -159,5 +160,105 @@ public sealed class TaskRowFormatterTests
 
         Assert.Equal("[Low]", nested.Text.Substring(nested.PriorityStart, nested.PriorityLength));
         Assert.Equal(flat.PriorityStart + 4, nested.PriorityStart); // two indent units = 4 chars
+    }
+
+    // ── Omit the grouped field from the row (#67) ────────────────────────────
+
+    private static TaskItem FullRowTask() => new()
+    {
+        Id = "1",
+        Name = "Ship the report",
+        StatusName = "in progress",
+        PriorityName = "High",
+        ListName = "Personal Tasks",
+        DueDateMs = DateTimeOffset.Parse("2026-07-01T12:00:00Z").ToUnixTimeMilliseconds(),
+    };
+
+    [Fact]
+    public void Format_GroupedByStatus_OmitsStatusBadge_KeepsOthers()
+    {
+        var row = TaskRowFormatter.Format(FullRowTask(), groupedBy: TaskField.Status);
+
+        // Status badge is omitted, reporting the absent sentinel so no colour span is drawn.
+        Assert.Equal(-1, row.StatusStart);
+        Assert.Equal(0, row.StatusLength);
+        Assert.DoesNotContain("[in progress]", row.Text);
+        // Every other segment is intact.
+        Assert.Equal("[High]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
+        Assert.Contains("· Personal Tasks", row.Text);
+        Assert.Contains("· due ", row.Text);
+    }
+
+    [Fact]
+    public void Format_GroupedByPriority_OmitsPriorityBadge_KeepsStatus()
+    {
+        var row = TaskRowFormatter.Format(FullRowTask(), groupedBy: TaskField.Priority);
+
+        Assert.Equal(-1, row.PriorityStart);
+        Assert.Equal(0, row.PriorityLength);
+        Assert.DoesNotContain("[High]", row.Text);
+        // Status badge still present and its span still exact.
+        Assert.Equal("[in progress]", row.Text.Substring(row.StatusStart, row.StatusLength));
+    }
+
+    [Fact]
+    public void Format_GroupedByList_OmitsListSegment_KeepsDue()
+    {
+        var row = TaskRowFormatter.Format(FullRowTask(), groupedBy: TaskField.List);
+
+        Assert.DoesNotContain("· Personal Tasks", row.Text);
+        Assert.Contains("· due ", row.Text);
+        // Badges are unaffected.
+        Assert.Equal("[in progress]", row.Text.Substring(row.StatusStart, row.StatusLength));
+    }
+
+    [Fact]
+    public void Format_GroupedByDue_OmitsDueSegment_KeepsList()
+    {
+        var row = TaskRowFormatter.Format(FullRowTask(), groupedBy: TaskField.Due);
+
+        Assert.DoesNotContain("· due ", row.Text);
+        Assert.Contains("· Personal Tasks", row.Text);
+    }
+
+    [Fact]
+    public void Format_GroupedByStatus_PriorityBadgeShiftsLeftToStayExact()
+    {
+        var task = FullRowTask();
+        var ungrouped = TaskRowFormatter.Format(task);
+        var grouped = TaskRowFormatter.Format(task, groupedBy: TaskField.Status);
+
+        // With the status badge gone, the priority badge sits right after the title + two spaces,
+        // and its reported span still lands exactly on the bracket.
+        Assert.Equal("[High]", grouped.Text.Substring(grouped.PriorityStart, grouped.PriorityLength));
+        Assert.Equal(task.Name.Length + 2, grouped.PriorityStart);
+        Assert.True(grouped.PriorityStart < ungrouped.PriorityStart);
+    }
+
+    [Theory]
+    [InlineData(TaskField.Created)]
+    [InlineData(TaskField.LastActivity)]
+    public void Format_GroupedByRowlessField_LeavesRowUnchanged(TaskField field)
+    {
+        var task = FullRowTask();
+
+        var grouped = TaskRowFormatter.Format(task, groupedBy: field);
+        var ungrouped = TaskRowFormatter.Format(task);
+
+        // Created / LastActivity have no row segment, so grouping by them changes nothing.
+        Assert.Equal(ungrouped.Text, grouped.Text);
+        Assert.Equal(ungrouped.StatusStart, grouped.StatusStart);
+        Assert.Equal(ungrouped.PriorityStart, grouped.PriorityStart);
+    }
+
+    [Fact]
+    public void Format_Ungrouped_KeepsEverySegment()
+    {
+        var row = TaskRowFormatter.Format(FullRowTask(), groupedBy: null);
+
+        Assert.Equal("[in progress]", row.Text.Substring(row.StatusStart, row.StatusLength));
+        Assert.Equal("[High]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
+        Assert.Contains("· Personal Tasks", row.Text);
+        Assert.Contains("· due ", row.Text);
     }
 }
