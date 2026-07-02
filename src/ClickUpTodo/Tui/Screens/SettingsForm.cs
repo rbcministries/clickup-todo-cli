@@ -4,8 +4,8 @@ namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>
 /// Pure input-handling logic for the settings screen, factored out of the Terminal.Gui glue so it
-/// can be unit-tested: parsing/clamping the refresh interval and deciding whether an excluded-status
-/// entry can be added (non-blank and not a case-insensitive duplicate).
+/// can be unit-tested: parsing/clamping the refresh interval and parsing/formatting the
+/// agent-dispatch extra-args field.
 /// </summary>
 public static class SettingsForm
 {
@@ -22,18 +22,6 @@ public static class SettingsForm
         => int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var s)
             ? Math.Clamp(s, MinRefreshSeconds, MaxRefreshSeconds)
             : fallback;
-
-    /// <summary>
-    /// Whether <paramref name="candidate"/> can be added to the excluded-status list: it must be
-    /// non-blank and not already present (case-insensitive). Compares against the trimmed candidate.
-    /// </summary>
-    public static bool CanAdd(IReadOnlyList<string> existing, string? candidate)
-    {
-        var trimmed = candidate?.Trim();
-        if (string.IsNullOrWhiteSpace(trimmed))
-            return false;
-        return !existing.Any(s => string.Equals(s, trimmed, StringComparison.OrdinalIgnoreCase));
-    }
 
     /// <summary>
     /// Parses the agent-dispatch "extra args" field (#27) into a list of arguments, splitting on

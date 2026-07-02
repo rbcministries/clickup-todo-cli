@@ -31,29 +31,6 @@ public sealed class SettingsFormTests
     public void ParseRefreshSeconds_AcceptsWhitespacePaddedIntegers()
         => Assert.Equal(60, SettingsForm.ParseRefreshSeconds("  60  ", fallback: 99));
 
-    [Fact]
-    public void CanAdd_AllowsANewNonBlankStatus()
-        => Assert.True(SettingsForm.CanAdd(["cancelled"], "won't do"));
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void CanAdd_RejectsBlank(string? candidate)
-        => Assert.False(SettingsForm.CanAdd([], candidate));
-
-    [Fact]
-    public void CanAdd_AcceptsATrimmedButDistinctCandidate()
-        => Assert.True(SettingsForm.CanAdd(["cancelled"], "  done  "));
-
-    [Fact]
-    public void CanAdd_RejectsCaseInsensitiveDuplicate()
-        => Assert.False(SettingsForm.CanAdd(["Cancelled"], "cancelled"));
-
-    [Fact]
-    public void CanAdd_ComparesAgainstTheTrimmedCandidate()
-        => Assert.False(SettingsForm.CanAdd(["cancelled"], "  cancelled  "));
-
     // ── agent-dispatch extra args (#27) ─────────────────────────────────────────
 
     [Theory]

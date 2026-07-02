@@ -75,37 +75,59 @@ public sealed class ViewSettingsConfigTests : IDisposable
         Assert.Contains("\"Created\"", json); // persisted by name, not ordinal
     }
 
+    /// <summary>The full seeded default view: Assignee IS me (#68) + a Status IS NOT rule per default
+    /// excluded status (#69).</summary>
+    private static List<FilterRule> DefaultFilters() =>
+    [
+        ViewSettings.DefaultAssigneeRule(),
+        .. ViewSettings.DefaultExcludedStatuses.Select(ViewSettings.StatusIsNotRule),
+    ];
+
     [Fact]
-    public void FreshlyLoadedDefaultView_IsTheSeededAssigneeMeRule_AndIsDefault()
+    public void FreshlyLoadedDefaultView_IsTheSeededDefault_AndIsDefault()
     {
-        // A fresh config (no file) is migrated on load: the default view is the single "Assignee IS me"
-        // rule (which reproduces today's "my tasks" fetch), and that counts as the default view (#68).
+        // A fresh config (no file) is migrated on load: the default view is Assignee IS me plus the
+        // default Status IS NOT exclusions (#68 + #69), and that counts as the default view.
         var view = new ConfigStore(_dir).Load().View;
 
         Assert.True(view.IsDefault);
-        var rule = Assert.Single(view.Filters);
-        Assert.Equal(TaskField.Assignee, rule.Field);
-        Assert.Equal(FilterOp.Is, rule.Op);
-        Assert.Equal(ViewSettings.CurrentUserToken, rule.Value);
+        var assignee = Assert.Single(view.Filters, r => r.Field == TaskField.Assignee);
+        Assert.Equal(FilterOp.Is, assignee.Op);
+        Assert.Equal(ViewSettings.CurrentUserToken, assignee.Value);
+        Assert.Equal(
+            ViewSettings.DefaultExcludedStatuses.OrderBy(s => s),
+            view.Filters.Where(r => r.Field == TaskField.Status && r.Op == FilterOp.IsNot).Select(r => r.Value).OrderBy(s => s));
         Assert.Null(view.SortField);
         Assert.Null(view.GroupField);
         Assert.False(view.ShowSubtasks);
     }
 
     [Fact]
-    public void EmptyOrExtendedView_IsNotDefault()
+    public void SeededDefaultView_IsDefault_RegardlessOfFilterOrder()
     {
-        Assert.False(new ViewSettings().IsDefault); // zero filters is no longer the default
-        Assert.False(new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()], ShowSubtasks = true }.IsDefault);
-        Assert.False(new ViewSettings
-        {
-            Filters = [ViewSettings.DefaultAssigneeRule(), new FilterRule { Field = TaskField.Status, Op = FilterOp.IsNot, Value = "done" }],
-        }.IsDefault);
+        Assert.True(new ViewSettings { Filters = DefaultFilters() }.IsDefault);
+        // Order-independent: reversing the filter list is still the default.
+        Assert.True(new ViewSettings { Filters = [.. Enumerable.Reverse(DefaultFilters())] }.IsDefault);
     }
 
     [Fact]
-    public void DefaultAssigneeRule_AloneIsDefault()
-        => Assert.True(new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()] }.IsDefault);
+    public void ViewsThatDivergeFromTheSeededDefault_AreNotDefault()
+    {
+        Assert.False(new ViewSettings().IsDefault); // zero filters
+        Assert.False(new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()] }.IsDefault); // assignee alone (missing exclusions)
+        Assert.False(new ViewSettings { Filters = DefaultFilters(), ShowSubtasks = true }.IsDefault);
+        Assert.False(new ViewSettings { Filters = DefaultFilters(), GroupField = TaskField.List }.IsDefault);
+        // An extra rule beyond the default set.
+        Assert.False(new ViewSettings
+        {
+            Filters = [.. DefaultFilters(), new FilterRule { Field = TaskField.Status, Op = FilterOp.IsNot, Value = "done" }],
+        }.IsDefault);
+        // Right count, but a default exclusion swapped for a different status.
+        Assert.False(new ViewSettings
+        {
+            Filters = [ViewSettings.DefaultAssigneeRule(), ViewSettings.StatusIsNotRule("won't do"), ViewSettings.StatusIsNotRule("done")],
+        }.IsDefault);
+    }
 
     [Fact]
     public void SavedConfig_PersistsEnumsAsStrings()

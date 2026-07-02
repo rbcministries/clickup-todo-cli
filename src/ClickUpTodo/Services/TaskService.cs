@@ -35,20 +35,12 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
         foreach (var task in assigned.Concat(personal))
             byId[task.Id] = task;
 
-        return ExcludeByStatus(byId.Values, config.ExcludedStatuses)
+        // Status exclusion is no longer a separate mechanism — it's ordinary "Status IS NOT" filter
+        // rules applied by TaskView.Filter at render time (#69). LoadAsync only fetches, merges, and
+        // orders; visibility is decided in exactly one place.
+        return byId.Values
             .OrderBy(t => t, TaskOrder.Instance)
             .ToList();
-    }
-
-    /// <summary>Filters out tasks whose status is in the excluded set (case-insensitive).</summary>
-    internal static IEnumerable<TaskItem> ExcludeByStatus(IEnumerable<TaskItem> tasks, IEnumerable<string> excluded)
-    {
-        var set = new HashSet<string>(
-            excluded.Where(s => !string.IsNullOrWhiteSpace(s)),
-            StringComparer.OrdinalIgnoreCase);
-        return set.Count == 0
-            ? tasks
-            : tasks.Where(t => string.IsNullOrWhiteSpace(t.StatusName) || !set.Contains(t.StatusName));
     }
 
     /// <summary>The set of assignee ids the assigned fetch should be scoped to, for this service's user.</summary>

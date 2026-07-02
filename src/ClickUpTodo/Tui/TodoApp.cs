@@ -321,7 +321,7 @@ public sealed class TodoApp
         if (_activeScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.ExcludedStatuses, _config.AgentDispatch);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.AgentDispatch);
         ShowScreen(screen, () =>
         {
             var result = screen.Result;
@@ -329,12 +329,11 @@ public sealed class TodoApp
                 return;
 
             _config.RefreshSeconds = result.RefreshSeconds;
-            _config.ExcludedStatuses = result.ExcludedStatuses;
             _config.AgentDispatch = result.AgentDispatch;
             _configStore.Save(_config);
 
             _refresh.IntervalSeconds = result.RefreshSeconds;
-            Flash($"Settings saved · refresh {result.RefreshSeconds}s · {result.ExcludedStatuses.Count} status(es) excluded");
+            Flash($"Settings saved · refresh {result.RefreshSeconds}s");
             _refresh.RequestRefresh();
         });
     }
