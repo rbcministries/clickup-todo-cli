@@ -46,7 +46,7 @@ public sealed class ClickUpClientIntegrationTests
         using var client = new ClickUpClient(Token!);
         var me = await client.GetMeAsync();
 
-        var tasks = await client.GetAssignedTasksAsync(WorkspaceId!, me.Id);
+        var tasks = await client.GetAssignedTasksAsync(WorkspaceId!, [me.Id]);
 
         Assert.All(tasks, t => Assert.False(string.IsNullOrWhiteSpace(t.Id)));
     }

@@ -72,6 +72,10 @@ public sealed record NamedEntity(string Id, string Name);
 /// <summary>A selectable status from a list's workflow.</summary>
 public sealed record StatusOption(string Name, string? Color);
 
+/// <summary>A user assigned to a task: the numeric ClickUp id (for stable matching / the app user) and
+/// a display name (for labels and grouping).</summary>
+public sealed record TaskAssignee(long Id, string Name);
+
 /// <summary>A unified task as shown in the to-do list, merged from either source endpoint.</summary>
 public sealed record TaskItem
 {
@@ -107,6 +111,12 @@ public sealed record TaskItem
     /// <summary>Priority hex colour (ClickUp <c>priority.color</c>, e.g. <c>#f50000</c>), or null when
     /// unset. Rendered as the priority badge's background, mirroring <see cref="StatusColor"/>.</summary>
     public string? PriorityColor { get; init; }
+
+    /// <summary>
+    /// The task's assignees (ClickUp <c>assignees</c>), empty when unassigned. Carried on the list item
+    /// (not just <see cref="TaskDetail"/>) so the F3 view can filter/sort/group by assignee (#68).
+    /// </summary>
+    public IReadOnlyList<TaskAssignee> Assignees { get; init; } = [];
 }
 
 /// <summary>One selectable option of a drop-down or labels custom field. Drop-down options carry a

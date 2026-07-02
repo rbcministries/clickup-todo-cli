@@ -21,7 +21,7 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     /// <summary>Merged, de-duplicated, stably-ordered task snapshot.</summary>
     public async Task<IReadOnlyList<TaskItem>> LoadAsync(CancellationToken ct = default)
     {
-        var assigned = await client.GetAssignedTasksAsync(config.WorkspaceId, userId, ct);
+        var assigned = await client.GetAssignedTasksAsync(config.WorkspaceId, [userId], ct);
         var personal = await client.GetListTasksAsync(config.PersonalTasksListId, ct);
 
         // De-dup by task id; a task assigned to me that also lives on my personal list appears once.
