@@ -17,6 +17,9 @@ public sealed class ViewSettingsConfigTests : IDisposable
         var store = new ConfigStore(_dir);
         var original = new AppConfig
         {
+            // Already at the current schema, so Load() doesn't seed the default assignee rule — this
+            // test isolates the view's save/load round-trip (migration is covered in ConfigMigrationsTests).
+            SchemaVersion = ConfigMigrations.CurrentVersion,
             WorkspaceId = "1",
             PersonalTasksListId = "2",
             View = new ViewSettings
@@ -53,6 +56,7 @@ public sealed class ViewSettingsConfigTests : IDisposable
         var store = new ConfigStore(_dir);
         store.Save(new AppConfig
         {
+            SchemaVersion = ConfigMigrations.CurrentVersion, // isolate round-trip from the default-rule seed
             View = new ViewSettings
             {
                 Filters = [new FilterRule { Field = TaskField.Created, Op = FilterOp.GreaterOrEqual, Value = "2026-06-01" }],
@@ -72,24 +76,36 @@ public sealed class ViewSettingsConfigTests : IDisposable
     }
 
     [Fact]
-    public void DefaultView_IsEmptyAndDefault()
+    public void FreshlyLoadedDefaultView_IsTheSeededAssigneeMeRule_AndIsDefault()
     {
-        var view = new AppConfig().View;
+        // A fresh config (no file) is migrated on load: the default view is the single "Assignee IS me"
+        // rule (which reproduces today's "my tasks" fetch), and that counts as the default view (#68).
+        var view = new ConfigStore(_dir).Load().View;
 
         Assert.True(view.IsDefault);
-        Assert.Empty(view.Filters);
+        var rule = Assert.Single(view.Filters);
+        Assert.Equal(TaskField.Assignee, rule.Field);
+        Assert.Equal(FilterOp.Is, rule.Op);
+        Assert.Equal(ViewSettings.CurrentUserToken, rule.Value);
         Assert.Null(view.SortField);
         Assert.Null(view.GroupField);
         Assert.False(view.ShowSubtasks);
     }
 
     [Fact]
-    public void ShowSubtasks_MakesViewNonDefault()
+    public void EmptyOrExtendedView_IsNotDefault()
     {
-        var view = new ViewSettings { ShowSubtasks = true };
-
-        Assert.False(view.IsDefault);
+        Assert.False(new ViewSettings().IsDefault); // zero filters is no longer the default
+        Assert.False(new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()], ShowSubtasks = true }.IsDefault);
+        Assert.False(new ViewSettings
+        {
+            Filters = [ViewSettings.DefaultAssigneeRule(), new FilterRule { Field = TaskField.Status, Op = FilterOp.IsNot, Value = "done" }],
+        }.IsDefault);
     }
+
+    [Fact]
+    public void DefaultAssigneeRule_AloneIsDefault()
+        => Assert.True(new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()] }.IsDefault);
 
     [Fact]
     public void SavedConfig_PersistsEnumsAsStrings()
