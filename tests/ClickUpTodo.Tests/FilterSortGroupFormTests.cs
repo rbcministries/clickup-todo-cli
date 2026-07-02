@@ -27,6 +27,36 @@ public sealed class FilterSortGroupFormTests
     }
 
     [Fact]
+    public void Fields_IncludesAssignee()
+    {
+        Assert.Contains(TaskField.Assignee, FilterSortGroupForm.Fields);
+        Assert.Contains("Assignee", FilterSortGroupForm.FieldChoices());
+    }
+
+    [Fact]
+    public void TryBuildRule_AssigneeIs_Valid()
+    {
+        var ok = FilterSortGroupForm.TryBuildRule(TaskField.Assignee, FilterOp.Is, " me ", out var rule, out var error);
+
+        Assert.True(ok);
+        Assert.Null(error);
+        Assert.Equal(TaskField.Assignee, rule!.Field);
+        Assert.Equal("me", rule.Value);
+    }
+
+    [Theory]
+    [InlineData(FilterOp.IsNot)]
+    [InlineData(FilterOp.GreaterThan)]
+    public void TryBuildRule_AssigneeNonIsOperator_Rejected(FilterOp op)
+    {
+        var ok = FilterSortGroupForm.TryBuildRule(TaskField.Assignee, op, "me", out var rule, out var error);
+
+        Assert.False(ok);
+        Assert.Null(rule);
+        Assert.Contains("IS", error);
+    }
+
+    [Fact]
     public void FieldIndex_RoundTrips()
     {
         Assert.Equal(0, FilterSortGroupForm.FieldToIndex(null));

@@ -278,12 +278,27 @@ public sealed class TodoApp
         if (result is null)
             return;
 
+        var previous = _config.View;
         _config.View = result;
         _configStore.Save(_config);
         Flash(ViewSummary(result));
-        // The view changed but the underlying task set didn't, so re-render directly rather than
-        // waiting on a refresh (BuildSignature would otherwise treat it as a no-op).
-        Render(keepTaskId: CurrentTask()?.Id);
+
+        // An Assignee rule scopes the server-side fetch (#68), so a change to the resolved assignee set
+        // needs a reload — a client-side re-render can't surface tasks that were never fetched. Every
+        // other rule change (status/list/due/priority/sort/group) is a pure client-side re-filter, so
+        // re-render directly (BuildSignature would otherwise treat it as a no-op).
+        var before = _tasks.ResolveAssigneeIds(previous);
+        var after = _tasks.ResolveAssigneeIds(result);
+        if (!TaskService.SameAssigneeSet(before, after))
+        {
+            if (after.Count == 0)
+                Flash("Fetching tasks for all assignees — this may be slow.");
+            _refresh.RequestRefresh();
+        }
+        else
+        {
+            Render(keepTaskId: CurrentTask()?.Id);
+        }
     }
 
     /// <summary>A one-line description of the active view for the status line.</summary>

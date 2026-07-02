@@ -31,13 +31,20 @@ public static class TaskFieldInfo
         TaskField.LastActivity => "Last activity",
         TaskField.Due => "Due date",
         TaskField.Priority => "Priority",
+        TaskField.Assignee => "Assignee",
         _ => field.ToString(),
     };
 
-    /// <summary>Operators valid for a field: all six for numeric/date and ordinal, IS / IS NOT for categorical.</summary>
-    public static IReadOnlyList<FilterOp> ValidOps(TaskField field) => IsNumeric(field) || IsOrdinal(field)
-        ? [FilterOp.Is, FilterOp.IsNot, FilterOp.GreaterThan, FilterOp.LessThan, FilterOp.GreaterOrEqual, FilterOp.LessOrEqual]
-        : [FilterOp.Is, FilterOp.IsNot];
+    /// <summary>
+    /// Operators valid for a field: all six for numeric/date and ordinal, IS / IS NOT for categorical.
+    /// Assignee is IS-only for now — it scopes the server-side fetch (#68); IS NOT (a client-side
+    /// exclude) is deferred with the other multi-assignee matching work.
+    /// </summary>
+    public static IReadOnlyList<FilterOp> ValidOps(TaskField field) =>
+        field == TaskField.Assignee ? [FilterOp.Is]
+        : IsNumeric(field) || IsOrdinal(field)
+            ? [FilterOp.Is, FilterOp.IsNot, FilterOp.GreaterThan, FilterOp.LessThan, FilterOp.GreaterOrEqual, FilterOp.LessOrEqual]
+            : [FilterOp.Is, FilterOp.IsNot];
 
     public static string OpSymbol(FilterOp op) => op switch
     {
@@ -58,6 +65,9 @@ public static class TaskFieldInfo
     {
         TaskField.Status => task.StatusName,
         TaskField.List => task.ListName,
+        // Assignee is multi-valued; grouping/sorting use the first assignee (the least-surprising single
+        // bucket for a to-do list, #68). null → the (none) bucket, like other missing categorical values.
+        TaskField.Assignee => task.Assignees.Count > 0 ? task.Assignees[0].Name : null,
         _ => null,
     };
 
@@ -132,6 +142,14 @@ public static class TaskView
 
     private static bool Matches(TaskItem task, FilterRule rule)
     {
+        // Assignee is enforced at the fetch layer (server-side assignees[] set, #68), so it's a no-op as
+        // a client-side filter. Re-applying it here would wrongly drop Personal-Tasks-list tasks that
+        // are assigned to someone else (those are merged in regardless of assignee). This covers every
+        // op: the F3 UI only offers IS (ValidOps), so an IS NOT here could only come from a hand-edited
+        // or future-version config, and client-side multi-assignee matching is deferred to #73.
+        if (rule.Field == TaskField.Assignee)
+            return true;
+
         if (TaskFieldInfo.IsOrdinal(rule.Field))
             return MatchesOrdinal(task, rule);
 

@@ -6,6 +6,12 @@ namespace ClickUpTodo.Configuration;
 /// </summary>
 public sealed class AppConfig
 {
+    /// <summary>
+    /// One-shot config migration version (0 = pre-migrations). Bumped by <see cref="ConfigMigrations"/>
+    /// on load so seeded defaults are applied exactly once and a user's later edits aren't re-seeded.
+    /// </summary>
+    public int SchemaVersion { get; set; }
+
     /// <summary>Selected ClickUp workspace (team) id.</summary>
     public string WorkspaceId { get; set; } = "";
 

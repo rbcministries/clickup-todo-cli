@@ -108,12 +108,18 @@ public sealed class ClickUpClient : IDisposable
                 .ToList();
         });
 
-    /// <summary>All open tasks across the workspace assigned to <paramref name="userId"/>, de-paged.</summary>
-    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, long userId, CancellationToken ct = default)
+    /// <summary>
+    /// All open workspace tasks assigned to any of <paramref name="assigneeIds"/>, de-paged. An
+    /// <b>empty</b> set omits the <c>assignees</c> filter entirely, so ClickUp returns tasks for
+    /// everyone in the workspace — a deliberately broad (and slower) fetch the caller opts into by
+    /// clearing the Assignee rule (#68).
+    /// </summary>
+    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, CancellationToken ct = default)
         => Guard("GetFilteredTeamTasks", () => PageAsync(page =>
             _client.V2.Team[workspaceId].Task.GetAsync(cfg =>
             {
-                cfg.QueryParameters.Assignees = [userId.ToString(CultureInfo.InvariantCulture)];
+                if (assigneeIds.Count > 0)
+                    cfg.QueryParameters.Assignees = assigneeIds.Select(id => id.ToString(CultureInfo.InvariantCulture)).ToArray();
                 cfg.QueryParameters.Page = page;
                 cfg.QueryParameters.IncludeClosed = false;
                 cfg.QueryParameters.Subtasks = true;
@@ -167,7 +173,8 @@ public sealed class ClickUpClient : IDisposable
 
     // ── Mapping & plumbing ──────────────────────────────────────────────────
 
-    private static TaskItem Map(TaskObject t)
+    // internal (not private) so the mapping can be unit-tested without hitting the live API.
+    internal static TaskItem Map(TaskObject t)
     {
         var priorityLevel = ClickUpPriority.Level(t.Priority?.Id, t.Priority?.PriorityProp);
         return new()
@@ -186,8 +193,18 @@ public sealed class ClickUpClient : IDisposable
             PriorityLevel = priorityLevel,
             PriorityName = ClickUpPriority.NameFromLevel(priorityLevel),
             PriorityColor = t.Priority?.Color,
+            Assignees = MapAssignees(t.Assignees),
         };
     }
+
+    /// <summary>Maps ClickUp's <c>assignees</c> to the stable <see cref="TaskAssignee"/> shape, keeping
+    /// the numeric id (for matching / the app user) and a display name; drops entries with neither.</summary>
+    private static IReadOnlyList<TaskAssignee> MapAssignees(List<User>? assignees)
+        => assignees?
+            .Select(u => new TaskAssignee(u.Id ?? 0, DisplayName(u)))
+            .Where(a => a.Id != 0 || a.Name.Length > 0)
+            .ToList()
+           ?? [];
 
     private static TaskDetail MapDetail(TaskObject t) => new()
     {

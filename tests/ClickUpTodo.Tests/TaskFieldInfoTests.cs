@@ -1,3 +1,4 @@
+using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Services;
 
@@ -31,6 +32,29 @@ public sealed class TaskFieldInfoTests
     [Fact]
     public void DisplayName_Priority()
         => Assert.Equal("Priority", TaskFieldInfo.DisplayName(TaskField.Priority));
+
+    [Fact]
+    public void DisplayName_Assignee()
+        => Assert.Equal("Assignee", TaskFieldInfo.DisplayName(TaskField.Assignee));
+
+    [Fact]
+    public void ValidOps_Assignee_IsOnly()
+        => Assert.Equal([FilterOp.Is], TaskFieldInfo.ValidOps(TaskField.Assignee));
+
+    [Fact]
+    public void CategoricalValue_Assignee_UsesFirstAssignee_OrNullWhenNone()
+    {
+        var withTwo = new TaskItem
+        {
+            Id = "1",
+            Name = "t",
+            Assignees = [new TaskAssignee(1, "Ada"), new TaskAssignee(2, "Bo")],
+        };
+        var withNone = new TaskItem { Id = "2", Name = "t" };
+
+        Assert.Equal("Ada", TaskFieldInfo.CategoricalValue(withTwo, TaskField.Assignee));
+        Assert.Null(TaskFieldInfo.CategoricalValue(withNone, TaskField.Assignee));
+    }
 
     [Fact]
     public void ValidOps_Created_IncludesOrderingOperators()

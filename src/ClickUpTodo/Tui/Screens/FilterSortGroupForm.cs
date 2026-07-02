@@ -12,7 +12,7 @@ public static class FilterSortGroupForm
 {
     /// <summary>The filterable/sortable/groupable fields, in display order.</summary>
     public static readonly IReadOnlyList<TaskField> Fields =
-        [TaskField.Status, TaskField.List, TaskField.Created, TaskField.LastActivity, TaskField.Due, TaskField.Priority];
+        [TaskField.Status, TaskField.List, TaskField.Assignee, TaskField.Created, TaskField.LastActivity, TaskField.Due, TaskField.Priority];
 
     /// <summary>All operators, in display order (validity per field is enforced by <see cref="TryBuildRule"/>).</summary>
     public static readonly IReadOnlyList<FilterOp> Ops =
@@ -36,8 +36,8 @@ public static class FilterSortGroupForm
 
     /// <summary>
     /// Validates and builds a filter rule from the picker selections: the value must be non-blank, and
-    /// ordering operators (>, &lt;, GEQ, LEQ) are only valid on numeric/date and ordinal (priority)
-    /// fields. Returns false with an <paramref name="error"/> message otherwise.
+    /// the operator must be valid for the field (ordering operators only on numeric/date and ordinal
+    /// fields; assignee is IS-only, #68). Returns false with an <paramref name="error"/> message otherwise.
     /// </summary>
     public static bool TryBuildRule(TaskField field, FilterOp op, string? value, out FilterRule? rule, out string? error)
     {
@@ -49,9 +49,10 @@ public static class FilterSortGroupForm
             error = "Enter a value before adding a filter.";
             return false;
         }
-        if (!TaskFieldInfo.IsNumeric(field) && !TaskFieldInfo.IsOrdinal(field) && op is not (FilterOp.Is or FilterOp.IsNot))
+        var validOps = TaskFieldInfo.ValidOps(field);
+        if (!validOps.Contains(op))
         {
-            error = $"{TaskFieldInfo.DisplayName(field)} only supports IS / IS NOT.";
+            error = $"{TaskFieldInfo.DisplayName(field)} only supports {string.Join(" / ", validOps.Select(TaskFieldInfo.OpSymbol))}.";
             return false;
         }
         rule = new FilterRule { Field = field, Op = op, Value = trimmed };
