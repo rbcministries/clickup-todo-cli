@@ -29,14 +29,40 @@ public sealed class StatusBadgeListSource : IListDataSource
     private readonly ObservableCollection<string> _text;
     // Parallel to _text; each row's zero or more colored badge spans (empty = header row / no badges).
     private readonly IReadOnlyList<IReadOnlyList<Badge>> _badges;
+    private readonly IReadOnlyList<Attribute?> _headerAttrs; // parallel to _text; non-null only on header rows
     private readonly ListWrapper<string> _inner;
 
-    public StatusBadgeListSource(ObservableCollection<string> text, IReadOnlyList<IReadOnlyList<Badge>> badges)
+    public StatusBadgeListSource(
+        ObservableCollection<string> text,
+        IReadOnlyList<IReadOnlyList<Badge>> badges,
+        IReadOnlyList<Attribute?>? headerAttrs = null)
     {
         _text = text;
         _badges = badges;
+        _headerAttrs = headerAttrs ?? new Attribute?[text.Count];
         _inner = new ListWrapper<string>(text);
     }
+
+    /// <summary>
+    /// Builds the full-row background attribute for a group header from its hex color (background from
+    /// the color, foreground the higher-contrast of black/white), or null when the color is
+    /// missing/malformed — the caller then uses <see cref="NeutralHeaderAttr"/> instead.
+    /// </summary>
+    public static Attribute? HeaderAttr(string? hexColor)
+    {
+        if (!StatusBadgeColor.TryParseHex(hexColor, out var r, out var g, out var b))
+            return null;
+        var background = new Color(r, g, b, 255);
+        var foreground = StatusBadgeColor.PreferDarkText(r, g, b)
+            ? new Color(0, 0, 0, 255)
+            : new Color(255, 255, 255, 255);
+        return new Attribute(foreground, background);
+    }
+
+    /// <summary>A muted gray bar for header rows with no field color (the pinned/tasks sections, the
+    /// "no date" bucket, or a list whose color isn't resolved).</summary>
+    public static Attribute NeutralHeaderAttr { get; } =
+        new(new Color(210, 210, 210, 255), new Color(58, 58, 58, 255));
 
     /// <summary>
     /// Builds a badge from a status hex color, or null when there's no badge (no status) or the
@@ -83,12 +109,60 @@ public sealed class StatusBadgeListSource : IListDataSource
     {
         _inner.Render(listView, selected, item, col, row, width, viewportX);
 
-        if (item < 0 || item >= _badges.Count || item >= _text.Count)
+        if (item < 0 || item >= _text.Count)
+            return;
+
+        // A header row paints its whole width with the bar attribute — but only when unselected, so the
+        // list's selection highlight still shows the cursor when it lands on a header. Headers never
+        // carry a badge, so the two overlays are mutually exclusive.
+        var headerAttr = item < _headerAttrs.Count ? _headerAttrs[item] : null;
+        if (headerAttr is { } ha && !selected)
+        {
+            PaintHeaderBar(listView, ha, col, row, width, viewportX, _text[item]);
+            return;
+        }
+
+        if (item >= _badges.Count)
             return;
         var text = _text[item];
         foreach (var badge in _badges[item])
             if (badge.Length > 0)
                 OverlayBadge(listView, badge, col, row, width, viewportX, text);
+    }
+
+    /// <summary>
+    /// Re-draws an entire header row — text then space-padding out to <paramref name="width"/> — in the
+    /// bar attribute, so the color spans the full line (the stock wrapper already padded with spaces in
+    /// the base attribute; this recolors those cells). Wide runes and horizontal scroll are honored the
+    /// same way as <see cref="OverlayBadge"/>.
+    /// </summary>
+    private static void PaintHeaderBar(ListView listView, Attribute attr, int col, int row, int width, int viewportX, string text)
+    {
+        var baseAttr = listView.SetAttribute(attr);
+
+        var displayCol = 0;
+        for (var i = 0; i < text.Length;)
+        {
+            Rune.DecodeFromUtf16(text.AsSpan(i), out var rune, out var consumed);
+            var runeWidth = Math.Max(1, rune.GetColumns());
+            var x = displayCol - viewportX;
+            if (x >= 0 && x + runeWidth <= width)
+            {
+                listView.Move(col + x, row);
+                listView.AddRune(rune);
+            }
+            displayCol += runeWidth;
+            i += consumed;
+        }
+
+        // Pad the rest of the visible line with spaces so the bar fills the frame width.
+        for (var x = Math.Max(0, displayCol - viewportX); x < width; x++)
+        {
+            listView.Move(col + x, row);
+            listView.AddRune(new Rune(' '));
+        }
+
+        listView.SetAttribute(baseAttr);
     }
 
     /// <summary>

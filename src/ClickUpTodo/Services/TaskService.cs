@@ -13,6 +13,11 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     // PrefetchStatusesAsync so the picker opens from cache in the common case.
     private readonly StatusCache _statusCache = new(client.GetListStatusesAsync, timeProvider);
 
+    // Per-list color chips, cached for the process lifetime (a list's color effectively never changes
+    // within a session). A null value means "fetched, but the list has no color set" — cached so it
+    // isn't refetched. Used to tint List-grouped headers (#61).
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _listColors = new(StringComparer.Ordinal);
+
     /// <summary>Merged, de-duplicated, stably-ordered task snapshot.</summary>
     public async Task<IReadOnlyList<TaskItem>> LoadAsync(CancellationToken ct = default)
     {
@@ -93,6 +98,37 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
                 missing.Add(t.ParentId);
         }
         return missing;
+    }
+
+    /// <summary>
+    /// Best-effort list-color lookup for the given lists, keyed by list id, for tinting List-grouped
+    /// headers. Colors are cached for the process lifetime; a list whose color can't be fetched (or that
+    /// has none) maps to null so the caller falls back to a generated hue and it isn't refetched.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, string?>> ResolveListColorsAsync(
+        IEnumerable<string> listIds, CancellationToken ct = default)
+    {
+        // Fetch the not-yet-cached lists concurrently; a session commonly spans several lists, so doing
+        // them sequentially would add a round-trip per list to the first List-grouped render.
+        var toFetch = listIds
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.Ordinal)
+            .Where(id => !_listColors.ContainsKey(id))
+            .ToList();
+
+        await Task.WhenAll(toFetch.Select(async id =>
+        {
+            try
+            {
+                _listColors[id] = await client.GetListColorAsync(id, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _listColors[id] = null; // best-effort: a list we can't fetch just falls back to a hue
+            }
+        }));
+
+        return new Dictionary<string, string?>(_listColors, StringComparer.Ordinal);
     }
 
     /// <summary>

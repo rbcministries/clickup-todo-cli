@@ -10,6 +10,10 @@ namespace ClickUpTodo.Services;
 public readonly record struct LayoutRow(string? HeaderText, TaskItem? Task, int Depth, bool IsContextParent)
 {
     public bool IsHeader => Task is null;
+
+    /// <summary>For a header row, the grouped field's hex color for its full-width bar (null → neutral
+    /// bar; always null for task rows). Threaded through so the TUI can tint headers by group (#61).</summary>
+    public string? HeaderColor { get; init; }
 }
 
 /// <summary>
@@ -35,21 +39,30 @@ public static class SectionLayout
     /// The single tasks-section header to emit when <b>not</b> grouped (used only to separate the
     /// to-do rows from a pinned section above); pass null to omit it.
     /// </param>
+    /// <param name="headerColors">
+    /// Optional per-group header bar colors (hex), parallel to <paramref name="groups"/>, attached to
+    /// each grouped header row's <see cref="LayoutRow.HeaderColor"/>. Null / short → neutral bar (#61).
+    /// </param>
     public static IReadOnlyList<LayoutRow> BuildTodoSection(
         IReadOnlyList<TaskGroup> groups,
         IReadOnlyDictionary<string, TaskItem> contextParents,
         bool grouped,
         bool nest,
-        string? ungroupedTasksHeader)
+        string? ungroupedTasksHeader,
+        IReadOnlyList<string?>? headerColors = null)
     {
         var rows = new List<LayoutRow>();
-        foreach (var group in groups)
+        for (var gi = 0; gi < groups.Count; gi++)
         {
+            var group = groups[gi];
             // A header per named group when grouping; otherwise a single tasks header, and only when a
             // pinned section sits above (signalled by a non-null ungroupedTasksHeader). Header counts use
             // the real group members — an injected context parent is a header, not a counted task row.
             if (grouped)
-                rows.Add(new LayoutRow($"─ {(group.Label ?? "").ToUpperInvariant()} ({group.Tasks.Count}) ─", null, 0, false));
+                rows.Add(new LayoutRow($"─ {(group.Label ?? "").ToUpperInvariant()} ({group.Tasks.Count}) ─", null, 0, false)
+                {
+                    HeaderColor = headerColors is not null && gi < headerColors.Count ? headerColors[gi] : null,
+                });
             else if (ungroupedTasksHeader is not null)
                 rows.Add(new LayoutRow(ungroupedTasksHeader, null, 0, false));
 
