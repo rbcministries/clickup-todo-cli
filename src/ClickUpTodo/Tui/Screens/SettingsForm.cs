@@ -34,4 +34,18 @@ public static class SettingsForm
             return false;
         return !existing.Any(s => string.Equals(s, trimmed, StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>
+    /// Parses the agent-dispatch "extra args" field (#27) into a list of arguments, splitting on
+    /// whitespace and dropping blanks. This keeps the settings UI simple; args that themselves
+    /// contain spaces aren't expressible here (a rare need for the dispatch model flag / etc.).
+    /// </summary>
+    public static List<string> ParseExtraArgs(string? text)
+        => string.IsNullOrWhiteSpace(text)
+            ? []
+            : [.. text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+
+    /// <summary>Renders an extra-args list back to the space-joined text shown in the field.</summary>
+    public static string FormatExtraArgs(IEnumerable<string> args)
+        => string.Join(" ", args.Where(a => !string.IsNullOrWhiteSpace(a)));
 }

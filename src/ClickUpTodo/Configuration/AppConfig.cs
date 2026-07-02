@@ -31,6 +31,9 @@ public sealed class AppConfig
     /// <summary>The active filter/sort/group view (F3), persisted so it survives restarts.</summary>
     public ViewSettings View { get; set; } = new();
 
+    /// <summary>Configuration for dispatching an interactive <c>claude</c> session (#23); all optional.</summary>
+    public AgentDispatchSettings AgentDispatch { get; set; } = new();
+
     /// <summary>True once the setup wizard has completed at least once.</summary>
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(WorkspaceId) && !string.IsNullOrWhiteSpace(PersonalTasksListId);

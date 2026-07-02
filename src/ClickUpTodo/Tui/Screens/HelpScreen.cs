@@ -25,6 +25,7 @@ public sealed class HelpScreen : Screen
                 + "  Tab         Jump to the first task in the next section\n"
                 + "  Space       Set the focused task's status\n"
                 + "  Enter       Open the task detail view (description, comments, attributes)\n"
+                + "  A           In the detail view: dispatch an interactive Claude session\n"
                 + "  Ctrl+B      Open the task in your browser\n"
                 + "  Ctrl+P      Pin / unpin (pinned tasks group at the top)\n"
                 + "  Ctrl+R      Refresh now\n"

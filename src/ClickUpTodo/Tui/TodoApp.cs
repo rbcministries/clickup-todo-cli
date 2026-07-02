@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
@@ -43,6 +44,12 @@ public sealed class TodoApp
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
+    // Composes the seed prompt + launches an interactive `claude` session for the detail view's A
+    // keybinding (#26). Zero-config defaults today; #27 (S4) will populate its options from AppConfig.
+    private readonly AgentDispatcher _agent = new(new TerminalLauncher());
+    // True while a dispatch is in flight, so a rapid second submit doesn't launch a duplicate session.
+    // Only touched on the UI thread (set in DispatchAgent, cleared via Application.Invoke).
+    private bool _dispatching;
 
     private Window _window = null!;
     private FrameView _frame = null!;
@@ -62,8 +69,9 @@ public sealed class TodoApp
     // The ListView's backing collection, kept so a single row can be updated in place (without
     // SetSource, which would reset the list and the cursor).
     private ObservableCollection<string> _display = [];
-    // Per-row status-badge color overlay, parallel to _display (null = header row or no/!valid color).
-    private List<StatusBadgeListSource.Badge?> _badges = [];
+    // Per-row badge color overlays (status + priority), parallel to _display (empty = header row or
+    // no/invalid colors).
+    private List<IReadOnlyList<StatusBadgeListSource.Badge>> _badges = [];
     // Per-row full-width header-bar attribute, parallel to _display (non-null only on header rows). (#61)
     private List<Attribute?> _headerAttrs = [];
     // Per-row nesting depth, parallel to _display, so an in-place row update keeps its indent (#46).
@@ -123,9 +131,10 @@ public sealed class TodoApp
     private async Task<IReadOnlyList<TaskItem>> FetchAsync(CancellationToken ct)
     {
         var tasks = await _tasks.LoadAsync(ct);
-        // Only resolve context parents when they'll actually be rendered: subtasks shown AND ungrouped
-        // (grouping wins over nesting in Render), so we don't pay N extra round-trips for nothing.
-        _contextParents = _config.View.ShowSubtasks && _config.View.GroupField is null
+        // Resolve context parents whenever the subtasks view is on: they're rendered as headers whether
+        // or not an F3 group is active now that grouping and nesting compose (#57). Off → skip the
+        // extra round-trips.
+        _contextParents = _config.View.ShowSubtasks
             ? await _tasks.ResolveContextParentsAsync(tasks, ct)
             : EmptyParents;
         // List colors are only needed to tint headers when grouping by List; skip the fetches otherwise.
@@ -297,7 +306,7 @@ public sealed class TodoApp
         if (_activeScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.ExcludedStatuses);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.ExcludedStatuses, _config.AgentDispatch);
         ShowScreen(screen, () =>
         {
             var result = screen.Result;
@@ -306,6 +315,7 @@ public sealed class TodoApp
 
             _config.RefreshSeconds = result.RefreshSeconds;
             _config.ExcludedStatuses = result.ExcludedStatuses;
+            _config.AgentDispatch = result.AgentDispatch;
             _configStore.Save(_config);
 
             _refresh.IntervalSeconds = result.RefreshSeconds;
@@ -491,6 +501,9 @@ public sealed class TodoApp
                     if (_activeScreen is not null)
                         return;
                     var screen = new TaskDetailScreen(detail, comments);
+                    // A (in the detail view) → compose + launch an interactive claude session (#26).
+                    // The detail view stays open; dispatch runs off the UI thread so the TUI stays live.
+                    screen.AgentDispatchRequested += (_, prompt) => DispatchAgent(detail, comments, prompt);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -503,6 +516,39 @@ public sealed class TodoApp
             catch (Exception ex)
             {
                 Application.Invoke(() => Flash($"Could not load task detail: {Short(ex)}"));
+            }
+        });
+    }
+
+    /// <summary>
+    /// Composes the seed prompt for <paramref name="detail"/> and launches an interactive
+    /// <c>claude</c> session in a new terminal (#26). Runs off the UI thread (file write + process
+    /// launch), then reports the outcome on the status line; the detail view and background refresh
+    /// keep running. Working directory / claude path / preferred terminal become configurable in #27.
+    /// </summary>
+    private void DispatchAgent(TaskDetail detail, IReadOnlyList<CommentItem> comments, string prompt)
+    {
+        // Re-entrancy guard: a second Enter before the first launch finishes would spawn a duplicate
+        // claude session. This runs on the UI thread (invoked from the screen's key handler) and is
+        // cleared back on the UI thread via Application.Invoke, so the plain bool needs no locking.
+        if (_dispatching)
+        {
+            Flash("A Claude session is already launching…");
+            return;
+        }
+        _dispatching = true;
+
+        Flash($"Launching Claude for '{detail.Name}'…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var result = await _agent.DispatchAsync(detail, comments, prompt);
+                Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => { _dispatching = false; Flash($"Could not launch Claude: {Short(ex)}"); });
             }
         });
     }
@@ -621,8 +667,8 @@ public sealed class TodoApp
             return;
         _rows[index] = updated;
         // Rebuild at the row's existing depth so an in-place update keeps its nesting indent (#46).
-        var (text, badge) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0);
-        _badges[index] = badge;
+        var (text, badges) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0);
+        _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
         _display[index] = sending ? $"{text}  (sending…)" : text;
@@ -715,14 +761,15 @@ public sealed class TodoApp
         var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
         var grouped = view.GroupField is not null;
-        // Nesting and field-grouping are two ways of grouping the same rows, so grouping wins: subtasks
-        // only nest when shown and no F3 group is active (grouped → subtasks stay flat within groups). (#46)
-        var nest = view.ShowSubtasks && !grouped;
+        // Grouping and nesting compose: within each F3 group, subtasks nest under their parent when
+        // both fall in the same group; a subtask whose parent lands in a different group renders flat
+        // within its own group (SubtaskArranger, run per-group, yields exactly this). (#46, #57)
+        var nest = view.ShowSubtasks;
 
         _rows.Clear();
         _kinds.Clear();
         _display = new ObservableCollection<string>();
-        _badges = new List<StatusBadgeListSource.Badge?>();
+        _badges = new List<IReadOnlyList<StatusBadgeListSource.Badge>>();
         _headerAttrs = new List<Attribute?>();
         _depths = new List<int>();
 
@@ -735,22 +782,15 @@ public sealed class TodoApp
         foreach (var t in pinned)
             AddTask(t);
 
-        for (var gi = 0; gi < groups.Count; gi++)
+        // The single tasks-section header only appears (when ungrouped) to separate the to-do rows
+        // from a pinned section above them.
+        var ungroupedTasksHeader = pinned.Count > 0 ? $"{TasksHeaderPrefix} ({todoCount}) ─" : null;
+        foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors))
         {
-            var group = groups[gi];
-            // A header per named group when grouping; otherwise keep today's behaviour — the single
-            // tasks-section header only appears when there's a pinned section above it to separate from.
-            if (grouped)
-                AddHeader($" {(group.Label ?? "").ToUpperInvariant()} ({group.Tasks.Count})", headerColors[gi]);
-            else if (pinned.Count > 0)
-                AddHeader($"{TasksHeaderPrefix} ({todoCount}) ─");
-
-            if (nest)
-                foreach (var row in SubtaskArranger.Arrange(group.Tasks, _contextParents))
-                    AddTask(row.Task, row.Depth, row.IsContextParent);
+            if (row.IsHeader)
+                AddHeader(row.HeaderText!, row.HeaderColor);
             else
-                foreach (var t in group.Tasks)
-                    AddTask(t);
+                AddTask(row.Task!, row.Depth, row.IsContextParent);
         }
 
         // A custom source that draws text like the stock wrapper, overlays each [status] badge with its
@@ -781,7 +821,7 @@ public sealed class TodoApp
         _rows.Add(null);
         _kinds.Add(RowKind.Header);
         _display.Add(text);
-        _badges.Add(null);
+        _badges.Add([]);
         _headerAttrs.Add(StatusBadgeListSource.HeaderAttr(hexColor) ?? StatusBadgeListSource.NeutralHeaderAttr);
         _depths.Add(0);
     }
@@ -791,28 +831,33 @@ public sealed class TodoApp
         _rows.Add(null);
         _kinds.Add(RowKind.Spacer);
         _display.Add("");
-        _badges.Add(null);
+        _badges.Add([]);
         _headerAttrs.Add(null);
         _depths.Add(0);
     }
 
     private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false)
     {
-        var (text, badge) = BuildRow(task, depth, isContextParent);
+        var (text, badges) = BuildRow(task, depth, isContextParent);
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);
-        _badges.Add(badge);
+        _badges.Add(badges);
         _headerAttrs.Add(null);
         _depths.Add(depth);
     }
 
-    /// <summary>The display text and (optional) status-color badge overlay for a task row.</summary>
-    private static (string Text, StatusBadgeListSource.Badge? Badge) BuildRow(
+    /// <summary>The display text and the row's color badge overlays (status, then priority when set).</summary>
+    private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
         TaskItem task, int depth = 0, bool isContextParent = false)
     {
         var row = TaskRowFormatter.Format(task, depth, isContextParent);
-        return (row.Text, StatusBadgeListSource.TryCreate(row.BadgeStart, row.BadgeLength, task.StatusColor));
+        var badges = new List<StatusBadgeListSource.Badge>(2);
+        if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
+            badges.Add(status);
+        if (StatusBadgeListSource.TryCreate(row.PriorityStart, row.PriorityLength, task.PriorityColor) is { } priority)
+            badges.Add(priority);
+        return (row.Text, badges);
     }
 
     private void Flash(string message)

@@ -104,7 +104,8 @@ public sealed record TaskItem
     /// <summary>Canonical priority name ("Urgent"/"High"/"Normal"/"Low"), or null when unset.</summary>
     public string? PriorityName { get; init; }
 
-    /// <summary>ClickUp's color for this task's priority (hex, e.g. <c>#f50000</c>), or null when unset.</summary>
+    /// <summary>Priority hex colour (ClickUp <c>priority.color</c>, e.g. <c>#f50000</c>), or null when
+    /// unset. Rendered as the priority badge's background, mirroring <see cref="StatusColor"/>.</summary>
     public string? PriorityColor { get; init; }
 }
 

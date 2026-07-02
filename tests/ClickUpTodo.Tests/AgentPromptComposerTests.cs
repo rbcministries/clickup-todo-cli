@@ -86,6 +86,51 @@ public sealed class AgentPromptComposerTests
         Assert.StartsWith($"\n\n{AgentPromptComposer.Preamble}\n\n{{", composed);
     }
 
+    // ── preamble override (#27) ───────────────────────────────────────────────────
+
+    [Fact]
+    public void Compose_CustomPreamble_ReplacesTheDefaultLine()
+    {
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", preamble: "Use only the JSON below.");
+
+        Assert.StartsWith("triage\n\nUse only the JSON below.\n\n{", composed);
+        Assert.DoesNotContain(AgentPromptComposer.Preamble, composed);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Compose_BlankPreamble_FallsBackToTheDefault(string? preamble)
+    {
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", preamble);
+        Assert.StartsWith($"triage\n\n{AgentPromptComposer.Preamble}\n\n{{", composed);
+    }
+
+    [Fact]
+    public void Compose_CustomPreamble_IsTrimmed()
+    {
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", preamble: "  Custom lead.  ");
+        Assert.StartsWith("triage\n\nCustom lead.\n\n{", composed);
+    }
+
+    [Fact]
+    public void WritePromptFile_HonorsCustomPreamble()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "clickup-todo-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var path = AgentPromptComposer.WritePromptFile(Task(), [], "triage", dir, preamble: "Lead X.");
+            var text = File.ReadAllText(path);
+            Assert.StartsWith("triage\n\nLead X.\n\n{", text);
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
     // ── task subset ──────────────────────────────────────────────────────────────
 
     [Fact]
