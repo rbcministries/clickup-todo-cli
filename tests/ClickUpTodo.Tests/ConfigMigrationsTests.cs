@@ -80,6 +80,17 @@ public sealed class ConfigMigrationsTests : IDisposable
     }
 
     [Fact]
+    public void Apply_WhitespaceVariantOfTheSameStatus_IsNotDuplicated()
+    {
+        // "won't do" and "  won't do  " are the same status once trimmed — only one rule should result.
+        var config = new AppConfig { LegacyExcludedStatuses = ["won't do", "  won't do  "] };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(["won't do"], StatusIsNotRules(config.View).Select(r => r.Value));
+    }
+
+    [Fact]
     public void Apply_DoesNotDuplicateAStatusRuleAlreadyPresent_CaseInsensitively()
     {
         // The user already has a hand-added "Status IS NOT WON'T DO"; migrating the legacy "won't do"

@@ -56,10 +56,13 @@ public static class ConfigMigrations
     {
         if (string.IsNullOrWhiteSpace(status))
             return;
+        // Trim first, then compare and insert the same trimmed value — otherwise a whitespace variant
+        // (e.g. "won't do" then "  won't do  ") would pass the covered-check and add a duplicate rule.
+        var trimmed = status.Trim();
         var covered = view.Filters.Any(r =>
             r.Field == TaskField.Status && r.Op == FilterOp.IsNot
-            && string.Equals(r.Value, status, StringComparison.OrdinalIgnoreCase));
+            && string.Equals(r.Value, trimmed, StringComparison.OrdinalIgnoreCase));
         if (!covered)
-            view.Filters.Add(ViewSettings.StatusIsNotRule(status.Trim()));
+            view.Filters.Add(ViewSettings.StatusIsNotRule(trimmed));
     }
 }
