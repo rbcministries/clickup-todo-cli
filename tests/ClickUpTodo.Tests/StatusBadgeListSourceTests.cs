@@ -49,10 +49,23 @@ public sealed class StatusBadgeListSourceTests
         // The invariant the fix guarantees: every grapheme starts at exactly the display column the
         // stock renderer places it, i.e. text[..CharIndex].GetColumns().
         foreach (var g in StatusBadgeListSource.LayOutGraphemes(text))
-        {
             Assert.Equal(text[..g.CharIndex].GetColumns(), g.Column);
-            Assert.Equal(g.Text.GetColumns(), g.Width);
-        }
+    }
+
+    [Theory]
+    [InlineData("a", 1)]                                          // ASCII — 1 column
+    [InlineData("会", 2)]                                          // wide CJK ideograph — 2 columns
+    [InlineData("\U0001F600", 2)]                                 // emoji — 2 columns
+    [InlineData("\U0001F468‍\U0001F469‍\U0001F467", 2)]           // ZWJ family cluster — capped at 2
+    public void LayOutGraphemes_ClusterWidth_IsGraphemeAware_CappedAtTwo(string grapheme, int expectedWidth)
+    {
+        // Independent (hardcoded) widths — not derived from GetColumns — pinning that a whole cluster is
+        // one unit whose width is capped at two columns, which is what makes the overlay align (#63).
+        var g = Assert.Single(StatusBadgeListSource.LayOutGraphemes(grapheme));
+        Assert.Equal(grapheme, g.Text);
+        Assert.Equal(0, g.Column);
+        Assert.Equal(0, g.CharIndex);
+        Assert.Equal(expectedWidth, g.Width);
     }
 
     [Fact]
