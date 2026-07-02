@@ -667,7 +667,10 @@ public sealed class TodoApp
             return;
         _rows[index] = updated;
         // Rebuild at the row's existing depth so an in-place update keeps its nesting indent (#46).
-        var (text, badges) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0);
+        // A task lives in exactly one section (nonPinned excludes pinned), so only a to-do row omits
+        // the grouped field; a pinned Focus row keeps every segment (no group header above it) (#67).
+        var groupedBy = _focus.IsPinned(updated.Id) ? (TaskField?)null : _config.View.GroupField;
+        var (text, badges) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy);
         _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
@@ -790,7 +793,9 @@ public sealed class TodoApp
             if (row.IsHeader)
                 AddHeader(row.HeaderText!, row.HeaderColor);
             else
-                AddTask(row.Task!, row.Depth, row.IsContextParent);
+                // Omit the grouped field from each to-do row — the group header above already shows it
+                // (#67). The pinned Focus section has no group headers, so its rows keep every segment.
+                AddTask(row.Task!, row.Depth, row.IsContextParent, view.GroupField);
         }
 
         // A custom source that draws text like the stock wrapper, overlays each [status] badge with its
@@ -836,9 +841,9 @@ public sealed class TodoApp
         _depths.Add(0);
     }
 
-    private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false)
+    private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null)
     {
-        var (text, badges) = BuildRow(task, depth, isContextParent);
+        var (text, badges) = BuildRow(task, depth, isContextParent, groupedBy);
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);
@@ -847,11 +852,12 @@ public sealed class TodoApp
         _depths.Add(depth);
     }
 
-    /// <summary>The display text and the row's color badge overlays (status, then priority when set).</summary>
+    /// <summary>The display text and the row's color badge overlays (status, then priority when set).
+    /// <paramref name="groupedBy"/> omits the grouped field's segment (its header already conveys it, #67).</summary>
     private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
-        TaskItem task, int depth = 0, bool isContextParent = false)
+        TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null)
     {
-        var row = TaskRowFormatter.Format(task, depth, isContextParent);
+        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy);
         var badges = new List<StatusBadgeListSource.Badge>(2);
         if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
             badges.Add(status);
