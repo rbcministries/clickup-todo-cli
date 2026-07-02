@@ -144,7 +144,9 @@ public static class TaskView
     {
         // Assignee is enforced at the fetch layer (server-side assignees[] set, #68), so it's a no-op as
         // a client-side filter. Re-applying it here would wrongly drop Personal-Tasks-list tasks that
-        // are assigned to someone else (those are merged in regardless of assignee).
+        // are assigned to someone else (those are merged in regardless of assignee). This covers every
+        // op: the F3 UI only offers IS (ValidOps), so an IS NOT here could only come from a hand-edited
+        // or future-version config, and client-side multi-assignee matching is deferred to #73.
         if (rule.Field == TaskField.Assignee)
             return true;
 

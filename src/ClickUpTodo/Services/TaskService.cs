@@ -58,8 +58,14 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     /// The assignee ids to send to the server-side task fetch, derived from the view's
     /// <c>Assignee IS</c> rules: the <c>me</c> token resolves to <paramref name="currentUserId"/>, a
     /// numeric value is taken as an id. Values that are neither (a username/email) are skipped — resolving
-    /// those needs a workspace-members lookup (deferred, #68). An empty result means "no assignee filter"
+    /// those needs a workspace-members lookup (deferred, #73). An empty result means "no assignee filter"
     /// (fetch everyone). Pure and unit-testable.
+    /// <para>
+    /// Multiple <c>Assignee IS</c> rules union into one set — ClickUp's <c>assignees[]</c> is OR
+    /// (assigned to <em>any</em>), which is the right contains-semantics for a multi-valued field even
+    /// though the other F3 rule kinds AND together. The default view has a single rule, so this only
+    /// matters once a user adds a second assignee.
+    /// </para>
     /// </summary>
     public static IReadOnlyList<long> ResolveAssigneeIds(ViewSettings view, long currentUserId)
     {

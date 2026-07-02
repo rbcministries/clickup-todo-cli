@@ -141,6 +141,9 @@ public sealed class FilterSortGroupScreen : Screen
                 SortField = FilterSortGroupForm.IndexToField(sortList.SelectedItem),
                 SortDirection = direction,
                 GroupField = FilterSortGroupForm.IndexToField(groupList.SelectedItem),
+                // Preserve the F4 subtasks toggle, which this screen doesn't edit — otherwise saving the
+                // F3 view would silently turn subtasks off (and, since #68, flip IsDefault).
+                ShowSubtasks = current.ShowSubtasks,
             };
             Close();
         };
