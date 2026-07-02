@@ -95,15 +95,46 @@ public sealed class ViewSettings
         new() { Field = TaskField.Assignee, Op = FilterOp.Is, Value = CurrentUserToken };
 
     /// <summary>
-    /// True when the view is exactly the seeded default — the single <c>Assignee IS me</c> rule and
-    /// nothing else. (An "untouched install" is no longer zero filters; it's the one default assignee
-    /// rule, #68.)
+    /// The statuses hidden by default. These used to live in <c>AppConfig.ExcludedStatuses</c>; they're
+    /// now seeded as <c>Status IS NOT</c> rules so visibility is decided solely by the F3 filter engine
+    /// (#69). A fresh install seeds one rule per entry; existing users' saved exclusions are migrated in
+    /// their place (see <see cref="ConfigMigrations"/>).
     /// </summary>
-    public bool IsDefault =>
-        Filters.Count == 1 && IsDefaultAssigneeRule(Filters[0])
-        && SortField is null && GroupField is null && !ShowSubtasks;
+    public static readonly IReadOnlyList<string> DefaultExcludedStatuses = ["won't do", "cancelled"];
+
+    /// <summary>A <c>Status IS NOT <paramref name="status"/></c> rule — the filter-engine equivalent of
+    /// a legacy excluded status (#69).</summary>
+    public static FilterRule StatusIsNotRule(string status) =>
+        new() { Field = TaskField.Status, Op = FilterOp.IsNot, Value = status };
+
+    /// <summary>
+    /// True when the view is exactly the seeded default and nothing else: the single
+    /// <c>Assignee IS me</c> rule (#68) plus one <c>Status IS NOT</c> rule for each
+    /// <see cref="DefaultExcludedStatuses"/> entry (#69), with no sort, group, or subtasks. Order of
+    /// the filters doesn't matter. (An "untouched install" is no longer zero filters — nor just the
+    /// assignee rule — it's the assignee rule plus the default status exclusions.)
+    /// </summary>
+    public bool IsDefault
+    {
+        get
+        {
+            if (SortField is not null || GroupField is not null || ShowSubtasks)
+                return false;
+            if (Filters.Count != 1 + DefaultExcludedStatuses.Count)
+                return false;
+            if (Filters.Count(IsDefaultAssigneeRule) != 1)
+                return false;
+            // Every default exclusion must be present; with the exact count above, that leaves no room
+            // for extra or duplicate rules.
+            return DefaultExcludedStatuses.All(s => Filters.Any(r => IsStatusIsNotRule(r, s)));
+        }
+    }
 
     private static bool IsDefaultAssigneeRule(FilterRule r) =>
         r.Field == TaskField.Assignee && r.Op == FilterOp.Is
         && string.Equals(r.Value, CurrentUserToken, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsStatusIsNotRule(FilterRule r, string status) =>
+        r.Field == TaskField.Status && r.Op == FilterOp.IsNot
+        && string.Equals(r.Value, status, StringComparison.OrdinalIgnoreCase);
 }

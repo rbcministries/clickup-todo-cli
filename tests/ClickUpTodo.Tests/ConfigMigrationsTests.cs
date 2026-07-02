@@ -3,45 +3,144 @@ using ClickUpTodo.Configuration;
 namespace ClickUpTodo.Tests;
 
 /// <summary>
-/// Unit tests for the one-shot config migrations (#68): seeding the default <c>Assignee IS me</c> rule,
-/// idempotency, and that a deliberately-cleared assignee rule isn't re-seeded once the config is at the
-/// current schema version.
+/// Unit tests for the one-shot config migrations: seeding the default <c>Assignee IS me</c> rule (#68)
+/// and migrating the legacy excluded-statuses setting to <c>Status IS NOT</c> filter rules (#69),
+/// including the absent/empty/present-legacy mapping, de-dup, case-insensitivity, idempotency, and that
+/// the legacy <c>excludedStatuses</c> key stops being persisted.
 /// </summary>
 public sealed class ConfigMigrationsTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "clickup-todo-tests", Guid.NewGuid().ToString("N"));
 
+    private static IReadOnlyList<FilterRule> StatusIsNotRules(ViewSettings view) =>
+        [.. view.Filters.Where(r => r.Field == TaskField.Status && r.Op == FilterOp.IsNot)];
+
     [Fact]
-    public void Apply_FreshConfig_SeedsAssigneeMeRule_AndStampsVersion()
+    public void Apply_FreshConfig_SeedsAssigneeMeRule_AndDefaultStatusExclusions_AndStampsVersion()
     {
-        var config = new AppConfig(); // SchemaVersion 0, empty view
+        var config = new AppConfig(); // SchemaVersion 0, empty view, no legacy exclusions (null)
 
         ConfigMigrations.Apply(config);
 
         Assert.Equal(ConfigMigrations.CurrentVersion, config.SchemaVersion);
-        var rule = Assert.Single(config.View.Filters);
-        Assert.Equal(TaskField.Assignee, rule.Field);
-        Assert.Equal(FilterOp.Is, rule.Op);
-        Assert.Equal(ViewSettings.CurrentUserToken, rule.Value);
+        // Default view = Assignee IS me (#68) + one Status IS NOT rule per default excluded status (#69).
+        var assignee = Assert.Single(config.View.Filters, r => r.Field == TaskField.Assignee);
+        Assert.Equal(FilterOp.Is, assignee.Op);
+        Assert.Equal(ViewSettings.CurrentUserToken, assignee.Value);
+        Assert.Equal(
+            ViewSettings.DefaultExcludedStatuses.OrderBy(s => s),
+            StatusIsNotRules(config.View).Select(r => r.Value).OrderBy(s => s));
         Assert.True(config.View.IsDefault);
     }
 
     [Fact]
-    public void Apply_PreservesExistingFilters_AndPrependsTheAssigneeRule()
+    public void Apply_AbsentLegacyField_SeedsDefaultExclusions()
     {
+        // A config that never carried excludedStatuses (null) is treated as a fresh install: seed the
+        // defaults so today's "hide won't do / cancelled" behaviour is preserved under the filter model.
+        var config = new AppConfig { LegacyExcludedStatuses = null };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(["won't do", "cancelled"], StatusIsNotRules(config.View).Select(r => r.Value));
+    }
+
+    [Fact]
+    public void Apply_EmptyLegacyList_SeedsNoExclusions()
+    {
+        // An empty array means the user deliberately cleared their exclusions — seed nothing, so only
+        // the assignee rule remains. (This is why the shim is nullable: absent != empty.)
+        var config = new AppConfig { LegacyExcludedStatuses = [] };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Empty(StatusIsNotRules(config.View));
+        Assert.Equal(TaskField.Assignee, Assert.Single(config.View.Filters).Field);
+    }
+
+    [Fact]
+    public void Apply_PresentLegacyList_MigratesEachEntry()
+    {
+        // The acceptance example: excludedStatuses: ["qa", "won't do"] → two Status IS NOT rules.
+        var config = new AppConfig { LegacyExcludedStatuses = ["qa", "won't do"] };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(["qa", "won't do"], StatusIsNotRules(config.View).Select(r => r.Value));
+    }
+
+    [Fact]
+    public void Apply_TrimsMigratedValues_AndSkipsBlankEntries()
+    {
+        var config = new AppConfig { LegacyExcludedStatuses = ["  qa  ", "   ", ""] };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(["qa"], StatusIsNotRules(config.View).Select(r => r.Value)); // trimmed; blanks dropped
+    }
+
+    [Fact]
+    public void Apply_DoesNotDuplicateAStatusRuleAlreadyPresent_CaseInsensitively()
+    {
+        // The user already has a hand-added "Status IS NOT WON'T DO"; migrating the legacy "won't do"
+        // must not add a second, case-insensitively-equal rule.
         var config = new AppConfig
         {
-            View = new ViewSettings
-            {
-                Filters = [new FilterRule { Field = TaskField.Status, Op = FilterOp.IsNot, Value = "won't do" }],
-            },
+            View = new ViewSettings { Filters = [new FilterRule { Field = TaskField.Status, Op = FilterOp.IsNot, Value = "WON'T DO" }] },
+            LegacyExcludedStatuses = ["won't do", "cancelled"],
         };
 
         ConfigMigrations.Apply(config);
 
-        Assert.Equal(2, config.View.Filters.Count);
-        Assert.Equal(TaskField.Assignee, config.View.Filters[0].Field); // seeded rule leads
-        Assert.Equal(TaskField.Status, config.View.Filters[1].Field);   // original preserved
+        Assert.Equal(["WON'T DO", "cancelled"], StatusIsNotRules(config.View).Select(r => r.Value));
+    }
+
+    [Fact]
+    public void Apply_PreservesUnrelatedExistingFilters()
+    {
+        var config = new AppConfig
+        {
+            View = new ViewSettings { Filters = [new FilterRule { Field = TaskField.Status, Op = FilterOp.IsNot, Value = "qa" }] },
+            // null legacy → seed the defaults alongside the user's pre-existing "qa" exclusion.
+        };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(TaskField.Assignee, config.View.Filters[0].Field); // seeded assignee leads
+        Assert.Equal(["qa", "won't do", "cancelled"], StatusIsNotRules(config.View).Select(r => r.Value));
+    }
+
+    [Fact]
+    public void Apply_ExistingV1User_MigratesTheirSavedExclusions()
+    {
+        // A post-#68 config (schema 1) still carries excludedStatuses on disk (it was a live property);
+        // the assignee rule is already seeded. v2 migrates the saved exclusions in place.
+        var config = new AppConfig
+        {
+            SchemaVersion = 1,
+            View = new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()] },
+            LegacyExcludedStatuses = ["won't do", "cancelled"],
+        };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(ConfigMigrations.CurrentVersion, config.SchemaVersion);
+        Assert.Equal(["won't do", "cancelled"], StatusIsNotRules(config.View).Select(r => r.Value));
+        Assert.True(config.View.IsDefault);
+    }
+
+    [Fact]
+    public void Apply_NullsTheLegacyShim_SoItIsNotReMigrated()
+    {
+        var config = new AppConfig { LegacyExcludedStatuses = ["qa"] };
+
+        ConfigMigrations.Apply(config);
+        Assert.Null(config.LegacyExcludedStatuses); // dropped after one-shot migration
+
+        // Re-running finds no legacy field and, being at the current version, adds nothing.
+        var before = config.View.Filters.Count;
+        ConfigMigrations.Apply(config);
+        Assert.Equal(before, config.View.Filters.Count);
     }
 
     [Fact]
@@ -50,9 +149,10 @@ public sealed class ConfigMigrationsTests : IDisposable
         var config = new AppConfig();
 
         ConfigMigrations.Apply(config);
+        var count = config.View.Filters.Count;
         ConfigMigrations.Apply(config);
 
-        Assert.Single(config.View.Filters); // not duplicated
+        Assert.Equal(count, config.View.Filters.Count); // not duplicated
     }
 
     [Fact]
@@ -61,6 +161,7 @@ public sealed class ConfigMigrationsTests : IDisposable
         var config = new AppConfig
         {
             View = new ViewSettings { Filters = [new FilterRule { Field = TaskField.Assignee, Op = FilterOp.Is, Value = "12345" }] },
+            LegacyExcludedStatuses = [], // isolate the assignee behaviour from status seeding
         };
 
         ConfigMigrations.Apply(config);
@@ -70,10 +171,10 @@ public sealed class ConfigMigrationsTests : IDisposable
     }
 
     [Fact]
-    public void Apply_AlreadyCurrentVersionWithNoAssigneeRule_LeavesEveryoneAlone()
+    public void Apply_AlreadyCurrentVersion_LeavesEverythingAlone()
     {
-        // A user who cleared the assignee rule (→ "everyone") and is already at the current schema must
-        // NOT have the me-rule re-seeded on the next load.
+        // A user who cleared both the assignee rule (→ "everyone") and all exclusions and is already at
+        // the current schema must NOT have anything re-seeded on the next load.
         var config = new AppConfig { SchemaVersion = ConfigMigrations.CurrentVersion, View = new ViewSettings { Filters = [] } };
 
         ConfigMigrations.Apply(config);
@@ -82,18 +183,35 @@ public sealed class ConfigMigrationsTests : IDisposable
     }
 
     [Fact]
-    public void Load_LegacyConfigWithoutSchemaVersion_MigratesOnDisk()
+    public void Load_LegacyConfigWithExcludedStatuses_MigratesOnDisk_AndDropsTheKey()
     {
-        // A pre-migration config.json (no schemaVersion, empty view) → loaded config is migrated.
+        // A pre-migration config.json (no schemaVersion, with excludedStatuses) is migrated on load;
+        // once saved, the excludedStatuses key is gone and the exclusions live as Status IS NOT rules.
         var store = new ConfigStore(_dir);
         Directory.CreateDirectory(_dir);
-        File.WriteAllText(store.ConfigPath, """{ "workspaceId": "1", "personalTasksListId": "2", "view": { "filters": [] } }""");
+        File.WriteAllText(store.ConfigPath,
+            """{ "workspaceId": "1", "personalTasksListId": "2", "excludedStatuses": ["qa", "won't do"], "view": { "filters": [] } }""");
 
         var loaded = store.Load();
 
         Assert.Equal(ConfigMigrations.CurrentVersion, loaded.SchemaVersion);
+        Assert.Null(loaded.LegacyExcludedStatuses);
+        Assert.Equal(["qa", "won't do"], StatusIsNotRules(loaded.View).Select(r => r.Value));
+        Assert.Equal(TaskField.Assignee, Assert.Single(loaded.View.Filters, r => r.Field == TaskField.Assignee).Field);
+
+        store.Save(loaded);
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.DoesNotContain("excludedStatuses", json);
+    }
+
+    [Fact]
+    public void Load_FreshConfig_SeedsDefaultsAndIsDefault()
+    {
+        // No config file at all → a fresh install is migrated on load to the full default view.
+        var loaded = new ConfigStore(_dir).Load();
+
         Assert.True(loaded.View.IsDefault);
-        Assert.Equal(TaskField.Assignee, Assert.Single(loaded.View.Filters).Field);
+        Assert.Equal(["won't do", "cancelled"], StatusIsNotRules(loaded.View).Select(r => r.Value));
     }
 
     public void Dispose()

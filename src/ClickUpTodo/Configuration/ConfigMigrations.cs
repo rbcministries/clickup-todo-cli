@@ -8,7 +8,7 @@ namespace ClickUpTodo.Configuration;
 public static class ConfigMigrations
 {
     /// <summary>The version an up-to-date config carries once all migrations have run.</summary>
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     /// <summary>Applies any migrations the config hasn't seen yet, then stamps it current.</summary>
     public static void Apply(AppConfig config)
@@ -20,6 +20,12 @@ public static class ConfigMigrations
         if (config.SchemaVersion < 1)
             SeedDefaultAssigneeRule(config.View);
 
+        // v2 (#69): the standalone excluded-statuses setting became ordinary "Status IS NOT" filter
+        // rules. Migrate any saved exclusions (or seed the defaults on a fresh install) into the view,
+        // then drop the legacy shim so it's never written again.
+        if (config.SchemaVersion < 2)
+            MigrateStatusExclusions(config);
+
         config.SchemaVersion = CurrentVersion;
     }
 
@@ -27,5 +33,33 @@ public static class ConfigMigrations
     {
         if (!view.Filters.Any(r => r.Field == TaskField.Assignee))
             view.Filters.Insert(0, ViewSettings.DefaultAssigneeRule());
+    }
+
+    /// <summary>
+    /// Converts the legacy <c>excludedStatuses</c> array into <c>Status IS NOT</c> filter rules. The
+    /// legacy value being <b>absent</b> (null) means a fresh install (or a config that never carried
+    /// the key), so the default exclusions are seeded to preserve today's behaviour; an <b>empty</b>
+    /// list means the user cleared their exclusions, so nothing is seeded; a <b>non-empty</b> list is
+    /// migrated entry-for-entry. Each rule is added only when not already covered (case-insensitive),
+    /// so re-running — or a config that already has the matching rule — never duplicates. The shim is
+    /// then nulled so the migration is one-shot and <c>excludedStatuses</c> stops being persisted.
+    /// </summary>
+    private static void MigrateStatusExclusions(AppConfig config)
+    {
+        var toExclude = config.LegacyExcludedStatuses ?? ViewSettings.DefaultExcludedStatuses;
+        foreach (var status in toExclude)
+            AddStatusIsNotRuleIfAbsent(config.View, status);
+        config.LegacyExcludedStatuses = null;
+    }
+
+    private static void AddStatusIsNotRuleIfAbsent(ViewSettings view, string status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+            return;
+        var covered = view.Filters.Any(r =>
+            r.Field == TaskField.Status && r.Op == FilterOp.IsNot
+            && string.Equals(r.Value, status, StringComparison.OrdinalIgnoreCase));
+        if (!covered)
+            view.Filters.Add(ViewSettings.StatusIsNotRule(status.Trim()));
     }
 }

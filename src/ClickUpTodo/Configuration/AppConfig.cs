@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ClickUpTodo.Configuration;
 
 /// <summary>
@@ -26,10 +28,21 @@ public sealed class AppConfig
     public int RefreshSeconds { get; set; } = 60;
 
     /// <summary>
-    /// Task statuses to hide from the list (case-insensitive). Defaults to the common
-    /// "done but irrelevant" statuses; editable from the in-app settings menu.
+    /// Legacy status-exclusion setting, retained only as a <b>deserialize-only migration shim</b>
+    /// (#69). Status exclusion is now expressed as ordinary F3 <c>Status IS NOT</c> filter rules;
+    /// <see cref="ConfigMigrations"/> reads any saved <c>excludedStatuses</c> array on load, converts
+    /// each entry into a rule, then nulls this out so it's never written again (the
+    /// <see cref="JsonIgnoreCondition.WhenWritingNull"/> ignore drops it from <c>config.json</c>).
+    /// <para>
+    /// Null means the key was <b>absent</b> (a fresh install, or an already-migrated config) — the
+    /// migration then seeds the default exclusions. An empty list means the user deliberately cleared
+    /// their exclusions — the migration seeds nothing. This absent-vs-empty distinction is why it's a
+    /// nullable shim rather than a list with a non-null default.
+    /// </para>
     /// </summary>
-    public List<string> ExcludedStatuses { get; set; } = ["won't do", "cancelled"];
+    [JsonPropertyName("excludedStatuses")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? LegacyExcludedStatuses { get; set; }
 
     /// <summary>Task ids pinned to the "Current Focus" pane, so focus survives restarts.</summary>
     public List<string> PinnedTaskIds { get; set; } = [];
