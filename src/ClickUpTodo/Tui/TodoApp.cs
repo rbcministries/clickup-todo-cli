@@ -88,6 +88,10 @@ public sealed class TodoApp
     // on the UI thread during Render, so it's volatile to publish the reference safely across threads.
     private volatile IReadOnlyDictionary<string, TaskItem> _contextParents = EmptyParents;
     private static readonly IReadOnlyDictionary<string, TaskItem> EmptyParents = new Dictionary<string, TaskItem>();
+    // Ids of the non-pinned subtasks pulled into the Current Focus section (nested under a pinned
+    // parent, #75). Set during Render; read by UpdateTaskRow so an in-place status update treats a
+    // pulled-in Focus row like a Focus row (keeps every segment) rather than a to-do row.
+    private IReadOnlySet<string> _focusNestedIds = new HashSet<string>(StringComparer.Ordinal);
     private string _status = "Loading…";
     private string _signature = "";
 
@@ -681,9 +685,11 @@ public sealed class TodoApp
             return;
         _rows[index] = updated;
         // Rebuild at the row's existing depth so an in-place update keeps its nesting indent (#46).
-        // A task lives in exactly one section (nonPinned excludes pinned), so only a to-do row omits
-        // the grouped field; a pinned Focus row keeps every segment (no group header above it) (#67).
-        var groupedBy = _focus.IsPinned(updated.Id) ? (TaskField?)null : _config.View.GroupField;
+        // A task lives in exactly one section (nonPinned excludes pinned and Focus-nested subtasks), so
+        // only a to-do row omits the grouped field; a Focus row — a pin or a subtask nested under one
+        // (#75) — keeps every segment (no group header above it) (#67).
+        var inFocus = _focus.IsPinned(updated.Id) || _focusNestedIds.Contains(updated.Id);
+        var groupedBy = inFocus ? (TaskField?)null : _config.View.GroupField;
         var (text, badges) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy);
         _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
@@ -767,13 +773,21 @@ public sealed class TodoApp
         // Pinned tasks are shown as today (unaffected by filters/grouping — explicit pins shouldn't
         // vanish); the filter/sort/group view (F3) applies to the non-pinned set. Sort applies to both.
         var view = _config.View;
-        var pinned = TaskView.Sort(_all.Where(t => _focus.IsPinned(t.Id)), view.SortField, view.SortDirection);
+        var nest = view.ShowSubtasks;
 
-        // The non-pinned set feeds the F3 view. When subtasks are hidden (the default), drop them here
-        // so the main list stays a flat top-level view; pins are handled above so a pinned subtask is
-        // never hidden. (#46)
-        var nonPinned = _all.Where(t => !_focus.IsPinned(t.Id));
-        if (!view.ShowSubtasks)
+        // The pinned "Current Focus" section. When the subtasks view (F4) is on, a pinned parent's
+        // in-snapshot subtasks nest indented beneath it (reusing SubtaskArranger) instead of falling
+        // through to the to-do set un-indented; those pulled-in subtask ids are excluded from the
+        // non-pinned set below so they don't render twice. Pins ignore F3 filters/grouping. (#75)
+        var pinnedIds = _all.Where(t => _focus.IsPinned(t.Id)).Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
+        var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection);
+        _focusNestedIds = focus.NestedSubtaskIds;
+
+        // The non-pinned set feeds the F3 view. Drop pinned tasks and (when nesting) any subtask pulled
+        // into the Focus section above, so it renders only once. When subtasks are hidden (the default),
+        // also drop them here so the main list stays a flat top-level view. (#46, #75)
+        var nonPinned = _all.Where(t => !pinnedIds.Contains(t.Id) && !focus.NestedSubtaskIds.Contains(t.Id));
+        if (!nest)
             nonPinned = nonPinned.Where(t => string.IsNullOrEmpty(t.ParentId));
         var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
@@ -781,7 +795,6 @@ public sealed class TodoApp
         // Grouping and nesting compose: within each F3 group, subtasks nest under their parent when
         // both fall in the same group; a subtask whose parent lands in a different group renders flat
         // within its own group (SubtaskArranger, run per-group, yields exactly this). (#46, #57)
-        var nest = view.ShowSubtasks;
 
         _rows.Clear();
         _kinds.Clear();
@@ -794,14 +807,17 @@ public sealed class TodoApp
         // entries (and the non-field pinned/tasks headers) fall back to the neutral bar. (#61)
         var headerColors = GroupHeaderPalette.Resolve(view.GroupField, groups, _listColors);
 
-        if (pinned.Count > 0)
-            AddHeader($"{FocusHeaderPrefix} ({pinned.Count})");
-        foreach (var t in pinned)
-            AddTask(t);
+        // The Focus header count is the number of pinned tasks (the anchors); pulled-in subtasks are
+        // nested child rows, not pins. Focus rows keep every segment (no group header sits above them,
+        // #67), so AddTask is called with groupedBy null.
+        if (pinnedIds.Count > 0)
+            AddHeader($"{FocusHeaderPrefix} ({pinnedIds.Count})");
+        foreach (var row in focus.Rows)
+            AddTask(row.Task, row.Depth, row.IsContextParent, groupedBy: null);
 
         // The single tasks-section header only appears (when ungrouped) to separate the to-do rows
         // from a pinned section above them.
-        var ungroupedTasksHeader = pinned.Count > 0 ? $"{TasksHeaderPrefix} ({todoCount}) ─" : null;
+        var ungroupedTasksHeader = pinnedIds.Count > 0 ? $"{TasksHeaderPrefix} ({todoCount}) ─" : null;
         foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors))
         {
             if (row.IsHeader)
@@ -816,7 +832,7 @@ public sealed class TodoApp
         // ClickUp color, and paints each group header as a full-width color bar. Assigning Source
         // (rather than SetSource) lets us pass our source; the ListView disposes the previous one.
         _list.Source = new StatusBadgeListSource(_display, _badges, _headerAttrs);
-        _frame.Title = BuildFrameTitle(pinned.Count, todoCount, view);
+        _frame.Title = BuildFrameTitle(pinnedIds.Count, todoCount, view);
 
         // Restore the cursor onto the same task, or the first task row.
         var target = keepTaskId is not null ? _rows.FindIndex(r => r?.Id == keepTaskId) : -1;
