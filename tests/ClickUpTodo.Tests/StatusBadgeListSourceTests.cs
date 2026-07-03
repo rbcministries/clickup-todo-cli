@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Text;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Tui;
@@ -124,5 +125,39 @@ public sealed class StatusBadgeListSourceTests
 
         // Regression capture: the pre-fix formula genuinely disagreed (the offset was real).
         Assert.NotEqual(baseWidth, OldPerRuneColumns(row.Text, row.StatusStart));
+    }
+
+    // ── Type-ahead search key decoupling (#76) ───────────────────────────────
+
+    private static readonly IReadOnlyList<IReadOnlyList<StatusBadgeListSource.Badge>> NoBadges =
+        Array.Empty<IReadOnlyList<StatusBadgeListSource.Badge>>();
+
+    [Fact]
+    public void ToList_WithSearchKeys_ReturnsTitleOnlyKeys_NotDecoratedDisplayText()
+    {
+        // The rendered lines carry the ▶/▼ marker + badges; the type-ahead navigator (#12) must search
+        // the parallel title-only keys instead, so typing a title's first letters still jumps.
+        var display = new ObservableCollection<string> { "▶ Write report  [in progress]", "  ▼ Fix bug  [to do]" };
+        var keys = new[] { "Write report", "Fix bug" };
+
+        var source = new StatusBadgeListSource(display, NoBadges, headerAttrs: null, searchKeys: keys);
+        var list = source.ToList();
+
+        Assert.Equal(["Write report", "Fix bug"], list.Cast<string>());
+        // None of the keys leak the fold marker glyphs.
+        Assert.All(list.Cast<string>(), k => Assert.DoesNotContain('▶', k));
+        Assert.All(list.Cast<string>(), k => Assert.DoesNotContain('▼', k));
+    }
+
+    [Fact]
+    public void ToList_WithoutSearchKeys_DelegatesToDisplayText()
+    {
+        // Backward compatibility: with no keys supplied, ToList() returns the stock display strings.
+        var display = new ObservableCollection<string> { "Write report", "Fix bug" };
+
+        var source = new StatusBadgeListSource(display, NoBadges);
+        var list = source.ToList();
+
+        Assert.Equal(["Write report", "Fix bug"], list.Cast<string>());
     }
 }

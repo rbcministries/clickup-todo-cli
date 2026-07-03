@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using ClickUpTodo.ClickUp.Generated;
 using ClickUpTodo.ClickUp.Generated.Models;
+using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.Kiota.Abstractions.Serialization;
 using Microsoft.Kiota.Http.HttpClientLibrary;
 using Microsoft.Kiota.Serialization.Json;
@@ -21,10 +22,18 @@ public sealed class ClickUpClient : IDisposable
     private readonly HttpClientRequestAdapter _adapter;
     private readonly ClickUpApiClient _client;
 
-    public ClickUpClient(string token, HttpClient? httpClient = null)
+    /// <summary>Drives the client with any Kiota auth provider (personal token or OAuth).</summary>
+    public ClickUpClient(IAuthenticationProvider authProvider, HttpClient? httpClient = null)
     {
-        _adapter = new HttpClientRequestAdapter(new ClickUpTokenAuthProvider(token), httpClient: httpClient);
+        ArgumentNullException.ThrowIfNull(authProvider);
+        _adapter = new HttpClientRequestAdapter(authProvider, httpClient: httpClient);
         _client = new ClickUpApiClient(_adapter);
+    }
+
+    /// <summary>Drives the client with a ClickUp personal API token (sent as a raw header).</summary>
+    public ClickUpClient(string token, HttpClient? httpClient = null)
+        : this(new ClickUpTokenAuthProvider(token), httpClient)
+    {
     }
 
     /// <summary>The signed-in user. Doubles as a cheap token-validation call.</summary>
@@ -230,7 +239,8 @@ public sealed class ClickUpClient : IDisposable
             .ToList()
            ?? [];
 
-    private static TaskDetail MapDetail(TaskObject t) => new()
+    // internal (not private) so the mapping can be unit-tested without hitting the live API.
+    internal static TaskDetail MapDetail(TaskObject t) => new()
     {
         Id = t.Id ?? "",
         CustomId = t.CustomId,
@@ -248,6 +258,7 @@ public sealed class ClickUpClient : IDisposable
         // source. Prefer the plain text for a terminal, falling back to the raw form.
         Description = !string.IsNullOrWhiteSpace(t.TextContent) ? t.TextContent : t.Description,
         Priority = t.Priority?.PriorityProp,
+        PriorityColor = t.Priority?.Color,
         DueDateMs = ParseMs(t.DueDate),
         CreatedMs = ParseMs(t.DateCreated),
         UpdatedMs = ParseMs(t.DateUpdated),

@@ -17,8 +17,9 @@ public sealed class FocusSectionLayoutTests
     private static IReadOnlySet<string> Pins(params string[] ids)
         => new HashSet<string>(ids, StringComparer.Ordinal);
 
-    private static FocusSection Build(IReadOnlyList<TaskItem> all, IReadOnlySet<string> pins, bool nest)
-        => FocusSectionLayout.Build(all, pins, nest, sortField: null, SortDirection.Ascending);
+    private static FocusSection Build(IReadOnlyList<TaskItem> all, IReadOnlySet<string> pins, bool nest,
+        IReadOnlySet<string>? expanded = null)
+        => FocusSectionLayout.Build(all, pins, nest, sortField: null, SortDirection.Ascending, expanded);
 
     private static IEnumerable<string> Ids(FocusSection s) => s.Rows.Select(r => r.Task.Id);
     private static IEnumerable<int> Depths(FocusSection s) => s.Rows.Select(r => r.Depth);
@@ -133,5 +134,31 @@ public sealed class FocusSectionLayoutTests
         var s = Build(all, Pins("a", "b"), nest: true);
 
         Assert.Equal(["a", "b"], Ids(s)); // default (name-ascending) order among anchors
+    }
+
+    [Fact]
+    public void NestOn_PinnedParentCollapsed_HidesSubtask_ButStillPulledFromTodo()
+    {
+        // Per-parent folding (#76) applies in Focus too: a collapsed pinned parent hides its subtask in
+        // the section, yet the subtask stays pulled (excluded from the to-do set) so it never reappears
+        // un-nested elsewhere — collapsed means hidden, not relocated.
+        TaskItem[] all = [Task("p"), Task("c", parent: "p"), Task("o")];
+
+        var s = Build(all, Pins("p"), nest: true, expanded: new HashSet<string>(/* p collapsed */));
+
+        Assert.Equal(["p"], Ids(s));                 // c is hidden under the collapsed pin
+        Assert.Equal(FoldState.Collapsed, s.Rows[0].Fold);
+        Assert.Equal(Pins("c"), s.NestedSubtaskIds); // still pulled out of the to-do set
+    }
+
+    [Fact]
+    public void NestOn_PinnedParentExpanded_ShowsSubtaskWithExpandedMarker()
+    {
+        TaskItem[] all = [Task("p"), Task("c", parent: "p")];
+
+        var s = Build(all, Pins("p"), nest: true, expanded: new HashSet<string>(["p"]));
+
+        Assert.Equal(["p", "c"], Ids(s));
+        Assert.Equal(FoldState.Expanded, s.Rows[0].Fold);
     }
 }

@@ -18,6 +18,9 @@ public sealed class SubtaskArrangerTests
 
     private static readonly Dictionary<string, TaskItem> NoContext = new();
 
+    private static IReadOnlySet<string> Expanded(params string[] ids)
+        => new HashSet<string>(ids, StringComparer.Ordinal);
+
     [Fact]
     public void Arrange_NestsChildImmediatelyUnderParent_WithDepth()
     {
@@ -188,5 +191,102 @@ public sealed class SubtaskArrangerTests
         Assert.Equal(["P", "X", "Y"], rows.Select(r => r.Task.Id));
         Assert.Equal([0, 1, 2], rows.Select(r => r.Depth));
         Assert.All(rows, r => Assert.False(r.IsContextParent));
+    }
+
+    // ── Per-parent fold state (#76) ──────────────────────────────────────────
+
+    [Fact]
+    public void Arrange_NullExpanded_KeepsLegacyAllExpanded_AndMarksParentsExpanded()
+    {
+        TaskItem[] tasks = [Task("p"), Task("c", parent: "p"), Task("leaf")];
+
+        var rows = Arrange(tasks); // expanded == null ⇒ everything expanded (pre-#76)
+
+        Assert.Equal(["p", "c", "leaf"], rows.Select(r => r.Task.Id));
+        Assert.Equal(FoldState.Expanded, rows[0].Fold); // parent with children
+        Assert.Equal(FoldState.None, rows[1].Fold);     // leaf child
+        Assert.Equal(FoldState.None, rows[2].Fold);     // top-level leaf
+    }
+
+    [Fact]
+    public void Arrange_CollapsedParent_HidesChildren_AndShowsCollapsedMarker()
+    {
+        TaskItem[] tasks = [Task("p"), Task("c", parent: "p"), Task("other")];
+
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, Expanded(/* none */));
+
+        // 'p' is collapsed: its child 'c' is hidden and must NOT leak out as a flat top-level row.
+        Assert.Equal(["p", "other"], rows.Select(r => r.Task.Id));
+        Assert.Equal(FoldState.Collapsed, rows[0].Fold);
+        Assert.Equal(FoldState.None, rows[1].Fold);
+    }
+
+    [Fact]
+    public void Arrange_ExpandedParent_NestsChildren()
+    {
+        TaskItem[] tasks = [Task("p"), Task("c", parent: "p"), Task("other")];
+
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, Expanded("p"));
+
+        Assert.Equal(["p", "c", "other"], rows.Select(r => r.Task.Id));
+        Assert.Equal([0, 1, 0], rows.Select(r => r.Depth));
+        Assert.Equal(FoldState.Expanded, rows[0].Fold);
+    }
+
+    [Fact]
+    public void Arrange_CollapsedParent_SuppressesDeepSubtree_NoLeak()
+    {
+        // p → c → g. Collapsing p must hide the whole subtree, not just the direct child.
+        TaskItem[] tasks = [Task("p"), Task("c", parent: "p"), Task("g", parent: "c")];
+
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, Expanded(/* none */));
+
+        var only = Assert.Single(rows);
+        Assert.Equal("p", only.Task.Id);
+        Assert.Equal(FoldState.Collapsed, only.Fold);
+    }
+
+    [Fact]
+    public void Arrange_MixedFold_OneExpandedOneCollapsed()
+    {
+        TaskItem[] tasks =
+        [
+            Task("p1"), Task("c1", parent: "p1"),
+            Task("p2"), Task("c2", parent: "p2"),
+        ];
+
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, Expanded("p1"));
+
+        Assert.Equal(["p1", "c1", "p2"], rows.Select(r => r.Task.Id));
+        Assert.Equal(FoldState.Expanded, rows[0].Fold);
+        Assert.Equal(FoldState.Collapsed, rows[2].Fold);
+    }
+
+    [Fact]
+    public void Arrange_ContextParent_AlwaysExpanded_RegardlessOfSet_AndNoFoldMarker()
+    {
+        // A context parent isn't in the set, yet its assigned child must still show (it exists only to
+        // display that child) and the context parent itself carries no fold marker.
+        TaskItem[] tasks = [Task("c", parent: "P")];
+        var context = new Dictionary<string, TaskItem> { ["P"] = Task("P") };
+
+        var rows = SubtaskArranger.Arrange(tasks, context, Expanded(/* none */));
+
+        Assert.Equal(["P", "c"], rows.Select(r => r.Task.Id));
+        Assert.True(rows[0].IsContextParent);
+        Assert.Equal(FoldState.None, rows[0].Fold); // never user-foldable
+    }
+
+    [Fact]
+    public void Arrange_CollapsedParent_UnderExpandedContextParent_IsHidden()
+    {
+        // Context parent P (always shown) → child c (a collapsed parent) → grandchild g (hidden).
+        TaskItem[] tasks = [Task("c", parent: "P"), Task("g", parent: "c")];
+        var context = new Dictionary<string, TaskItem> { ["P"] = Task("P") };
+
+        var rows = SubtaskArranger.Arrange(tasks, context, Expanded(/* c not expanded */));
+
+        Assert.Equal(["P", "c"], rows.Select(r => r.Task.Id));
+        Assert.Equal(FoldState.Collapsed, rows[1].Fold); // c is a collapsed parent
     }
 }

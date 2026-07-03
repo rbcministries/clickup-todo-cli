@@ -31,7 +31,13 @@ namespace ClickUpTodo.Tui.Screens;
 public sealed class TaskDetailScreen : Screen
 {
     private readonly Tabs _tabs;
-    private readonly TextView[] _panes;
+    // The view inserted as each tab: Description/Comments are a plain TextView; Other is a container
+    // (a coloured header view above its scrollable body), so this is typed as View, not TextView.
+    private readonly View[] _tabContents;
+    // The focusable, scrollable view for each tab — the TextView that ↑/↓/PgUp/PgDn scroll. For Other
+    // that's the custom-fields body (its coloured header is a non-focusable overlay), so it differs
+    // from _tabContents there; for the other tabs the two are the same TextView.
+    private readonly View[] _scrollTargets;
     private readonly FrameView _promptBox;
     private readonly TextField _promptField;
 
@@ -70,11 +76,40 @@ public sealed class TaskDetailScreen : Screen
 
         var description = NewPane("Description", TaskDetailFormatter.Description(task));
         var commentsPane = NewPane($"Comments ({comments.Count})", TaskDetailFormatter.Comments(comments));
-        var other = NewPane("Other", TaskDetailFormatter.OtherAttributes(task));
-        _panes = [description, commentsPane, other];
 
-        for (var i = 0; i < _panes.Length; i++)
-            _tabs.InsertTab(i, _panes[i]);
+        // The Other tab colours its Priority/Status values (#66), which a plain TextView can't do. Its
+        // content is a container: a coloured, fixed-height header view (List/Priority/Status/dates) on
+        // top, and the scrollable, word-wrapped "Custom fields:" body beneath it.
+        var headerLines = TaskDetailFormatter.HeaderAttributeLines(task);
+        var attributesView = new DetailAttributesView(headerLines)
+        {
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = headerLines.Count,
+        };
+        var customFields = new TextView
+        {
+            // Y leaves a blank gap row after the header attributes, mirroring the blank line the plain
+            // OtherAttributes layout renders between them and the "Custom fields:" section.
+            X = 0,
+            Y = headerLines.Count + 1,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+            Text = TaskDetailFormatter.CustomFieldsBody(task),
+            ReadOnly = true,
+            WordWrap = true,
+        };
+        // CanFocus so the container is in the focus chain — its scrollable custom-fields body (below)
+        // receives focus via SetFocus; the coloured header view above it stays non-focusable.
+        var other = new View { Title = "Other", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(), CanFocus = true };
+        other.Add(attributesView, customFields);
+
+        _tabContents = [description, commentsPane, other];
+        _scrollTargets = [description, commentsPane, customFields];
+
+        for (var i = 0; i < _tabContents.Length; i++)
+            _tabs.InsertTab(i, _tabContents[i]);
         _tabs.Value = description;
 
         var hint = new Label
@@ -101,16 +136,16 @@ public sealed class TaskDetailScreen : Screen
         _promptBox.Add(_promptField);
         _promptField.KeyDown += OnPromptKey;
 
-        // Focus lives in whichever pane (TextView) is front-most, so the key handler is wired to each
-        // pane to reliably intercept Tab/Esc/Ctrl+B/A before the read-only TextView sees them.
-        foreach (var pane in _panes)
-            pane.KeyDown += OnKey;
+        // Focus lives in whichever scroll target (TextView) is front-most, so the key handler is wired
+        // to each to reliably intercept Tab/Esc/Ctrl+B/A before the read-only TextView sees them.
+        foreach (var target in _scrollTargets)
+            target.KeyDown += OnKey;
         KeyDown += OnKey;
 
         Add([header, _tabs, hint, _promptBox]);
     }
 
-    public override void OnShown() => _panes[0].SetFocus();
+    public override void OnShown() => _scrollTargets[0].SetFocus();
 
     private void OnKey(object? sender, Key key)
     {
@@ -188,24 +223,24 @@ public sealed class TaskDetailScreen : Screen
         FocusCurrentPane();
     }
 
-    /// <summary>Returns focus to the front-most tab pane (after the prompt box closes).</summary>
+    /// <summary>Returns focus to the front-most tab's scroll target (after the prompt box closes).</summary>
     private void FocusCurrentPane()
     {
-        var current = Array.IndexOf(_panes, _tabs.Value as TextView);
+        var current = Array.IndexOf(_tabContents, _tabs.Value);
         if (current < 0)
             current = 0;
-        _panes[current].SetFocus();
+        _scrollTargets[current].SetFocus();
     }
 
-    /// <summary>Advances the selected tab and moves focus into it so ↑/↓ scroll its content.</summary>
+    /// <summary>Advances the selected tab and moves focus into its scroll target so ↑/↓ scroll it.</summary>
     private void CycleTab(bool forward)
     {
-        var current = Array.IndexOf(_panes, _tabs.Value as TextView);
+        var current = Array.IndexOf(_tabContents, _tabs.Value);
         if (current < 0)
             current = 0;
-        var next = ((current + (forward ? 1 : -1)) % _panes.Length + _panes.Length) % _panes.Length;
-        _tabs.Value = _panes[next];
-        _panes[next].SetFocus();
+        var next = ((current + (forward ? 1 : -1)) % _tabContents.Length + _tabContents.Length) % _tabContents.Length;
+        _tabs.Value = _tabContents[next];
+        _scrollTargets[next].SetFocus();
     }
 
     private static TextView NewPane(string title, string text) => new()

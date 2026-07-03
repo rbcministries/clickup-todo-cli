@@ -17,8 +17,9 @@ public sealed class SectionLayoutTests
 
     private static IReadOnlyList<LayoutRow> Build(
         IReadOnlyList<TaskGroup> groups, bool grouped, bool nest,
-        string? ungroupedTasksHeader = null, IReadOnlyDictionary<string, TaskItem>? context = null)
-        => SectionLayout.BuildTodoSection(groups, context ?? NoContext, grouped, nest, ungroupedTasksHeader);
+        string? ungroupedTasksHeader = null, IReadOnlyDictionary<string, TaskItem>? context = null,
+        IReadOnlySet<string>? expanded = null)
+        => SectionLayout.BuildTodoSection(groups, context ?? NoContext, grouped, nest, ungroupedTasksHeader, headerColors: null, expanded);
 
     private static IEnumerable<string> TaskIds(IEnumerable<LayoutRow> rows)
         => rows.Where(r => !r.IsHeader).Select(r => r.Task!.Id);
@@ -203,6 +204,27 @@ public sealed class SectionLayoutTests
 
         Assert.Equal(["P", "c"], TaskIds(rows));
         Assert.Equal(1, rows.Single(r => !r.IsHeader && r.Task!.Id == "c").Depth);
+    }
+
+    [Fact]
+    public void GroupedAndNested_PerParentFold_CollapsedParentHidesChildInItsGroup()
+    {
+        // Per-parent folding (#76) composes with grouping: within a group, a collapsed parent hides its
+        // child and shows the Collapsed marker; an expanded parent nests and shows Expanded.
+        var groups = new[]
+        {
+            new TaskGroup("In Progress", new[] { Task("p1"), Task("c1", parent: "p1") }),
+            new TaskGroup("To Do", new[] { Task("p2"), Task("c2", parent: "p2") }),
+        };
+
+        var rows = Build(groups, grouped: true, nest: true, expanded: new HashSet<string>(["p1"]));
+
+        // p1 expanded → c1 shown nested; p2 collapsed → c2 hidden (not leaked flat).
+        Assert.Equal(["IN PROGRESS", "p1", "c1", "TO DO", "p2"],
+            rows.Select(r => r.IsHeader ? StripHeader(r.HeaderText!) : r.Task!.Id));
+        Assert.Equal(FoldState.Expanded, rows.Single(r => !r.IsHeader && r.Task!.Id == "p1").Fold);
+        Assert.Equal(FoldState.Collapsed, rows.Single(r => !r.IsHeader && r.Task!.Id == "p2").Fold);
+        Assert.Equal(1, rows.Single(r => !r.IsHeader && r.Task!.Id == "c1").Depth);
     }
 
     // Reduce a "─ LABEL (n) ─" header down to its label for order assertions.

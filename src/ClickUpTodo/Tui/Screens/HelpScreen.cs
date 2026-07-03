@@ -33,6 +33,7 @@ public sealed class HelpScreen : Screen
                 + "  F2          Settings (refresh rate, excluded statuses)\n"
                 + "  F3          Filter / sort / group the list\n"
                 + "  F4          Show / hide subtasks (shown nested under their parent)\n"
+                + "  → / ←       Expand / collapse the selected parent's subtasks (▶ collapsed, ▼ expanded)\n"
                 + "              F3 can also nest a parent's subtasks that aren't assigned to you\n"
                 + "  Ctrl+Q/Esc  Quit\n"
                 + "\n"

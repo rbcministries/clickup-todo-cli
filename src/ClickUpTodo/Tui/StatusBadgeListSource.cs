@@ -30,16 +30,21 @@ public sealed class StatusBadgeListSource : IListDataSource
     // Parallel to _text; each row's zero or more colored badge spans (empty = header row / no badges).
     private readonly IReadOnlyList<IReadOnlyList<Badge>> _badges;
     private readonly IReadOnlyList<Attribute?> _headerAttrs; // parallel to _text; non-null only on header rows
+    // Parallel to _text; the per-row type-ahead search key (a task row's title only), decoupled from the
+    // decorated display text so the #12 navigator matches titles even with a ▶/▼ marker + badges (#76).
+    private readonly IReadOnlyList<string>? _searchKeys;
     private readonly ListWrapper<string> _inner;
 
     public StatusBadgeListSource(
         ObservableCollection<string> text,
         IReadOnlyList<IReadOnlyList<Badge>> badges,
-        IReadOnlyList<Attribute?>? headerAttrs = null)
+        IReadOnlyList<Attribute?>? headerAttrs = null,
+        IReadOnlyList<string>? searchKeys = null)
     {
         _text = text;
         _badges = badges;
         _headerAttrs = headerAttrs ?? new Attribute?[text.Count];
+        _searchKeys = searchKeys;
         _inner = new ListWrapper<string>(text);
     }
 
@@ -102,7 +107,14 @@ public sealed class StatusBadgeListSource : IListDataSource
     public void SetMark(int item, bool value) => _inner.SetMark(item, value);
     public bool RenderMark(ListView listView, int item, int row, bool isMarked, bool markMultiple)
         => _inner.RenderMark(listView, item, row, isMarked, markMultiple);
-    public IList ToList() => _inner.ToList();
+
+    /// <summary>
+    /// The list the type-ahead navigator (#12) searches. When per-row search keys were supplied (#76)
+    /// this returns them — a task row's title only — so typing a title's first letters still jumps to it
+    /// even though the rendered line now leads with a ▶/▼ fold marker (and carries badges/metadata). With
+    /// no keys it delegates to the stock wrapper (the decorated display strings), preserving old behaviour.
+    /// </summary>
+    public IList ToList() => _searchKeys is null ? _inner.ToList() : new List<string>(_searchKeys);
 
     // ── Render = stock text + color overlay ──────────────────────────────────
     public void Render(ListView listView, bool selected, int item, int col, int row, int width, int viewportX = 0)

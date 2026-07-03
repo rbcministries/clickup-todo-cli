@@ -47,14 +47,20 @@ public static class TaskRowFormatter
     /// <c>· {list}</c>, Due drops <c>· due {date}</c>; Created/LastActivity have no row segment so
     /// grouping by them changes nothing.
     /// </param>
-    public static Row Format(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, bool isForeignSubtask = false)
+    /// <param name="marker">
+    /// A fold marker prefix (#76) — e.g. <c>"▶ "</c>/<c>"▼ "</c> or a blank gutter — inserted right after
+    /// the indent, before the title. Default <c>""</c> leaves the row untouched (pre-#76 layout). Because
+    /// the badge offsets below are captured from the running text length, the marker is accounted for
+    /// automatically and the colour spans stay exact.
+    /// </param>
+    public static Row Format(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
     {
         var indent = depth > 0 ? string.Concat(Enumerable.Repeat(IndentUnit, depth)) : "";
 
         // Build the line incrementally, capturing each badge's offset from the running length. This
-        // keeps the spans exact regardless of indent, the title's own '[' characters, or which badges
-        // are present — two coloured badges make hand-computed offsets fragile.
-        var text = indent + task.Name;
+        // keeps the spans exact regardless of indent, the marker, the title's own '[' characters, or
+        // which badges are present — two coloured badges make hand-computed offsets fragile.
+        var text = indent + marker + task.Name;
 
         var (statusStart, statusLength) = groupedBy == TaskField.Status
             ? (-1, 0)
