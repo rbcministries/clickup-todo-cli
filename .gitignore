@@ -9,6 +9,9 @@ obj/
 *.nupkg
 nupkg/
 
+# User-supplied ClickUp OAuth app credentials (never committed — issue #1)
+oauth-app.json
+
 # Kiota generation log (the generated client itself IS committed)
 **/Generated/.kiota.log
 
