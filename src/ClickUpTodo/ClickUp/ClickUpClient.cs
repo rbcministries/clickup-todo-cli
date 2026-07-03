@@ -1,8 +1,11 @@
 using System.Globalization;
+using System.Text.Json;
 using ClickUpTodo.ClickUp.Generated;
 using ClickUpTodo.ClickUp.Generated.Models;
 using Microsoft.Kiota.Abstractions.Authentication;
+using Microsoft.Kiota.Abstractions.Serialization;
 using Microsoft.Kiota.Http.HttpClientLibrary;
+using Microsoft.Kiota.Serialization.Json;
 using ApiException = Microsoft.Kiota.Abstractions.ApiException;
 
 namespace ClickUpTodo.ClickUp;
@@ -70,6 +73,38 @@ public sealed class ClickUpClient : IDisposable
             return new NamedEntity(list?.Id ?? listId, list?.Name ?? "(unnamed list)");
         });
 
+    /// <summary>
+    /// A list's own color chip (ClickUp's <c>status.color</c>, e.g. <c>#e16b16</c>), or null when the
+    /// list has no color set. ClickUp stores the list color under a field named <c>status</c> that the
+    /// generated model doesn't map, so it's read defensively from Kiota's <see cref="IParsable"/>
+    /// additional data; any shape we can't read yields null (callers fall back to a generated hue).
+    /// </summary>
+    public Task<string?> GetListColorAsync(string listId, CancellationToken ct = default)
+        => Guard("GetList", async () =>
+            ExtractListColor(await _client.V2.List[listId].GetAsync(cancellationToken: ct)));
+
+    /// <summary>
+    /// Pulls <c>status.color</c> out of a list's unmapped additional data. Kiota represents nested
+    /// objects as <see cref="UntypedObject"/>; we also tolerate a raw <see cref="JsonElement"/> in case
+    /// the serializer shape changes. Returns null (rather than throwing) for any unexpected shape.
+    /// </summary>
+    internal static string? ExtractListColor(global::ClickUpTodo.ClickUp.Generated.Models.List? list)
+    {
+        if (list?.AdditionalData is null || !list.AdditionalData.TryGetValue("status", out var raw) || raw is null)
+            return null;
+
+        var color = raw switch
+        {
+            UntypedObject obj => (obj.GetValue().TryGetValue("color", out var c) ? c : null) is UntypedString s
+                ? s.GetValue()
+                : null,
+            JsonElement el when el.ValueKind == JsonValueKind.Object && el.TryGetProperty("color", out var c)
+                => c.GetString(),
+            _ => null,
+        };
+        return string.IsNullOrWhiteSpace(color) ? null : color;
+    }
+
     /// <summary>The available statuses for a list's workflow, ordered by ClickUp's order index.</summary>
     public Task<IReadOnlyList<StatusOption>> GetListStatusesAsync(string listId, CancellationToken ct = default)
         => Guard("GetList", async () =>
@@ -82,12 +117,18 @@ public sealed class ClickUpClient : IDisposable
                 .ToList();
         });
 
-    /// <summary>All open tasks across the workspace assigned to <paramref name="userId"/>, de-paged.</summary>
-    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, long userId, CancellationToken ct = default)
+    /// <summary>
+    /// All open workspace tasks assigned to any of <paramref name="assigneeIds"/>, de-paged. An
+    /// <b>empty</b> set omits the <c>assignees</c> filter entirely, so ClickUp returns tasks for
+    /// everyone in the workspace — a deliberately broad (and slower) fetch the caller opts into by
+    /// clearing the Assignee rule (#68).
+    /// </summary>
+    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, CancellationToken ct = default)
         => Guard("GetFilteredTeamTasks", () => PageAsync(page =>
             _client.V2.Team[workspaceId].Task.GetAsync(cfg =>
             {
-                cfg.QueryParameters.Assignees = [userId.ToString(CultureInfo.InvariantCulture)];
+                if (assigneeIds.Count > 0)
+                    cfg.QueryParameters.Assignees = assigneeIds.Select(id => id.ToString(CultureInfo.InvariantCulture)).ToArray();
                 cfg.QueryParameters.Page = page;
                 cfg.QueryParameters.IncludeClosed = false;
                 cfg.QueryParameters.Subtasks = true;
@@ -141,18 +182,38 @@ public sealed class ClickUpClient : IDisposable
 
     // ── Mapping & plumbing ──────────────────────────────────────────────────
 
-    private static TaskItem Map(TaskObject t) => new()
+    // internal (not private) so the mapping can be unit-tested without hitting the live API.
+    internal static TaskItem Map(TaskObject t)
     {
-        Id = t.Id ?? "",
-        Name = t.Name ?? "(untitled)",
-        Url = t.Url,
-        DueDateMs = ParseMs(t.DueDate),
-        UpdatedMs = ParseMs(t.DateUpdated),
-        ListId = t.List?.Id,
-        ListName = t.List?.Name,
-        StatusName = t.Status?.StatusProp,
-        StatusColor = t.Status?.Color,
-    };
+        var priorityLevel = ClickUpPriority.Level(t.Priority?.Id, t.Priority?.PriorityProp);
+        return new()
+        {
+            Id = t.Id ?? "",
+            Name = t.Name ?? "(untitled)",
+            Url = t.Url,
+            ParentId = string.IsNullOrWhiteSpace(t.Parent) ? null : t.Parent,
+            DueDateMs = ParseMs(t.DueDate),
+            CreatedMs = ParseMs(t.DateCreated),
+            UpdatedMs = ParseMs(t.DateUpdated),
+            ListId = t.List?.Id,
+            ListName = t.List?.Name,
+            StatusName = t.Status?.StatusProp,
+            StatusColor = t.Status?.Color,
+            PriorityLevel = priorityLevel,
+            PriorityName = ClickUpPriority.NameFromLevel(priorityLevel),
+            PriorityColor = t.Priority?.Color,
+            Assignees = MapAssignees(t.Assignees),
+        };
+    }
+
+    /// <summary>Maps ClickUp's <c>assignees</c> to the stable <see cref="TaskAssignee"/> shape, keeping
+    /// the numeric id (for matching / the app user) and a display name; drops entries with neither.</summary>
+    private static IReadOnlyList<TaskAssignee> MapAssignees(List<User>? assignees)
+        => assignees?
+            .Select(u => new TaskAssignee(u.Id ?? 0, DisplayName(u)))
+            .Where(a => a.Id != 0 || a.Name.Length > 0)
+            .ToList()
+           ?? [];
 
     private static TaskDetail MapDetail(TaskObject t) => new()
     {
@@ -164,6 +225,10 @@ public sealed class ClickUpClient : IDisposable
         StatusColor = t.Status?.Color,
         ListId = t.List?.Id,
         ListName = t.List?.Name,
+        Lists = t.Locations?
+            .Select(l => new NamedEntity(l.Id ?? "", l.Name ?? ""))
+            .Where(l => !string.IsNullOrWhiteSpace(l.Name))
+            .ToList() ?? [],
         // ClickUp's text_content is the rendered plain text; description is the raw (often markdown)
         // source. Prefer the plain text for a terminal, falling back to the raw form.
         Description = !string.IsNullOrWhiteSpace(t.TextContent) ? t.TextContent : t.Description,
@@ -175,9 +240,45 @@ public sealed class ClickUpClient : IDisposable
         Assignees = t.Assignees?.Select(DisplayName).Where(n => n.Length > 0).ToList() ?? [],
         CustomFields = t.CustomFields?
             .Where(f => !string.IsNullOrWhiteSpace(f.Name))
-            .Select(f => new CustomFieldItem(f.Name!, f.Type))
+            .Select(MapCustomField)
             .ToList() ?? [],
     };
+
+    /// <summary>
+    /// Maps a generated <see cref="CustomField"/> onto the stable <see cref="CustomFieldItem"/>,
+    /// including its loosely-typed <c>value</c> and <c>type_config.options</c>. The generated type
+    /// only surfaces <c>id</c>/<c>name</c>/<c>type</c>; the rest lands in Kiota's <c>AdditionalData</c>
+    /// as mixed boxed types, so we re-serialize the field to JSON (a faithful round-trip) and read
+    /// the value/options back with <see cref="System.Text.Json"/> — no dependency on the internal
+    /// <c>UntypedNode</c> shape and no generated type escaping this facade (issue #35).
+    /// </summary>
+    internal static CustomFieldItem MapCustomField(CustomField f)
+    {
+        try
+        {
+            var (value, options) = CustomFieldReader.Read(SerializeToJson(f));
+            return new CustomFieldItem(f.Name!, f.Type, value, options);
+        }
+        catch
+        {
+            // One malformed/unexpected field must never sink the whole task's detail — degrade to
+            // name/type only (the same shape the tab showed before values were surfaced).
+            return new CustomFieldItem(f.Name!, f.Type);
+        }
+    }
+
+    /// <summary>Serializes any Kiota model to a detached <see cref="JsonElement"/>. Uses the JSON
+    /// writer factory directly (no reliance on global serializer registration), and clones the root
+    /// so it outlives the backing <see cref="JsonDocument"/>.</summary>
+    private static JsonElement SerializeToJson(IParsable value)
+    {
+        using var writer = new JsonSerializationWriterFactory().GetSerializationWriter("application/json");
+        // WriteObjectValue (not value.Serialize) so the writer opens/closes the root JSON object.
+        writer.WriteObjectValue(null, value);
+        using var stream = writer.GetSerializedContent();
+        using var doc = JsonDocument.Parse(stream);
+        return doc.RootElement.Clone();
+    }
 
     /// <summary>Best display name for a user: username, then email, then numeric id.</summary>
     private static string DisplayName(User? user)

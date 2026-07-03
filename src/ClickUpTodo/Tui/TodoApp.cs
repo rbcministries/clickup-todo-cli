@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
@@ -10,6 +11,7 @@ using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
+using Attribute = Terminal.Gui.Drawing.Attribute;
 
 // Terminal.Gui 2.4 deprecates the static `Application` facade in favour of an instance-based
 // API that is not yet stable or documented. The static API remains the supported v2 pattern,
@@ -42,6 +44,12 @@ public sealed class TodoApp
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
+    // Composes the seed prompt + launches an interactive `claude` session for the detail view's A
+    // keybinding (#26). Zero-config defaults today; #27 (S4) will populate its options from AppConfig.
+    private readonly AgentDispatcher _agent = new(new TerminalLauncher());
+    // True while a dispatch is in flight, so a rapid second submit doesn't launch a duplicate session.
+    // Only touched on the UI thread (set in DispatchAgent, cleared via Application.Invoke).
+    private bool _dispatching;
 
     private Window _window = null!;
     private FrameView _frame = null!;
@@ -53,13 +61,33 @@ public sealed class TodoApp
     private Screen? _activeScreen;
 
     private IReadOnlyList<TaskItem> _all = [];
-    // Parallel to the ListView's rows: the task on each row, or null for a header/separator row.
+    // Parallel to the ListView's rows: the task on each row, or null for a header/spacer row.
     private readonly List<TaskItem?> _rows = [];
+    // Parallel to _rows: what kind of row it is, so navigation can tell headers from blank spacers
+    // (both carry a null _rows entry) and skip to real sections. (#61)
+    private readonly List<RowKind> _kinds = [];
     // The ListView's backing collection, kept so a single row can be updated in place (without
     // SetSource, which would reset the list and the cursor).
     private ObservableCollection<string> _display = [];
-    // Per-row status-badge color overlay, parallel to _display (null = header row or no/!valid color).
-    private List<StatusBadgeListSource.Badge?> _badges = [];
+    // Per-row badge color overlays (status + priority), parallel to _display (empty = header row or
+    // no/invalid colors).
+    private List<IReadOnlyList<StatusBadgeListSource.Badge>> _badges = [];
+    // Per-row full-width header-bar attribute, parallel to _display (non-null only on header rows). (#61)
+    private List<Attribute?> _headerAttrs = [];
+    // Per-row nesting depth, parallel to _display, so an in-place row update keeps its indent (#46).
+    private List<int> _depths = [];
+    // Per-list color chips for List-grouped headers, resolved off the UI thread in FetchAsync and read
+    // during Render; volatile to publish the reference safely across threads. (#61)
+    private volatile IReadOnlyDictionary<string, string?> _listColors = EmptyListColors;
+    private static readonly IReadOnlyDictionary<string, string?> EmptyListColors = new Dictionary<string, string?>();
+
+    /// <summary>The kind of a rendered row: an actionable task, a section header, or a blank spacer.</summary>
+    private enum RowKind { Task, Header, Spacer }
+    // Parents of assigned subtasks that aren't themselves in the snapshot, shown as context headers in
+    // the subtasks view (F4). Resolved off the UI thread (FetchAsync) while ShowSubtasks is on and read
+    // on the UI thread during Render, so it's volatile to publish the reference safely across threads.
+    private volatile IReadOnlyDictionary<string, TaskItem> _contextParents = EmptyParents;
+    private static readonly IReadOnlyDictionary<string, TaskItem> EmptyParents = new Dictionary<string, TaskItem>();
     private string _status = "Loading…";
     private string _signature = "";
 
@@ -80,7 +108,7 @@ public sealed class TodoApp
             _status = $"Loading… (driver: {driverName ?? "default (ansi)"})";
             Build();
             _refresh = new RefreshService(
-                fetch: ct => _tasks.LoadAsync(ct),
+                fetch: FetchAsync,
                 intervalSeconds: _config.RefreshSeconds,
                 onUpdate: tasks => Application.Invoke(() => OnTasksLoaded(tasks)),
                 onError: ex => Application.Invoke(() => Flash($"Refresh failed: {Short(ex)}")));
@@ -93,6 +121,27 @@ public sealed class TodoApp
             _window?.Dispose();
             Application.Shutdown();
         }
+    }
+
+    /// <summary>
+    /// Background fetch for the refresh loop: loads the task snapshot and, when the nested subtasks
+    /// view is on, resolves any parents not in the snapshot so they can be shown as context headers.
+    /// Runs off the UI thread; <see cref="_contextParents"/> is set before the result is marshalled in.
+    /// </summary>
+    private async Task<IReadOnlyList<TaskItem>> FetchAsync(CancellationToken ct)
+    {
+        var tasks = await _tasks.LoadAsync(ct);
+        // Resolve context parents whenever the subtasks view is on: they're rendered as headers whether
+        // or not an F3 group is active now that grouping and nesting compose (#57). Off → skip the
+        // extra round-trips.
+        _contextParents = _config.View.ShowSubtasks
+            ? await _tasks.ResolveContextParentsAsync(tasks, ct)
+            : EmptyParents;
+        // List colors are only needed to tint headers when grouping by List; skip the fetches otherwise.
+        _listColors = _config.View.GroupField == TaskField.List
+            ? await _tasks.ResolveListColorsAsync(tasks.Select(t => t.ListId ?? ""), ct)
+            : EmptyListColors;
+        return tasks;
     }
 
     private void Build()
@@ -117,7 +166,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · Ctrl+Q quit · type to search",
+            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · Ctrl+Q quit · type to search",
         };
 
         _window.Add(_frame, _statusLabel, help);
@@ -186,7 +235,33 @@ public sealed class TodoApp
                 key.Handled = true;
                 OpenViewSettings();
                 break;
+            case KeyCode.F4:
+                key.Handled = true;
+                ToggleShowSubtasks();
+                break;
         }
+    }
+
+    /// <summary>Toggles the subtasks view (F4, #46) — hidden vs. shown nested — and persists it.</summary>
+    private void ToggleShowSubtasks()
+    {
+        if (_activeScreen is not null)
+            return;
+
+        var on = !_config.View.ShowSubtasks;
+        _config.View.ShowSubtasks = on;
+        _configStore.Save(_config);
+        Flash(on ? "Subtasks shown, nested under their parent (F4)." : "Subtasks hidden (F4).");
+
+        // Re-render immediately (in-snapshot parents nest without waiting on the network), keep the
+        // stored signature in sync, then — when turning on — refresh to pull in parents not assigned
+        // to me as context headers; that fetch changes the signature again and re-renders when it lands.
+        if (!on)
+            _contextParents = EmptyParents;
+        Render(keepTaskId: CurrentTask()?.Id);
+        _signature = CurrentSignature(_all);
+        if (on)
+            _refresh.RequestRefresh();
     }
 
     private void OpenViewSettings()
@@ -203,12 +278,27 @@ public sealed class TodoApp
         if (result is null)
             return;
 
+        var previous = _config.View;
         _config.View = result;
         _configStore.Save(_config);
         Flash(ViewSummary(result));
-        // The view changed but the underlying task set didn't, so re-render directly rather than
-        // waiting on a refresh (BuildSignature would otherwise treat it as a no-op).
-        Render(keepTaskId: CurrentTask()?.Id);
+
+        // An Assignee rule scopes the server-side fetch (#68), so a change to the resolved assignee set
+        // needs a reload — a client-side re-render can't surface tasks that were never fetched. Every
+        // other rule change (status/list/due/priority/sort/group) is a pure client-side re-filter, so
+        // re-render directly (BuildSignature would otherwise treat it as a no-op).
+        var before = _tasks.ResolveAssigneeIds(previous);
+        var after = _tasks.ResolveAssigneeIds(result);
+        if (!TaskService.SameAssigneeSet(before, after))
+        {
+            if (after.Count == 0)
+                Flash("Fetching tasks for all assignees — this may be slow.");
+            _refresh.RequestRefresh();
+        }
+        else
+        {
+            Render(keepTaskId: CurrentTask()?.Id);
+        }
     }
 
     /// <summary>A one-line description of the active view for the status line.</summary>
@@ -231,7 +321,7 @@ public sealed class TodoApp
         if (_activeScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.ExcludedStatuses);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.AgentDispatch);
         ShowScreen(screen, () =>
         {
             var result = screen.Result;
@@ -239,11 +329,11 @@ public sealed class TodoApp
                 return;
 
             _config.RefreshSeconds = result.RefreshSeconds;
-            _config.ExcludedStatuses = result.ExcludedStatuses;
+            _config.AgentDispatch = result.AgentDispatch;
             _configStore.Save(_config);
 
             _refresh.IntervalSeconds = result.RefreshSeconds;
-            Flash($"Settings saved · refresh {result.RefreshSeconds}s · {result.ExcludedStatuses.Count} status(es) excluded");
+            Flash($"Settings saved · refresh {result.RefreshSeconds}s");
             _refresh.RequestRefresh();
         });
     }
@@ -296,7 +386,19 @@ public sealed class TodoApp
         var screen = _activeScreen;
         _activeScreen = null;
         _window.Remove(screen);
-        screen.Dispose();
+        // Terminal.Gui 2.4.10 can throw from View/Tabs.Dispose while tearing down a view's subviews
+        // (disposing a child mutates the parent's subview list mid-iteration → IndexOutOfRange; hit
+        // when Esc closes the tabbed detail view). The screen is already detached from the window
+        // above, so a failed Dispose is at worst a minor leak of that screen's views — never a reason
+        // to crash the app. Guard it so closing a screen can't take the process down.
+        try
+        {
+            screen.Dispose();
+        }
+        catch (Exception ex) when (ex is ArgumentOutOfRangeException or IndexOutOfRangeException)
+        {
+            Debug.WriteLine($"Screen dispose threw (Terminal.Gui teardown bug), ignoring: {ex}");
+        }
         _frame.Visible = true;
         _list.SetFocus();
     }
@@ -306,12 +408,12 @@ public sealed class TodoApp
         => _list.SelectedItem is int i && i >= 0 && i < _rows.Count ? _rows[i] : null;
 
     /// <summary>
-    /// Moves the cursor to the first task row beneath the next header (sections are delimited by the
-    /// header rows tracked as null entries in <see cref="_rows"/>). Wraps to the first section.
+    /// Moves the cursor to the first task row beneath the next header (sections are delimited by
+    /// <see cref="RowKind.Header"/> rows). Wraps to the first section.
     /// </summary>
     private void JumpToNextSection()
     {
-        var headers = Enumerable.Range(0, _rows.Count).Where(i => _rows[i] is null).ToList();
+        var headers = Enumerable.Range(0, _kinds.Count).Where(i => _kinds[i] == RowKind.Header).ToList();
         if (headers.Count == 0)
             return; // no sections (e.g. nothing pinned)
 
@@ -413,6 +515,9 @@ public sealed class TodoApp
                     if (_activeScreen is not null)
                         return;
                     var screen = new TaskDetailScreen(detail, comments);
+                    // A (in the detail view) → compose + launch an interactive claude session (#26).
+                    // The detail view stays open; dispatch runs off the UI thread so the TUI stays live.
+                    screen.AgentDispatchRequested += (_, prompt) => DispatchAgent(detail, comments, prompt);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -429,11 +534,51 @@ public sealed class TodoApp
         });
     }
 
+    /// <summary>
+    /// Composes the seed prompt for <paramref name="detail"/> and launches an interactive
+    /// <c>claude</c> session in a new terminal (#26). Runs off the UI thread (file write + process
+    /// launch), then reports the outcome on the status line; the detail view and background refresh
+    /// keep running. Working directory / claude path / preferred terminal become configurable in #27.
+    /// </summary>
+    private void DispatchAgent(TaskDetail detail, IReadOnlyList<CommentItem> comments, string prompt)
+    {
+        // Re-entrancy guard: a second Enter before the first launch finishes would spawn a duplicate
+        // claude session. This runs on the UI thread (invoked from the screen's key handler) and is
+        // cleared back on the UI thread via Application.Invoke, so the plain bool needs no locking.
+        if (_dispatching)
+        {
+            Flash("A Claude session is already launching…");
+            return;
+        }
+        _dispatching = true;
+
+        Flash($"Launching Claude for '{detail.Name}'…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var result = await _agent.DispatchAsync(detail, comments, prompt);
+                Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => { _dispatching = false; Flash($"Could not launch Claude: {Short(ex)}"); });
+            }
+        });
+    }
+
     private void OpenStatusPicker()
     {
         var task = CurrentTask();
         if (task is null)
             return;
+        // A context-parent header (a parent not assigned to me, shown only so its subtask can nest
+        // beneath it) is context, not my work — don't change its status. (#46)
+        if (_contextParents.ContainsKey(task.Id))
+        {
+            Flash("This is a parent shown for context (not assigned to you) — status unchanged.");
+            return;
+        }
         if (string.IsNullOrWhiteSpace(task.ListId))
         {
             Flash("This task has no list, so its statuses can't be loaded.");
@@ -529,14 +674,18 @@ public sealed class TodoApp
     private void UpdateTaskRow(TaskItem updated, bool sending)
     {
         _all = TaskService.ApplyStatusChange(_all, updated.Id, updated.StatusName);
-        _signature = BuildSignature(_all);
+        _signature = CurrentSignature(_all);
 
         var index = _rows.FindIndex(r => r?.Id == updated.Id);
         if (index < 0 || index >= _display.Count)
             return;
         _rows[index] = updated;
-        var (text, badge) = BuildRow(updated);
-        _badges[index] = badge;
+        // Rebuild at the row's existing depth so an in-place update keeps its nesting indent (#46).
+        // A task lives in exactly one section (nonPinned excludes pinned), so only a to-do row omits
+        // the grouped field; a pinned Focus row keeps every segment (no group header above it) (#67).
+        var groupedBy = _focus.IsPinned(updated.Id) ? (TaskField?)null : _config.View.GroupField;
+        var (text, badges) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy);
+        _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
         _display[index] = sending ? $"{text}  (sending…)" : text;
@@ -563,7 +712,7 @@ public sealed class TodoApp
 
         // Rebuilding the ListView (SetSource) forces a full reset + redraw. Skip it when the visible
         // task set is unchanged and just update the (cheap) status line.
-        var signature = BuildSignature(tasks);
+        var signature = CurrentSignature(tasks);
         if (signature == _signature)
         {
             _statusLabel.Text = _status;
@@ -573,13 +722,28 @@ public sealed class TodoApp
         Render(keepTaskId: CurrentTask()?.Id);
     }
 
+    /// <summary>
+    /// The rendered fingerprint including the subtasks-view state, so toggling F4 or resolving new
+    /// context parents is treated as a change (not a no-op refresh) even when the task set is identical.
+    /// </summary>
+    private string CurrentSignature(IReadOnlyList<TaskItem> tasks)
+    {
+        var sb = new System.Text.StringBuilder(BuildSignature(tasks));
+        sb.Append("#sub=").Append(_config.View.ShowSubtasks);
+        if (_config.View.ShowSubtasks)
+            foreach (var id in _contextParents.Keys.OrderBy(x => x, StringComparer.Ordinal))
+                sb.Append(';').Append(id);
+        return sb.ToString();
+    }
+
     /// <summary>A cheap fingerprint of what's actually rendered, so no-op refreshes skip a redraw.</summary>
     private static string BuildSignature(IReadOnlyList<TaskItem> tasks)
     {
-        var sb = new System.Text.StringBuilder(tasks.Count * 24);
+        var sb = new System.Text.StringBuilder(tasks.Count * 28);
         foreach (var t in tasks)
             sb.Append(t.Id).Append(':').Append(t.StatusName).Append(':').Append(t.Name)
-              .Append(':').Append(t.DueDateMs).Append(':').Append(t.UpdatedMs).Append('|');
+              .Append(':').Append(t.DueDateMs).Append(':').Append(t.UpdatedMs)
+              .Append(':').Append(t.ParentId).Append('|');
         return sb.ToString();
     }
 
@@ -604,36 +768,54 @@ public sealed class TodoApp
         // vanish); the filter/sort/group view (F3) applies to the non-pinned set. Sort applies to both.
         var view = _config.View;
         var pinned = TaskView.Sort(_all.Where(t => _focus.IsPinned(t.Id)), view.SortField, view.SortDirection);
-        var groups = TaskView.Apply(_all.Where(t => !_focus.IsPinned(t.Id)), view);
+
+        // The non-pinned set feeds the F3 view. When subtasks are hidden (the default), drop them here
+        // so the main list stays a flat top-level view; pins are handled above so a pinned subtask is
+        // never hidden. (#46)
+        var nonPinned = _all.Where(t => !_focus.IsPinned(t.Id));
+        if (!view.ShowSubtasks)
+            nonPinned = nonPinned.Where(t => string.IsNullOrEmpty(t.ParentId));
+        var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
         var grouped = view.GroupField is not null;
+        // Grouping and nesting compose: within each F3 group, subtasks nest under their parent when
+        // both fall in the same group; a subtask whose parent lands in a different group renders flat
+        // within its own group (SubtaskArranger, run per-group, yields exactly this). (#46, #57)
+        var nest = view.ShowSubtasks;
 
         _rows.Clear();
+        _kinds.Clear();
         _display = new ObservableCollection<string>();
-        _badges = new List<StatusBadgeListSource.Badge?>();
+        _badges = new List<IReadOnlyList<StatusBadgeListSource.Badge>>();
+        _headerAttrs = new List<Attribute?>();
+        _depths = new List<int>();
+
+        // A background color per group header, by the grouped field (status/list/priority/date). Null
+        // entries (and the non-field pinned/tasks headers) fall back to the neutral bar. (#61)
+        var headerColors = GroupHeaderPalette.Resolve(view.GroupField, groups, _listColors);
 
         if (pinned.Count > 0)
             AddHeader($"{FocusHeaderPrefix} ({pinned.Count})");
         foreach (var t in pinned)
             AddTask(t);
 
-        foreach (var group in groups)
+        // The single tasks-section header only appears (when ungrouped) to separate the to-do rows
+        // from a pinned section above them.
+        var ungroupedTasksHeader = pinned.Count > 0 ? $"{TasksHeaderPrefix} ({todoCount}) ─" : null;
+        foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors))
         {
-            // A header per named group when grouping; otherwise keep today's behaviour — the single
-            // tasks-section header only appears when there's a pinned section above it to separate from.
-            if (grouped)
-                AddHeader($"─ {(group.Label ?? "").ToUpperInvariant()} ({group.Tasks.Count}) ─");
-            else if (pinned.Count > 0)
-                AddHeader($"{TasksHeaderPrefix} ({todoCount}) ─");
-
-            foreach (var t in group.Tasks)
-                AddTask(t);
+            if (row.IsHeader)
+                AddHeader(row.HeaderText!, row.HeaderColor);
+            else
+                // Omit the grouped field from each to-do row — the group header above already shows it
+                // (#67). The pinned Focus section has no group headers, so its rows keep every segment.
+                AddTask(row.Task!, row.Depth, row.IsContextParent, view.GroupField);
         }
 
-        // A custom source that draws text like the stock wrapper but overlays each [status] badge
-        // with its ClickUp color. Assigning Source (rather than SetSource) lets us pass our source;
-        // the ListView disposes the previous one.
-        _list.Source = new StatusBadgeListSource(_display, _badges);
+        // A custom source that draws text like the stock wrapper, overlays each [status] badge with its
+        // ClickUp color, and paints each group header as a full-width color bar. Assigning Source
+        // (rather than SetSource) lets us pass our source; the ListView disposes the previous one.
+        _list.Source = new StatusBadgeListSource(_display, _badges, _headerAttrs);
         _frame.Title = BuildFrameTitle(pinned.Count, todoCount, view);
 
         // Restore the cursor onto the same task, or the first task row.
@@ -646,26 +828,56 @@ public sealed class TodoApp
         _statusLabel.Text = _status;
     }
 
-    private void AddHeader(string text)
+    /// <summary>
+    /// Appends a section header, preceded by a blank spacer row for breathing room (except at the very
+    /// top of the list). <paramref name="hexColor"/> tints the full-width bar; a null/unparseable color
+    /// falls back to the neutral bar.
+    /// </summary>
+    private void AddHeader(string text, string? hexColor = null)
+    {
+        if (_display.Count > 0)
+            AddSpacer();
+        _rows.Add(null);
+        _kinds.Add(RowKind.Header);
+        _display.Add(text);
+        _badges.Add([]);
+        _headerAttrs.Add(StatusBadgeListSource.HeaderAttr(hexColor) ?? StatusBadgeListSource.NeutralHeaderAttr);
+        _depths.Add(0);
+    }
+
+    private void AddSpacer()
     {
         _rows.Add(null);
-        _display.Add(text);
-        _badges.Add(null);
+        _kinds.Add(RowKind.Spacer);
+        _display.Add("");
+        _badges.Add([]);
+        _headerAttrs.Add(null);
+        _depths.Add(0);
     }
 
-    private void AddTask(TaskItem task)
+    private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null)
     {
-        var (text, badge) = BuildRow(task);
+        var (text, badges) = BuildRow(task, depth, isContextParent, groupedBy);
         _rows.Add(task);
+        _kinds.Add(RowKind.Task);
         _display.Add(text);
-        _badges.Add(badge);
+        _badges.Add(badges);
+        _headerAttrs.Add(null);
+        _depths.Add(depth);
     }
 
-    /// <summary>The display text and (optional) status-color badge overlay for a task row.</summary>
-    private static (string Text, StatusBadgeListSource.Badge? Badge) BuildRow(TaskItem task)
+    /// <summary>The display text and the row's color badge overlays (status, then priority when set).
+    /// <paramref name="groupedBy"/> omits the grouped field's segment (its header already conveys it, #67).</summary>
+    private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
+        TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null)
     {
-        var row = TaskRowFormatter.Format(task);
-        return (row.Text, StatusBadgeListSource.TryCreate(row.BadgeStart, row.BadgeLength, task.StatusColor));
+        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy);
+        var badges = new List<StatusBadgeListSource.Badge>(2);
+        if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
+            badges.Add(status);
+        if (StatusBadgeListSource.TryCreate(row.PriorityStart, row.PriorityLength, task.PriorityColor) is { } priority)
+            badges.Add(priority);
+        return (row.Text, badges);
     }
 
     private void Flash(string message)

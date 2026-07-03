@@ -1,3 +1,4 @@
+using System.Globalization;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 
@@ -13,10 +14,20 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     // PrefetchStatusesAsync so the picker opens from cache in the common case.
     private readonly StatusCache _statusCache = new(client.GetListStatusesAsync, timeProvider);
 
+    // Per-list color chips, cached for the process lifetime (a list's color effectively never changes
+    // within a session). A null value means "fetched, but the list has no color set" — cached so it
+    // isn't refetched. Used to tint List-grouped headers (#61).
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _listColors = new(StringComparer.Ordinal);
+
+    /// <summary>The signed-in app user's ClickUp id — the target of the default "Assignee IS me" rule.</summary>
+    public long UserId { get; } = userId;
+
     /// <summary>Merged, de-duplicated, stably-ordered task snapshot.</summary>
     public async Task<IReadOnlyList<TaskItem>> LoadAsync(CancellationToken ct = default)
     {
-        var assigned = await client.GetAssignedTasksAsync(config.WorkspaceId, userId, ct);
+        // Assignee IS rules scope the assigned fetch server-side (#68). The default view's "Assignee IS
+        // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone.
+        var assigned = await client.GetAssignedTasksAsync(config.WorkspaceId, ResolveAssigneeIds(config.View), ct);
         var personal = await client.GetListTasksAsync(config.PersonalTasksListId, ct);
 
         // De-dup by task id; a task assigned to me that also lives on my personal list appears once.
@@ -24,21 +35,49 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
         foreach (var task in assigned.Concat(personal))
             byId[task.Id] = task;
 
-        return ExcludeByStatus(byId.Values, config.ExcludedStatuses)
+        // Status exclusion is no longer a separate mechanism — it's ordinary "Status IS NOT" filter
+        // rules applied by TaskView.Filter at render time (#69). LoadAsync only fetches, merges, and
+        // orders; visibility is decided in exactly one place.
+        return byId.Values
             .OrderBy(t => t, TaskOrder.Instance)
             .ToList();
     }
 
-    /// <summary>Filters out tasks whose status is in the excluded set (case-insensitive).</summary>
-    internal static IEnumerable<TaskItem> ExcludeByStatus(IEnumerable<TaskItem> tasks, IEnumerable<string> excluded)
+    /// <summary>The set of assignee ids the assigned fetch should be scoped to, for this service's user.</summary>
+    public IReadOnlyList<long> ResolveAssigneeIds(ViewSettings view) => ResolveAssigneeIds(view, UserId);
+
+    /// <summary>
+    /// The assignee ids to send to the server-side task fetch, derived from the view's
+    /// <c>Assignee IS</c> rules: the <c>me</c> token resolves to <paramref name="currentUserId"/>, a
+    /// numeric value is taken as an id. Values that are neither (a username/email) are skipped — resolving
+    /// those needs a workspace-members lookup (deferred, #73). An empty result means "no assignee filter"
+    /// (fetch everyone). Pure and unit-testable.
+    /// <para>
+    /// Multiple <c>Assignee IS</c> rules union into one set — ClickUp's <c>assignees[]</c> is OR
+    /// (assigned to <em>any</em>), which is the right contains-semantics for a multi-valued field even
+    /// though the other F3 rule kinds AND together. The default view has a single rule, so this only
+    /// matters once a user adds a second assignee.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<long> ResolveAssigneeIds(ViewSettings view, long currentUserId)
     {
-        var set = new HashSet<string>(
-            excluded.Where(s => !string.IsNullOrWhiteSpace(s)),
-            StringComparer.OrdinalIgnoreCase);
-        return set.Count == 0
-            ? tasks
-            : tasks.Where(t => string.IsNullOrWhiteSpace(t.StatusName) || !set.Contains(t.StatusName));
+        var ids = new List<long>();
+        foreach (var r in view.Filters)
+        {
+            if (r.Field != TaskField.Assignee || r.Op != FilterOp.Is)
+                continue;
+            if (string.Equals(r.Value, ViewSettings.CurrentUserToken, StringComparison.OrdinalIgnoreCase))
+                ids.Add(currentUserId);
+            else if (long.TryParse(r.Value?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+                ids.Add(id);
+        }
+        return ids.Distinct().ToList();
     }
+
+    /// <summary>Order-insensitive equality of two assignee-id sets, used to decide whether an F3 edit
+    /// changed the server-side fetch (needing a reload) rather than just the client-side view.</summary>
+    public static bool SameAssigneeSet(IReadOnlyList<long> a, IReadOnlyList<long> b)
+        => a.Count == b.Count && new HashSet<long>(a).SetEquals(b);
 
     /// <summary>The available statuses for a list, served from the TTL cache or fetched on demand.</summary>
     public Task<IReadOnlyList<StatusOption>> GetStatusesForListAsync(string listId, CancellationToken ct = default)
@@ -74,6 +113,94 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     /// </summary>
     public static IReadOnlyList<TaskItem> ApplyStatusChange(IReadOnlyList<TaskItem> tasks, string taskId, string? newStatus)
         => tasks.Select(t => t.Id == taskId ? t with { StatusName = newStatus } : t).ToList();
+
+    /// <summary>
+    /// The distinct parent ids referenced by a subtask in <paramref name="snapshot"/> that aren't
+    /// themselves present in it — the parents the nested subtasks view (#46) must pull in as context
+    /// headers. Pure; order follows first appearance so the fetch is deterministic.
+    /// </summary>
+    internal static IReadOnlyList<string> MissingParentIds(IReadOnlyList<TaskItem> snapshot)
+    {
+        var present = new HashSet<string>(snapshot.Select(t => t.Id));
+        var missing = new List<string>();
+        var seen = new HashSet<string>();
+        foreach (var t in snapshot)
+        {
+            if (string.IsNullOrEmpty(t.ParentId) || present.Contains(t.ParentId))
+                continue;
+            if (seen.Add(t.ParentId))
+                missing.Add(t.ParentId);
+        }
+        return missing;
+    }
+
+    /// <summary>
+    /// Best-effort list-color lookup for the given lists, keyed by list id, for tinting List-grouped
+    /// headers. Colors are cached for the process lifetime; a list whose color can't be fetched (or that
+    /// has none) maps to null so the caller falls back to a generated hue and it isn't refetched.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, string?>> ResolveListColorsAsync(
+        IEnumerable<string> listIds, CancellationToken ct = default)
+    {
+        // Fetch the not-yet-cached lists concurrently; a session commonly spans several lists, so doing
+        // them sequentially would add a round-trip per list to the first List-grouped render.
+        var toFetch = listIds
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Distinct(StringComparer.Ordinal)
+            .Where(id => !_listColors.ContainsKey(id))
+            .ToList();
+
+        await Task.WhenAll(toFetch.Select(async id =>
+        {
+            try
+            {
+                _listColors[id] = await client.GetListColorAsync(id, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _listColors[id] = null; // best-effort: a list we can't fetch just falls back to a hue
+            }
+        }));
+
+        return new Dictionary<string, string?>(_listColors, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Fetches the parents of assigned subtasks that aren't themselves in <paramref name="snapshot"/>,
+    /// mapped to <see cref="TaskItem"/> headers for the nested subtasks view. Best-effort: a parent
+    /// that can't be fetched (deleted / no access) is skipped rather than failing the whole load.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, TaskItem>> ResolveContextParentsAsync(
+        IReadOnlyList<TaskItem> snapshot, CancellationToken ct = default)
+    {
+        var result = new Dictionary<string, TaskItem>();
+        foreach (var id in MissingParentIds(snapshot))
+        {
+            try
+            {
+                var d = await client.GetTaskDetailAsync(id, ct);
+                // ParentId is intentionally left null: a context parent is a header for its subtask, so
+                // it's always rendered at the top level (it isn't nested under its own parent here).
+                result[id] = new TaskItem
+                {
+                    Id = d.Id,
+                    Name = d.Name,
+                    Url = d.Url,
+                    StatusName = d.StatusName,
+                    StatusColor = d.StatusColor,
+                    ListId = d.ListId,
+                    ListName = d.ListName,
+                    DueDateMs = d.DueDateMs,
+                    UpdatedMs = d.UpdatedMs,
+                };
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort: a parent we can't fetch just won't get a context header.
+            }
+        }
+        return result;
+    }
 
     /// <summary>Stable ordering: by due date (soonest first, undated last), then by name.</summary>
     private sealed class TaskOrder : IComparer<TaskItem>

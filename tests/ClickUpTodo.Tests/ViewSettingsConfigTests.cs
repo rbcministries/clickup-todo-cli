@@ -17,6 +17,9 @@ public sealed class ViewSettingsConfigTests : IDisposable
         var store = new ConfigStore(_dir);
         var original = new AppConfig
         {
+            // Already at the current schema, so Load() doesn't seed the default assignee rule — this
+            // test isolates the view's save/load round-trip (migration is covered in ConfigMigrationsTests).
+            SchemaVersion = ConfigMigrations.CurrentVersion,
             WorkspaceId = "1",
             PersonalTasksListId = "2",
             View = new ViewSettings
@@ -29,6 +32,7 @@ public sealed class ViewSettingsConfigTests : IDisposable
                 SortField = TaskField.LastActivity,
                 SortDirection = SortDirection.Descending,
                 GroupField = TaskField.List,
+                ShowSubtasks = true,
             },
         };
 
@@ -43,17 +47,86 @@ public sealed class ViewSettingsConfigTests : IDisposable
         Assert.Equal(TaskField.LastActivity, loaded.View.SortField);
         Assert.Equal(SortDirection.Descending, loaded.View.SortDirection);
         Assert.Equal(TaskField.List, loaded.View.GroupField);
+        Assert.True(loaded.View.ShowSubtasks);
     }
 
     [Fact]
-    public void DefaultView_IsEmptyAndDefault()
+    public void SaveThenLoad_RoundTripsCreatedField()
     {
-        var view = new AppConfig().View;
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig
+        {
+            SchemaVersion = ConfigMigrations.CurrentVersion, // isolate round-trip from the default-rule seed
+            View = new ViewSettings
+            {
+                Filters = [new FilterRule { Field = TaskField.Created, Op = FilterOp.GreaterOrEqual, Value = "2026-06-01" }],
+                SortField = TaskField.Created,
+                GroupField = TaskField.Created,
+            },
+        });
+
+        var loaded = store.Load();
+
+        Assert.Equal(TaskField.Created, loaded.View.Filters[0].Field);
+        Assert.Equal(TaskField.Created, loaded.View.SortField);
+        Assert.Equal(TaskField.Created, loaded.View.GroupField);
+
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.Contains("\"Created\"", json); // persisted by name, not ordinal
+    }
+
+    /// <summary>The full seeded default view: Assignee IS me (#68) + a Status IS NOT rule per default
+    /// excluded status (#69).</summary>
+    private static List<FilterRule> DefaultFilters() =>
+    [
+        ViewSettings.DefaultAssigneeRule(),
+        .. ViewSettings.DefaultExcludedStatuses.Select(ViewSettings.StatusIsNotRule),
+    ];
+
+    [Fact]
+    public void FreshlyLoadedDefaultView_IsTheSeededDefault_AndIsDefault()
+    {
+        // A fresh config (no file) is migrated on load: the default view is Assignee IS me plus the
+        // default Status IS NOT exclusions (#68 + #69), and that counts as the default view.
+        var view = new ConfigStore(_dir).Load().View;
 
         Assert.True(view.IsDefault);
-        Assert.Empty(view.Filters);
+        var assignee = Assert.Single(view.Filters, r => r.Field == TaskField.Assignee);
+        Assert.Equal(FilterOp.Is, assignee.Op);
+        Assert.Equal(ViewSettings.CurrentUserToken, assignee.Value);
+        Assert.Equal(
+            ViewSettings.DefaultExcludedStatuses.OrderBy(s => s),
+            view.Filters.Where(r => r.Field == TaskField.Status && r.Op == FilterOp.IsNot).Select(r => r.Value).OrderBy(s => s));
         Assert.Null(view.SortField);
         Assert.Null(view.GroupField);
+        Assert.False(view.ShowSubtasks);
+    }
+
+    [Fact]
+    public void SeededDefaultView_IsDefault_RegardlessOfFilterOrder()
+    {
+        Assert.True(new ViewSettings { Filters = DefaultFilters() }.IsDefault);
+        // Order-independent: reversing the filter list is still the default.
+        Assert.True(new ViewSettings { Filters = [.. Enumerable.Reverse(DefaultFilters())] }.IsDefault);
+    }
+
+    [Fact]
+    public void ViewsThatDivergeFromTheSeededDefault_AreNotDefault()
+    {
+        Assert.False(new ViewSettings().IsDefault); // zero filters
+        Assert.False(new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()] }.IsDefault); // assignee alone (missing exclusions)
+        Assert.False(new ViewSettings { Filters = DefaultFilters(), ShowSubtasks = true }.IsDefault);
+        Assert.False(new ViewSettings { Filters = DefaultFilters(), GroupField = TaskField.List }.IsDefault);
+        // An extra rule beyond the default set.
+        Assert.False(new ViewSettings
+        {
+            Filters = [.. DefaultFilters(), new FilterRule { Field = TaskField.Status, Op = FilterOp.IsNot, Value = "done" }],
+        }.IsDefault);
+        // Right count, but a default exclusion swapped for a different status.
+        Assert.False(new ViewSettings
+        {
+            Filters = [ViewSettings.DefaultAssigneeRule(), ViewSettings.StatusIsNotRule("won't do"), ViewSettings.StatusIsNotRule("done")],
+        }.IsDefault);
     }
 
     [Fact]

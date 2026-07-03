@@ -1,3 +1,4 @@
+using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Services;
 
@@ -12,10 +13,61 @@ public sealed class TaskFieldInfoTests
     [Theory]
     [InlineData(TaskField.Status, false)]
     [InlineData(TaskField.List, false)]
+    [InlineData(TaskField.Created, true)]
     [InlineData(TaskField.LastActivity, true)]
     [InlineData(TaskField.Due, true)]
+    [InlineData(TaskField.Priority, false)]
     public void IsNumeric_OnlyDateFields(TaskField field, bool expected)
         => Assert.Equal(expected, TaskFieldInfo.IsNumeric(field));
+
+    [Theory]
+    [InlineData(TaskField.Status, false)]
+    [InlineData(TaskField.List, false)]
+    [InlineData(TaskField.LastActivity, false)]
+    [InlineData(TaskField.Due, false)]
+    [InlineData(TaskField.Priority, true)]
+    public void IsOrdinal_OnlyPriority(TaskField field, bool expected)
+        => Assert.Equal(expected, TaskFieldInfo.IsOrdinal(field));
+
+    [Fact]
+    public void DisplayName_Priority()
+        => Assert.Equal("Priority", TaskFieldInfo.DisplayName(TaskField.Priority));
+
+    [Fact]
+    public void DisplayName_Assignee()
+        => Assert.Equal("Assignee", TaskFieldInfo.DisplayName(TaskField.Assignee));
+
+    [Fact]
+    public void ValidOps_Assignee_IsOnly()
+        => Assert.Equal([FilterOp.Is], TaskFieldInfo.ValidOps(TaskField.Assignee));
+
+    [Fact]
+    public void CategoricalValue_Assignee_UsesFirstAssignee_OrNullWhenNone()
+    {
+        var withTwo = new TaskItem
+        {
+            Id = "1",
+            Name = "t",
+            Assignees = [new TaskAssignee(1, "Ada"), new TaskAssignee(2, "Bo")],
+        };
+        var withNone = new TaskItem { Id = "2", Name = "t" };
+
+        Assert.Equal("Ada", TaskFieldInfo.CategoricalValue(withTwo, TaskField.Assignee));
+        Assert.Null(TaskFieldInfo.CategoricalValue(withNone, TaskField.Assignee));
+    }
+
+    [Fact]
+    public void ValidOps_Created_IncludesOrderingOperators()
+    {
+        var ops = TaskFieldInfo.ValidOps(TaskField.Created);
+
+        Assert.Contains(FilterOp.GreaterThan, ops);
+        Assert.Contains(FilterOp.LessOrEqual, ops);
+        Assert.Equal(6, ops.Count);
+    }
+
+    [Fact]
+    public void DisplayName_Created() => Assert.Equal("Created", TaskFieldInfo.DisplayName(TaskField.Created));
 
     [Fact]
     public void ValidOps_Categorical_IsAndIsNotOnly()
@@ -28,6 +80,17 @@ public sealed class TaskFieldInfoTests
     public void ValidOps_Numeric_IncludesOrderingOperators()
     {
         var ops = TaskFieldInfo.ValidOps(TaskField.Due);
+
+        Assert.Contains(FilterOp.GreaterThan, ops);
+        Assert.Contains(FilterOp.LessOrEqual, ops);
+        Assert.Equal(6, ops.Count);
+    }
+
+    [Fact]
+    public void ValidOps_Ordinal_IncludesOrderingOperators()
+    {
+        // Priority is ordinal, so all six operators are valid (not just IS / IS NOT).
+        var ops = TaskFieldInfo.ValidOps(TaskField.Priority);
 
         Assert.Contains(FilterOp.GreaterThan, ops);
         Assert.Contains(FilterOp.LessOrEqual, ops);

@@ -8,20 +8,13 @@ It shows the tasks **assigned to you** and the tasks on your **Personal Tasks li
 the ClickUp REST API on a configurable interval, and lets you change a task's status and pin tasks to
 a "Current Focus" pane — all from the keyboard.
 
-```
-┌ ClickUp Simple CLI — Acme Workspace ────────────────────────────────────────┐
-│┌ ★ Current Focus (1) ───────────────────────────────────────────────────────┐│
-││ [in progress] Ship the Q3 report  · Personal Tasks  · due Jul 1             ││
-│└──────────────────────────────────────────────────────────────────────────-─┘│
-│┌ TASKS (12) ──────────────────────────────────────────────────────────────-─┐│
-││ [to do] Review onboarding PR  · Engineering                                 ││
-││ [to do] Reply to vendor email  · Personal Tasks  · due Jun 28               ││
-││ …                                                                           ││
-│└──────────────────────────────────────────────────────────────────────────-─┘│
-│ Updated 14:02:31 · 13 task(s) · refresh every 60s                            │
-│ ↑/↓ move · Tab switch pane · Space set status · P pin · Enter open · Q quit  │
-└──────────────────────────────────────────────────────────────────────────-──┘
-```
+<img width="770" height="219" alt="Screenshot 2026-07-01 152130" src="https://github.com/user-attachments/assets/eab69023-d41e-457e-9aa9-061ce2f8b360" />
+
+_Pin focused tasks, group by list/status/priority, and more_
+
+<img width="1144" height="127" alt="Screenshot 2026-07-01 152244" src="https://github.com/user-attachments/assets/38d750a7-eddf-48b8-952a-ff4fbf7810dc" />
+
+_Keyboard shortcuts for common operations_
 
 ## Install
 

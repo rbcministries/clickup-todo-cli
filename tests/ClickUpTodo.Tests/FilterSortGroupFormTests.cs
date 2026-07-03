@@ -20,6 +20,43 @@ public sealed class FilterSortGroupFormTests
     }
 
     [Fact]
+    public void Fields_IncludesCreated()
+    {
+        Assert.Contains(TaskField.Created, FilterSortGroupForm.Fields);
+        Assert.Contains("Created", FilterSortGroupForm.FieldChoices());
+    }
+
+    [Fact]
+    public void Fields_IncludesAssignee()
+    {
+        Assert.Contains(TaskField.Assignee, FilterSortGroupForm.Fields);
+        Assert.Contains("Assignee", FilterSortGroupForm.FieldChoices());
+    }
+
+    [Fact]
+    public void TryBuildRule_AssigneeIs_Valid()
+    {
+        var ok = FilterSortGroupForm.TryBuildRule(TaskField.Assignee, FilterOp.Is, " me ", out var rule, out var error);
+
+        Assert.True(ok);
+        Assert.Null(error);
+        Assert.Equal(TaskField.Assignee, rule!.Field);
+        Assert.Equal("me", rule.Value);
+    }
+
+    [Theory]
+    [InlineData(FilterOp.IsNot)]
+    [InlineData(FilterOp.GreaterThan)]
+    public void TryBuildRule_AssigneeNonIsOperator_Rejected(FilterOp op)
+    {
+        var ok = FilterSortGroupForm.TryBuildRule(TaskField.Assignee, op, "me", out var rule, out var error);
+
+        Assert.False(ok);
+        Assert.Null(rule);
+        Assert.Contains("IS", error);
+    }
+
+    [Fact]
     public void FieldIndex_RoundTrips()
     {
         Assert.Equal(0, FilterSortGroupForm.FieldToIndex(null));
@@ -84,4 +121,20 @@ public sealed class FilterSortGroupFormTests
         Assert.Null(rule);
         Assert.Contains("IS / IS NOT", error);
     }
+
+    [Fact]
+    public void TryBuildRule_Valid_PriorityOrdering()
+    {
+        // Priority is ordinal, so ordering operators are allowed (unlike categorical fields).
+        var ok = FilterSortGroupForm.TryBuildRule(TaskField.Priority, FilterOp.GreaterOrEqual, "High", out var rule, out var error);
+
+        Assert.True(ok);
+        Assert.Null(error);
+        Assert.Equal(TaskField.Priority, rule!.Field);
+        Assert.Equal(FilterOp.GreaterOrEqual, rule.Op);
+    }
+
+    [Fact]
+    public void Fields_IncludesPriority()
+        => Assert.Contains(TaskField.Priority, FilterSortGroupForm.Fields);
 }

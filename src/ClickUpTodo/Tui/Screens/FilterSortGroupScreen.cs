@@ -46,7 +46,7 @@ public sealed class FilterSortGroupScreen : Screen
         opList.SetSource(new ObservableCollection<string>(FilterSortGroupForm.Ops.Select(TaskFieldInfo.OpSymbol)));
         opList.SelectedItem = 0;
 
-        var valueLabel = new Label { X = 1, Y = 13, Text = "Value (name, or yyyy-mm-dd):" };
+        var valueLabel = new Label { X = 1, Y = 13, Text = "Value (name/me, or yyyy-mm-dd):" };
         var valueField = new TextField { X = 1, Y = 14, Width = 26 };
 
         var addButton = new Button { X = 1, Y = 15, Text = "Add filter" };
@@ -131,7 +131,7 @@ public sealed class FilterSortGroupScreen : Screen
 
         var save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var cancel = new Button { X = Pos.Right(save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
-        var clear = new Button { X = Pos.Right(cancel) + 2, Y = Pos.AnchorEnd(1), Text = "Clear all" };
+        var clear = new Button { X = Pos.Right(cancel) + 2, Y = Pos.AnchorEnd(1), Text = "Reset to default" };
 
         save.Accepting += (_, _) =>
         {
@@ -141,14 +141,22 @@ public sealed class FilterSortGroupScreen : Screen
                 SortField = FilterSortGroupForm.IndexToField(sortList.SelectedItem),
                 SortDirection = direction,
                 GroupField = FilterSortGroupForm.IndexToField(groupList.SelectedItem),
+                // Preserve the F4 subtasks toggle, which this screen doesn't edit — otherwise saving the
+                // F3 view would silently turn subtasks off (and, since #68, flip IsDefault).
+                ShowSubtasks = current.ShowSubtasks,
             };
             Close();
         };
         cancel.Accepting += (_, _) => Close();
         clear.Accepting += (_, _) =>
         {
+            // Reset to the default view (the seeded "Assignee IS me" rule), not to zero filters — an
+            // empty assignee rule would mean "everyone" and trigger a broad workspace fetch (#68).
             working.Clear();
+            working.Add(ViewSettings.DefaultAssigneeRule());
             filterDisplay.Clear();
+            foreach (var r in working)
+                filterDisplay.Add(TaskFieldInfo.Describe(r));
             sortList.SelectedItem = 0;
             groupList.SelectedItem = 0;
             direction = SortDirection.Ascending;

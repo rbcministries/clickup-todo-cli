@@ -31,26 +31,31 @@ public sealed class SettingsFormTests
     public void ParseRefreshSeconds_AcceptsWhitespacePaddedIntegers()
         => Assert.Equal(60, SettingsForm.ParseRefreshSeconds("  60  ", fallback: 99));
 
-    [Fact]
-    public void CanAdd_AllowsANewNonBlankStatus()
-        => Assert.True(SettingsForm.CanAdd(["cancelled"], "won't do"));
+    // ── agent-dispatch extra args (#27) ─────────────────────────────────────────
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void CanAdd_RejectsBlank(string? candidate)
-        => Assert.False(SettingsForm.CanAdd([], candidate));
+    public void ParseExtraArgs_BlankYieldsEmpty(string? text)
+        => Assert.Empty(SettingsForm.ParseExtraArgs(text));
 
     [Fact]
-    public void CanAdd_AcceptsATrimmedButDistinctCandidate()
-        => Assert.True(SettingsForm.CanAdd(["cancelled"], "  done  "));
+    public void ParseExtraArgs_SplitsOnWhitespaceAndDropsBlanks()
+        => Assert.Equal(["--model", "opus", "--verbose"], SettingsForm.ParseExtraArgs("  --model   opus\t--verbose "));
 
     [Fact]
-    public void CanAdd_RejectsCaseInsensitiveDuplicate()
-        => Assert.False(SettingsForm.CanAdd(["Cancelled"], "cancelled"));
+    public void FormatExtraArgs_JoinsWithSpaces()
+        => Assert.Equal("--model opus", SettingsForm.FormatExtraArgs(["--model", "opus"]));
 
     [Fact]
-    public void CanAdd_ComparesAgainstTheTrimmedCandidate()
-        => Assert.False(SettingsForm.CanAdd(["cancelled"], "  cancelled  "));
+    public void FormatExtraArgs_SkipsBlankEntries()
+        => Assert.Equal("--model opus", SettingsForm.FormatExtraArgs(["--model", "  ", "opus"]));
+
+    [Fact]
+    public void ExtraArgs_RoundTripThroughFormatThenParse()
+    {
+        string[] args = ["--model", "opus", "--dangerously-skip-permissions"];
+        Assert.Equal(args, SettingsForm.ParseExtraArgs(SettingsForm.FormatExtraArgs(args)));
+    }
 }

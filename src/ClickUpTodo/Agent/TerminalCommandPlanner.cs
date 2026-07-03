@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace ClickUpTodo.Agent;
 
 /// <summary>
@@ -26,13 +28,15 @@ public static class TerminalCommandPlanner
             _ => [],
         };
 
-    // ── Windows: Windows Terminal → pwsh → powershell, all running the same pwsh command ──
+    // ── Windows: Windows Terminal → pwsh → powershell → cmd, all running the same pwsh command ──
     //
-    // No `cmd /c start "" pwsh …` last resort: Windows PowerShell (powershell.exe) ships in-box on
-    // every supported Windows, so this chain always resolves a real terminal. Nesting the pwsh
-    // command (which contains `&` and parentheses) through cmd.exe is unreliable — cmd.exe's parsing
-    // differs from the CommandLineToArgvW escaping that ProcessStartInfo.ArgumentList applies, and it
-    // can't be verified headlessly. A robust cmd-based last resort is tracked as a follow-up (#45).
+    // The first three launch the PowerShell host directly. The `cmd` last resort (#45) opens a new
+    // window via `cmd /c start "" <host> …` and carries the payload as `-EncodedCommand <base64>`:
+    // Base64 is [A-Za-z0-9+/=] only, so the `&`/parenthesis command survives cmd.exe's tokenizer
+    // intact (that mis-tokenization is exactly why PR #42 first omitted the cmd path). `-EncodedCommand`
+    // needs a PowerShell host, so the cmd candidate is gated on one being present — cmd alone can't run
+    // the file-reading `claude` invocation. In practice powershell.exe is always in-box, so cmd sits
+    // last and is reached only if the direct launches fail to start, or when it's explicitly preferred.
 
     private static IReadOnlyList<LaunchSpec> PlanWindows(
         Func<string, bool> exists, string file, string? cwd, TerminalLauncherOptions options)
@@ -45,6 +49,7 @@ public static class TerminalCommandPlanner
             PreferredTerminal.WindowsTerminal,
             PreferredTerminal.Pwsh,
             PreferredTerminal.PowerShell,
+            PreferredTerminal.Cmd,
         };
 
         // Honor an explicit preference by moving it to the front of the chain (fallback preserved).
@@ -63,6 +68,11 @@ public static class TerminalCommandPlanner
                     "pwsh", ["-NoExit", "-Command", command], cwd, "PowerShell (pwsh)"),
                 PreferredTerminal.PowerShell when exists("powershell") => new LaunchSpec(
                     "powershell", ["-NoExit", "-Command", command], cwd, "Windows PowerShell"),
+                PreferredTerminal.Cmd when exists("cmd") && PwshHost(exists) is { } host => new LaunchSpec(
+                    "cmd",
+                    ["/c", "start", "", host, "-NoExit", "-EncodedCommand", EncodePwshCommand(command)],
+                    cwd,
+                    "Command Prompt (cmd)"),
                 _ => null,
             };
             if (spec is not null)
@@ -70,6 +80,10 @@ public static class TerminalCommandPlanner
         }
         return specs;
     }
+
+    /// <summary>The PowerShell host to run inside the cmd window — pwsh preferred, else powershell; null if neither.</summary>
+    private static string? PwshHost(Func<string, bool> exists) =>
+        exists("pwsh") ? "pwsh" : exists("powershell") ? "powershell" : null;
 
     // ── macOS: osascript drives Terminal to run the bash command ──
 
@@ -142,6 +156,13 @@ public static class TerminalCommandPlanner
 
     /// <summary>Single-quote for POSIX shells: literal text, embedded <c>'</c> → <c>'\''</c>.</summary>
     private static string PosixQuote(string s) => $"'{s.Replace("'", "'\\''")}'";
+
+    /// <summary>
+    /// Encode a PowerShell command for <c>-EncodedCommand</c>: Base64 of the UTF-16LE bytes. The
+    /// result is <c>[A-Za-z0-9+/=]</c> only, so it survives cmd.exe's parser (and <c>start</c>) intact.
+    /// </summary>
+    private static string EncodePwshCommand(string command) =>
+        Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
 
     /// <summary>Escape for an AppleScript double-quoted string literal.</summary>
     private static string AppleScriptEscape(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");

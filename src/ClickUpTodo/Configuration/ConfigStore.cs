@@ -39,10 +39,13 @@ public sealed class ConfigStore
 
     public AppConfig Load()
     {
-        if (!File.Exists(ConfigPath))
-            return new AppConfig();
-        var json = File.ReadAllText(ConfigPath);
-        return JsonSerializer.Deserialize<AppConfig>(json, JsonOptions) ?? new AppConfig();
+        var config = File.Exists(ConfigPath)
+            ? JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(ConfigPath), JsonOptions) ?? new AppConfig()
+            : new AppConfig();
+        // Bring older (or freshly-created) configs up to the current schema — e.g. seed the default
+        // Assignee rule (#68). Runs on the in-memory config; it's persisted on the next Save.
+        ConfigMigrations.Apply(config);
+        return config;
     }
 
     public void Save(AppConfig config)
