@@ -7,53 +7,38 @@ using System.IO;
 using System;
 namespace ClickUpTodo.ClickUp.Generated.Models
 {
+    /// <summary>
+    /// A Workspace member. ClickUp&apos;s GET /team returns each member wrapped as { user: {...} }.
+    /// </summary>
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
-    #pragma warning disable CS1591
-    public partial class Workspace : IAdditionalDataHolder, IParsable
-    #pragma warning restore CS1591
+    public partial class Member : IAdditionalDataHolder, IParsable
     {
         /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
         public IDictionary<string, object> AdditionalData { get; set; }
-        /// <summary>The id property</summary>
+        /// <summary>The user property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
-        public string? Id { get; set; }
+        public global::ClickUpTodo.ClickUp.Generated.Models.User? User { get; set; }
 #nullable restore
 #else
-        public string Id { get; set; }
-#endif
-        /// <summary>The members property</summary>
-#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
-#nullable enable
-        public List<global::ClickUpTodo.ClickUp.Generated.Models.Member>? Members { get; set; }
-#nullable restore
-#else
-        public List<global::ClickUpTodo.ClickUp.Generated.Models.Member> Members { get; set; }
-#endif
-        /// <summary>The name property</summary>
-#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
-#nullable enable
-        public string? Name { get; set; }
-#nullable restore
-#else
-        public string Name { get; set; }
+        public global::ClickUpTodo.ClickUp.Generated.Models.User User { get; set; }
 #endif
         /// <summary>
-        /// Instantiates a new <see cref="global::ClickUpTodo.ClickUp.Generated.Models.Workspace"/> and sets the default values.
+        /// Instantiates a new <see cref="global::ClickUpTodo.ClickUp.Generated.Models.Member"/> and sets the default values.
         /// </summary>
-        public Workspace()
+        public Member()
         {
             AdditionalData = new Dictionary<string, object>();
         }
         /// <summary>
         /// Creates a new instance of the appropriate class based on discriminator value
         /// </summary>
-        /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.Workspace"/></returns>
+        /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.Member"/></returns>
         /// <param name="parseNode">The parse node to use to read the discriminator value and create the object</param>
-        public static global::ClickUpTodo.ClickUp.Generated.Models.Workspace CreateFromDiscriminatorValue(IParseNode parseNode)
+        public static global::ClickUpTodo.ClickUp.Generated.Models.Member CreateFromDiscriminatorValue(IParseNode parseNode)
         {
             if(ReferenceEquals(parseNode, null)) throw new ArgumentNullException(nameof(parseNode));
-            return new global::ClickUpTodo.ClickUp.Generated.Models.Workspace();
+            return new global::ClickUpTodo.ClickUp.Generated.Models.Member();
         }
         /// <summary>
         /// The deserialization information for the current model
@@ -63,9 +48,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         {
             return new Dictionary<string, Action<IParseNode>>
             {
-                { "id", n => { Id = n.GetStringValue(); } },
-                { "members", n => { Members = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.Member>(global::ClickUpTodo.ClickUp.Generated.Models.Member.CreateFromDiscriminatorValue)?.AsList(); } },
-                { "name", n => { Name = n.GetStringValue(); } },
+                { "user", n => { User = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.User>(global::ClickUpTodo.ClickUp.Generated.Models.User.CreateFromDiscriminatorValue); } },
             };
         }
         /// <summary>
@@ -75,9 +58,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         public virtual void Serialize(ISerializationWriter writer)
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
-            writer.WriteStringValue("id", Id);
-            writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.Member>("members", Members);
-            writer.WriteStringValue("name", Name);
+            writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.User>("user", User);
             writer.WriteAdditionalData(AdditionalData);
         }
     }

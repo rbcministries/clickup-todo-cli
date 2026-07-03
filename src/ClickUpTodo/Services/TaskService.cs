@@ -26,8 +26,9 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     public async Task<IReadOnlyList<TaskItem>> LoadAsync(CancellationToken ct = default)
     {
         // Assignee IS rules scope the assigned fetch server-side (#68). The default view's "Assignee IS
-        // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone.
-        var assigned = await client.GetAssignedTasksAsync(config.WorkspaceId, ResolveAssigneeIds(config.View), ct);
+        // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone. A
+        // username/email rule is resolved to an id via the workspace-members lookup (#73).
+        var assigned = await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), ct);
         var personal = await client.GetListTasksAsync(config.PersonalTasksListId, ct);
 
         // De-dup by task id; a task assigned to me that also lives on my personal list appears once.
@@ -43,15 +44,27 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
             .ToList();
     }
 
-    /// <summary>The set of assignee ids the assigned fetch should be scoped to, for this service's user.</summary>
+    // Workspace members, fetched at most once per service instance (they change rarely within a session)
+    // and only when an Assignee rule actually needs a name/email resolved. A faulted fetch is not cached
+    // so the next load retries.
+    private Task<IReadOnlyList<WorkspaceMember>>? _membersFetch;
+
+    /// <summary>The set of assignee ids the assigned fetch should be scoped to (me + numeric ids only,
+    /// for this service's user). Name/email values are resolved by <see cref="ResolveAssigneeIdsAsync"/>.</summary>
     public IReadOnlyList<long> ResolveAssigneeIds(ViewSettings view) => ResolveAssigneeIds(view, UserId);
+
+    /// <summary>Me + numeric-id resolution only; a username/email value contributes nothing (it needs the
+    /// members overload). Kept for the fast path and as the members-fetch-failure fallback.</summary>
+    public static IReadOnlyList<long> ResolveAssigneeIds(ViewSettings view, long currentUserId)
+        => ResolveAssigneeIds(view, currentUserId, []);
 
     /// <summary>
     /// The assignee ids to send to the server-side task fetch, derived from the view's
     /// <c>Assignee IS</c> rules: the <c>me</c> token resolves to <paramref name="currentUserId"/>, a
-    /// numeric value is taken as an id. Values that are neither (a username/email) are skipped — resolving
-    /// those needs a workspace-members lookup (deferred, #73). An empty result means "no assignee filter"
-    /// (fetch everyone). Pure and unit-testable.
+    /// numeric value is taken as an id, and any other value (a username/email) is matched
+    /// case-insensitively against <paramref name="members"/>' username/email and resolved to their id(s)
+    /// (#73). A value that matches no member is skipped (best-effort). An empty result means "no assignee
+    /// filter" (fetch everyone). Pure and unit-testable.
     /// <para>
     /// Multiple <c>Assignee IS</c> rules union into one set — ClickUp's <c>assignees[]</c> is OR
     /// (assigned to <em>any</em>), which is the right contains-semantics for a multi-valued field even
@@ -59,25 +72,81 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     /// matters once a user adds a second assignee.
     /// </para>
     /// </summary>
-    public static IReadOnlyList<long> ResolveAssigneeIds(ViewSettings view, long currentUserId)
+    public static IReadOnlyList<long> ResolveAssigneeIds(ViewSettings view, long currentUserId, IReadOnlyList<WorkspaceMember> members)
     {
         var ids = new List<long>();
         foreach (var r in view.Filters)
         {
             if (r.Field != TaskField.Assignee || r.Op != FilterOp.Is)
                 continue;
-            if (string.Equals(r.Value, ViewSettings.CurrentUserToken, StringComparison.OrdinalIgnoreCase))
+            var value = r.Value?.Trim() ?? "";
+            if (value.Length == 0)
+                continue;
+            if (string.Equals(value, ViewSettings.CurrentUserToken, StringComparison.OrdinalIgnoreCase))
                 ids.Add(currentUserId);
-            else if (long.TryParse(r.Value?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
+            else if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id))
                 ids.Add(id);
+            else
+                ids.AddRange(MatchMembers(members, value));
         }
         return ids.Distinct().ToList();
     }
 
-    /// <summary>Order-insensitive equality of two assignee-id sets, used to decide whether an F3 edit
-    /// changed the server-side fetch (needing a reload) rather than just the client-side view.</summary>
-    public static bool SameAssigneeSet(IReadOnlyList<long> a, IReadOnlyList<long> b)
-        => a.Count == b.Count && new HashSet<long>(a).SetEquals(b);
+    /// <summary>Ids of members whose username or email equals <paramref name="value"/> (case-insensitive).</summary>
+    private static IEnumerable<long> MatchMembers(IReadOnlyList<WorkspaceMember> members, string value)
+        => members
+            .Where(m => string.Equals(m.Username, value, StringComparison.OrdinalIgnoreCase)
+                     || string.Equals(m.Email, value, StringComparison.OrdinalIgnoreCase))
+            .Select(m => m.Id)
+            .Where(id => id != 0);
+
+    /// <summary>True when a view has an <c>Assignee IS</c> rule whose value is neither <c>me</c> nor a
+    /// numeric id — i.e. a username/email that requires the workspace-members lookup to resolve. Used to
+    /// avoid the members round-trip on the common (default) view.</summary>
+    public static bool HasUnresolvedAssigneeNames(ViewSettings view)
+        => view.Filters.Any(r => r.Field == TaskField.Assignee && r.Op == FilterOp.Is && IsUnresolvedName(r.Value));
+
+    private static bool IsUnresolvedName(string? value)
+    {
+        var v = value?.Trim() ?? "";
+        return v.Length > 0
+            && !string.Equals(v, ViewSettings.CurrentUserToken, StringComparison.OrdinalIgnoreCase)
+            && !long.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out _);
+    }
+
+    /// <summary>
+    /// Resolves the view's <c>Assignee IS</c> rules to a server-side assignee-id set, fetching workspace
+    /// members (cached, at most once) only when a rule carries a username/email. Best-effort: if the
+    /// members fetch fails, falls back to me + numeric ids so the load still succeeds (#73).
+    /// </summary>
+    public async Task<IReadOnlyList<long>> ResolveAssigneeIdsAsync(ViewSettings view, CancellationToken ct = default)
+    {
+        if (!HasUnresolvedAssigneeNames(view))
+            return ResolveAssigneeIds(view);
+
+        IReadOnlyList<WorkspaceMember> members;
+        try
+        {
+            members = await (_membersFetch ??= client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _membersFetch = null; // don't cache a failure — the next load retries
+            return ResolveAssigneeIds(view); // best-effort: names stay unresolved, me/numeric still apply
+        }
+        return ResolveAssigneeIds(view, UserId, members);
+    }
+
+    /// <summary>The distinct, case-insensitive set of <c>Assignee IS</c> rule <em>values</em>. Used to
+    /// decide whether an F3 edit changed the server-side fetch (needing a reload) rather than just the
+    /// client-side view. Compares raw values, not resolved ids, so a change to a still-unresolved
+    /// username/email is never missed (unlike an id-set comparison, which can't see it).</summary>
+    public static IReadOnlySet<string> AssigneeRuleValues(ViewSettings view)
+        => view.Filters
+            .Where(r => r.Field == TaskField.Assignee && r.Op == FilterOp.Is)
+            .Select(r => (r.Value ?? "").Trim())
+            .Where(v => v.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The available statuses for a list, served from the TTL cache or fetched on demand.</summary>
     public Task<IReadOnlyList<StatusOption>> GetStatusesForListAsync(string listId, CancellationToken ct = default)
