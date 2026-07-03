@@ -129,10 +129,17 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
         {
             members = await (_membersFetch ??= client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            _membersFetch = null; // don't cache a failure — the next load retries
-            return ResolveAssigneeIds(view); // best-effort: names stay unresolved, me/numeric still apply
+            throw; // genuine caller cancellation (e.g. app shutdown) — let it propagate
+        }
+        catch (Exception)
+        {
+            // Any failure — an API error or an HttpClient timeout (which surfaces as a
+            // TaskCanceledException even though our ct wasn't signalled) — is best-effort: names stay
+            // unresolved (me/numeric still apply) and the cache is cleared so the next load retries.
+            _membersFetch = null;
+            return ResolveAssigneeIds(view);
         }
         return ResolveAssigneeIds(view, UserId, members);
     }
