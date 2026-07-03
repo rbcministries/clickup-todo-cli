@@ -38,4 +38,34 @@ public sealed class ClickUpClientMapTests
 
         Assert.Empty(mapped.Assignees);
     }
+
+    [Fact]
+    public void MapDetail_CarriesStatusAndPriorityColors()
+    {
+        // The detail Other tab colours the Status/Priority values (#66), so MapDetail must carry both
+        // hex colours through from the generated Status/Priority objects.
+        var t = new TaskObject
+        {
+            Id = "abc",
+            Name = "A task",
+            Status = new Status { StatusProp = "in progress", Color = "#00ff00" },
+            Priority = new Priority { PriorityProp = "high", Color = "#ff0000" },
+        };
+
+        var detail = ClickUpClient.MapDetail(t);
+
+        Assert.Equal("in progress", detail.StatusName);
+        Assert.Equal("#00ff00", detail.StatusColor);
+        Assert.Equal("high", detail.Priority);
+        Assert.Equal("#ff0000", detail.PriorityColor);
+    }
+
+    [Fact]
+    public void MapDetail_NoStatusOrPriority_LeavesColorsNull()
+    {
+        var detail = ClickUpClient.MapDetail(new TaskObject { Id = "abc", Name = "A task" });
+
+        Assert.Null(detail.StatusColor);
+        Assert.Null(detail.PriorityColor);
+    }
 }

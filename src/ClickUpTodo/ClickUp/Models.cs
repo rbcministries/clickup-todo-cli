@@ -169,6 +169,10 @@ public sealed record TaskDetail
     public string? Description { get; init; }
     public string? Priority { get; init; }
 
+    /// <summary>Priority hex color for the detail Other tab's coloured <c>Priority:</c> value; null when
+    /// unset. Mirrors <see cref="TaskItem.PriorityColor"/> and the sibling <see cref="StatusColor"/>.</summary>
+    public string? PriorityColor { get; init; }
+
     public long? DueDateMs { get; init; }
     public long? CreatedMs { get; init; }
     public long? UpdatedMs { get; init; }
