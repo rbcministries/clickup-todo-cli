@@ -76,6 +76,9 @@ public sealed class TodoApp
     private List<Attribute?> _headerAttrs = [];
     // Per-row nesting depth, parallel to _display, so an in-place row update keeps its indent (#46).
     private List<int> _depths = [];
+    // Per-row fold state, parallel to _display, so ←/→ can read the selected row's state and an in-place
+    // update reproduces the correct ▶/▼ marker (#76). None on headers/spacers/leaves/context parents.
+    private List<FoldState> _folds = [];
     // Per-list color chips for List-grouped headers, resolved off the UI thread in FetchAsync and read
     // during Render; volatile to publish the reference safely across threads. (#61)
     private volatile IReadOnlyDictionary<string, string?> _listColors = EmptyListColors;
@@ -92,6 +95,9 @@ public sealed class TodoApp
     // parent, #75). Set during Render; read by UpdateTaskRow so an in-place status update treats a
     // pulled-in Focus row like a Focus row (keeps every segment) rather than a to-do row.
     private IReadOnlySet<string> _focusNestedIds = new HashSet<string>(StringComparer.Ordinal);
+    // Ids of parents the user has expanded this session (#76). Empty = all collapsed (the default). Only
+    // meaningful while the subtasks view (F4) is on; ephemeral (never persisted to config, per the issue).
+    private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
     private string _status = "Loading…";
     private string _signature = "";
 
@@ -170,7 +176,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · Ctrl+Q quit · type to search",
+            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · ◂/▸ expand/collapse · Ctrl+Q quit · type to search",
         };
 
         _window.Add(_frame, _statusLabel, help);
@@ -223,6 +229,22 @@ public sealed class TodoApp
                 key.Handled = true;
                 JumpToNextSection();
                 break;
+            case KeyCode.CursorRight:
+                // ←/→ drive per-parent fold only while the subtasks view is on (#76); off, they fall
+                // through to the ListView's native horizontal scroll.
+                if (_config.View.ShowSubtasks && _activeScreen is null)
+                {
+                    key.Handled = true;
+                    ExpandOrEnter();
+                }
+                break;
+            case KeyCode.CursorLeft:
+                if (_config.View.ShowSubtasks && _activeScreen is null)
+                {
+                    key.Handled = true;
+                    CollapseOrJumpToParent();
+                }
+                break;
             case KeyCode.Esc:
                 key.Handled = true;
                 Application.RequestStop();
@@ -255,7 +277,7 @@ public sealed class TodoApp
         var on = !_config.View.ShowSubtasks;
         _config.View.ShowSubtasks = on;
         _configStore.Save(_config);
-        Flash(on ? "Subtasks shown, nested under their parent (F4)." : "Subtasks hidden (F4).");
+        Flash(on ? "Subtasks view on — press → to expand a parent, ← to collapse (F4)." : "Subtasks hidden (F4).");
 
         // Re-render immediately (in-snapshot parents nest without waiting on the network), keep the
         // stored signature in sync, then — when turning on — refresh to pull in parents not assigned
@@ -439,6 +461,67 @@ public sealed class TodoApp
                 if (_rows[i] is not null)
                     return i;
             return -1;
+        }
+    }
+
+    /// <summary>
+    /// → in the subtasks view (#76): expand a collapsed parent's subtasks; on an already-expanded parent
+    /// move the cursor into its first child; otherwise a no-op.
+    /// </summary>
+    private void ExpandOrEnter()
+    {
+        var i = _list.SelectedItem ?? -1;
+        if (i < 0 || i >= _folds.Count)
+            return;
+
+        switch (_folds[i])
+        {
+            case FoldState.Collapsed when _rows[i]?.Id is { } id:
+                _expanded.Add(id);
+                Render(keepTaskId: id);
+                break;
+            case FoldState.Expanded:
+                // Move into the first child — the next row indented deeper than this one.
+                var depth = i < _depths.Count ? _depths[i] : 0;
+                if (i + 1 < _rows.Count && _rows[i + 1] is not null && _depths[i + 1] > depth)
+                    _list.SelectedItem = i + 1;
+                break;
+        }
+    }
+
+    /// <summary>
+    /// ← in the subtasks view (#76): collapse an expanded parent; otherwise jump to (and collapse) the
+    /// selected row's foldable parent — a context parent (never foldable) is jumped to without collapsing.
+    /// </summary>
+    private void CollapseOrJumpToParent()
+    {
+        var i = _list.SelectedItem ?? -1;
+        if (i < 0 || i >= _folds.Count)
+            return;
+
+        if (_folds[i] == FoldState.Expanded && _rows[i]?.Id is { } id)
+        {
+            _expanded.Remove(id);
+            Render(keepTaskId: id);
+            return;
+        }
+
+        // On a child / leaf / collapsed row: hop to its parent. A visible child's parent is always
+        // expanded (or a context parent), so this collapses it and lands the cursor on it.
+        var parentId = _rows[i]?.ParentId;
+        if (string.IsNullOrEmpty(parentId))
+            return;
+        var j = _rows.FindIndex(r => r?.Id == parentId);
+        if (j < 0)
+            return;
+        if (_folds[j] == FoldState.Expanded)
+        {
+            _expanded.Remove(parentId!);
+            Render(keepTaskId: parentId);
+        }
+        else
+        {
+            _list.SelectedItem = j; // context parent (not foldable) — just select it
         }
     }
 
@@ -692,7 +775,9 @@ public sealed class TodoApp
         // (#75) — keeps every segment (no group header above it) (#67).
         var inFocus = _focus.IsPinned(updated.Id) || _focusNestedIds.Contains(updated.Id);
         var groupedBy = inFocus ? (TaskField?)null : _config.View.GroupField;
-        var (text, badges) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy);
+        // Reproduce the row's ▶/▼ fold marker from its stored state so an in-place update keeps it (#76).
+        var marker = FoldMarker(index < _folds.Count ? _folds[index] : FoldState.None, _config.View.ShowSubtasks);
+        var (text, badges) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy, marker: marker);
         _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
@@ -782,7 +867,7 @@ public sealed class TodoApp
         // through to the to-do set un-indented; those pulled-in subtask ids are excluded from the
         // non-pinned set below so they don't render twice. Pins ignore F3 filters/grouping. (#75)
         var pinnedIds = _all.Where(t => _focus.IsPinned(t.Id)).Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
-        var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection);
+        var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection, _expanded);
         _focusNestedIds = focus.NestedSubtaskIds;
 
         // The non-pinned set feeds the F3 view. Drop pinned tasks and (when nesting) any subtask pulled
@@ -804,6 +889,7 @@ public sealed class TodoApp
         _badges = new List<IReadOnlyList<StatusBadgeListSource.Badge>>();
         _headerAttrs = new List<Attribute?>();
         _depths = new List<int>();
+        _folds = new List<FoldState>();
 
         // A background color per group header, by the grouped field (status/list/priority/date). Null
         // entries (and the non-field pinned/tasks headers) fall back to the neutral bar. (#61)
@@ -815,25 +901,30 @@ public sealed class TodoApp
         if (pinnedIds.Count > 0)
             AddHeader($"{FocusHeaderPrefix} ({pinnedIds.Count})");
         foreach (var row in focus.Rows)
-            AddTask(row.Task, row.Depth, row.IsContextParent, groupedBy: null);
+            AddTask(row.Task, row.Depth, row.IsContextParent, groupedBy: null, fold: row.Fold);
 
         // The single tasks-section header only appears (when ungrouped) to separate the to-do rows
         // from a pinned section above them.
         var ungroupedTasksHeader = pinnedIds.Count > 0 ? $"{TasksHeaderPrefix} ({todoCount}) ─" : null;
-        foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors))
+        foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors, _expanded))
         {
             if (row.IsHeader)
                 AddHeader(row.HeaderText!, row.HeaderColor);
             else
                 // Omit the grouped field from each to-do row — the group header above already shows it
                 // (#67). The pinned Focus section has no group headers, so its rows keep every segment.
-                AddTask(row.Task!, row.Depth, row.IsContextParent, view.GroupField);
+                AddTask(row.Task!, row.Depth, row.IsContextParent, view.GroupField, fold: row.Fold);
         }
 
         // A custom source that draws text like the stock wrapper, overlays each [status] badge with its
         // ClickUp color, and paints each group header as a full-width color bar. Assigning Source
         // (rather than SetSource) lets us pass our source; the ListView disposes the previous one.
-        _list.Source = new StatusBadgeListSource(_display, _badges, _headerAttrs);
+        // Type-ahead (#12) searches title-only keys so the ▶/▼ marker + badges on the rendered line don't
+        // break "type the first letters of a title to jump" (#76); header/spacer rows keep their text.
+        var searchKeys = new List<string>(_rows.Count);
+        for (var i = 0; i < _rows.Count; i++)
+            searchKeys.Add(_rows[i]?.Name ?? _display[i]);
+        _list.Source = new StatusBadgeListSource(_display, _badges, _headerAttrs, searchKeys);
         _frame.Title = BuildFrameTitle(pinnedIds.Count, todoCount, view);
 
         // Restore the cursor onto the same task, or the first task row.
@@ -861,6 +952,7 @@ public sealed class TodoApp
         _badges.Add([]);
         _headerAttrs.Add(StatusBadgeListSource.HeaderAttr(hexColor) ?? StatusBadgeListSource.NeutralHeaderAttr);
         _depths.Add(0);
+        _folds.Add(FoldState.None);
     }
 
     private void AddSpacer()
@@ -871,25 +963,40 @@ public sealed class TodoApp
         _badges.Add([]);
         _headerAttrs.Add(null);
         _depths.Add(0);
+        _folds.Add(FoldState.None);
     }
 
-    private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null)
+    private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None)
     {
-        var (text, badges) = BuildRow(task, depth, isContextParent, groupedBy);
+        var (text, badges) = BuildRow(task, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks));
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);
         _badges.Add(badges);
         _headerAttrs.Add(null);
         _depths.Add(depth);
+        _folds.Add(fold);
     }
 
+    /// <summary>
+    /// The leading fold marker (#76) for a row: a ▶/▼ glyph on a foldable parent, a two-column gutter on
+    /// other rows so titles line up, or nothing when the subtasks view is off (unchanged layout).
+    /// </summary>
+    private static string FoldMarker(FoldState fold, bool nest)
+        => !nest ? "" : fold switch
+        {
+            FoldState.Expanded => "▼ ",
+            FoldState.Collapsed => "▶ ",
+            _ => "  ",
+        };
+
     /// <summary>The display text and the row's color badge overlays (status, then priority when set).
-    /// <paramref name="groupedBy"/> omits the grouped field's segment (its header already conveys it, #67).</summary>
+    /// <paramref name="groupedBy"/> omits the grouped field's segment (its header already conveys it, #67).
+    /// <paramref name="marker"/> is the leading ▶/▼ fold marker or gutter (#76).</summary>
     private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
-        TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null)
+        TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "")
     {
-        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy);
+        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker);
         var badges = new List<StatusBadgeListSource.Badge>(2);
         if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
             badges.Add(status);
