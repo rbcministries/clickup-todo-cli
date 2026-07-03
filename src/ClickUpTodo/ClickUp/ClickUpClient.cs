@@ -49,6 +49,20 @@ public sealed class ClickUpClient : IDisposable
         => Guard("GetAuthorizedTeams", async () =>
             Named((await _client.V2.Team.GetAsync(cancellationToken: ct))?.Teams, t => t.Id, t => t.Name));
 
+    /// <summary>
+    /// The members of a Workspace — their ids, usernames, and emails — so a username/email typed in an
+    /// <c>Assignee IS</c> filter can be resolved to an id for the server-side task fetch (#73). ClickUp's
+    /// <c>GET /team</c> returns every team the user belongs to with its members inline, so this reuses
+    /// that one call and picks the requested workspace (falling back to the only/first team).
+    /// </summary>
+    public Task<IReadOnlyList<WorkspaceMember>> GetWorkspaceMembersAsync(string workspaceId, CancellationToken ct = default)
+        => Guard("GetAuthorizedTeams", async () =>
+        {
+            var teams = (await _client.V2.Team.GetAsync(cancellationToken: ct))?.Teams ?? [];
+            var team = teams.FirstOrDefault(t => t.Id == workspaceId) ?? teams.FirstOrDefault();
+            return MapMembers(team?.Members);
+        });
+
     public Task<IReadOnlyList<NamedEntity>> GetSpacesAsync(string workspaceId, CancellationToken ct = default)
         => Guard("GetSpaces", async () =>
             Named((await _client.V2.Team[workspaceId].Space.GetAsync(cancellationToken: ct))?.Spaces, s => s.Id, s => s.Name));
@@ -212,6 +226,16 @@ public sealed class ClickUpClient : IDisposable
         => assignees?
             .Select(u => new TaskAssignee(u.Id ?? 0, DisplayName(u)))
             .Where(a => a.Id != 0 || a.Name.Length > 0)
+            .ToList()
+           ?? [];
+
+    /// <summary>Maps a Workspace's <c>members</c> (each wrapped as <c>{ user }</c>) to the stable
+    /// <see cref="WorkspaceMember"/> shape, keeping id/username/email; drops entries with no id (an id is
+    /// required to resolve a name/email into an <c>assignees[]</c> filter). internal for unit testing.</summary>
+    internal static IReadOnlyList<WorkspaceMember> MapMembers(List<Member>? members)
+        => members?
+            .Select(m => new WorkspaceMember(m.User?.Id ?? 0, m.User?.Username, m.User?.Email))
+            .Where(m => m.Id != 0)
             .ToList()
            ?? [];
 
