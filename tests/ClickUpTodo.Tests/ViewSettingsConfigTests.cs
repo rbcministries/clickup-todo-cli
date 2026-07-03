@@ -33,6 +33,7 @@ public sealed class ViewSettingsConfigTests : IDisposable
                 SortDirection = SortDirection.Descending,
                 GroupField = TaskField.List,
                 ShowSubtasks = true,
+                ShowAllSubtasksOfAssignedParents = true,
             },
         };
 
@@ -48,6 +49,7 @@ public sealed class ViewSettingsConfigTests : IDisposable
         Assert.Equal(SortDirection.Descending, loaded.View.SortDirection);
         Assert.Equal(TaskField.List, loaded.View.GroupField);
         Assert.True(loaded.View.ShowSubtasks);
+        Assert.True(loaded.View.ShowAllSubtasksOfAssignedParents);
     }
 
     [Fact]
@@ -116,6 +118,7 @@ public sealed class ViewSettingsConfigTests : IDisposable
         Assert.False(new ViewSettings().IsDefault); // zero filters
         Assert.False(new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()] }.IsDefault); // assignee alone (missing exclusions)
         Assert.False(new ViewSettings { Filters = DefaultFilters(), ShowSubtasks = true }.IsDefault);
+        Assert.False(new ViewSettings { Filters = DefaultFilters(), ShowAllSubtasksOfAssignedParents = true }.IsDefault); // #70 flag
         Assert.False(new ViewSettings { Filters = DefaultFilters(), GroupField = TaskField.List }.IsDefault);
         // An extra rule beyond the default set.
         Assert.False(new ViewSettings

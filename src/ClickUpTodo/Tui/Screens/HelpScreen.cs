@@ -34,6 +34,7 @@ public sealed class HelpScreen : Screen
                 + "  F3          Filter / sort / group the list\n"
                 + "  F4          Show / hide subtasks (shown nested under their parent)\n"
                 + "  → / ←       Expand / collapse the selected parent's subtasks (▶ collapsed, ▼ expanded)\n"
+                + "              F3 can also nest a parent's subtasks that aren't assigned to you\n"
                 + "  Ctrl+Q/Esc  Quit\n"
                 + "\n"
                 + "  Settings, the status picker, the task detail, and this help open as full-window\n"

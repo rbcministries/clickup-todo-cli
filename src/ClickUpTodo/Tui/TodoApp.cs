@@ -91,6 +91,12 @@ public sealed class TodoApp
     // on the UI thread during Render, so it's volatile to publish the reference safely across threads.
     private volatile IReadOnlyDictionary<string, TaskItem> _contextParents = EmptyParents;
     private static readonly IReadOnlyDictionary<string, TaskItem> EmptyParents = new Dictionary<string, TaskItem>();
+    // Teammate-owned subtasks of my in-view parents, pulled in regardless of assignee when the F4
+    // subtasks view and the ShowAllSubtasksOfAssignedParents setting are both on (#70). Keyed by id;
+    // resolved off the UI thread (FetchAsync) and read on the UI thread during Render, so volatile like
+    // _contextParents. They render as not-mine rows nested under their parent and aren't my work
+    // (status/pin are blocked on them).
+    private volatile IReadOnlyDictionary<string, TaskItem> _foreignSubtasks = EmptyParents;
     // Ids of the non-pinned subtasks pulled into the Current Focus section (nested under a pinned
     // parent, #75). Set during Render; read by UpdateTaskRow so an in-place status update treats a
     // pulled-in Focus row like a Focus row (keeps every segment) rather than a to-do row.
@@ -146,6 +152,12 @@ public sealed class TodoApp
         // extra round-trips.
         _contextParents = _config.View.ShowSubtasks
             ? await _tasks.ResolveContextParentsAsync(tasks, ct)
+            : EmptyParents;
+        // Pull in a parent's teammate-owned subtasks (regardless of assignee) only when both the
+        // subtasks view and the ShowAllSubtasksOfAssignedParents setting are on (#70). Off → skip the
+        // extra list-scoped round-trips. Keyed by id for fast Render/guard lookups.
+        _foreignSubtasks = _config.View.ShowSubtasks && _config.View.ShowAllSubtasksOfAssignedParents
+            ? (await _tasks.ResolveForeignSubtasksAsync(tasks, ct)).ToDictionary(t => t.Id, StringComparer.Ordinal)
             : EmptyParents;
         // List colors are only needed to tint headers when grouping by List; skip the fetches otherwise.
         _listColors = _config.View.GroupField == TaskField.List
@@ -283,7 +295,10 @@ public sealed class TodoApp
         // stored signature in sync, then — when turning on — refresh to pull in parents not assigned
         // to me as context headers; that fetch changes the signature again and re-renders when it lands.
         if (!on)
+        {
             _contextParents = EmptyParents;
+            _foreignSubtasks = EmptyParents; // no nesting when subtasks are hidden (#70 is a no-op then)
+        }
         Render(keepTaskId: CurrentTask()?.Id);
         _signature = CurrentSignature(_all);
         if (on)
@@ -317,9 +332,20 @@ public sealed class TodoApp
         // time (#73) — is never missed.
         var before = TaskService.AssigneeRuleValues(previous);
         var after = TaskService.AssigneeRuleValues(result);
-        if (!before.SetEquals(after))
+        var assigneeChanged = !before.SetEquals(after);
+
+        // Turning on "show all subtasks of my parents" (#70) needs a fetch to pull the teammate-owned
+        // children in — a client-side re-render can't surface tasks never fetched — but only when the F4
+        // subtasks view is also on (otherwise it's a no-op). Turning it off drops the pulled-in children
+        // immediately so the view updates without waiting on a refresh.
+        var pullChildrenNowOn = result.ShowAllSubtasksOfAssignedParents && result.ShowSubtasks;
+        var pullChildrenNeedsFetch = pullChildrenNowOn && !previous.ShowAllSubtasksOfAssignedParents;
+        if (!result.ShowAllSubtasksOfAssignedParents)
+            _foreignSubtasks = EmptyParents;
+
+        if (assigneeChanged || pullChildrenNeedsFetch)
         {
-            if (after.Count == 0)
+            if (assigneeChanged && after.Count == 0)
                 Flash("Fetching tasks for all assignees — this may be slow.");
             _refresh.RequestRefresh();
         }
@@ -532,6 +558,13 @@ public sealed class TodoApp
         var task = CurrentTask();
         if (task is null)
             return;
+        // A subtask pulled in under my parent that isn't assigned to me (#70) isn't part of my snapshot,
+        // so pinning it would be a no-op (Focus renders from _all). Refuse it with a clear message.
+        if (_foreignSubtasks.ContainsKey(task.Id))
+        {
+            Flash("This subtask isn't assigned to you — nothing to pin.");
+            return;
+        }
         // The pin write goes through IFocusStore (local today, possibly network-backed later), so
         // run it off the key handler and apply the result back on the UI thread. The local store
         // completes synchronously, so this stays snappy.
@@ -666,6 +699,12 @@ public sealed class TodoApp
         if (_contextParents.ContainsKey(task.Id))
         {
             Flash("This is a parent shown for context (not assigned to you) — status unchanged.");
+            return;
+        }
+        // A subtask pulled in under my parent that isn't assigned to me is context, not my work (#70).
+        if (_foreignSubtasks.ContainsKey(task.Id))
+        {
+            Flash("This subtask isn't assigned to you — status unchanged.");
             return;
         }
         if (string.IsNullOrWhiteSpace(task.ListId))
@@ -824,8 +863,18 @@ public sealed class TodoApp
         var sb = new System.Text.StringBuilder(BuildSignature(tasks));
         sb.Append("#sub=").Append(_config.View.ShowSubtasks);
         if (_config.View.ShowSubtasks)
+        {
             foreach (var id in _contextParents.Keys.OrderBy(x => x, StringComparer.Ordinal))
                 sb.Append(';').Append(id);
+            // Fold in the pulled-in foreign subtasks so adding/removing one — or an edit to one (status,
+            // rename, reschedule; UpdatedMs advances on any ClickUp edit) — is treated as a render change
+            // rather than a no-op refresh (#70). These rows aren't in `tasks`/_all, so BuildSignature
+            // above doesn't cover them.
+            sb.Append("#fsub=");
+            foreach (var kv in _foreignSubtasks.OrderBy(x => x.Key, StringComparer.Ordinal))
+                sb.Append(kv.Key).Append(':').Append(kv.Value.StatusName)
+                  .Append(':').Append(kv.Value.UpdatedMs).Append(';');
+        }
         return sb.ToString();
     }
 
@@ -876,6 +925,14 @@ public sealed class TodoApp
         var nonPinned = _all.Where(t => !pinnedIds.Contains(t.Id) && !focus.NestedSubtaskIds.Contains(t.Id));
         if (!nest)
             nonPinned = nonPinned.Where(t => string.IsNullOrEmpty(t.ParentId));
+        // When nesting, fold in the teammate-owned subtasks of my parents (#70) before Apply, so they're
+        // filtered (Status IS NOT etc.), sorted, and grouped consistently and the arranger can nest them
+        // under their present parent. Populated only when the F4 view + the setting are both on. Foreign
+        // children of a *pinned* parent are dropped here (they'd render detached — nesting them in the
+        // Focus section is deferred to #85).
+        else if (_foreignSubtasks.Count > 0)
+            nonPinned = nonPinned.Concat(
+                TaskService.ForeignSubtasksNotUnderPinned(_all, _foreignSubtasks.Values.ToList(), pinnedIds));
         var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
         var grouped = view.GroupField is not null;
@@ -913,7 +970,10 @@ public sealed class TodoApp
             else
                 // Omit the grouped field from each to-do row — the group header above already shows it
                 // (#67). The pinned Focus section has no group headers, so its rows keep every segment.
-                AddTask(row.Task!, row.Depth, row.IsContextParent, view.GroupField, fold: row.Fold);
+                // Carry the ▶/▼ fold state (#76); a pulled-in teammate-owned subtask (#70) also gets a
+                // not-mine marker.
+                AddTask(row.Task!, row.Depth, row.IsContextParent, view.GroupField,
+                    fold: row.Fold, isForeignSubtask: _foreignSubtasks.ContainsKey(row.Task!.Id));
         }
 
         // A custom source that draws text like the stock wrapper, overlays each [status] badge with its
@@ -966,9 +1026,9 @@ public sealed class TodoApp
         _folds.Add(FoldState.None);
     }
 
-    private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None)
+    private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None, bool isForeignSubtask = false)
     {
-        var (text, badges) = BuildRow(task, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks));
+        var (text, badges) = BuildRow(task, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask);
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);
@@ -994,9 +1054,9 @@ public sealed class TodoApp
     /// <paramref name="groupedBy"/> omits the grouped field's segment (its header already conveys it, #67).
     /// <paramref name="marker"/> is the leading ▶/▼ fold marker or gutter (#76).</summary>
     private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
-        TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "")
+        TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
     {
-        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker);
+        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask);
         var badges = new List<StatusBadgeListSource.Badge>(2);
         if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
             badges.Add(status);

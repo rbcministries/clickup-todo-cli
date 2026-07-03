@@ -168,6 +168,44 @@ public sealed class SectionLayoutTests
         Assert.Equal(["p", "c"], TaskIds(rows));
     }
 
+    // ── #70: a pulled-in teammate-owned child (folded into the set before Apply) nests under its
+    // present parent exactly like an in-snapshot subtask — in both ungrouped and grouped views.
+
+    [Fact]
+    public void Ungrouped_ForeignChildInSet_NestsUnderPresentParent()
+    {
+        // "P" is my parent; "c" is the teammate-owned child #70 pulls into the same set. No context
+        // parent is involved — the parent is present — so it nests via the ordinary child mechanism.
+        var groups = new[] { new TaskGroup(null, new[] { Task("P"), Task("c", parent: "P") }) };
+
+        var rows = Build(groups, grouped: false, nest: true);
+
+        Assert.Equal(["P", "c"], TaskIds(rows));
+        Assert.Equal(1, rows.Single(r => !r.IsHeader && r.Task!.Id == "c").Depth);
+    }
+
+    [Fact]
+    public void Ungrouped_ForeignGrandchildInSet_NestsTwoDeep()
+    {
+        var groups = new[] { new TaskGroup(null, new[] { Task("P"), Task("c", parent: "P"), Task("gc", parent: "c") }) };
+
+        var rows = Build(groups, grouped: false, nest: true);
+
+        Assert.Equal(["P", "c", "gc"], TaskIds(rows));
+        Assert.Equal(2, rows.Single(r => !r.IsHeader && r.Task!.Id == "gc").Depth);
+    }
+
+    [Fact]
+    public void Grouped_ForeignChildSharingParentGroup_Nests()
+    {
+        var groups = new[] { new TaskGroup("List A", new[] { Task("P"), Task("c", parent: "P") }) };
+
+        var rows = Build(groups, grouped: true, nest: true);
+
+        Assert.Equal(["P", "c"], TaskIds(rows));
+        Assert.Equal(1, rows.Single(r => !r.IsHeader && r.Task!.Id == "c").Depth);
+    }
+
     [Fact]
     public void GroupedAndNested_PerParentFold_CollapsedParentHidesChildInItsGroup()
     {

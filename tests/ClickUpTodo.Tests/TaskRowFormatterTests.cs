@@ -116,6 +116,30 @@ public sealed class TaskRowFormatterTests
         Assert.Equal("[to do]", row.Text.Substring(row.StatusStart, row.StatusLength));
     }
 
+    [Fact]
+    public void Format_ForeignSubtask_AppendsNotAssignedMarker()
+    {
+        var task = new TaskItem { Id = "1", Name = "Teammate's subtask", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, depth: 1, isForeignSubtask: true);
+
+        Assert.Contains("(not assigned to you)", row.Text);
+        Assert.DoesNotContain("parent —", row.Text); // the child marker, not the context-parent one
+        Assert.StartsWith("  Teammate's subtask", row.Text); // still indented as a nested row
+        Assert.Equal("[to do]", row.Text.Substring(row.StatusStart, row.StatusLength));
+    }
+
+    [Fact]
+    public void Format_ContextParentWins_OverForeignSubtaskMarker()
+    {
+        var task = new TaskItem { Id = "1", Name = "P", StatusName = "to do" };
+
+        // If both flags are ever set, the context-parent marker takes precedence (a parent row).
+        var row = TaskRowFormatter.Format(task, isContextParent: true, isForeignSubtask: true);
+
+        Assert.Contains("(parent — not assigned to you)", row.Text);
+    }
+
     // ── Priority badge (#55) ─────────────────────────────────────────────────
 
     [Fact]
