@@ -66,6 +66,10 @@ public static class ClickUpPriority
 /// <summary>The signed-in ClickUp user.</summary>
 public sealed record ClickUpUser(long Id, string DisplayName);
 
+/// <summary>A member of a Workspace: the numeric ClickUp id plus the username/email a user can type in
+/// an <c>Assignee IS</c> filter, so a typed name/email resolves to an id for the server-side fetch (#73).</summary>
+public sealed record WorkspaceMember(long Id, string? Username, string? Email);
+
 /// <summary>An id+name pair: a workspace, space, folder, or list in the setup hierarchy.</summary>
 public sealed record NamedEntity(string Id, string Name);
 

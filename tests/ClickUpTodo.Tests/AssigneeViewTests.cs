@@ -100,18 +100,99 @@ public sealed class AssigneeViewTests
         => Assert.Empty(TaskService.ResolveAssigneeIds(new ViewSettings { Filters = [] }, 42));
 
     [Fact]
-    public void ResolveAssigneeIds_UsernameValue_IsSkipped_PendingMembersLookup()
+    public void ResolveAssigneeIds_UsernameValue_WithoutMembers_IsSkipped()
     {
+        // The 2-arg overload (fast path / members-fetch-failure fallback) can't resolve a name.
         var view = new ViewSettings { Filters = [Assignee(FilterOp.Is, "teammate@example.com")] };
 
         Assert.Empty(TaskService.ResolveAssigneeIds(view, 42));
     }
 
+    // ── Username/email resolution via workspace members (#73) ──────────────────────
+
+    private static readonly WorkspaceMember[] Members =
+    [
+        new(10, "ada", "ada@example.com"),
+        new(20, "bo", "bo@example.com"),
+        new(30, "cy", null),
+    ];
+
     [Fact]
-    public void SameAssigneeSet_IsOrderInsensitive()
+    public void ResolveAssigneeIds_UsernameOrEmail_ResolvesToMemberId()
     {
-        Assert.True(TaskService.SameAssigneeSet([1, 2, 3], [3, 1, 2]));
-        Assert.False(TaskService.SameAssigneeSet([1, 2], [1, 2, 3]));
-        Assert.False(TaskService.SameAssigneeSet([1, 2], [1, 9]));
+        Assert.Equal([20L],
+            TaskService.ResolveAssigneeIds(new ViewSettings { Filters = [Assignee(FilterOp.Is, "bo")] }, 42, Members));
+        Assert.Equal([10L],
+            TaskService.ResolveAssigneeIds(new ViewSettings { Filters = [Assignee(FilterOp.Is, "ada@example.com")] }, 42, Members));
+    }
+
+    [Fact]
+    public void ResolveAssigneeIds_NameMatch_IsCaseInsensitive()
+        => Assert.Equal([10L],
+            TaskService.ResolveAssigneeIds(new ViewSettings { Filters = [Assignee(FilterOp.Is, "ADA")] }, 42, Members));
+
+    [Fact]
+    public void ResolveAssigneeIds_UnknownName_IsSkipped_BestEffort()
+        => Assert.Empty(
+            TaskService.ResolveAssigneeIds(new ViewSettings { Filters = [Assignee(FilterOp.Is, "nobody")] }, 42, Members));
+
+    [Fact]
+    public void ResolveAssigneeIds_MixOfMeNumericAndName_UnionedDistinct()
+    {
+        var view = new ViewSettings
+        {
+            Filters =
+            [
+                Assignee(FilterOp.Is, "me"),   // → 42
+                Assignee(FilterOp.Is, "20"),   // numeric id
+                Assignee(FilterOp.Is, "bo"),   // name → 20 (collapses with the numeric)
+                Assignee(FilterOp.Is, "ada"),  // name → 10
+            ],
+        };
+
+        Assert.Equal([42L, 20L, 10L], TaskService.ResolveAssigneeIds(view, 42, Members));
+    }
+
+    // ── HasUnresolvedAssigneeNames (gates the members round-trip) ──────────────────
+
+    [Fact]
+    public void HasUnresolvedAssigneeNames_TrueOnlyForNonMeNonNumericValue()
+    {
+        Assert.False(TaskService.HasUnresolvedAssigneeNames(new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()] }));
+        Assert.False(TaskService.HasUnresolvedAssigneeNames(new ViewSettings { Filters = [Assignee(FilterOp.Is, "99")] }));
+        Assert.False(TaskService.HasUnresolvedAssigneeNames(new ViewSettings { Filters = [] }));
+        Assert.True(TaskService.HasUnresolvedAssigneeNames(new ViewSettings { Filters = [Assignee(FilterOp.Is, "ada@example.com")] }));
+    }
+
+    // ── AssigneeRuleValues (drives the F3 reload decision) ─────────────────────────
+
+    [Fact]
+    public void AssigneeRuleValues_IsDistinctCaseInsensitiveSetOfIsValues()
+    {
+        var view = new ViewSettings
+        {
+            Filters =
+            [
+                Assignee(FilterOp.Is, "me"),
+                Assignee(FilterOp.Is, "ME"),               // dupe (case-insensitive)
+                Assignee(FilterOp.Is, "ada"),
+                new() { Field = TaskField.Status, Op = FilterOp.IsNot, Value = "done" }, // ignored
+            ],
+        };
+
+        var values = TaskService.AssigneeRuleValues(view);
+
+        Assert.True(values.SetEquals(["me", "ada"]));
+    }
+
+    [Fact]
+    public void AssigneeRuleValues_DetectsAddingANameEvenBeforeItResolves()
+    {
+        // The reason for comparing raw values: adding "bo" changes the fetch, and an id-set comparison
+        // (which can't resolve "bo" without members) would wrongly see no change and skip the reload.
+        var before = TaskService.AssigneeRuleValues(new ViewSettings { Filters = [Assignee(FilterOp.Is, "me")] });
+        var after = TaskService.AssigneeRuleValues(new ViewSettings { Filters = [Assignee(FilterOp.Is, "me"), Assignee(FilterOp.Is, "bo")] });
+
+        Assert.False(before.SetEquals(after));
     }
 }

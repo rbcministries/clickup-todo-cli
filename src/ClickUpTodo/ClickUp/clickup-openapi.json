@@ -224,8 +224,14 @@
         "type": "object",
         "properties": {
           "id": { "type": "string" },
-          "name": { "type": "string" }
+          "name": { "type": "string" },
+          "members": { "type": "array", "items": { "$ref": "#/components/schemas/Member" } }
         }
+      },
+      "Member": {
+        "type": "object",
+        "description": "A Workspace member. ClickUp's GET /team returns each member wrapped as { user: {...} }.",
+        "properties": { "user": { "$ref": "#/components/schemas/User" } }
       },
       "WorkspacesResponse": {
         "type": "object",

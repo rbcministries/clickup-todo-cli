@@ -140,19 +140,16 @@ public sealed class StatusBadgeListSource : IListDataSource
     {
         var baseAttr = listView.SetAttribute(attr);
 
-        var displayCol = 0;
-        for (var i = 0; i < text.Length;)
+        var displayCol = 0; // total columns consumed by the text, for where padding starts
+        foreach (var g in LayOutGraphemes(text))
         {
-            Rune.DecodeFromUtf16(text.AsSpan(i), out var rune, out var consumed);
-            var runeWidth = Math.Max(1, rune.GetColumns());
-            var x = displayCol - viewportX;
-            if (x >= 0 && x + runeWidth <= width)
+            var x = g.Column - viewportX;
+            if (x >= 0 && x + g.Width <= width)
             {
                 listView.Move(col + x, row);
-                listView.AddRune(rune);
+                listView.AddStr(g.Text);
             }
-            displayCol += runeWidth;
-            i += consumed;
+            displayCol = g.Column + g.Width;
         }
 
         // Pad the rest of the visible line with spaces so the bar fills the frame width.
@@ -166,13 +163,16 @@ public sealed class StatusBadgeListSource : IListDataSource
     }
 
     /// <summary>
-    /// Re-draws just the badge's runes with its attribute. Positions are computed in display-column
-    /// space (honoring wide runes via <see cref="RuneExtensions.GetColumns"/>) and offset by the
-    /// horizontal scroll (<paramref name="viewportX"/>); cells outside the viewport are skipped.
+    /// Re-draws just the badge's characters with its attribute. Positions are computed in
+    /// display-column space using <see cref="LayOutGraphemes"/> — the same grapheme-aware width the
+    /// stock renderer uses (<see cref="StringExtensions.GetColumns(string, bool)"/>) — and offset by
+    /// the horizontal scroll (<paramref name="viewportX"/>); cells outside the viewport are skipped.
+    /// Computing widths any other way (e.g. per-rune) drifts from the base renderer for names with
+    /// wide/combining/emoji runes and mis-places the color (see #63).
     /// </summary>
     private static void OverlayBadge(ListView listView, Badge badge, int col, int row, int width, int viewportX, string text)
     {
-        var end = Math.Min(badge.Start + badge.Length, text.Length);
+        var end = badge.Start + badge.Length;
 
         // The driver's current attribute is global, shared state. The stock wrapper just rendered
         // this row's text and left that base attribute current; switching to the badge attribute and
@@ -181,25 +181,46 @@ public sealed class StatusBadgeListSource : IListDataSource
         // (see #34). Capture the base attribute and restore it once we're done.
         var baseAttr = listView.SetAttribute(badge.Attr);
 
-        var displayCol = 0; // display column within the full, unscrolled line
-        for (var i = 0; i < end;)
+        foreach (var g in LayOutGraphemes(text))
         {
-            Rune.DecodeFromUtf16(text.AsSpan(i), out var rune, out var consumed);
-            var runeWidth = Math.Max(1, rune.GetColumns());
-            if (i >= badge.Start)
+            if (g.CharIndex >= end)
+                break;
+            if (g.CharIndex < badge.Start)
+                continue;
+            var x = g.Column - viewportX;
+            if (x >= 0 && x + g.Width <= width)
             {
-                var x = displayCol - viewportX;
-                if (x >= 0 && x + runeWidth <= width)
-                {
-                    listView.Move(col + x, row);
-                    listView.AddRune(rune);
-                }
+                listView.Move(col + x, row);
+                listView.AddStr(g.Text);
             }
-            displayCol += runeWidth;
-            i += consumed;
         }
 
         listView.SetAttribute(baseAttr);
+    }
+
+    /// <summary>A grapheme cluster of a row's text with the display <paramref name="Column"/> it starts
+    /// at (in the full, unscrolled line), its display <paramref name="Width"/> in columns, and the
+    /// UTF-16 <paramref name="CharIndex"/> of its first char.</summary>
+    public readonly record struct LaidOutGrapheme(int Column, int Width, int CharIndex, string Text);
+
+    /// <summary>
+    /// Walks a row's text as grapheme clusters, reporting each cluster's start display column, width,
+    /// and char offset. Widths use Terminal.Gui's grapheme-aware <see cref="StringExtensions.GetColumns(string, bool)"/>
+    /// (per cluster), so a cluster's <c>Column</c> equals <c>text[..CharIndex].GetColumns()</c> — i.e.
+    /// exactly where the stock <see cref="ListWrapper{T}"/> draws it. Pure (no Terminal.Gui draw
+    /// surface), so the column math the overlays depend on is unit-testable (see #63).
+    /// </summary>
+    public static IEnumerable<LaidOutGrapheme> LayOutGraphemes(string text)
+    {
+        var charIndex = 0;
+        var displayCol = 0;
+        foreach (var grapheme in GraphemeHelper.GetGraphemes(text))
+        {
+            var w = grapheme.GetColumns();
+            yield return new LaidOutGrapheme(displayCol, w, charIndex, grapheme);
+            displayCol += w;
+            charIndex += grapheme.Length;
+        }
     }
 
     public void Dispose() => _inner.Dispose();
