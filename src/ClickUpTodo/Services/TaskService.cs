@@ -278,6 +278,88 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
         return result;
     }
 
+    /// <summary>
+    /// The tasks from <paramref name="listTasks"/> to pull into the view as not-mine subtasks of an
+    /// in-view parent (#70): those absent from <paramref name="snapshot"/> whose <c>parent</c> chain
+    /// reaches a task that <em>is</em> in the snapshot. Grandchildren are included (a chain through
+    /// other not-in-snapshot children still counts), and a task already in the snapshot is never
+    /// duplicated. Pure and order-deterministic (follows <paramref name="listTasks"/> order),
+    /// cycle-guarded, deduped by id — so the fetch selection is unit-testable.
+    /// </summary>
+    internal static IReadOnlyList<TaskItem> ForeignDescendants(
+        IReadOnlyList<TaskItem> snapshot, IReadOnlyList<TaskItem> listTasks)
+    {
+        var present = new HashSet<string>(snapshot.Select(t => t.Id));
+
+        // parent-of lookup across snapshot ∪ fetched; snapshot wins on id collisions (its mapping is
+        // the one the rest of the view uses).
+        var parentOf = new Dictionary<string, string?>();
+        foreach (var t in listTasks)
+            parentOf[t.Id] = t.ParentId;
+        foreach (var t in snapshot)
+            parentOf[t.Id] = t.ParentId;
+
+        bool DescendsFromPresent(string id)
+        {
+            var seen = new HashSet<string>();
+            var current = id;
+            while (parentOf.TryGetValue(current, out var parent) && !string.IsNullOrEmpty(parent))
+            {
+                if (!seen.Add(parent))
+                    return false; // pathological parent cycle — bail rather than loop forever
+                if (present.Contains(parent))
+                    return true;
+                current = parent;
+            }
+            return false;
+        }
+
+        var result = new List<TaskItem>();
+        var added = new HashSet<string>();
+        foreach (var t in listTasks)
+        {
+            if (present.Contains(t.Id) || !added.Add(t.Id))
+                continue;
+            if (DescendsFromPresent(t.Id))
+                result.Add(t);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Fetches the teammate-owned subtasks of in-view parents so they can nest beneath them regardless
+    /// of assignee (#70). The assignee constraint is server-side (#68), so these children fall outside
+    /// the main fetch; we recover them with a list-scoped fetch (<see cref="ClickUpClient.GetListTasksAsync"/>,
+    /// which returns every task in a list — any assignee — with subtasks), one per distinct list holding
+    /// an in-view task, and keep only those that chain up to a snapshot task (<see cref="ForeignDescendants"/>).
+    /// Best-effort: a list we can't fetch is skipped rather than failing the whole load. Non-assignee
+    /// filters (status/closed) still apply — the pulled-in children flow through <c>TaskView.Apply</c>
+    /// like any other task.
+    /// </summary>
+    public async Task<IReadOnlyList<TaskItem>> ResolveForeignSubtasksAsync(
+        IReadOnlyList<TaskItem> snapshot, CancellationToken ct = default)
+    {
+        var listIds = snapshot
+            .Select(t => t.ListId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        var listTasks = new List<TaskItem>();
+        foreach (var listId in listIds)
+        {
+            try
+            {
+                listTasks.AddRange(await client.GetListTasksAsync(listId!, ct));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Best-effort: a list we can't fetch just contributes no pulled-in children.
+            }
+        }
+        return ForeignDescendants(snapshot, listTasks);
+    }
+
     /// <summary>Stable ordering: by due date (soonest first, undated last), then by name.</summary>
     private sealed class TaskOrder : IComparer<TaskItem>
     {

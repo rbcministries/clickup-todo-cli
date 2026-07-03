@@ -83,6 +83,15 @@ public sealed class ViewSettings
     public bool ShowSubtasks { get; set; }
 
     /// <summary>
+    /// When true (and <see cref="ShowSubtasks"/> is on), a parent that is in my view has <b>all</b> of
+    /// its subtasks nested beneath it regardless of who each is assigned to — the teammate-owned children
+    /// that the assignee-scoped fetch (#68) leaves out are pulled in and shown as not-mine context rows
+    /// (#70). When false (the default) only subtasks that independently qualify for the snapshot nest,
+    /// exactly as #46 behaves. A no-op while <see cref="ShowSubtasks"/> is off (there's nothing to nest).
+    /// </summary>
+    public bool ShowAllSubtasksOfAssignedParents { get; set; }
+
+    /// <summary>
     /// The literal filter value that means "the current app user" for an <see cref="TaskField.Assignee"/>
     /// rule. Kept as a token (not a numeric id) so the seeded default doesn't need the user id at
     /// config-load time; it's resolved to the id only at the fetch layer (#68).
@@ -118,7 +127,7 @@ public sealed class ViewSettings
     {
         get
         {
-            if (SortField is not null || GroupField is not null || ShowSubtasks)
+            if (SortField is not null || GroupField is not null || ShowSubtasks || ShowAllSubtasksOfAssignedParents)
                 return false;
             if (Filters.Count != 1 + DefaultExcludedStatuses.Count)
                 return false;
