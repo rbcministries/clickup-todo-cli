@@ -14,6 +14,11 @@ public readonly record struct LayoutRow(string? HeaderText, TaskItem? Task, int 
     /// <summary>For a header row, the grouped field's hex color for its full-width bar (null → neutral
     /// bar; always null for task rows). Threaded through so the TUI can tint headers by group (#61).</summary>
     public string? HeaderColor { get; init; }
+
+    /// <summary>For a task row, its fold marker state (#76): <see cref="FoldState.None"/> unless the row
+    /// is a user-foldable parent; <see cref="FoldState.Collapsed"/>/<see cref="FoldState.Expanded"/>
+    /// otherwise. Always <see cref="FoldState.None"/> for header rows.</summary>
+    public FoldState Fold { get; init; }
 }
 
 /// <summary>
@@ -43,13 +48,18 @@ public static class SectionLayout
     /// Optional per-group header bar colors (hex), parallel to <paramref name="groups"/>, attached to
     /// each grouped header row's <see cref="LayoutRow.HeaderColor"/>. Null / short → neutral bar (#61).
     /// </param>
+    /// <param name="expanded">
+    /// The ids of expanded parents for per-parent folding (#76), forwarded to <see cref="SubtaskArranger"/>.
+    /// <c>null</c> ⇒ every parent expanded (pre-#76 behaviour).
+    /// </param>
     public static IReadOnlyList<LayoutRow> BuildTodoSection(
         IReadOnlyList<TaskGroup> groups,
         IReadOnlyDictionary<string, TaskItem> contextParents,
         bool grouped,
         bool nest,
         string? ungroupedTasksHeader,
-        IReadOnlyList<string?>? headerColors = null)
+        IReadOnlyList<string?>? headerColors = null,
+        IReadOnlySet<string>? expanded = null)
     {
         var rows = new List<LayoutRow>();
         for (var gi = 0; gi < groups.Count; gi++)
@@ -67,8 +77,8 @@ public static class SectionLayout
                 rows.Add(new LayoutRow(ungroupedTasksHeader, null, 0, false));
 
             if (nest)
-                foreach (var row in SubtaskArranger.Arrange(group.Tasks, contextParents))
-                    rows.Add(new LayoutRow(null, row.Task, row.Depth, row.IsContextParent));
+                foreach (var row in SubtaskArranger.Arrange(group.Tasks, contextParents, expanded))
+                    rows.Add(new LayoutRow(null, row.Task, row.Depth, row.IsContextParent) { Fold = row.Fold });
             else
                 foreach (var t in group.Tasks)
                     rows.Add(new LayoutRow(null, t, 0, false));

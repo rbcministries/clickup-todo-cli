@@ -40,6 +40,27 @@ public sealed class TaskRowFormatterTests
     }
 
     [Fact]
+    public void Format_WithFoldMarker_PrependsMarkerAfterIndent_AndKeepsBadgeSpanExact()
+    {
+        var task = new TaskItem { Id = "1", Name = "Roll up sprint", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, depth: 1, marker: "▶ ");
+
+        // Indent (2 per depth) then the marker then the title.
+        Assert.StartsWith("  ▶ Roll up sprint", row.Text);
+        // The badge span still lands exactly on the status bracket despite the marker shifting offsets.
+        Assert.Equal("[to do]", row.Text.Substring(row.StatusStart, row.StatusLength));
+    }
+
+    [Fact]
+    public void Format_DefaultMarker_IsEmpty_LayoutUnchanged()
+    {
+        var task = new TaskItem { Id = "1", Name = "Plain row", StatusName = "to do" };
+
+        Assert.Equal(TaskRowFormatter.Format(task).Text, TaskRowFormatter.Format(task, marker: "").Text);
+    }
+
+    [Fact]
     public void Format_NoStatus_ProducesNoBadge()
     {
         var task = new TaskItem { Id = "1", Name = "Untitled work", StatusName = null };
