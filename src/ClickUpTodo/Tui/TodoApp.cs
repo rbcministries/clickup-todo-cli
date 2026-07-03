@@ -176,7 +176,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · ◂/▸ expand/collapse · Ctrl+Q quit · type to search",
+            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · →/← expand/collapse · Ctrl+Q quit · type to search",
         };
 
         _window.Add(_frame, _statusLabel, help);
