@@ -78,6 +78,19 @@ public sealed class FilterSortGroupScreen : Screen
         groupList.SetSource(new ObservableCollection<string>(FilterSortGroupForm.FieldChoices()));
         groupList.SelectedItem = FilterSortGroupForm.FieldToIndex(current.GroupField);
 
+        // ── Right column: subtasks modifier (#70) ────────────────────────────
+        // A checkbox-style Button (mirroring dirButton — no new control type). It's a modifier on the
+        // F4 subtasks view: when the parent is mine, nest all of its subtasks regardless of assignee.
+        // A no-op while F4 subtasks are hidden, so the label says so.
+        var pullChildren = current.ShowAllSubtasksOfAssignedParents;
+        var subtasksHeader = new Label { X = rightX, Y = 19, Text = "─ Subtasks (F4) ─" };
+        var pullChildrenButton = new Button { X = rightX, Y = 20, Text = PullChildrenText(pullChildren) };
+        pullChildrenButton.Accepting += (_, _) =>
+        {
+            pullChildren = !pullChildren;
+            pullChildrenButton.Text = PullChildrenText(pullChildren);
+        };
+
         var hint = new Label
         {
             X = 1,
@@ -144,6 +157,7 @@ public sealed class FilterSortGroupScreen : Screen
                 // Preserve the F4 subtasks toggle, which this screen doesn't edit — otherwise saving the
                 // F3 view would silently turn subtasks off (and, since #68, flip IsDefault).
                 ShowSubtasks = current.ShowSubtasks,
+                ShowAllSubtasksOfAssignedParents = pullChildren,
             };
             Close();
         };
@@ -161,6 +175,8 @@ public sealed class FilterSortGroupScreen : Screen
             groupList.SelectedItem = 0;
             direction = SortDirection.Ascending;
             dirButton.Text = DirectionText(direction);
+            pullChildren = false;
+            pullChildrenButton.Text = PullChildrenText(pullChildren);
         };
 
         // Esc cancels from anywhere on the screen (Result stays null).
@@ -177,6 +193,7 @@ public sealed class FilterSortGroupScreen : Screen
             addHeader, fieldLabel, _fieldList, opLabel, opList, valueLabel, valueField, addButton, removeButton,
             activeHeader, filtersList,
             sortHeader, sortLabel, sortList, dirButton, groupHeader, groupLabel, groupList,
+            subtasksHeader, pullChildrenButton,
             hint, save, cancel, clear,
         ]);
     }
@@ -185,4 +202,8 @@ public sealed class FilterSortGroupScreen : Screen
 
     private static string DirectionText(SortDirection direction)
         => $"Direction: {(direction == SortDirection.Ascending ? "Ascending" : "Descending")}";
+
+    /// <summary>Checkbox-style label for the #70 "show all subtasks of my parents" toggle.</summary>
+    private static string PullChildrenText(bool on)
+        => $"[{(on ? "x" : " ")}] Show all subtasks of my tasks (regardless of assignee)";
 }

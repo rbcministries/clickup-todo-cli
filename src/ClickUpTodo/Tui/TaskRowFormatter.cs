@@ -24,6 +24,9 @@ public static class TaskRowFormatter
     /// <summary>Trailing marker on a parent shown only as context (its subtask is assigned to me, it isn't).</summary>
     private const string ContextParentMarker = "  · (parent — not assigned to you)";
 
+    /// <summary>Trailing marker on a subtask pulled in under my parent that isn't assigned to me (#70).</summary>
+    private const string ForeignSubtaskMarker = "  · (not assigned to you)";
+
     /// <summary>
     /// Formats a task row, optionally indented for the nested subtasks view.
     /// </summary>
@@ -33,6 +36,10 @@ public static class TaskRowFormatter
     /// True when the task is a parent pulled in purely as a header (not assigned to the user); appends
     /// a marker so it reads as context rather than actionable work.
     /// </param>
+    /// <param name="isForeignSubtask">
+    /// True when the task is a subtask pulled in under my parent that isn't assigned to me (#70);
+    /// appends a not-mine marker so it reads as context rather than my actionable work.
+    /// </param>
     /// <param name="groupedBy">
     /// The active F3 group field, or null when ungrouped. When set, the segment for that field is
     /// omitted from the row because the group header above already conveys it (#67): Status/Priority
@@ -40,7 +47,7 @@ public static class TaskRowFormatter
     /// <c>· {list}</c>, Due drops <c>· due {date}</c>; Created/LastActivity have no row segment so
     /// grouping by them changes nothing.
     /// </param>
-    public static Row Format(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null)
+    public static Row Format(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, bool isForeignSubtask = false)
     {
         var indent = depth > 0 ? string.Concat(Enumerable.Repeat(IndentUnit, depth)) : "";
 
@@ -62,6 +69,8 @@ public static class TaskRowFormatter
             text += $"  · due {DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime:MMM d}";
         if (isContextParent)
             text += ContextParentMarker;
+        else if (isForeignSubtask)
+            text += ForeignSubtaskMarker;
 
         return new Row(text, statusStart, statusLength, priorityStart, priorityLength);
     }
