@@ -64,9 +64,10 @@ public sealed class OAuthAppCredentialStore
                 return null;
             return new OAuthAppCredentials(dto.ClientId.Trim(), dto.ClientSecret.Trim());
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
-            // Malformed file — treat as "no credentials" rather than crashing sign-in.
+            // Malformed, locked, or unreadable file — treat as "no credentials" rather than
+            // crashing sign-in. Callers fall back to the personal-token path.
             return null;
         }
     }

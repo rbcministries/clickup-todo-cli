@@ -78,6 +78,16 @@ public sealed class ClickUpOAuthTests
     }
 
     [Fact]
+    public async Task Exchange_Throws_OnSuccessWithNonJsonBody()
+    {
+        var handler = new StubHandler(HttpStatusCode.OK, "not json {");
+        var oauth = new ClickUpOAuth(new HttpClient(handler));
+
+        await Assert.ThrowsAsync<ClickUpOAuthException>(
+            () => oauth.ExchangeCodeForTokenAsync(Creds, "code"));
+    }
+
+    [Fact]
     public async Task Exchange_Throws_OnEmptyCode()
     {
         var oauth = new ClickUpOAuth(new HttpClient(new StubHandler(HttpStatusCode.OK, "{}")));

@@ -58,6 +58,16 @@ public sealed class OAuthAppCredentialStoreTests : IDisposable
     }
 
     [Fact]
+    public void Load_TreatsWhitespaceOnlyEnvVars_AsAbsent()
+    {
+        var store = new OAuthAppCredentialStore(_dir, Env(
+            (OAuthAppCredentialStore.ClientIdEnvVar, "   "),
+            (OAuthAppCredentialStore.ClientSecretEnvVar, "   ")));
+
+        Assert.Null(store.Load());
+    }
+
+    [Fact]
     public void Load_FallsBackToFile_WhenEnvAbsent()
     {
         new OAuthAppCredentialStore(_dir, NoEnv).Save(new OAuthAppCredentials("file_id", "file_secret"));
