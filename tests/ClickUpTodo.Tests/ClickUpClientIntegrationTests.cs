@@ -39,6 +39,22 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task GetWorkspaceMembers_ReturnsMembersWithIds()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(WorkspaceId),
+            "Set CLICKUP_TOKEN and CLICKUP_WORKSPACE_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+        var me = await client.GetMeAsync();
+
+        var members = await client.GetWorkspaceMembersAsync(WorkspaceId!);
+
+        // The workspace always contains at least the authenticated user; every member carries an id.
+        Assert.NotEmpty(members);
+        Assert.All(members, m => Assert.True(m.Id > 0));
+        Assert.Contains(members, m => m.Id == me.Id);
+    }
+
+    [SkippableFact]
     public async Task GetAssignedTasks_ReturnsTasksWithIds()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(WorkspaceId),

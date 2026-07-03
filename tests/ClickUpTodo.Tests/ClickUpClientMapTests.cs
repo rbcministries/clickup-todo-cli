@@ -38,4 +38,41 @@ public sealed class ClickUpClientMapTests
 
         Assert.Empty(mapped.Assignees);
     }
+
+    // ── MapMembers (#73): Workspace members → WorkspaceMember for username/email → id resolution ──
+
+    [Fact]
+    public void MapMembers_CarriesIdUsernameAndEmail()
+    {
+        List<Member> members =
+        [
+            new() { User = new User { Id = 42, Username = "Ben", Email = "ben@example.com" } },
+            new() { User = new User { Id = 7, Email = "teammate@example.com" } }, // username may be absent
+        ];
+
+        var mapped = ClickUpClient.MapMembers(members);
+
+        Assert.Equal(2, mapped.Count);
+        Assert.Equal(new WorkspaceMember(42, "Ben", "ben@example.com"), mapped[0]);
+        Assert.Equal(new WorkspaceMember(7, null, "teammate@example.com"), mapped[1]);
+    }
+
+    [Fact]
+    public void MapMembers_DropsEntriesWithNoId()
+    {
+        // An id is required to build an assignees[] filter, so a member without one is dropped.
+        List<Member> members =
+        [
+            new() { User = new User { Username = "no-id" } },
+            new() { User = null },
+            new() { User = new User { Id = 5, Username = "keep" } },
+        ];
+
+        var mapped = ClickUpClient.MapMembers(members);
+
+        Assert.Equal([new WorkspaceMember(5, "keep", null)], mapped);
+    }
+
+    [Fact]
+    public void MapMembers_Null_YieldsEmptyList() => Assert.Empty(ClickUpClient.MapMembers(null));
 }

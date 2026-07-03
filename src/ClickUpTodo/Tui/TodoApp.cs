@@ -287,13 +287,15 @@ public sealed class TodoApp
         _configStore.Save(_config);
         Flash(ViewSummary(result));
 
-        // An Assignee rule scopes the server-side fetch (#68), so a change to the resolved assignee set
-        // needs a reload — a client-side re-render can't surface tasks that were never fetched. Every
-        // other rule change (status/list/due/priority/sort/group) is a pure client-side re-filter, so
-        // re-render directly (BuildSignature would otherwise treat it as a no-op).
-        var before = _tasks.ResolveAssigneeIds(previous);
-        var after = _tasks.ResolveAssigneeIds(result);
-        if (!TaskService.SameAssigneeSet(before, after))
+        // An Assignee rule scopes the server-side fetch (#68), so a change to the assignee rules needs a
+        // reload — a client-side re-render can't surface tasks that were never fetched. Every other rule
+        // change (status/list/due/priority/sort/group) is a pure client-side re-filter, so re-render
+        // directly (BuildSignature would otherwise treat it as a no-op). We compare the raw Assignee IS
+        // values (not resolved ids) so a change to a username/email — resolved to an id only at fetch
+        // time (#73) — is never missed.
+        var before = TaskService.AssigneeRuleValues(previous);
+        var after = TaskService.AssigneeRuleValues(result);
+        if (!before.SetEquals(after))
         {
             if (after.Count == 0)
                 Flash("Fetching tasks for all assignees — this may be slow.");
