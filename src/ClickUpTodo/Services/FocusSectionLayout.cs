@@ -34,12 +34,17 @@ public static class FocusSectionLayout
     /// <param name="nest">True when the F4 subtasks view is on (nest a pinned parent's subtasks).</param>
     /// <param name="sortField">The active sort field (applies to pins as to the to-do set).</param>
     /// <param name="sortDirection">The active sort direction.</param>
+    /// <param name="expanded">
+    /// The ids of expanded parents for per-parent folding (#76), forwarded to <see cref="SubtaskArranger"/>
+    /// so a pinned parent folds like any other. <c>null</c> ⇒ every parent expanded (pre-#76 behaviour).
+    /// </param>
     public static FocusSection Build(
         IReadOnlyList<TaskItem> allTasks,
         IReadOnlySet<string> pinnedIds,
         bool nest,
         TaskField? sortField,
-        SortDirection sortDirection)
+        SortDirection sortDirection,
+        IReadOnlySet<string>? expanded = null)
     {
         var pinned = allTasks.Where(t => pinnedIds.Contains(t.Id));
 
@@ -93,7 +98,7 @@ public static class FocusSectionLayout
         // pure arranger the to-do section uses. No context parents in Focus: a pinned subtask whose parent
         // isn't pinned falls back to a flat top-level row (the arranger's orphan path), matching pre-#75.
         var focusInput = TaskView.Sort(pinned.Concat(pulledTasks), sortField, sortDirection);
-        var rows = SubtaskArranger.Arrange(focusInput, NoContext);
+        var rows = SubtaskArranger.Arrange(focusInput, NoContext, expanded);
         return new FocusSection(rows, nested);
     }
 

@@ -2,12 +2,27 @@ using ClickUpTodo.ClickUp;
 
 namespace ClickUpTodo.Services;
 
+/// <summary>The fold state of a row in the nested subtasks view (#76): <see cref="None"/> for a leaf, a
+/// parentless task, or a context parent (none of which the user folds); otherwise <see cref="Collapsed"/>
+/// (its subtree is hidden) or <see cref="Expanded"/> (its subtree is shown beneath it).</summary>
+public enum FoldState
+{
+    None,
+    Collapsed,
+    Expanded,
+}
+
 /// <summary>
 /// A task placed into the nested subtasks view (#46): the task, its indent <paramref name="Depth"/>
 /// (0 = top level), and whether it's a <paramref name="IsContextParent"/> — a parent pulled in purely
 /// as a grouping header because it isn't in the snapshot itself (i.e. not assigned to the user).
 /// </summary>
-public readonly record struct ArrangedRow(TaskItem Task, int Depth, bool IsContextParent);
+public readonly record struct ArrangedRow(TaskItem Task, int Depth, bool IsContextParent)
+{
+    /// <summary>This row's fold marker state (#76): <see cref="FoldState.None"/> unless the row is a
+    /// user-foldable parent with children in the section.</summary>
+    public FoldState Fold { get; init; }
+}
 
 /// <summary>
 /// Rearranges an already-filtered-and-sorted task list so each subtask sits immediately beneath its
@@ -26,9 +41,17 @@ public static class SubtaskArranger
     /// Parents referenced by a subtask but absent from <paramref name="orderedTasks"/>, keyed by id,
     /// to inject as context headers. Pass an empty dictionary to disable injection.
     /// </param>
+    /// <param name="expanded">
+    /// The ids of parents whose subtasks should be shown (#76). <c>null</c> means <b>every</b> parent is
+    /// expanded — the pre-#76 behaviour. When non-null, a parent whose id isn't in the set is
+    /// <b>collapsed</b>: its whole subtree is hidden (and suppressed, so it never leaks out flat).
+    /// Context parents are always expanded regardless of the set — they exist only to display their
+    /// child, so they're never user-foldable.
+    /// </param>
     public static IReadOnlyList<ArrangedRow> Arrange(
         IReadOnlyList<TaskItem> orderedTasks,
-        IReadOnlyDictionary<string, TaskItem> contextParents)
+        IReadOnlyDictionary<string, TaskItem> contextParents,
+        IReadOnlySet<string>? expanded = null)
     {
         var present = new HashSet<string>(orderedTasks.Select(t => t.Id));
 
@@ -46,15 +69,35 @@ public static class SubtaskArranger
         var result = new List<ArrangedRow>(orderedTasks.Count);
         var emitted = new HashSet<string>();
 
+        // Mark a collapsed parent's whole subtree as emitted without adding rows, so the outer loop and
+        // the straggler safety net don't re-surface the hidden children as flat top-level rows (#76).
+        void Suppress(TaskItem task)
+        {
+            if (!emitted.Add(task.Id))
+                return;
+            if (childrenByParent.TryGetValue(task.Id, out var children))
+                foreach (var child in children)
+                    Suppress(child);
+        }
+
         void Emit(TaskItem task, int depth)
         {
             // Guard first so a (pathological) parent cycle can't recurse forever.
             if (!emitted.Add(task.Id))
                 return;
-            result.Add(new ArrangedRow(task, depth, IsContextParent: false));
-            if (childrenByParent.TryGetValue(task.Id, out var children))
-                foreach (var child in children)
-                    Emit(child, depth + 1);
+            var hasChildren = childrenByParent.TryGetValue(task.Id, out var children) && children.Count > 0;
+            var isExpanded = expanded is null || expanded.Contains(task.Id);
+            var fold = hasChildren ? (isExpanded ? FoldState.Expanded : FoldState.Collapsed) : FoldState.None;
+            result.Add(new ArrangedRow(task, depth, IsContextParent: false) { Fold = fold });
+            if (hasChildren)
+            {
+                if (isExpanded)
+                    foreach (var child in children!)
+                        Emit(child, depth + 1);
+                else
+                    foreach (var child in children!)
+                        Suppress(child);
+            }
         }
 
         var emittedContext = new HashSet<string>();
