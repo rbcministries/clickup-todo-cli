@@ -230,7 +230,8 @@ public sealed class ClickUpClient : IDisposable
             .ToList()
            ?? [];
 
-    private static TaskDetail MapDetail(TaskObject t) => new()
+    // internal (not private) so the mapping can be unit-tested without hitting the live API.
+    internal static TaskDetail MapDetail(TaskObject t) => new()
     {
         Id = t.Id ?? "",
         CustomId = t.CustomId,
@@ -248,6 +249,7 @@ public sealed class ClickUpClient : IDisposable
         // source. Prefer the plain text for a terminal, falling back to the raw form.
         Description = !string.IsNullOrWhiteSpace(t.TextContent) ? t.TextContent : t.Description,
         Priority = t.Priority?.PriorityProp,
+        PriorityColor = t.Priority?.Color,
         DueDateMs = ParseMs(t.DueDate),
         CreatedMs = ParseMs(t.DateCreated),
         UpdatedMs = ParseMs(t.DateUpdated),

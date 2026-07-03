@@ -56,23 +56,55 @@ public static class TaskDetailFormatter
         return sb.ToString().TrimEnd('\n');
     }
 
-    /// <summary>The Other-attributes tab body: dates, list, priority, custom fields.</summary>
-    public static string OtherAttributes(TaskDetail task)
+    /// <summary>One coloured span of a detail line: its text and, when it should be badged, a ClickUp
+    /// hex colour (null = rendered in the view's normal attribute). Terminal.Gui-free (the colour is a
+    /// raw hex string, mapped to an attribute by the view), so the layout stays unit-testable.</summary>
+    public readonly record struct DetailRun(string Text, string? Color = null);
+
+    /// <summary>One line of the Other tab's header attributes, as an ordered list of coloured runs.</summary>
+    public sealed record DetailLine(IReadOnlyList<DetailRun> Runs)
     {
-        var sb = new StringBuilder();
-        sb.Append("List:          ").Append(Coalesce(task.ListName)).Append('\n');
+        /// <summary>The line's plain text — its runs concatenated (what the uncoloured layout shows).</summary>
+        public string Text => string.Concat(Runs.Select(r => r.Text));
+    }
+
+    /// <summary>
+    /// The Other tab's header attributes (List / Lists / Priority / Status / dates) as structured,
+    /// coloured runs — the single source of truth for both the coloured detail view (#66) and the
+    /// plain <see cref="OtherAttributes"/> string. The Priority and Status <em>values</em> carry their
+    /// hex colour (<see cref="TaskDetail.PriorityColor"/> / <see cref="TaskDetail.StatusColor"/>) so the
+    /// view can badge them; the labels and every other line are uncoloured. The em-dash placeholder for
+    /// a missing value is never coloured.
+    /// </summary>
+    public static IReadOnlyList<DetailLine> HeaderAttributeLines(TaskDetail task)
+    {
+        var lines = new List<DetailLine> { Line("List:          " + Coalesce(task.ListName)) };
         // ClickUp's "Tasks in Multiple Lists": show the full membership only when the task belongs to
         // more than its home list; otherwise the single "List:" line above already covers it.
         var lists = ListMembership(task);
         if (lists.Count > 1)
-            sb.Append("Lists:         ").Append(string.Join(", ", lists)).Append('\n');
-        sb.Append("Priority:      ").Append(Coalesce(task.Priority)).Append('\n');
-        sb.Append("Status:        ").Append(Coalesce(task.StatusName)).Append('\n');
-        sb.Append("Created:       ").Append(FormatDateOrDash(task.CreatedMs)).Append('\n');
-        sb.Append("Last activity: ").Append(FormatDateOrDash(task.UpdatedMs)).Append('\n');
-        sb.Append("Due:           ").Append(FormatDateOrDash(task.DueDateMs)).Append('\n');
+            lines.Add(Line("Lists:         " + string.Join(", ", lists)));
 
-        sb.Append('\n').Append("Custom fields:").Append('\n');
+        var priority = Coalesce(task.Priority);
+        lines.Add(new DetailLine([new DetailRun("Priority:      "), new DetailRun(priority, ValueColor(priority, task.PriorityColor))]));
+        var status = Coalesce(task.StatusName);
+        lines.Add(new DetailLine([new DetailRun("Status:        "), new DetailRun(status, ValueColor(status, task.StatusColor))]));
+
+        lines.Add(Line("Created:       " + FormatDateOrDash(task.CreatedMs)));
+        lines.Add(Line("Last activity: " + FormatDateOrDash(task.UpdatedMs)));
+        lines.Add(Line("Due:           " + FormatDateOrDash(task.DueDateMs)));
+        return lines;
+
+        static DetailLine Line(string text) => new([new DetailRun(text)]);
+        // Only a real value gets its colour — the em-dash placeholder for an absent value stays uncoloured.
+        static string? ValueColor(string value, string? color) => value == EmDash ? null : color;
+    }
+
+    /// <summary>The Other tab's "Custom fields:" section (below the header attributes).</summary>
+    public static string CustomFieldsBody(TaskDetail task)
+    {
+        var sb = new StringBuilder();
+        sb.Append("Custom fields:").Append('\n');
         if (task.CustomFields.Count == 0)
             sb.Append("  (none)");
         else
@@ -86,6 +118,20 @@ public static class TaskDetailFormatter
                     sb.Append(": ").Append(value);
                 sb.Append('\n');
             }
+        return sb.ToString().TrimEnd('\n');
+    }
+
+    /// <summary>The Other-attributes tab body as plain text (dates, list, priority, custom fields) —
+    /// used where per-span colour isn't available. Assembled from the same
+    /// <see cref="HeaderAttributeLines"/> + <see cref="CustomFieldsBody"/> the coloured view draws from,
+    /// so the two can't drift.</summary>
+    public static string OtherAttributes(TaskDetail task)
+    {
+        var sb = new StringBuilder();
+        foreach (var line in HeaderAttributeLines(task))
+            sb.Append(line.Text).Append('\n');
+        sb.Append('\n');
+        sb.Append(CustomFieldsBody(task));
         return sb.ToString().TrimEnd('\n');
     }
 
@@ -266,9 +312,12 @@ public static class TaskDetailFormatter
         return names;
     }
 
-    private static string Coalesce(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value!;
+    /// <summary>Placeholder shown for a missing/blank attribute value (never coloured as a badge).</summary>
+    private const string EmDash = "—";
 
-    private static string FormatDateOrDash(long? ms) => ms is { } v ? FormatDate(v) : "—";
+    private static string Coalesce(string? value) => string.IsNullOrWhiteSpace(value) ? EmDash : value!;
+
+    private static string FormatDateOrDash(long? ms) => ms is { } v ? FormatDate(v) : EmDash;
 
     private static string FormatDate(long ms)
         => DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime.ToString("MMM d, yyyy HH:mm");

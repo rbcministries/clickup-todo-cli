@@ -18,16 +18,22 @@ public sealed class TaskDetailFormatterTests
         string? description = "A description.",
         string? customId = null,
         string? listId = "L1",
-        IReadOnlyList<NamedEntity>? lists = null) => new()
+        IReadOnlyList<NamedEntity>? lists = null,
+        string? statusName = "in progress",
+        string? priority = "high",
+        string? statusColor = null,
+        string? priorityColor = null) => new()
         {
             Id = "abc",
             CustomId = customId,
             Name = "Ship the report",
-            StatusName = "in progress",
+            StatusName = statusName,
+            StatusColor = statusColor,
             ListId = listId,
             ListName = "Personal Tasks",
             Lists = lists ?? [],
-            Priority = "high",
+            Priority = priority,
+            PriorityColor = priorityColor,
             Description = description,
             Tags = tags ?? [],
             Assignees = assignees ?? [],
@@ -146,6 +152,78 @@ public sealed class TaskDetailFormatterTests
     {
         var text = TaskDetailFormatter.OtherAttributes(Sample(customFields: []));
         Assert.Contains("(none)", text);
+    }
+
+    // ── Header attribute lines / colouring (issue #66) ───────────────────────
+
+    [Fact]
+    public void HeaderAttributeLines_ColorsPriorityAndStatusValues()
+    {
+        var lines = TaskDetailFormatter.HeaderAttributeLines(
+            Sample(statusColor: "#00ff00", priorityColor: "#ff0000"));
+
+        var priority = lines.Single(l => l.Text.StartsWith("Priority:"));
+        // The label run is uncoloured; only the trailing value run carries the priority colour.
+        Assert.Equal("high", priority.Runs[^1].Text);
+        Assert.Equal("#ff0000", priority.Runs[^1].Color);
+        Assert.Null(priority.Runs[0].Color);
+
+        var status = lines.Single(l => l.Text.StartsWith("Status:"));
+        Assert.Equal("in progress", status.Runs[^1].Text);
+        Assert.Equal("#00ff00", status.Runs[^1].Color);
+        Assert.Null(status.Runs[0].Color);
+    }
+
+    [Fact]
+    public void HeaderAttributeLines_OnlyStatusAndPriorityValuesAreColoured()
+    {
+        var lines = TaskDetailFormatter.HeaderAttributeLines(
+            Sample(statusColor: "#00ff00", priorityColor: "#ff0000"));
+
+        foreach (var line in lines)
+            foreach (var run in line.Runs)
+                if (run.Color is not null)
+                    Assert.Contains(run.Text, new[] { "high", "in progress" });
+    }
+
+    [Fact]
+    public void HeaderAttributeLines_AbsentValues_AreNotColoured()
+    {
+        // Blank status/priority render as the em-dash placeholder, which is never badged even if a
+        // colour is somehow present.
+        var lines = TaskDetailFormatter.HeaderAttributeLines(
+            Sample(statusName: null, priority: null, statusColor: "#00ff00", priorityColor: "#ff0000"));
+
+        var priority = lines.Single(l => l.Text.StartsWith("Priority:"));
+        Assert.Equal("—", priority.Runs[^1].Text);
+        Assert.Null(priority.Runs[^1].Color);
+
+        var status = lines.Single(l => l.Text.StartsWith("Status:"));
+        Assert.Equal("—", status.Runs[^1].Text);
+        Assert.Null(status.Runs[^1].Color);
+    }
+
+    [Fact]
+    public void HeaderAttributeLines_MultipleLists_RendersUncolouredListsLine()
+    {
+        var lines = TaskDetailFormatter.HeaderAttributeLines(
+            Sample(listId: "L1", lists: [new NamedEntity("L2", "Engineering"), new NamedEntity("L3", "Q3 Launch")]));
+
+        var listsLine = lines.Single(l => l.Text.StartsWith("Lists:"));
+        Assert.Contains("Personal Tasks, Engineering, Q3 Launch", listsLine.Text);
+        // The multi-list membership line is never badged.
+        Assert.All(listsLine.Runs, r => Assert.Null(r.Color));
+    }
+
+    [Fact]
+    public void OtherAttributes_EqualsHeaderLinesPlusCustomFieldsBody()
+    {
+        // Guards the refactor: the plain string and the coloured view are built from the same pieces.
+        var task = Sample(customFields: [new("Sprint", "drop_down")]);
+        var expected = string.Join("\n", TaskDetailFormatter.HeaderAttributeLines(task).Select(l => l.Text))
+            + "\n\n" + TaskDetailFormatter.CustomFieldsBody(task);
+
+        Assert.Equal(expected, TaskDetailFormatter.OtherAttributes(task));
     }
 
     // ── Custom-field value rendering (issue #35) ─────────────────────────────
