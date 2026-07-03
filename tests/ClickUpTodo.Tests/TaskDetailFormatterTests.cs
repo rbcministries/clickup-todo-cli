@@ -204,6 +204,18 @@ public sealed class TaskDetailFormatterTests
     }
 
     [Fact]
+    public void HeaderAttributeLines_MultipleLists_RendersUncolouredListsLine()
+    {
+        var lines = TaskDetailFormatter.HeaderAttributeLines(
+            Sample(listId: "L1", lists: [new NamedEntity("L2", "Engineering"), new NamedEntity("L3", "Q3 Launch")]));
+
+        var listsLine = lines.Single(l => l.Text.StartsWith("Lists:"));
+        Assert.Contains("Personal Tasks, Engineering, Q3 Launch", listsLine.Text);
+        // The multi-list membership line is never badged.
+        Assert.All(listsLine.Runs, r => Assert.Null(r.Color));
+    }
+
+    [Fact]
     public void OtherAttributes_EqualsHeaderLinesPlusCustomFieldsBody()
     {
         // Guards the refactor: the plain string and the coloured view are built from the same pieces.
