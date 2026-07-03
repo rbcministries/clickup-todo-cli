@@ -173,4 +173,20 @@ public sealed class SubtaskArrangerTests
     {
         Assert.Empty(Arrange([]));
     }
+
+    [Fact]
+    public void Arrange_PresentChildThatIsAlsoAContextParent_NestsChainWithoutContextHeader()
+    {
+        // #70 edge case: X is a foreign child folded into the set (so it's present) *and* it's listed as
+        // a context parent (it parents the in-snapshot subtask Y). Because X is present, X nests under P
+        // and Y under X — X is never injected as a duplicate context header.
+        TaskItem[] tasks = [Task("P"), Task("X", parent: "P"), Task("Y", parent: "X")];
+        var context = new Dictionary<string, TaskItem> { ["X"] = Task("X") };
+
+        var rows = Arrange(tasks, context);
+
+        Assert.Equal(["P", "X", "Y"], rows.Select(r => r.Task.Id));
+        Assert.Equal([0, 1, 2], rows.Select(r => r.Depth));
+        Assert.All(rows, r => Assert.False(r.IsContextParent));
+    }
 }

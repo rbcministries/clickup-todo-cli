@@ -88,4 +88,57 @@ public sealed class ForeignDescendantsTests
         Assert.Empty(TaskService.ForeignDescendants([], []));
         Assert.Empty(TaskService.ForeignDescendants([Task("P")], []));
     }
+
+    // ── ForeignSubtasksNotUnderPinned (#70 / interim for #85) ────────────────
+
+    private static IReadOnlySet<string> Pinned(params string[] ids) => ids.ToHashSet(StringComparer.Ordinal);
+
+    [Fact]
+    public void KeepsForeignChildOfNonPinnedParent()
+    {
+        TaskItem[] snapshot = [Task("P")];
+        TaskItem[] foreign = [Task("c", parent: "P")];
+
+        Assert.Equal(["c"], Ids(TaskService.ForeignSubtasksNotUnderPinned(snapshot, foreign, Pinned())));
+    }
+
+    [Fact]
+    public void DropsForeignChildOfPinnedParent()
+    {
+        TaskItem[] snapshot = [Task("P")];
+        TaskItem[] foreign = [Task("c", parent: "P")];
+
+        Assert.Empty(TaskService.ForeignSubtasksNotUnderPinned(snapshot, foreign, Pinned("P")));
+    }
+
+    [Fact]
+    public void DropsForeignGrandchildWhoseRootAncestorIsPinned()
+    {
+        // gc's direct parent is a foreign child (not pinned), but the in-snapshot ancestor P is pinned,
+        // so both the child and grandchild are dropped (they belong under the pinned parent, #85).
+        TaskItem[] snapshot = [Task("P")];
+        TaskItem[] foreign = [Task("c", parent: "P"), Task("gc", parent: "c")];
+
+        Assert.Empty(TaskService.ForeignSubtasksNotUnderPinned(snapshot, foreign, Pinned("P")));
+    }
+
+    [Fact]
+    public void KeepsForeignChildrenOfNonPinnedParent_WhenAnotherParentIsPinned()
+    {
+        TaskItem[] snapshot = [Task("P"), Task("Q")];
+        TaskItem[] foreign = [Task("c", parent: "P"), Task("d", parent: "Q")];
+
+        // Only Q is pinned → its child d drops; P's child c stays.
+        Assert.Equal(["c"], Ids(TaskService.ForeignSubtasksNotUnderPinned(snapshot, foreign, Pinned("Q"))));
+    }
+
+    [Fact]
+    public void ForeignSubtasksNotUnderPinned_IsCycleSafe()
+    {
+        TaskItem[] snapshot = [Task("P")];
+        TaskItem[] foreign = [Task("a", parent: "b"), Task("b", parent: "a")];
+
+        // A cycle never reaches a pinned ancestor → kept (not dropped, and no infinite loop).
+        Assert.Equal(["a", "b"], Ids(TaskService.ForeignSubtasksNotUnderPinned(snapshot, foreign, Pinned("P"))));
+    }
 }

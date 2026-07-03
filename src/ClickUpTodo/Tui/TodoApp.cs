@@ -781,11 +781,14 @@ public sealed class TodoApp
         {
             foreach (var id in _contextParents.Keys.OrderBy(x => x, StringComparer.Ordinal))
                 sb.Append(';').Append(id);
-            // Fold in the pulled-in foreign subtasks (id + status) so adding/removing one, or a status
-            // change on one, is treated as a render change rather than a no-op refresh (#70).
+            // Fold in the pulled-in foreign subtasks so adding/removing one — or an edit to one (status,
+            // rename, reschedule; UpdatedMs advances on any ClickUp edit) — is treated as a render change
+            // rather than a no-op refresh (#70). These rows aren't in `tasks`/_all, so BuildSignature
+            // above doesn't cover them.
             sb.Append("#fsub=");
             foreach (var kv in _foreignSubtasks.OrderBy(x => x.Key, StringComparer.Ordinal))
-                sb.Append(kv.Key).Append(':').Append(kv.Value.StatusName).Append(';');
+                sb.Append(kv.Key).Append(':').Append(kv.Value.StatusName)
+                  .Append(':').Append(kv.Value.UpdatedMs).Append(';');
         }
         return sb.ToString();
     }
@@ -839,9 +842,12 @@ public sealed class TodoApp
             nonPinned = nonPinned.Where(t => string.IsNullOrEmpty(t.ParentId));
         // When nesting, fold in the teammate-owned subtasks of my parents (#70) before Apply, so they're
         // filtered (Status IS NOT etc.), sorted, and grouped consistently and the arranger can nest them
-        // under their present parent. Populated only when the F4 view + the setting are both on.
+        // under their present parent. Populated only when the F4 view + the setting are both on. Foreign
+        // children of a *pinned* parent are dropped here (they'd render detached — nesting them in the
+        // Focus section is deferred to #85).
         else if (_foreignSubtasks.Count > 0)
-            nonPinned = nonPinned.Concat(_foreignSubtasks.Values);
+            nonPinned = nonPinned.Concat(
+                TaskService.ForeignSubtasksNotUnderPinned(_all, _foreignSubtasks.Values.ToList(), pinnedIds));
         var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
         var grouped = view.GroupField is not null;

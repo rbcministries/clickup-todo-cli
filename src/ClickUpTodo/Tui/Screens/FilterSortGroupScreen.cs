@@ -84,7 +84,7 @@ public sealed class FilterSortGroupScreen : Screen
         // A no-op while F4 subtasks are hidden, so the label says so.
         var pullChildren = current.ShowAllSubtasksOfAssignedParents;
         var subtasksHeader = new Label { X = rightX, Y = 19, Text = "─ Subtasks (F4) ─" };
-        var pullChildrenButton = new Button { X = rightX, Y = 20, Text = PullChildrenText(pullChildren) };
+        var pullChildrenButton = new Button { X = rightX, Y = 20, Width = Dim.Fill(2), Text = PullChildrenText(pullChildren) };
         pullChildrenButton.Accepting += (_, _) =>
         {
             pullChildren = !pullChildren;
