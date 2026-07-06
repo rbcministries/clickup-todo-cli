@@ -129,11 +129,12 @@ You can also set `CLICKUP_TODO_DRIVER` (e.g. `CLICKUP_TODO_DRIVER=windows`). The
 shown in the status line at startup. See [issue #3](https://github.com/rbcministries/clickup-todo-cli/issues/3).
 
 **Slow arrow-key navigation on remote/slow terminals.** With the `ansi` driver the app diffs
-frames and only sends the terminal the cells that actually changed (~0.9 KB per keypress instead
+frames and only sends the terminal the rows that actually changed (~0.9 KB per keypress instead
 of ~18 KB for the whole visible list), which keeps navigation snappy over SSH and on slow terminal
-emulators. The status line shows `diffed output` at startup when this is active. If a terminal
-ever renders artifacts with it, set `CLICKUP_TODO_NO_DIFF=1` to fall back to the stock
-full-repaint output.
+emulators. Changed rows are re-sent whole, byte-identical to the stock renderer, so wide/emoji
+text renders the same either way. The status line shows `diffed output` at startup when this is
+active. If a terminal ever renders artifacts with it, set `CLICKUP_TODO_NO_DIFF=1` to fall back
+to the stock full-repaint output.
 
 ## Other great CLI tools
 

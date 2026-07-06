@@ -63,6 +63,24 @@ Expected: identical except the status-line row containing the wall-clock timesta
 (borders/rows intact), never as an equality A/B: resize timing races make scroll
 position legitimately nondeterministic between runs.
 
+**4. Detail screen + tab switching (A/B vs stock)** — Enter opens the detail view, then
+Tab cycles Description/Comments/Other; the fake backend seeds comments with emoji,
+a VS16 sequence (🛠️), em-dashes, curly quotes, and a URL on the same lines — the exact
+grapheme mix that exposed sparse-flush cursor drift in the field:
+
+```bash
+E2E_TASKS=20 timeout 60 python3 -u .claude/skills/tui-validate/harness/detail_check.py $DLL /tmp/detail_new.txt
+E2E_TASKS=20 CLICKUP_TODO_NO_DIFF=1 timeout 60 python3 -u .claude/skills/tui-validate/harness/detail_check.py $DLL /tmp/detail_stock.txt
+diff /tmp/detail_stock.txt /tmp/detail_new.txt
+```
+
+Expected: identical. A `▯` in the dump marks an orphaned half of a wide glyph
+(pyte's own `screen.display` crashes on those) — any `▯`, doubled letters, or
+border-column shifts (`││C…`) mean flushed runs are landing at wrong columns.
+This check is why the frame diff is **row-atomic**: cell-level skipping repositions
+the cursor mid-row from the buffer's column model, which drifts around
+wide/ambiguous-width graphemes; whole-row flushes are byte-identical to stock.
+
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 
 - **Answer the terminal's queries or nothing ever renders.** Terminal.Gui's ANSI driver
