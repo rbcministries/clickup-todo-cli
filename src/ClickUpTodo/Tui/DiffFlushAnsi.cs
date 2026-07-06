@@ -7,7 +7,7 @@ using Attribute = Terminal.Gui.Drawing.Attribute;
 namespace ClickUpTodo.Tui;
 
 /// <summary>
-/// An ANSI console output that only flushes cells whose content actually changed since the last
+/// An ANSI console output that only flushes rows whose content actually changed since the last
 /// frame. Terminal.Gui 2.4's output buffer marks every cell a redraw <em>writes</em> as dirty —
 /// even when the rune and attribute are identical to what is already on screen — and a ListView
 /// selection move redraws its whole viewport. The net effect is that every ↑/↓ keypress re-sends
@@ -16,14 +16,19 @@ namespace ClickUpTodo.Tui;
 /// difference between instant and one-second navigation.
 /// <para>
 /// This subclass keeps a shadow copy of the last-flushed frame and, before delegating to the stock
-/// <see cref="AnsiOutput"/> flush, un-dirties every cell that matches the shadow. The stock flush
-/// (which already skips clean cells) then emits only real changes. Skipping is safe mid-run: the
-/// flush's attribute run-tracking is per-call, and a skipped cell leaves the terminal cell — and
-/// the terminal's current SGR state relative to the emitted stream — untouched.
+/// <see cref="AnsiOutput"/> flush, un-dirties every row whose dirty cells all match the shadow.
+/// The diff is deliberately <b>row-atomic</b>, not cell-level: a row with any change flushes all
+/// of its dirty cells verbatim, byte-identical to the stock flush. Cell-level skipping created
+/// sparse runs with mid-row cursor repositioning computed from the buffer's column model, and
+/// around wide/ambiguous-width graphemes (emoji, VS16 sequences like 🛠️) that model can disagree
+/// with the terminal's real cursor advance — glyphs then land shifted (doubled letters, stray
+/// characters over borders) and half-overwritten wide glyphs persist, because the buffer believed
+/// those cells were already correct. A contiguously written row self-aligns the way the stock
+/// renderer does, so per-row granularity keeps the volume win without the positioning hazard.
 /// </para>
 /// <para>
 /// Tradeoff: content corrupted <em>on the terminal side</em> (another process writing to the tty)
-/// is no longer repainted on the next frame, because the app believes those cells are current.
+/// is no longer repainted on the next frame, because the app believes those rows are current.
 /// That's the standard diffed-rendering tradeoff (vim/tmux behave the same); a resize repaints
 /// everything (the shadow resets when dimensions change).
 /// </para>
@@ -49,10 +54,12 @@ internal sealed class DiffFlushAnsiOutput(AppModel appModel) : AnsiOutput(appMod
     }
 
     /// <summary>
-    /// Clears the dirty flag on every cell identical to the shadow frame (so the stock flush skips
-    /// it) and records the cells that will be flushed. A row left with no dirty cells has its
-    /// dirty-line flag cleared too, so the flush doesn't emit a cursor move for it. Static and
-    /// buffer-in/buffer-out so the diff itself is unit-testable without a console.
+    /// Clears the dirty flags of every row whose dirty cells are all identical to the shadow frame
+    /// (so the stock flush skips the row entirely — its dirty-line flag is cleared too, saving the
+    /// per-row cursor move). A row with <b>any</b> changed cell is left untouched, so it flushes
+    /// byte-identically to the stock renderer — never as sparse mid-row runs, which mis-position
+    /// around wide/ambiguous-width graphemes (see class docs). Static and buffer-in/buffer-out so
+    /// the diff itself is unit-testable without a console.
     /// </summary>
     internal static void TrimUnchangedCells(IOutputBuffer buffer, ref ShadowCell[,] shadow)
     {
@@ -93,31 +100,40 @@ internal sealed class DiffFlushAnsiOutput(AppModel appModel) : AnsiOutput(appMod
             if (!dirtyLines[r])
                 continue;
 
+            // Pass 1: does any dirty cell in this row differ from what the terminal shows?
             var rowChanged = false;
+            for (var c = 0; c < cols && !rowChanged; c++)
+            {
+                if (!contents[r, c].IsDirty)
+                    continue;
+                ref var known = ref shadow[r, c];
+                var cell = contents[r, c];
+                rowChanged = !(known.Seen
+                    && known.Grapheme == cell.Grapheme
+                    && known.Attr == cell.Attribute
+                    && known.Url == buffer.GetCellUrl(c, r));
+            }
+
+            if (!rowChanged)
+            {
+                // Terminal already shows this row exactly — skip it whole.
+                for (var c = 0; c < cols; c++)
+                    contents[r, c].IsDirty = false;
+                dirtyLines[r] = false; // saves the flush's per-dirty-row cursor reposition
+                continue;
+            }
+
+            // Changed row: flush verbatim (all dirty flags untouched) and record the shadow.
             for (var c = 0; c < cols; c++)
             {
                 if (!contents[r, c].IsDirty)
                     continue;
-
                 ref var known = ref shadow[r, c];
-                var cell = contents[r, c];
-                var url = buffer.GetCellUrl(c, r);
-                if (known.Seen && known.Grapheme == cell.Grapheme && known.Attr == cell.Attribute && known.Url == url)
-                {
-                    contents[r, c].IsDirty = false; // terminal already shows exactly this
-                }
-                else
-                {
-                    known.Seen = true;
-                    known.Grapheme = cell.Grapheme;
-                    known.Attr = cell.Attribute;
-                    known.Url = url;
-                    rowChanged = true;
-                }
+                known.Seen = true;
+                known.Grapheme = contents[r, c].Grapheme;
+                known.Attr = contents[r, c].Attribute;
+                known.Url = buffer.GetCellUrl(c, r);
             }
-
-            if (!rowChanged)
-                dirtyLines[r] = false; // saves the flush's per-dirty-row cursor reposition
         }
     }
 

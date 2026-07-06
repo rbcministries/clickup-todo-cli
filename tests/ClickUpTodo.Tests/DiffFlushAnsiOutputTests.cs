@@ -76,8 +76,12 @@ public class DiffFlushAnsiOutputTests
     }
 
     [Fact]
-    public void ChangedGrapheme_FlushesOnlyThatCell()
+    public void ChangedGrapheme_FlushesTheWholeRow_NotJustThatCell()
     {
+        // Row-atomic on purpose: flushing only the changed cell creates sparse runs with mid-row
+        // cursor repositioning, which drifts around wide/ambiguous-width graphemes and corrupts
+        // the screen (doubled letters, stray glyphs over borders). A changed row must flush
+        // byte-identically to the stock renderer.
         var buffer = Buffer("hello", Red);
         var shadow = new DiffFlushAnsiOutput.ShadowCell[0, 0];
         DiffFlushAnsiOutput.TrimUnchangedCells(buffer, ref shadow);
@@ -85,8 +89,7 @@ public class DiffFlushAnsiOutputTests
         Fill(buffer, "hallo", Red);
         DiffFlushAnsiOutput.TrimUnchangedCells(buffer, ref shadow);
 
-        Assert.Equal(1, DirtyCount(buffer));
-        Assert.True(buffer.Contents![0, 1].IsDirty); // the 'e' → 'a'
+        Assert.Equal(5, DirtyCount(buffer)); // every dirty cell of the changed row, not just 'e'→'a'
         Assert.True(buffer.DirtyLines[0]);
     }
 

@@ -51,6 +51,10 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
 
         if (path.EndsWith("/user"))
             body = """{"user":{"id":1,"username":"bench","email":"bench@example.com"}}""";
+        else if (path.Contains("/task/") && path.EndsWith("/comment"))
+            body = CommentsJson();
+        else if (path.Contains("/task/"))
+            body = DetailJson(path);
         else if (path.Contains("/team/") && path.EndsWith("/task"))
             body = TasksJson(page: PageOf(query), taskCount);
         else if (path.Contains("/list/") && path.EndsWith("/task"))
@@ -97,6 +101,37 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
         }
         sb.Append($"],\"last_page\":{(start + count >= total ? "true" : "false")}}}");
         return sb.ToString();
+    }
+
+    /// <summary>Detail for the Enter → detail screen. The description deliberately mixes plain
+    /// prose with wide/multi-byte graphemes so per-cell rendering issues have something to bite.</summary>
+    private static string DetailJson(string path)
+    {
+        var id = path[(path.LastIndexOf('/') + 1)..];
+        return $$"""
+        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{"username":"Ben Seymour"}],"description":"Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed"}
+        """;
+    }
+
+    /// <summary>Comments matching the field report that exposed sparse-flush artifacts: an emoji
+    /// lead-in, em-dashes, curly quotes, and a URL (auto-hyperlinked cells) on the same lines.</summary>
+    private static string CommentsJson()
+    {
+        // 🛠️ is U+1F6E0 + U+FE0F (variation selector): ambiguous-width emoji presentation —
+        // the worst case for column-model vs terminal disagreement (field-reported trigger).
+        var text = "🛠️ Session summary — implementation (“ship now” approach)\n\n" +
+                   "PR: https://github.com/rbcministries/ODBM.Secure/pull/64 — Ready for Review\n" +
+                   "Branch: claude/ea-7221-address-display (off latest main)\n\n" +
+                   "What was built\n\n" +
+                   "Frontend-only filter in getAddressBookPageData (apps/account/src/api/account.ts): the Addresses page now displays only the primary address + addresses in use by an active (active/in_renewal) subscription; historical/unused addresses are suppressed.";
+        return JsonSerializer.Serialize(new
+        {
+            comments = new object[]
+            {
+                new { id = "c1", comment_text = text, user = new { username = "Ben Seymour" }, date = "1751476320000", resolved = false },
+                new { id = "c2", comment_text = "Follow-up: verified against the staging account — looks good ✅", user = new { username = "Ben Seymour" }, date = "1751480000000", resolved = false },
+            },
+        });
     }
 
     private static string ListJson(string path)
