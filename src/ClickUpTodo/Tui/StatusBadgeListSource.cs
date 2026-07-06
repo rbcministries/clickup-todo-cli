@@ -34,6 +34,13 @@ public sealed class StatusBadgeListSource : IListDataSource
     // decorated display text so the #12 navigator matches titles even with a ▶/▼ marker + badges (#76).
     private readonly IReadOnlyList<string>? _searchKeys;
     private readonly ListWrapper<string> _inner;
+    // Per-row grapheme layout, computed lazily and reused across frames. Render runs for every
+    // visible row on every redraw (each keypress), and each badge/header overlay used to re-segment
+    // the row's graphemes and re-measure their widths from scratch — O(row length) per badge per
+    // frame, growing with emoji/wide-rune-heavy titles. A row's layout only changes when its
+    // display string is replaced (an in-place status update), so cache by row and revalidate by
+    // string identity.
+    private readonly (string? Text, LaidOutGrapheme[] Layout)[] _layoutCache;
 
     public StatusBadgeListSource(
         ObservableCollection<string> text,
@@ -46,6 +53,9 @@ public sealed class StatusBadgeListSource : IListDataSource
         _headerAttrs = headerAttrs ?? new Attribute?[text.Count];
         _searchKeys = searchKeys;
         _inner = new ListWrapper<string>(text);
+        // Structural changes rebuild the whole source (TodoApp.Render assigns a new one), so the
+        // row count is fixed for this instance's lifetime; only row strings are replaced in place.
+        _layoutCache = new (string?, LaidOutGrapheme[])[text.Count];
     }
 
     /// <summary>
@@ -130,16 +140,33 @@ public sealed class StatusBadgeListSource : IListDataSource
         var headerAttr = item < _headerAttrs.Count ? _headerAttrs[item] : null;
         if (headerAttr is { } ha && !selected)
         {
-            PaintHeaderBar(listView, ha, col, row, width, viewportX, _text[item]);
+            PaintHeaderBar(listView, ha, col, row, width, viewportX, LayoutFor(item));
             return;
         }
 
         if (item >= _badges.Count)
             return;
-        var text = _text[item];
+        var layout = LayoutFor(item);
         foreach (var badge in _badges[item])
             if (badge.Length > 0)
-                OverlayBadge(listView, badge, col, row, width, viewportX, text);
+                OverlayBadge(listView, badge, col, row, width, viewportX, layout);
+    }
+
+    /// <summary>The cached grapheme layout for a row, recomputed only when the row's display
+    /// string was replaced (reference comparison — rows are only ever swapped wholesale).</summary>
+    private LaidOutGrapheme[] LayoutFor(int item)
+    {
+        var text = _text[item];
+        if ((uint)item >= (uint)_layoutCache.Length)
+            return LayOutGraphemes(text).ToArray(); // defensive; row count is fixed in practice
+
+        ref var entry = ref _layoutCache[item];
+        if (!ReferenceEquals(entry.Text, text))
+        {
+            entry.Text = text;
+            entry.Layout = LayOutGraphemes(text).ToArray();
+        }
+        return entry.Layout;
     }
 
     /// <summary>
@@ -148,12 +175,12 @@ public sealed class StatusBadgeListSource : IListDataSource
     /// the base attribute; this recolors those cells). Wide runes and horizontal scroll are honored the
     /// same way as <see cref="OverlayBadge"/>.
     /// </summary>
-    private static void PaintHeaderBar(ListView listView, Attribute attr, int col, int row, int width, int viewportX, string text)
+    private static void PaintHeaderBar(ListView listView, Attribute attr, int col, int row, int width, int viewportX, IReadOnlyList<LaidOutGrapheme> layout)
     {
         var baseAttr = listView.SetAttribute(attr);
 
         var displayCol = 0; // total columns consumed by the text, for where padding starts
-        foreach (var g in LayOutGraphemes(text))
+        foreach (var g in layout)
         {
             var x = g.Column - viewportX;
             if (x >= 0 && x + g.Width <= width)
@@ -182,7 +209,7 @@ public sealed class StatusBadgeListSource : IListDataSource
     /// Computing widths any other way (e.g. per-rune) drifts from the base renderer for names with
     /// wide/combining/emoji runes and mis-places the color (see #63).
     /// </summary>
-    private static void OverlayBadge(ListView listView, Badge badge, int col, int row, int width, int viewportX, string text)
+    private static void OverlayBadge(ListView listView, Badge badge, int col, int row, int width, int viewportX, IReadOnlyList<LaidOutGrapheme> layout)
     {
         var end = badge.Start + badge.Length;
 
@@ -193,7 +220,7 @@ public sealed class StatusBadgeListSource : IListDataSource
         // (see #34). Capture the base attribute and restore it once we're done.
         var baseAttr = listView.SetAttribute(badge.Attr);
 
-        foreach (var g in LayOutGraphemes(text))
+        foreach (var g in layout)
         {
             if (g.CharIndex >= end)
                 break;

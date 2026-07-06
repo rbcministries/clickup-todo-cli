@@ -118,10 +118,19 @@ public sealed class TodoApp
     public void Run(string? driverName = null)
     {
         // driverName lets the user pick a Terminal.Gui driver (windows/dotnet/ansi); null = default.
+        // For the ANSI driver (the default on every platform) install the frame-diffing output
+        // first: the stock backend re-sends every visible cell on any list redraw (~18 KB per
+        // arrow keypress), which makes navigation output-bound — and visibly laggy — on slow
+        // terminals/links. Diffing trims that to just the cells that changed (~0.9 KB). Best-effort:
+        // if the install fails (e.g. a future Terminal.Gui moved its internals) we run the stock
+        // driver. CLICKUP_TODO_NO_DIFF=1 is the escape hatch if a terminal misbehaves with it.
+        var diffing = (driverName is null or "ansi")
+            && string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CLICKUP_TODO_NO_DIFF"))
+            && DiffFlushAnsiBackend.TryInstall();
         Application.Init(driverName);
         try
         {
-            _status = $"Loading… (driver: {driverName ?? "default (ansi)"})";
+            _status = $"Loading… (driver: {driverName ?? "default (ansi)"}{(diffing ? ", diffed output" : "")})";
             Build();
             _refresh = new RefreshService(
                 fetch: FetchAsync,
