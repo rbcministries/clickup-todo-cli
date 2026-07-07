@@ -163,7 +163,8 @@
         "operationId": "GetTask",
         "summary": "Get a single task with its full detail (description, tags, assignees, dates, custom fields).",
         "parameters": [
-          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "include_subtasks", "in": "query", "schema": { "type": "boolean" } }
         ],
         "responses": {
           "200": {
@@ -307,7 +308,8 @@
           "locations": { "type": "array", "items": { "$ref": "#/components/schemas/TaskList" } },
           "tags": { "type": "array", "items": { "$ref": "#/components/schemas/Tag" } },
           "assignees": { "type": "array", "items": { "$ref": "#/components/schemas/User" } },
-          "custom_fields": { "type": "array", "items": { "$ref": "#/components/schemas/CustomField" } }
+          "custom_fields": { "type": "array", "items": { "$ref": "#/components/schemas/CustomField" } },
+          "subtasks": { "type": "array", "items": { "$ref": "#/components/schemas/Task" }, "nullable": true }
         }
       },
       "Priority": {

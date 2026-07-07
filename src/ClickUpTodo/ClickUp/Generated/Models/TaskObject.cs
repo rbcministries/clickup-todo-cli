@@ -128,6 +128,14 @@ namespace ClickUpTodo.ClickUp.Generated.Models
 #else
         public global::ClickUpTodo.ClickUp.Generated.Models.Status Status { get; set; }
 #endif
+        /// <summary>The subtasks property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.TaskObject>? Subtasks { get; set; }
+#nullable restore
+#else
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.TaskObject> Subtasks { get; set; }
+#endif
         /// <summary>The tags property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -192,6 +200,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
                 { "parent", n => { Parent = n.GetStringValue(); } },
                 { "priority", n => { Priority = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Priority>(global::ClickUpTodo.ClickUp.Generated.Models.Priority.CreateFromDiscriminatorValue); } },
                 { "status", n => { Status = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Status>(global::ClickUpTodo.ClickUp.Generated.Models.Status.CreateFromDiscriminatorValue); } },
+                { "subtasks", n => { Subtasks = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.TaskObject>(global::ClickUpTodo.ClickUp.Generated.Models.TaskObject.CreateFromDiscriminatorValue)?.AsList(); } },
                 { "tags", n => { Tags = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.Tag>(global::ClickUpTodo.ClickUp.Generated.Models.Tag.CreateFromDiscriminatorValue)?.AsList(); } },
                 { "text_content", n => { TextContent = n.GetStringValue(); } },
                 { "url", n => { Url = n.GetStringValue(); } },
@@ -219,6 +228,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             writer.WriteStringValue("parent", Parent);
             writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Priority>("priority", Priority);
             writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.Status>("status", Status);
+            writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.TaskObject>("subtasks", Subtasks);
             writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.Tag>("tags", Tags);
             writer.WriteStringValue("text_content", TextContent);
             writer.WriteStringValue("url", Url);
