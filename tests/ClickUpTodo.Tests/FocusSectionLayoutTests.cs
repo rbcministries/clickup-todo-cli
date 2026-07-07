@@ -248,4 +248,20 @@ public sealed class FocusSectionLayoutTests
         Assert.Equal(["p"], Ids(s));
         Assert.Empty(s.NestedSubtaskIds);
     }
+
+    [Fact]
+    public void NestOn_MixedForeign_OnlyThePinnedParentsChildIsPulled()
+    {
+        // One Build call with a foreign set that straddles the boundary: fp is under pinned p, fq under
+        // unpinned q. NestedSubtaskIds must be *exactly* {fp} — proving the pulled set is the precise
+        // subset the caller then excludes from the to-do list (complementarity within a single call).
+        TaskItem[] all = [Task("p"), Task("q")];
+        TaskItem[] foreign = [Task("fp", parent: "p"), Task("fq", parent: "q")];
+
+        var s = Build(all, Pins("p"), nest: true, foreign: foreign);
+
+        Assert.Equal(["p", "fp"], Ids(s)); // q (unpinned) and its foreign child fq stay out of Focus
+        Assert.Equal([0, 1], Depths(s));
+        Assert.Equal(Pins("fp"), s.NestedSubtaskIds);
+    }
 }

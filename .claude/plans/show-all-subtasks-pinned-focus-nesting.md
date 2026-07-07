@@ -114,5 +114,3 @@ arrangement logic is fully covered by the pure `FocusSectionLayoutTests`.
 
 - Same-list fetch caveat for foreign subtasks (#86 / #87).
 - Any change to how foreign subtasks are *fetched* (`ResolveForeignSubtasksAsync`).
-</content>
-</invoke>
