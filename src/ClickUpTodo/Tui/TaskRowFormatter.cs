@@ -11,15 +11,32 @@ namespace ClickUpTodo.Tui;
 public static class TaskRowFormatter
 {
     /// <summary>
-    /// The display line plus the character spans of the <c>[status]</c> and <c>[priority]</c> badges
-    /// (brackets included). <paramref name="Text"/> leads with the title so the ListView's type-ahead
-    /// matches titles. When a badge is absent its <c>*Length</c> is 0 and its <c>*Start</c> is -1.
+    /// The display line plus the character spans of the leading priority flag and the <c>[status]</c>
+    /// and <c>[priority]</c> badges (brackets included). Every row now leads with the fixed-width
+    /// priority gutter (see <see cref="LeadingFlag"/>), so <paramref name="Text"/> no longer starts with
+    /// the title — the ListView's type-ahead searches the decoupled title-only keys instead (#76). When a
+    /// badge/flag is absent its <c>*Length</c> is 0 and its <c>*Start</c> is -1.
     /// </summary>
     public readonly record struct Row(
-        string Text, int StatusStart, int StatusLength, int PriorityStart, int PriorityLength);
+        string Text,
+        int StatusStart, int StatusLength,
+        int PriorityStart, int PriorityLength,
+        int PriorityFlagStart, int PriorityFlagLength);
 
     /// <summary>Two spaces of indent per nesting level in the F4 subtasks view (#46).</summary>
     private const string IndentUnit = "  ";
+
+    /// <summary>
+    /// The leading priority badge every task row starts with: a flag glyph flanked by a space on each
+    /// side (coloured with the priority's background by the renderer) when a priority is set, or three
+    /// blank spaces (no colour span) when it isn't. Keeping both states the same width gives the list a
+    /// grid-like left gutter. The glyph is intentionally a single display column so <c>" ⚑ "</c> and
+    /// <c>"   "</c> occupy the same three columns.
+    /// </summary>
+    public const string LeadingFlag = " ⚑ ";
+
+    /// <summary>The blank gutter used when a task has no priority — same width as <see cref="LeadingFlag"/>.</summary>
+    public const string LeadingBlank = "   ";
 
     /// <summary>Trailing marker on a parent shown only as context (its subtask is assigned to me, it isn't).</summary>
     private const string ContextParentMarker = "  · (parent — not assigned to you)";
@@ -57,10 +74,18 @@ public static class TaskRowFormatter
     {
         var indent = depth > 0 ? string.Concat(Enumerable.Repeat(IndentUnit, depth)) : "";
 
+        // Every row leads with a fixed-width priority gutter: a coloured flag when a priority is set,
+        // else three blank spaces so undated rows still line up (a grid-like left edge). It sits ahead
+        // of the indent/marker so the flags share one column regardless of nesting depth. The flag stays
+        // even when grouped by priority — it's structural padding, not the (droppable) inline badge.
+        var hasPriority = !string.IsNullOrWhiteSpace(task.PriorityName);
+        var (flagStart, flagLength) = hasPriority ? (0, LeadingFlag.Length) : (-1, 0);
+        var leading = hasPriority ? LeadingFlag : LeadingBlank;
+
         // Build the line incrementally, capturing each badge's offset from the running length. This
         // keeps the spans exact regardless of indent, the marker, the title's own '[' characters, or
-        // which badges are present — two coloured badges make hand-computed offsets fragile.
-        var text = indent + marker + task.Name;
+        // which badges are present — several coloured spans make hand-computed offsets fragile.
+        var text = leading + indent + marker + task.Name;
 
         var (statusStart, statusLength) = groupedBy == TaskField.Status
             ? (-1, 0)
@@ -78,7 +103,7 @@ public static class TaskRowFormatter
         else if (isForeignSubtask)
             text += ForeignSubtaskMarker;
 
-        return new Row(text, statusStart, statusLength, priorityStart, priorityLength);
+        return new Row(text, statusStart, statusLength, priorityStart, priorityLength, flagStart, flagLength);
     }
 
     /// <summary>
