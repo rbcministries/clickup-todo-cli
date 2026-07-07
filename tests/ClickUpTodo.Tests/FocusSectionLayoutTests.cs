@@ -18,8 +18,8 @@ public sealed class FocusSectionLayoutTests
         => new HashSet<string>(ids, StringComparer.Ordinal);
 
     private static FocusSection Build(IReadOnlyList<TaskItem> all, IReadOnlySet<string> pins, bool nest,
-        IReadOnlySet<string>? expanded = null)
-        => FocusSectionLayout.Build(all, pins, nest, sortField: null, SortDirection.Ascending, expanded);
+        IReadOnlySet<string>? expanded = null, IReadOnlyList<TaskItem>? foreign = null)
+        => FocusSectionLayout.Build(all, pins, nest, sortField: null, SortDirection.Ascending, expanded, foreign);
 
     private static IEnumerable<string> Ids(FocusSection s) => s.Rows.Select(r => r.Task.Id);
     private static IEnumerable<int> Depths(FocusSection s) => s.Rows.Select(r => r.Depth);
@@ -160,5 +160,92 @@ public sealed class FocusSectionLayoutTests
 
         Assert.Equal(["p", "c"], Ids(s));
         Assert.Equal(FoldState.Expanded, s.Rows[0].Fold);
+    }
+
+    // ── Foreign (teammate-owned) subtasks of a pinned parent (#70 → #85) ────────
+    // These live outside the `all` snapshot; passing them in must nest a pin's foreign descendants under
+    // it in Focus and return them in NestedSubtaskIds (the caller drops exactly those from the to-do set).
+
+    [Fact]
+    public void NestOn_ForeignChildOfPinnedParent_NestsAtDepth1_AndIsPulled()
+    {
+        TaskItem[] all = [Task("p")];                       // only the parent is mine / in-snapshot
+        TaskItem[] foreign = [Task("fc", parent: "p")];     // teammate-owned child, not in the snapshot
+
+        var s = Build(all, Pins("p"), nest: true, foreign: foreign);
+
+        Assert.Equal(["p", "fc"], Ids(s));
+        Assert.Equal([0, 1], Depths(s));
+        Assert.Equal(Pins("fc"), s.NestedSubtaskIds);
+    }
+
+    [Fact]
+    public void NestOn_ForeignChildOfNonPinnedParent_IsNotPulledIntoFocus()
+    {
+        TaskItem[] all = [Task("p"), Task("q")];            // p pinned, q not
+        TaskItem[] foreign = [Task("fq", parent: "q")];     // foreign child of the *unpinned* q
+
+        var s = Build(all, Pins("p"), nest: true, foreign: foreign);
+
+        // fq belongs in the to-do section (under q), so Focus neither shows nor claims it.
+        Assert.Equal(["p"], Ids(s));
+        Assert.Empty(s.NestedSubtaskIds);
+    }
+
+    [Fact]
+    public void NestOn_ForeignChildOfNonPinnedInSnapshotParentUnderAPin_IsPulled()
+    {
+        // The bug the old ancestor-only helper missed: m is in-snapshot but *not* pinned, yet it descends
+        // from pinned p (so #75 nests m under p in Focus). A foreign child fm of m must follow m into
+        // Focus — not stay in the to-do set where its parent no longer lives (which would render detached).
+        TaskItem[] all = [Task("p"), Task("m", parent: "p")];
+        TaskItem[] foreign = [Task("fm", parent: "m")];
+
+        var s = Build(all, Pins("p"), nest: true, foreign: foreign);
+
+        Assert.Equal(["p", "m", "fm"], Ids(s));
+        Assert.Equal([0, 1, 2], Depths(s));
+        Assert.Equal(Pins("m", "fm"), s.NestedSubtaskIds);
+    }
+
+    [Fact]
+    public void NestOn_ForeignGrandchildThroughForeignIntermediate_NestsUnderPin()
+    {
+        // Both the child and grandchild are teammate-owned (foreign); the chain reaches pinned p.
+        TaskItem[] all = [Task("p")];
+        TaskItem[] foreign = [Task("fc", parent: "p"), Task("fg", parent: "fc")];
+
+        var s = Build(all, Pins("p"), nest: true, foreign: foreign);
+
+        Assert.Equal(["p", "fc", "fg"], Ids(s));
+        Assert.Equal([0, 1, 2], Depths(s));
+        Assert.Equal(Pins("fc", "fg"), s.NestedSubtaskIds);
+    }
+
+    [Fact]
+    public void NestOn_CollapsedPinnedParent_HidesForeignChild_ButStillPullsIt()
+    {
+        // Collapsed ⇒ hidden, not relocated: the foreign child is absent from the rendered rows yet still
+        // pulled (excluded from to-do), matching the in-snapshot behaviour.
+        TaskItem[] all = [Task("p")];
+        TaskItem[] foreign = [Task("fc", parent: "p")];
+
+        var s = Build(all, Pins("p"), nest: true, expanded: new HashSet<string>(/* p collapsed */),
+            foreign: foreign);
+
+        Assert.Equal(["p"], Ids(s));
+        Assert.Equal(Pins("fc"), s.NestedSubtaskIds);
+    }
+
+    [Fact]
+    public void NestOff_ForeignSubtasksIgnored()
+    {
+        TaskItem[] all = [Task("p")];
+        TaskItem[] foreign = [Task("fc", parent: "p")];
+
+        var s = Build(all, Pins("p"), nest: false, foreign: foreign);
+
+        Assert.Equal(["p"], Ids(s));
+        Assert.Empty(s.NestedSubtaskIds);
     }
 }
