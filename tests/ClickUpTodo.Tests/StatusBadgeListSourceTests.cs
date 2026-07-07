@@ -127,6 +127,33 @@ public sealed class StatusBadgeListSourceTests
         Assert.NotEqual(baseWidth, OldPerRuneColumns(row.Text, row.StatusStart));
     }
 
+    // ── Leading priority flag gutter ─────────────────────────────────────────
+
+    [Fact]
+    public void LeadingFlag_And_LeadingBlank_OccupyTheSameDisplayColumns()
+    {
+        // The grid-like gutter only lines up if the flag badge and the blank gutter render at the same
+        // width — i.e. the flag glyph is a single display column so " ⚑ " matches "   " (three columns).
+        var flagWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.LeadingFlag).Sum(g => g.Width);
+        var blankWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.LeadingBlank).Sum(g => g.Width);
+
+        Assert.Equal(blankWidth, flagWidth);
+        Assert.Equal(3, flagWidth);
+    }
+
+    [Fact]
+    public void LeadingFlagBadge_ColumnsMatchBaseRenderer()
+    {
+        // The flag occupies chars [0,3); its overlay must paint exactly columns [0,3) — the base
+        // renderer's width for the same span — so the colour lands on the flag and its two spaces.
+        var task = new TaskItem { Id = "1", Name = "Ship it", PriorityName = "Urgent", PriorityColor = "#f50000" };
+        var row = TaskRowFormatter.Format(task);
+
+        Assert.Equal(0, row.PriorityFlagStart);
+        var end = row.PriorityFlagStart + row.PriorityFlagLength;
+        Assert.Equal(row.Text[..end].GetColumns(), LaidOutColumnAt(row.Text, end));
+    }
+
     // ── Type-ahead search key decoupling (#76) ───────────────────────────────
 
     private static readonly IReadOnlyList<IReadOnlyList<StatusBadgeListSource.Badge>> NoBadges =

@@ -1067,7 +1067,11 @@ public sealed class TodoApp
         TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
     {
         var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask);
-        var badges = new List<StatusBadgeListSource.Badge>(2);
+        var badges = new List<StatusBadgeListSource.Badge>(3);
+        // The leading priority flag (its space-flag-space span) is tinted with the priority colour; the
+        // blank-gutter state carries no span so TryCreate returns null and it stays unshaded.
+        if (StatusBadgeListSource.TryCreate(row.PriorityFlagStart, row.PriorityFlagLength, task.PriorityColor) is { } flag)
+            badges.Add(flag);
         if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
             badges.Add(status);
         if (StatusBadgeListSource.TryCreate(row.PriorityStart, row.PriorityLength, task.PriorityColor) is { } priority)
