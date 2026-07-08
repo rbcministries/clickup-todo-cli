@@ -55,7 +55,10 @@ public static class DetailOtherTabLayout
 
         // Constrained: cap the header from the bottom and reserve the body its minimum. The body starts
         // immediately after the header (no separate gap row) — the blank separator before "Custom
-        // fields:" is carried in the spilled body text instead.
+        // fields:" is carried in the spilled body text instead. Below availableHeight == MinHeaderRows +
+        // MinBodyRows the body can no longer be guaranteed its minimum; at a 1-row (or 0-row) area only
+        // the header floor fits and the body degenerates to nothing — unavoidable, and far below the
+        // ≲9-row window this targets, so we clamp to non-negative sizes rather than special-case it.
         var headerHeight = Math.Clamp(availableHeight - MinBodyRows, MinHeaderRows, headerLineCount);
         // On a pathologically tiny window the header alone can exceed the whole area; keep it in bounds.
         if (headerHeight > availableHeight)

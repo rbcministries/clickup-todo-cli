@@ -25,9 +25,12 @@ public sealed class DetailOtherTabView : View
     private readonly string _customFieldsBody;
     private readonly DetailAttributesView _header;
     private readonly TextView _body;
-    // The header height last applied to the subviews; -1 forces the first layout to apply. Guards
-    // against re-setting the body Text (which resets scroll) on resizes that don't change the split.
-    private int _appliedHeaderHeight = -1;
+    // The split currently applied to the subviews (null until the first layout). Guards against
+    // re-setting the body Text — which resets its scroll — on resizes that don't change the split.
+    private DetailOtherTabLayout.Layout? _applied;
+    // The container height the current split was computed for; drives the draw-time self-correction
+    // below. int.MinValue forces the first draw to reconcile.
+    private int _laidOutForHeight = int.MinValue;
 
     public DetailOtherTabView(IReadOnlyList<TaskDetailFormatter.DetailLine> lines, string customFieldsBody)
     {
@@ -69,16 +72,34 @@ public sealed class DetailOtherTabView : View
     /// <inheritdoc/>
     protected override void OnSubViewLayout(LayoutEventArgs args)
     {
-        var layout = DetailOtherTabLayout.Compute(_lines.Count, Viewport.Height);
-        if (layout.HeaderHeight != _appliedHeaderHeight)
-        {
-            _header.Height = layout.HeaderHeight;
-            _body.Y = layout.BodyY;
-            _body.Text = layout.SpilledHeaderLines > 0 ? BuildSpilledBody(layout.SpilledHeaderLines) : _customFieldsBody;
-            _appliedHeaderHeight = layout.HeaderHeight;
-        }
-
+        Apply(Viewport.Height);
         base.OnSubViewLayout(args);
+    }
+
+    /// <inheritdoc/>
+    protected override bool OnDrawingContent(DrawContext? context)
+    {
+        // A newly-shown tab's content can be laid out before this container has its final height (e.g.
+        // while a sibling tab is the visible one), so the split can be computed against a stale size and
+        // never re-run on the tab switch alone — leaving the header uncapped and the spillover missing
+        // until the next keypress. By the time we draw, Viewport holds the real height; if it differs
+        // from what we last laid out for, schedule a relayout so the adaptive split applies on its own.
+        if (Viewport.Height != _laidOutForHeight)
+            SetNeedsLayout();
+        return base.OnDrawingContent(context);
+    }
+
+    private void Apply(int availableHeight)
+    {
+        _laidOutForHeight = availableHeight;
+        var layout = DetailOtherTabLayout.Compute(_lines.Count, availableHeight);
+        if (layout == _applied)
+            return;
+
+        _applied = layout;
+        _header.Height = layout.HeaderHeight;
+        _body.Y = layout.BodyY;
+        _body.Text = layout.SpilledHeaderLines > 0 ? BuildSpilledBody(layout.SpilledHeaderLines) : _customFieldsBody;
     }
 
     // The clipped trailing header lines (rendered uncoloured — they are the date lines except on a
