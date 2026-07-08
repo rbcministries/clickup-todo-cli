@@ -34,6 +34,20 @@ public sealed class ConfigMigrationsTests : IDisposable
     }
 
     [Fact]
+    public void Apply_NullAgentDispatch_CoalescedToDefaults()
+    {
+        // A hand-edited/corrupted config.json with "AgentDispatch": null deserializes to a null (the
+        // property's `= new()` default only fills a missing key). Dispatch settings are read at startup
+        // (#91), so Apply must normalize it back to defaults rather than leave a null to fault the launch.
+        var config = new AppConfig { AgentDispatch = null! };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.NotNull(config.AgentDispatch);
+        Assert.True(config.AgentDispatch.IsDefault);
+    }
+
+    [Fact]
     public void Apply_AbsentLegacyField_SeedsDefaultExclusions()
     {
         // A config that never carried excludedStatuses (null) is treated as a fresh install: seed the
