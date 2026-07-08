@@ -35,6 +35,8 @@ public sealed class AgentDispatcher
     /// the command), which is what keeps the launch safe (#23). <paramref name="workingDir"/> (the
     /// resolved start directory) and <paramref name="preamble"/> (a blank value keeps the composer's
     /// default) are the dispatch-time settings threaded in by the caller (#91).
+    /// <paramref name="outputSubdirectory"/> (blank unless the task-derived working-dir mode is
+    /// active, #98) adds a "write outputs to <c>./{subdir}</c>" instruction to the seed prompt.
     /// </summary>
     public async Task<AgentDispatchResult> DispatchAsync(
         TaskDetail task,
@@ -42,11 +44,12 @@ public sealed class AgentDispatcher
         string userPrompt,
         string? workingDir = null,
         string? preamble = null,
+        string? outputSubdirectory = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, preamble);
+        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, preamble, outputSubdirectory);
         var result = await _launcher.LaunchAsync(promptFile, workingDir, _options, ct).ConfigureAwait(false);
         return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile);
     }

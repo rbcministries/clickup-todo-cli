@@ -39,14 +39,47 @@ public static class AgentPromptComposer
     /// Builds the full prompt text: <c>{userPrompt}\n\n{preamble}\n\n{json}</c>. Uses <c>\n</c>
     /// throughout so the output is identical across platforms. A blank <paramref name="preamble"/>
     /// (the default) uses the fixed <see cref="Preamble"/>; a non-blank value overrides it (#27).
+    /// A non-blank <paramref name="outputSubdirectory"/> (the task-derived working-dir mode, #98)
+    /// inserts a "write outputs to <c>./{subdir}</c>" instruction as its own paragraph after the
+    /// user prompt; a blank value leaves the layout byte-identical to zero-config dispatch.
     /// </summary>
     public static string Compose(
-        TaskDetail task, IReadOnlyList<CommentItem> comments, string userPrompt, string? preamble = null)
+        TaskDetail task, IReadOnlyList<CommentItem> comments, string userPrompt,
+        string? preamble = null, string? outputSubdirectory = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         var prompt = (userPrompt ?? string.Empty).Trim();
         var lead = string.IsNullOrWhiteSpace(preamble) ? Preamble : preamble.Trim();
-        return $"{prompt}\n\n{lead}\n\n{BuildJson(task, comments)}";
+        return $"{ComposeHead(prompt, outputSubdirectory)}\n\n{lead}\n\n{BuildJson(task, comments)}";
+    }
+
+    /// <summary>
+    /// The text preceding the preamble: the (already-trimmed) user prompt, plus — when a
+    /// task-derived output subdirectory is supplied (#98) — an instruction telling the agent to
+    /// write its outputs there. A blank subdirectory yields just the prompt, so zero-config
+    /// dispatch stays byte-identical (including the empty-prompt case).
+    /// </summary>
+    private static string ComposeHead(string prompt, string? outputSubdirectory)
+    {
+        var token = (outputSubdirectory ?? string.Empty).Trim();
+        if (token.Length == 0)
+            return prompt;
+        var instruction = $"Write any output files to the subdirectory ./{token} (create it if needed).";
+        return prompt.Length == 0 ? instruction : $"{prompt}\n\n{instruction}";
+    }
+
+    /// <summary>
+    /// The per-task output subdirectory token for the <see cref="Configuration.AgentWorkingDirectory.TaskDerived"/>
+    /// mode (#98): the task's custom id when set, else its id, reduced to a filesystem-safe token
+    /// (via the same <see cref="SafeToken"/> used for temp filenames, so separators / traversal
+    /// can't escape the base dir). The agent is told to write outputs under <c>./{token}</c> so each
+    /// task's work stays separated inside the shared base working directory.
+    /// </summary>
+    public static string OutputSubdirectoryToken(TaskDetail task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        var raw = string.IsNullOrWhiteSpace(task.CustomId) ? task.Id : task.CustomId;
+        return SafeToken(raw ?? string.Empty);
     }
 
     /// <summary>
@@ -57,7 +90,7 @@ public static class AgentPromptComposer
     /// </summary>
     public static string WritePromptFile(
         TaskDetail task, IReadOnlyList<CommentItem> comments, string userPrompt,
-        string? directory = null, string? preamble = null)
+        string? directory = null, string? preamble = null, string? outputSubdirectory = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         var dir = string.IsNullOrWhiteSpace(directory)
@@ -67,7 +100,7 @@ public static class AgentPromptComposer
 
         var fileName = $"agent-prompt-{SafeToken(task.Id)}-{Guid.NewGuid():N}.txt";
         var path = Path.Combine(dir, fileName);
-        File.WriteAllText(path, Compose(task, comments, userPrompt, preamble));
+        File.WriteAllText(path, Compose(task, comments, userPrompt, preamble, outputSubdirectory));
         return path;
     }
 
