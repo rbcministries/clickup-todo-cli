@@ -34,4 +34,26 @@ public abstract class Screen : FrameView
 
     /// <summary>Called by the host once the screen is mounted, so it can focus its primary control.</summary>
     public virtual void OnShown() { }
+
+    /// <summary>
+    /// The screen's shortcuts for the shared contextual footer (#103). The host renders these on the
+    /// single window-owned help line while this screen is active, replacing the list's line — so each
+    /// screen declares its footer here instead of hand-rolling a hint <c>Label</c>.
+    /// </summary>
+    public abstract IReadOnlyList<HelpItem> HelpItems { get; }
+
+    /// <summary>
+    /// Raised to show a transient message on the host's status line (e.g. an inline validation error),
+    /// now that screens no longer own a hint Label to overwrite. The host routes it to its flash row.
+    /// </summary>
+    public event EventHandler<string>? FlashRequested;
+
+    /// <summary>Asks the host to flash <paramref name="message"/> on the shared status line.</summary>
+    protected void RequestFlash(string message) => FlashRequested?.Invoke(this, message);
+
+    /// <summary>Raised on F1 so the host opens the Help screen over this one (#103).</summary>
+    public event EventHandler? HelpRequested;
+
+    /// <summary>Asks the host to open Help (bound to F1 in each screen's key handler).</summary>
+    protected void RequestHelp() => HelpRequested?.Invoke(this, EventArgs.Empty);
 }
