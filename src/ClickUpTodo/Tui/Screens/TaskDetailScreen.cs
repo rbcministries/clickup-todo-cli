@@ -18,7 +18,9 @@ namespace ClickUpTodo.Tui.Screens;
 /// Esc returns to the list; Ctrl+B requests opening the task in the browser (the host reads
 /// <see cref="OpenBrowserRequested"/> in its close handler and owns the launch). Tab cycles tabs;
 /// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. The Stream tab (#106) is the default;
-/// Ctrl+PgUp/Ctrl+PgDn sort it oldest-first / newest-first and re-render it in place. Tab bodies come
+/// Ctrl+PgUp/Ctrl+PgDn sort it oldest-first / newest-first and re-render it in place, and it opens
+/// auto-scrolled to the newest (or oldest) entry per the <see cref="Configuration.StreamAutoScroll"/> preference
+/// (#107). Tab bodies come
 /// from the unit-tested
 /// <see cref="TaskDetailFormatter"/>, so this class is only the (CI-untestable) Terminal.Gui glue.
 /// </para>
