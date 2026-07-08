@@ -76,7 +76,10 @@ public sealed class SettingsFormTests
 
     [Fact]
     public void ExpandHomePath_TildeSlashExpandsUnderHome()
-        => Assert.Equal(Path.Combine(Home, "source", "repos"), SettingsForm.ExpandHomePath("~/source/repos", Home));
+        // The tail is combined as a single segment (Path.Combine(home, "source/repos")), so the
+        // expectation must mirror that exactly to stay correct on Windows too (where the '/' inside
+        // the tail is left as-is rather than being treated as a segment separator).
+        => Assert.Equal(Path.Combine(Home, "source/repos"), SettingsForm.ExpandHomePath("~/source/repos", Home));
 
     [Fact]
     public void ExpandHomePath_TildeBackslashExpandsUnderHome()

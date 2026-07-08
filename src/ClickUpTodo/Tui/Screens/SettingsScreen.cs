@@ -71,7 +71,7 @@ public sealed class SettingsScreen : Screen
             X = 1,
             Y = 7,
             Width = Dim.Percent(48),
-            Text = "Blank = ~/ClickUp-Tasks. A root for agent launches (≠ Fixed dir).",
+            Text = "Blank = ~/ClickUp-Tasks (≠ Fixed dir).",
         };
 
         // ── Right column: agent dispatch (#27) ─────────────────────────────────
