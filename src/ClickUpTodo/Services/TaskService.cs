@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Globalization;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
@@ -347,21 +346,22 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     /// recovered by that branch (the pre-#84 limitation) — only heavily-clustered lists take that path;
     /// see <c>.claude/plans/adaptive-subtask-fetch.md</c>.
     /// </para>
-    /// Worst cases are bounded by the plan's caps; a cap that drops work emits a diagnostic trace
-    /// (<see cref="Debug"/>) rather than truncating silently — stderr is avoided so it can't smear the
-    /// live TUI.
+    /// Worst cases are bounded: the plan caps the whole-list and per-parent <em>seeds</em>, and the
+    /// per-parent BFS below counts <em>every</em> <c>GetSubtasksAsync</c> round-trip (seeds + recursion)
+    /// against <see cref="SubtaskFetchOptions.MaxPerParentFetches"/> so a deep/wide foreign subtree can't
+    /// blow the budget. Any cap that drops work sets <see cref="ForeignSubtaskResolution.Truncated"/> so
+    /// the caller can surface it (the TUI appends a note to the post-refresh status line) rather than
+    /// truncating silently.
     /// Best-effort: a task/list whose fetch fails is skipped rather than failing the whole load.
     /// Non-assignee filters (status/closed) still apply — the pulled-in children flow through
     /// <c>TaskView.Apply</c> like any other task.
     /// </summary>
-    public async Task<IReadOnlyList<TaskItem>> ResolveForeignSubtasksAsync(
+    public async Task<ForeignSubtaskResolution> ResolveForeignSubtasksAsync(
         IReadOnlyList<TaskItem> snapshot, CancellationToken ct = default)
     {
-        var plan = SubtaskFetchStrategy.Plan(snapshot);
-        if (plan.Truncated)
-            Debug.WriteLine(
-                $"ResolveForeignSubtasks: fetch plan capped ({plan.WholeListIds.Count} whole-list, " +
-                $"{plan.PerParentIds.Count} per-parent) — some parents' foreign subtasks are omitted this refresh.");
+        var opts = SubtaskFetchOptions.Default;
+        var plan = SubtaskFetchStrategy.Plan(snapshot, opts);
+        var truncated = plan.Truncated;
 
         var fetched = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
 
@@ -389,7 +389,11 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
 
         // Per-parent branch: seed the BFS only from the parents the plan left to us, recursing into each
         // pulled-in child so deeper / cross-list descendants are reached. A child already gathered by a
-        // whole-list fetch is skipped (and not re-enqueued) by the dedup add below.
+        // whole-list fetch is skipped (and not re-enqueued) by the dedup add below. The budget bounds the
+        // TOTAL round-trips (seeds + recursion), not just the seed count, so an unexpectedly deep/wide
+        // subtree stops at the cap and flags truncation instead of fanning out unboundedly.
+        var budget = opts.MaxPerParentFetches;
+        var spent = 0;
         var expanded = new HashSet<string>(StringComparer.Ordinal);
         var toExpand = new Queue<string>(plan.PerParentIds);
         while (toExpand.Count > 0)
@@ -397,6 +401,12 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
             var id = toExpand.Dequeue();
             if (!expanded.Add(id))
                 continue;
+            if (spent >= budget)
+            {
+                truncated = true; // still-pending ids we won't reach this refresh
+                break;
+            }
+            spent++;
             IReadOnlyList<TaskItem> children;
             try
             {
@@ -414,7 +424,7 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
             }
         }
 
-        return ForeignDescendants(snapshot, fetched.Values.ToList());
+        return new ForeignSubtaskResolution(ForeignDescendants(snapshot, fetched.Values.ToList()), truncated);
     }
 
     /// <summary>Stable ordering: by due date (soonest first, undated last), then by name.</summary>

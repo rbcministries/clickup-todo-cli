@@ -39,6 +39,13 @@ public sealed record SubtaskFetchPlan(
     bool Truncated);
 
 /// <summary>
+/// Result of <see cref="TaskService.ResolveForeignSubtasksAsync"/>: the foreign subtasks to nest, plus
+/// whether a fetch cap dropped work (<see cref="Truncated"/>) so the caller can tell the user some
+/// subtasks were omitted rather than truncating silently (#87).
+/// </summary>
+public sealed record ForeignSubtaskResolution(IReadOnlyList<TaskItem> Subtasks, bool Truncated);
+
+/// <summary>
 /// Pure, adaptive selector for <em>how</em> to fetch a parent's teammate-owned subtasks (#87). The pure
 /// <em>selection</em> of which fetched tasks to keep stays in <see cref="TaskService.ForeignDescendants"/>;
 /// this decides only the fetch <em>source/shape</em> from the shape of the snapshot, primarily the number

@@ -85,11 +85,19 @@ Deterministic ordering so the heuristic is unit-testable.
   filtering downstream either way.
 - Per-parent: the existing BFS, but **seeded only from `PerParentIds`** (not the
   whole snapshot), still recursing into pulled-in children so cross-list /
-  deeper descendants are reached for that branch. Best-effort per-parent skip on
-  error is unchanged.
+  deeper descendants are reached for that branch. The BFS counts **every**
+  `GetSubtasksAsync` round-trip (seeds + recursion) against
+  `MaxPerParentFetches` and stops when the budget is spent — a deep/wide subtree
+  can't fan out unboundedly. Best-effort per-parent skip on error is unchanged.
 - Merge both pools (dedupe by id) -> `ForeignDescendants(snapshot, pool)`.
-- If `plan.Truncated`, `Debug.WriteLine` a one-line notice (no silent
-  truncation), consistent with the codebase's logging.
+- Return a `ForeignSubtaskResolution(Subtasks, Truncated)` where `Truncated` is
+  `plan.Truncated || bfsBudgetHit`. The **caller surfaces it** rather than
+  logging: a `Debug.WriteLine` is `[Conditional("DEBUG")]` and compiled out of
+  the shipped/tested `-c Release` binary (no `DEBUG` constant), so it would be
+  the very silent-truncation #87 forbids. `TodoApp` folds the flag into the
+  **persisted post-refresh status line** ("… · some subtasks omitted"); a
+  transient `Flash` would be repainted away by `OnTasksLoaded`/`Render` on the
+  same success path.
 
 ## Known tradeoff (documented, not silent)
 

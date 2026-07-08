@@ -107,6 +107,10 @@ public sealed class TodoApp
     // _contextParents. They render as not-mine rows nested under their parent and aren't my work
     // (status/pin are blocked on them).
     private volatile IReadOnlyDictionary<string, TaskItem> _foreignSubtasks = EmptyParents;
+    // Set when the adaptive foreign-subtask fetch hit a round-trip cap (#87) and omitted some subtasks;
+    // surfaced as a note on the post-refresh status line so the truncation isn't silent. Written in
+    // FetchAsync (off-thread) and read on the UI thread in OnTasksLoaded, so volatile like _foreignSubtasks.
+    private volatile bool _foreignSubtasksTruncated;
     // Ids of the non-pinned subtasks pulled into the Current Focus section (nested under a pinned
     // parent, #75). Set during Render; read by UpdateTaskRow so an in-place status update treats a
     // pulled-in Focus row like a Focus row (keeps every segment) rather than a to-do row.
@@ -184,9 +188,17 @@ public sealed class TodoApp
         // Pull in a parent's teammate-owned subtasks (regardless of assignee) only when both the
         // subtasks view and the ShowAllSubtasksOfAssignedParents setting are on (#70). Off → skip the
         // extra list-scoped round-trips. Keyed by id for fast Render/guard lookups.
-        _foreignSubtasks = _config.View.ShowSubtasks && _config.View.ShowAllSubtasksOfAssignedParents
-            ? (await _tasks.ResolveForeignSubtasksAsync(tasks, ct)).ToDictionary(t => t.Id, StringComparer.Ordinal)
-            : EmptyParents;
+        if (_config.View.ShowSubtasks && _config.View.ShowAllSubtasksOfAssignedParents)
+        {
+            var foreign = await _tasks.ResolveForeignSubtasksAsync(tasks, ct);
+            _foreignSubtasks = foreign.Subtasks.ToDictionary(t => t.Id, StringComparer.Ordinal);
+            _foreignSubtasksTruncated = foreign.Truncated;
+        }
+        else
+        {
+            _foreignSubtasks = EmptyParents;
+            _foreignSubtasksTruncated = false;
+        }
         // List colors are only needed to tint headers when grouping by List; skip the fetches otherwise.
         _listColors = _config.View.GroupField == TaskField.List
             ? await _tasks.ResolveListColorsAsync(tasks.Select(t => t.ListId ?? ""), ct)
@@ -346,6 +358,7 @@ public sealed class TodoApp
         {
             _contextParents = EmptyParents;
             _foreignSubtasks = EmptyParents; // no nesting when subtasks are hidden (#70 is a no-op then)
+            _foreignSubtasksTruncated = false;
         }
         Render(keepTaskId: CurrentTask()?.Id);
         _signature = CurrentSignature(_all);
@@ -389,7 +402,10 @@ public sealed class TodoApp
         var pullChildrenNowOn = result.ShowAllSubtasksOfAssignedParents && result.ShowSubtasks;
         var pullChildrenNeedsFetch = pullChildrenNowOn && !previous.ShowAllSubtasksOfAssignedParents;
         if (!result.ShowAllSubtasksOfAssignedParents)
+        {
             _foreignSubtasks = EmptyParents;
+            _foreignSubtasksTruncated = false;
+        }
 
         if (assigneeChanged || pullChildrenNeedsFetch)
         {
@@ -1016,6 +1032,10 @@ public sealed class TodoApp
     {
         _all = tasks;
         _status = $"Updated {DateTime.Now:HH:mm:ss} · {tasks.Count} task(s) · refresh every {_config.RefreshSeconds}s";
+        // Surface an adaptive-fetch cap (#87) on the persisted status line — a Flash here would be
+        // repainted away by this same success path, so it's folded into the line the path writes.
+        if (_foreignSubtasksTruncated)
+            _status += " · some subtasks omitted";
 
         // Warm the status cache for the lists currently on screen (best-effort, off the UI thread), so
         // pressing Space opens the picker from cache instead of paying a round-trip (#10).
