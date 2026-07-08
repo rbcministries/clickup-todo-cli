@@ -78,35 +78,14 @@ public sealed class TaskDetailScreen : Screen
         var commentsPane = NewPane($"Comments ({comments.Count})", TaskDetailFormatter.Comments(comments));
 
         // The Other tab colours its Priority/Status values (#66), which a plain TextView can't do. Its
-        // content is a container: a coloured, fixed-height header view (List/Priority/Status/dates) on
-        // top, and the scrollable, word-wrapped "Custom fields:" body beneath it.
+        // content is a container (a coloured, fixed-height header view on top of the scrollable,
+        // word-wrapped "Custom fields:" body). DetailOtherTabView owns that split and adapts it so both
+        // the header attributes and the custom-fields section stay reachable on a very short window (#81).
         var headerLines = TaskDetailFormatter.HeaderAttributeLines(task);
-        var attributesView = new DetailAttributesView(headerLines)
-        {
-            X = 0,
-            Y = 0,
-            Width = Dim.Fill(),
-            Height = headerLines.Count,
-        };
-        var customFields = new TextView
-        {
-            // Y leaves a blank gap row after the header attributes, mirroring the blank line the plain
-            // OtherAttributes layout renders between them and the "Custom fields:" section.
-            X = 0,
-            Y = headerLines.Count + 1,
-            Width = Dim.Fill(),
-            Height = Dim.Fill(),
-            Text = TaskDetailFormatter.CustomFieldsBody(task),
-            ReadOnly = true,
-            WordWrap = true,
-        };
-        // CanFocus so the container is in the focus chain — its scrollable custom-fields body (below)
-        // receives focus via SetFocus; the coloured header view above it stays non-focusable.
-        var other = new View { Title = "Other", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(), CanFocus = true };
-        other.Add(attributesView, customFields);
+        var other = new DetailOtherTabView(headerLines, TaskDetailFormatter.CustomFieldsBody(task));
 
         _tabContents = [description, commentsPane, other];
-        _scrollTargets = [description, commentsPane, customFields];
+        _scrollTargets = [description, commentsPane, other.ScrollTarget];
 
         for (var i = 0; i < _tabContents.Length; i++)
             _tabs.InsertTab(i, _tabContents[i]);
