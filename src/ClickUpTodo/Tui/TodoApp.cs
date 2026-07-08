@@ -346,7 +346,26 @@ public sealed class TodoApp
                 key.Handled = true;
                 OpenNotificationsFeed();
                 break;
+            case KeyCode.F6:
+                key.Handled = true;
+                CycleBadgeDisplay();
+                break;
         }
+    }
+
+    /// <summary>F6 — cycles how Status/Priority badges render (icons → text → hidden → icons), persists
+    /// the choice, and re-renders. A pure display toggle: it re-decorates the same rows, so it keeps the
+    /// cursor on the current task.</summary>
+    private void CycleBadgeDisplay()
+    {
+        if (ActiveScreen is not null)
+            return;
+
+        var mode = _config.BadgeDisplay.Next();
+        _config.BadgeDisplay = mode;
+        _configStore.Save(_config);
+        Flash(mode.Describe());
+        Render(keepTaskId: CurrentTask()?.Id);
     }
 
     /// <summary>
@@ -1068,7 +1087,7 @@ public sealed class TodoApp
         var groupedBy = inFocus ? (TaskField?)null : _config.View.GroupField;
         // Reproduce the row's ▶/▼ fold marker from its stored state so an in-place update keeps it (#76).
         var marker = FoldMarker(index < _folds.Count ? _folds[index] : FoldState.None, _config.View.ShowSubtasks);
-        var (text, badges) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy, marker: marker);
+        var (text, badges) = BuildRow(updated, _config.BadgeDisplay, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy, marker: marker);
         _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
@@ -1291,7 +1310,7 @@ public sealed class TodoApp
 
     private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None, bool isForeignSubtask = false)
     {
-        var (text, badges) = BuildRow(task, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask);
+        var (text, badges) = BuildRow(task, _config.BadgeDisplay, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask);
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);
@@ -1315,16 +1334,15 @@ public sealed class TodoApp
 
     /// <summary>The display text and the row's color badge overlays (status, then priority when set).
     /// <paramref name="groupedBy"/> omits the grouped field's segment (its header already conveys it, #67).
-    /// <paramref name="marker"/> is the leading ▶/▼ fold marker or gutter (#76).</summary>
+    /// <paramref name="marker"/> is the leading ▶/▼ fold marker or gutter (#76). <paramref name="badges"/>
+    /// selects how the leading Status/Priority badges render (F6).</summary>
     private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
-        TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
+        TaskItem task, BadgeDisplay badgeDisplay, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
     {
-        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask);
-        var badges = new List<StatusBadgeListSource.Badge>(3);
-        // The leading priority flag (its space-flag-space span) is tinted with the priority colour; the
-        // blank-gutter state carries no span so TryCreate returns null and it stays unshaded.
-        if (StatusBadgeListSource.TryCreate(row.PriorityFlagStart, row.PriorityFlagLength, task.PriorityColor) is { } flag)
-            badges.Add(flag);
+        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask, badgeDisplay);
+        var badges = new List<StatusBadgeListSource.Badge>(2);
+        // The Status/Priority badges (icon chip or bracketed text) are tinted with their field colours;
+        // an absent/hidden badge carries no span, so TryCreate returns null and nothing is shaded.
         if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
             badges.Add(status);
         if (StatusBadgeListSource.TryCreate(row.PriorityStart, row.PriorityLength, task.PriorityColor) is { } priority)

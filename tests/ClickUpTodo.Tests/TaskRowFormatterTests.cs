@@ -6,262 +6,239 @@ namespace ClickUpTodo.Tests;
 
 public sealed class TaskRowFormatterTests
 {
+    // ── Default mode ─────────────────────────────────────────────────────────
+
     [Fact]
-    public void Format_TitleLeads_AndIncludesStatusListAndDue()
+    public void Format_DefaultMode_IsIcons()
     {
-        var task = new TaskItem
-        {
-            Id = "1",
-            Name = "Ship the report",
-            StatusName = "in progress",
-            ListName = "Personal Tasks",
-            DueDateMs = DateTimeOffset.Parse("2026-07-01T12:00:00Z").ToUnixTimeMilliseconds(),
-        };
+        var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", PriorityName = "High" };
 
-        var row = TaskRowFormatter.Format(task);
+        // The default (no badges arg) matches an explicit Icons request.
+        Assert.Equal(
+            TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons).Text,
+            TaskRowFormatter.Format(task).Text);
+    }
 
-        // Rows lead with the fixed-width priority gutter (blank here — no priority) then the title.
-        Assert.StartsWith(TaskRowFormatter.LeadingBlank + "Ship the report", row.Text);
-        Assert.Contains("[in progress]", row.Text);
+    // ── Icon mode: status ○ chip + priority ⚑ chip, status first ─────────────
+
+    [Fact]
+    public void IconMode_StatusChipLeads_ThenPriorityChip_ThenTitle()
+    {
+        var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", PriorityName = "High" };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons);
+
+        // Status chip, then priority chip, then the title.
+        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.PriorityIcon + "Ship it", row.Text);
+        // Both spans land exactly on their chips, status before priority.
+        Assert.Equal(0, row.StatusStart);
+        Assert.Equal(TaskRowFormatter.StatusIcon, row.Text.Substring(row.StatusStart, row.StatusLength));
+        Assert.Equal(TaskRowFormatter.StatusIcon.Length, row.PriorityStart);
+        Assert.Equal(TaskRowFormatter.PriorityIcon, row.Text.Substring(row.PriorityStart, row.PriorityLength));
+    }
+
+    [Fact]
+    public void IconMode_NoPriority_BlankGutterKeepsAlignment_NoPrioritySpan()
+    {
+        var withPriority = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", PriorityName = "High" };
+        var noPriority = new TaskItem { Id = "2", Name = "Ship it", StatusName = "to do", PriorityName = null };
+
+        var a = TaskRowFormatter.Format(withPriority, badges: BadgeDisplay.Icons);
+        var b = TaskRowFormatter.Format(noPriority, badges: BadgeDisplay.Icons);
+
+        // No priority ⇒ no coloured span, but a blank gutter keeps the title aligned with priced rows.
+        Assert.Equal(-1, b.PriorityStart);
+        Assert.Equal(0, b.PriorityLength);
+        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.BlankGutter + "Ship it", b.Text);
+        // The title starts at the same column whether or not a priority chip is present.
+        Assert.Equal(a.Text.IndexOf("Ship it", StringComparison.Ordinal), b.Text.IndexOf("Ship it", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void IconMode_NoStatus_BlankGutter_PriorityChipStillAligned()
+    {
+        var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = null, PriorityName = "Urgent" };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons);
+
+        Assert.Equal(-1, row.StatusStart);
+        Assert.Equal(0, row.StatusLength);
+        // Blank status gutter, then the priority chip at the second gutter slot.
+        Assert.StartsWith(TaskRowFormatter.BlankGutter + TaskRowFormatter.PriorityIcon + "Ship it", row.Text);
+        Assert.Equal(TaskRowFormatter.BlankGutter.Length, row.PriorityStart);
+        Assert.Equal(TaskRowFormatter.PriorityIcon, row.Text.Substring(row.PriorityStart, row.PriorityLength));
+    }
+
+    [Fact]
+    public void IconMode_ChipsAndBlankGutter_AreTheSameWidth()
+    {
+        // The grid layout depends on the two icon chips and the blank gutter being the same char width.
+        Assert.Equal(TaskRowFormatter.BlankGutter.Length, TaskRowFormatter.StatusIcon.Length);
+        Assert.Equal(TaskRowFormatter.BlankGutter.Length, TaskRowFormatter.PriorityIcon.Length);
+    }
+
+    [Fact]
+    public void IconMode_Indented_ChipsLeadTheRow_TitleShiftsRight()
+    {
+        var task = new TaskItem { Id = "1", Name = "Subtask", StatusName = "to do", PriorityName = "Low" };
+
+        var flat = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons);
+        var nested = TaskRowFormatter.Format(task, depth: 2, badges: BadgeDisplay.Icons);
+
+        // Chips stay the leftmost gutter regardless of depth — the indent shifts only the title.
+        Assert.Equal(0, nested.StatusStart);
+        Assert.Equal(TaskRowFormatter.StatusIcon.Length, nested.PriorityStart);
+        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.PriorityIcon + "    Subtask", nested.Text);
+        Assert.Equal(flat.StatusStart, nested.StatusStart);
+    }
+
+    [Fact]
+    public void IconMode_WithFoldMarker_MarkerFollowsChipsAndIndent()
+    {
+        var task = new TaskItem { Id = "1", Name = "Roll up sprint", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, depth: 1, marker: "▶ ", badges: BadgeDisplay.Icons);
+
+        // Chips, then indent (2 per depth), then the marker, then the title.
+        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.BlankGutter + "  ▶ Roll up sprint", row.Text);
+        Assert.Equal(TaskRowFormatter.StatusIcon, row.Text.Substring(row.StatusStart, row.StatusLength));
+    }
+
+    // ── Text mode: [status] [priority], status first ────────────────────────
+
+    [Fact]
+    public void TextMode_StatusBadgeLeads_ThenPriorityBadge_ThenTitle()
+    {
+        var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", PriorityName = "High" };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Text);
+
+        Assert.StartsWith("[to do] [High] Ship it", row.Text);
+        Assert.Equal("[to do]", row.Text.Substring(row.StatusStart, row.StatusLength));
+        Assert.Equal("[High]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
+        // Status precedes priority, and neither coloured span includes the separator space.
+        Assert.True(row.PriorityStart > row.StatusStart + row.StatusLength);
+    }
+
+    [Fact]
+    public void TextMode_LiteralBadgeInTitle_DoesNotConfuseTheSpan()
+    {
+        // A "[High]" literal in the title must not be mistaken for the leading priority badge span.
+        var task = new TaskItem { Id = "1", Name = "Review [High] priority doc", PriorityName = "High" };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Text);
+
+        // With no status, the priority badge leads the row; the reported span is that leading badge.
+        Assert.Equal(0, row.PriorityStart);
+        Assert.Equal("[High]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
+    }
+
+    [Fact]
+    public void TextMode_NoStatus_PriorityLeadsWithNoStatusGutter()
+    {
+        var task = new TaskItem { Id = "1", Name = "Work", StatusName = null, PriorityName = "Urgent" };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Text);
+
+        Assert.Equal(-1, row.StatusStart);
+        Assert.Equal(0, row.StatusLength);
+        // Text mode is ragged — an absent status leaves no gutter, so the priority badge is at column 0.
+        Assert.Equal(0, row.PriorityStart);
+        Assert.StartsWith("[Urgent] Work", row.Text);
+    }
+
+    [Fact]
+    public void TextMode_Indented_BadgesLead_TitleShiftsRight()
+    {
+        var task = new TaskItem { Id = "1", Name = "Subtask", StatusName = "to do", PriorityName = "Low" };
+
+        var row = TaskRowFormatter.Format(task, depth: 2, badges: BadgeDisplay.Text);
+
+        Assert.StartsWith("[to do] [Low]     Subtask", row.Text); // two indent units = 4 spaces after the badges
+        Assert.Equal("[to do]", row.Text.Substring(row.StatusStart, row.StatusLength));
+        Assert.Equal("[Low]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
+    }
+
+    // ── Hidden mode: no badges ───────────────────────────────────────────────
+
+    [Fact]
+    public void HiddenMode_LeadsWithTitle_AndReportsNoSpans()
+    {
+        var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", PriorityName = "High" };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Hidden);
+
+        Assert.StartsWith("Ship it", row.Text);
+        Assert.Equal(-1, row.StatusStart);
+        Assert.Equal(0, row.StatusLength);
+        Assert.Equal(-1, row.PriorityStart);
+        Assert.Equal(0, row.PriorityLength);
+        // No badge brackets or chips leak into the line (the title has none of its own here).
+        Assert.DoesNotContain('[', row.Text);
+        Assert.DoesNotContain('○', row.Text);
+        Assert.DoesNotContain('⚑', row.Text);
+    }
+
+    [Fact]
+    public void HiddenMode_StillShowsMetadata()
+    {
+        var row = TaskRowFormatter.Format(FullRowTask(), badges: BadgeDisplay.Hidden);
+
+        Assert.StartsWith("Ship the report", row.Text);
         Assert.Contains("· Personal Tasks", row.Text);
         Assert.Contains("· due ", row.Text);
     }
 
-    [Fact]
-    public void Format_BadgeSpan_ExactlyCoversTheStatusBracket()
-    {
-        var task = new TaskItem { Id = "1", Name = "Reply to vendor [urgent]", StatusName = "to do" };
-
-        var row = TaskRowFormatter.Format(task);
-
-        // The span must land on the status badge, NOT the literal "[urgent]" inside the title.
-        Assert.True(row.StatusLength > 0);
-        var span = row.Text.Substring(row.StatusStart, row.StatusLength);
-        Assert.Equal("[to do]", span);
-    }
+    // ── Grouping drops the grouped field's badge (#67) ───────────────────────
 
     [Fact]
-    public void Format_WithFoldMarker_PrependsMarkerAfterIndent_AndKeepsBadgeSpanExact()
-    {
-        var task = new TaskItem { Id = "1", Name = "Roll up sprint", StatusName = "to do" };
-
-        var row = TaskRowFormatter.Format(task, depth: 1, marker: "▶ ");
-
-        // Leading gutter (blank — no priority), then indent (2 per depth), then the marker, then the title.
-        Assert.StartsWith(TaskRowFormatter.LeadingBlank + "  ▶ Roll up sprint", row.Text);
-        // The badge span still lands exactly on the status bracket despite the marker shifting offsets.
-        Assert.Equal("[to do]", row.Text.Substring(row.StatusStart, row.StatusLength));
-    }
-
-    [Fact]
-    public void Format_DefaultMarker_IsEmpty_LayoutUnchanged()
-    {
-        var task = new TaskItem { Id = "1", Name = "Plain row", StatusName = "to do" };
-
-        Assert.Equal(TaskRowFormatter.Format(task).Text, TaskRowFormatter.Format(task, marker: "").Text);
-    }
-
-    [Fact]
-    public void Format_NoStatus_ProducesNoBadge()
-    {
-        var task = new TaskItem { Id = "1", Name = "Untitled work", StatusName = null };
-
-        var row = TaskRowFormatter.Format(task);
-
-        Assert.Equal(0, row.StatusLength);
-        Assert.Equal(-1, row.StatusStart);
-        Assert.DoesNotContain('[', row.Text);
-    }
-
-    [Fact]
-    public void Format_BlankStatus_ProducesNoBadge()
-    {
-        var task = new TaskItem { Id = "1", Name = "Work", StatusName = "   " };
-
-        var row = TaskRowFormatter.Format(task);
-
-        Assert.Equal(0, row.StatusLength);
-    }
-
-    [Fact]
-    public void Format_Indented_PrefixesTwoSpacesPerDepth()
-    {
-        var task = new TaskItem { Id = "1", Name = "Subtask" };
-
-        // The leading gutter precedes the depth indent (blank here — the task has no priority).
-        Assert.StartsWith(TaskRowFormatter.LeadingBlank + "  Subtask", TaskRowFormatter.Format(task, depth: 1).Text);
-        Assert.StartsWith(TaskRowFormatter.LeadingBlank + "    Subtask", TaskRowFormatter.Format(task, depth: 2).Text);
-    }
-
-    [Fact]
-    public void Format_Indented_BadgeSpanShiftsToStayExact()
-    {
-        var task = new TaskItem { Id = "1", Name = "Subtask", StatusName = "to do" };
-
-        var flat = TaskRowFormatter.Format(task);
-        var nested = TaskRowFormatter.Format(task, depth: 2);
-
-        // The badge span must still land exactly on the status bracket after indenting.
-        Assert.Equal("[to do]", nested.Text.Substring(nested.StatusStart, nested.StatusLength));
-        Assert.Equal(flat.StatusStart + 4, nested.StatusStart); // two indent units = 4 chars
-    }
-
-    [Fact]
-    public void Format_ContextParent_AppendsMarker()
-    {
-        var task = new TaskItem { Id = "1", Name = "Parent not mine", StatusName = "to do" };
-
-        var row = TaskRowFormatter.Format(task, depth: 0, isContextParent: true);
-
-        Assert.Contains("(parent — not assigned to you)", row.Text);
-        // Marker sits after the row body, so the badge span is unaffected.
-        Assert.Equal("[to do]", row.Text.Substring(row.StatusStart, row.StatusLength));
-    }
-
-    [Fact]
-    public void Format_ForeignSubtask_AppendsNotAssignedMarker()
-    {
-        var task = new TaskItem { Id = "1", Name = "Teammate's subtask", StatusName = "to do" };
-
-        var row = TaskRowFormatter.Format(task, depth: 1, isForeignSubtask: true);
-
-        Assert.Contains("(not assigned to you)", row.Text);
-        Assert.DoesNotContain("parent —", row.Text); // the child marker, not the context-parent one
-        Assert.StartsWith(TaskRowFormatter.LeadingBlank + "  Teammate's subtask", row.Text); // still indented as a nested row
-        Assert.Equal("[to do]", row.Text.Substring(row.StatusStart, row.StatusLength));
-    }
-
-    [Fact]
-    public void Format_ContextParentWins_OverForeignSubtaskMarker()
-    {
-        var task = new TaskItem { Id = "1", Name = "P", StatusName = "to do" };
-
-        // If both flags are ever set, the context-parent marker takes precedence (a parent row).
-        var row = TaskRowFormatter.Format(task, isContextParent: true, isForeignSubtask: true);
-
-        Assert.Contains("(parent — not assigned to you)", row.Text);
-    }
-
-    // ── Priority badge (#55) ─────────────────────────────────────────────────
-
-    [Fact]
-    public void Format_PrioritySpan_ExactlyCoversThePriorityBracket()
+    public void IconMode_GroupedByStatus_DropsStatusChipEntirely_KeepsPriorityChip()
     {
         var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", PriorityName = "High" };
 
-        var row = TaskRowFormatter.Format(task);
+        var row = TaskRowFormatter.Format(task, groupedBy: TaskField.Status, badges: BadgeDisplay.Icons);
 
-        Assert.True(row.PriorityLength > 0);
-        Assert.Equal("[High]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
-        // Status and priority spans are distinct and non-overlapping; priority follows status.
-        Assert.Equal("[to do]", row.Text.Substring(row.StatusStart, row.StatusLength));
-        Assert.True(row.PriorityStart > row.StatusStart + row.StatusLength);
-        Assert.Contains("[to do]  [High]", row.Text);
+        // No status chip and no gutter for it — every grouped row drops it uniformly, so alignment holds.
+        Assert.Equal(-1, row.StatusStart);
+        Assert.StartsWith(TaskRowFormatter.PriorityIcon + "Ship it", row.Text);
+        Assert.Equal(0, row.PriorityStart);
+        Assert.Equal(TaskRowFormatter.PriorityIcon, row.Text.Substring(row.PriorityStart, row.PriorityLength));
     }
 
     [Fact]
-    public void Format_LiteralPriorityInTitle_DoesNotConfuseTheSpan()
+    public void IconMode_GroupedByPriority_DropsPriorityChipEntirely_KeepsStatusChip()
     {
-        // A "[High]" literal in the title must not be mistaken for the priority badge span.
-        var task = new TaskItem { Id = "1", Name = "Review [High] priority doc", PriorityName = "High" };
+        var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", PriorityName = "High" };
 
-        var row = TaskRowFormatter.Format(task);
+        var row = TaskRowFormatter.Format(task, groupedBy: TaskField.Priority, badges: BadgeDisplay.Icons);
 
-        // The reported span is the trailing badge, not the title occurrence.
-        Assert.Equal("[High]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
-        Assert.True(row.PriorityStart > task.Name.Length);
-    }
-
-    [Fact]
-    public void Format_NoPriority_ProducesNoPriorityBadge()
-    {
-        var task = new TaskItem { Id = "1", Name = "Work", StatusName = "to do", PriorityName = null };
-
-        var row = TaskRowFormatter.Format(task);
-
-        Assert.Equal(0, row.PriorityLength);
         Assert.Equal(-1, row.PriorityStart);
+        Assert.DoesNotContain('⚑', row.Text);
+        Assert.StartsWith(TaskRowFormatter.StatusIcon + "Ship it", row.Text);
+        Assert.Equal(0, row.StatusStart);
     }
 
     [Fact]
-    public void Format_PriorityWithoutStatus_PrioritySpanStillExact()
+    public void TextMode_GroupedByStatus_OmitsStatusBadge_KeepsPriority()
     {
-        var task = new TaskItem { Id = "1", Name = "Work", StatusName = null, PriorityName = "Urgent" };
+        var row = TaskRowFormatter.Format(FullRowTask(), groupedBy: TaskField.Status, badges: BadgeDisplay.Text);
 
-        var row = TaskRowFormatter.Format(task);
-
-        Assert.Equal(0, row.StatusLength);
         Assert.Equal(-1, row.StatusStart);
-        Assert.Equal("[Urgent]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
-        // With no status, the priority badge sits right after the leading flag + title + two spaces.
-        Assert.Equal(TaskRowFormatter.LeadingFlag.Length + task.Name.Length + 2, row.PriorityStart);
+        Assert.DoesNotContain("[in progress]", row.Text);
+        Assert.StartsWith("[High] Ship the report", row.Text);
     }
 
     [Fact]
-    public void Format_Indented_PrioritySpanShiftsToStayExact()
+    public void TextMode_GroupedByPriority_OmitsPriorityBadge_KeepsStatus()
     {
-        var task = new TaskItem { Id = "1", Name = "Subtask", StatusName = "to do", PriorityName = "Low" };
+        var row = TaskRowFormatter.Format(FullRowTask(), groupedBy: TaskField.Priority, badges: BadgeDisplay.Text);
 
-        var flat = TaskRowFormatter.Format(task);
-        var nested = TaskRowFormatter.Format(task, depth: 2);
-
-        Assert.Equal("[Low]", nested.Text.Substring(nested.PriorityStart, nested.PriorityLength));
-        Assert.Equal(flat.PriorityStart + 4, nested.PriorityStart); // two indent units = 4 chars
-    }
-
-    // ── Leading priority flag gutter ─────────────────────────────────────────
-
-    [Fact]
-    public void Format_WithPriority_LeadsWithFlagBadge_AndReportsItsSpan()
-    {
-        var task = new TaskItem { Id = "1", Name = "Ship it", PriorityName = "Urgent" };
-
-        var row = TaskRowFormatter.Format(task);
-
-        // The row leads with the flag gutter, and the reported span covers exactly those three chars.
-        Assert.StartsWith(TaskRowFormatter.LeadingFlag, row.Text);
-        Assert.Equal(0, row.PriorityFlagStart);
-        Assert.Equal(TaskRowFormatter.LeadingFlag.Length, row.PriorityFlagLength);
-        Assert.Equal(TaskRowFormatter.LeadingFlag, row.Text.Substring(row.PriorityFlagStart, row.PriorityFlagLength));
-        // The title follows the gutter.
-        Assert.StartsWith(TaskRowFormatter.LeadingFlag + "Ship it", row.Text);
-    }
-
-    [Fact]
-    public void Format_WithoutPriority_LeadsWithBlankGutter_AndReportsNoFlagSpan()
-    {
-        var task = new TaskItem { Id = "1", Name = "Ship it", PriorityName = null };
-
-        var row = TaskRowFormatter.Format(task);
-
-        // The blank gutter keeps the grid alignment but carries no colour span.
-        Assert.StartsWith(TaskRowFormatter.LeadingBlank, row.Text);
-        Assert.Equal(-1, row.PriorityFlagStart);
-        Assert.Equal(0, row.PriorityFlagLength);
-    }
-
-    [Fact]
-    public void Format_FlagAndBlankGutter_AreTheSameWidth()
-    {
-        // Grid-like layout depends on the set and unset gutters occupying the same number of chars.
-        Assert.Equal(TaskRowFormatter.LeadingBlank.Length, TaskRowFormatter.LeadingFlag.Length);
-    }
-
-    [Fact]
-    public void Format_GroupedByPriority_KeepsLeadingFlag_ThoughInlineBadgeIsDropped()
-    {
-        var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", PriorityName = "High" };
-
-        var row = TaskRowFormatter.Format(task, groupedBy: TaskField.Priority);
-
-        // The inline [priority] badge is dropped (its header conveys it), but the structural flag stays.
         Assert.Equal(-1, row.PriorityStart);
         Assert.DoesNotContain("[High]", row.Text);
-        Assert.Equal(0, row.PriorityFlagStart);
-        Assert.Equal(TaskRowFormatter.LeadingFlag, row.Text.Substring(row.PriorityFlagStart, row.PriorityFlagLength));
+        Assert.StartsWith("[in progress] Ship the report", row.Text);
     }
 
-    // ── Omit the grouped field from the row (#67) ────────────────────────────
+    // ── Metadata omission (#67) is mode-independent ──────────────────────────
 
     private static TaskItem FullRowTask() => new()
     {
@@ -274,30 +251,14 @@ public sealed class TaskRowFormatterTests
     };
 
     [Fact]
-    public void Format_GroupedByStatus_OmitsStatusBadge_KeepsOthers()
+    public void Format_Ungrouped_KeepsEverySegment()
     {
-        var row = TaskRowFormatter.Format(FullRowTask(), groupedBy: TaskField.Status);
+        var row = TaskRowFormatter.Format(FullRowTask());
 
-        // Status badge is omitted, reporting the absent sentinel so no colour span is drawn.
-        Assert.Equal(-1, row.StatusStart);
-        Assert.Equal(0, row.StatusLength);
-        Assert.DoesNotContain("[in progress]", row.Text);
-        // Every other segment is intact.
-        Assert.Equal("[High]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
         Assert.Contains("· Personal Tasks", row.Text);
         Assert.Contains("· due ", row.Text);
-    }
-
-    [Fact]
-    public void Format_GroupedByPriority_OmitsPriorityBadge_KeepsStatus()
-    {
-        var row = TaskRowFormatter.Format(FullRowTask(), groupedBy: TaskField.Priority);
-
-        Assert.Equal(-1, row.PriorityStart);
-        Assert.Equal(0, row.PriorityLength);
-        Assert.DoesNotContain("[High]", row.Text);
-        // Status badge still present and its span still exact.
-        Assert.Equal("[in progress]", row.Text.Substring(row.StatusStart, row.StatusLength));
+        Assert.Equal(TaskRowFormatter.StatusIcon, row.Text.Substring(row.StatusStart, row.StatusLength));
+        Assert.Equal(TaskRowFormatter.PriorityIcon, row.Text.Substring(row.PriorityStart, row.PriorityLength));
     }
 
     [Fact]
@@ -307,8 +268,6 @@ public sealed class TaskRowFormatterTests
 
         Assert.DoesNotContain("· Personal Tasks", row.Text);
         Assert.Contains("· due ", row.Text);
-        // Badges are unaffected.
-        Assert.Equal("[in progress]", row.Text.Substring(row.StatusStart, row.StatusLength));
     }
 
     [Fact]
@@ -318,20 +277,6 @@ public sealed class TaskRowFormatterTests
 
         Assert.DoesNotContain("· due ", row.Text);
         Assert.Contains("· Personal Tasks", row.Text);
-    }
-
-    [Fact]
-    public void Format_GroupedByStatus_PriorityBadgeShiftsLeftToStayExact()
-    {
-        var task = FullRowTask();
-        var ungrouped = TaskRowFormatter.Format(task);
-        var grouped = TaskRowFormatter.Format(task, groupedBy: TaskField.Status);
-
-        // With the status badge gone, the priority badge sits right after the leading flag + title +
-        // two spaces, and its reported span still lands exactly on the bracket.
-        Assert.Equal("[High]", grouped.Text.Substring(grouped.PriorityStart, grouped.PriorityLength));
-        Assert.Equal(TaskRowFormatter.LeadingFlag.Length + task.Name.Length + 2, grouped.PriorityStart);
-        Assert.True(grouped.PriorityStart < ungrouped.PriorityStart);
     }
 
     [Theory]
@@ -350,14 +295,38 @@ public sealed class TaskRowFormatterTests
         Assert.Equal(ungrouped.PriorityStart, grouped.PriorityStart);
     }
 
-    [Fact]
-    public void Format_Ungrouped_KeepsEverySegment()
-    {
-        var row = TaskRowFormatter.Format(FullRowTask(), groupedBy: null);
+    // ── Trailing context markers ─────────────────────────────────────────────
 
-        Assert.Equal("[in progress]", row.Text.Substring(row.StatusStart, row.StatusLength));
-        Assert.Equal("[High]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
-        Assert.Contains("· Personal Tasks", row.Text);
-        Assert.Contains("· due ", row.Text);
+    [Fact]
+    public void Format_ContextParent_AppendsMarker_BadgeSpanUnaffected()
+    {
+        var task = new TaskItem { Id = "1", Name = "Parent not mine", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, depth: 0, isContextParent: true);
+
+        Assert.Contains("(parent — not assigned to you)", row.Text);
+        Assert.Equal(TaskRowFormatter.StatusIcon, row.Text.Substring(row.StatusStart, row.StatusLength));
+    }
+
+    [Fact]
+    public void Format_ForeignSubtask_AppendsNotAssignedMarker()
+    {
+        var task = new TaskItem { Id = "1", Name = "Teammate's subtask", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, depth: 1, isForeignSubtask: true);
+
+        Assert.Contains("(not assigned to you)", row.Text);
+        Assert.DoesNotContain("parent —", row.Text); // the child marker, not the context-parent one
+        Assert.Equal(TaskRowFormatter.StatusIcon, row.Text.Substring(row.StatusStart, row.StatusLength));
+    }
+
+    [Fact]
+    public void Format_ContextParentWins_OverForeignSubtaskMarker()
+    {
+        var task = new TaskItem { Id = "1", Name = "P", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, isContextParent: true, isForeignSubtask: true);
+
+        Assert.Contains("(parent — not assigned to you)", row.Text);
     }
 }

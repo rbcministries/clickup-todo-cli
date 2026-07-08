@@ -83,74 +83,49 @@ public sealed class StatusBadgeListSourceTests
     }
 
     [Fact]
-    public void BadgeStartColumn_ForAsciiTitle_MatchesBothFormulas_NoRegression()
-    {
-        // The common case (ASCII names) must be unchanged: the new grapheme layout and the old per-rune
-        // formula agree, and both equal the base renderer's width.
-        var task = new TaskItem
-        {
-            Id = "t1",
-            Name = "Write the weekly report",
-            StatusName = "in progress",
-            StatusColor = "#4194e0",
-        };
-        var row = TaskRowFormatter.Format(task);
-
-        Assert.True(row.StatusStart > 0);
-        var expected = row.Text[..row.StatusStart].GetColumns();
-        Assert.Equal(expected, LaidOutColumnAt(row.Text, row.StatusStart));
-        Assert.Equal(expected, OldPerRuneColumns(row.Text, row.StatusStart));
-    }
-
-    [Fact]
-    public void BadgeStartColumn_ForMultiEmojiTitle_AlignsToText_AndFixesTheOldOffset()
+    public void LayOutColumns_ForMultiEmojiTitle_MatchBaseRenderer_AndFixTheOldOffset()
     {
         // The observed #63 case: titles with more than one emoji. Skin-tone and variation-selector
         // sequences are multi-rune grapheme clusters the base renderer caps at 2 columns, so the old
-        // per-rune sum drifted right of the text — and the drift compounded per emoji.
-        var task = new TaskItem
-        {
-            Id = "t2",
-            Name = "\U0001F44D\U0001F3FD ship ❤️ it",
-            StatusName = "to do",
-            StatusColor = "#87909e",
-        };
-        var row = TaskRowFormatter.Format(task);
+        // per-rune sum drifted right of the text — and the drift compounded per emoji. Badges now lead
+        // the row (before the title), but the same grapheme-aware layout still positions everything the
+        // header/overlay paints, so pin the invariant on the title text itself.
+        const string title = "\U0001F44D\U0001F3FD ship ❤️ it";
+        var end = title.Length;
 
-        Assert.True(row.StatusStart > 0);
-        var baseWidth = row.Text[..row.StatusStart].GetColumns();
+        // Fixed: the layout agrees with the stock renderer's cumulative width at the end of the title.
+        Assert.Equal(title.GetColumns(), LaidOutColumnAt(title, end));
 
-        // Fixed: the overlay now lands exactly where the stock renderer drew the '[' of the badge.
-        Assert.Equal(baseWidth, LaidOutColumnAt(row.Text, row.StatusStart));
-
-        // Regression capture: the pre-fix formula genuinely disagreed (the offset was real).
-        Assert.NotEqual(baseWidth, OldPerRuneColumns(row.Text, row.StatusStart));
+        // Regression capture: the pre-fix per-rune formula genuinely disagreed (the offset was real).
+        Assert.NotEqual(title.GetColumns(), OldPerRuneColumns(title, end));
     }
 
-    // ── Leading priority flag gutter ─────────────────────────────────────────
+    // ── Leading icon-chip gutter ─────────────────────────────────────────────
 
     [Fact]
-    public void LeadingFlag_And_LeadingBlank_OccupyTheSameDisplayColumns()
+    public void IconChips_And_BlankGutter_OccupyTheSameDisplayColumns()
     {
-        // The grid-like gutter only lines up if the flag badge and the blank gutter render at the same
-        // width — i.e. the flag glyph is a single display column so " ⚑ " matches "   " (three columns).
-        var flagWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.LeadingFlag).Sum(g => g.Width);
-        var blankWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.LeadingBlank).Sum(g => g.Width);
+        // The grid-like gutter only lines up if the ○/⚑ chips and the blank gutter render at the same
+        // width — i.e. each glyph is a single display column so " ○ "/" ⚑ " match "   " (three columns).
+        var statusWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.StatusIcon).Sum(g => g.Width);
+        var priorityWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.PriorityIcon).Sum(g => g.Width);
+        var blankWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.BlankGutter).Sum(g => g.Width);
 
-        Assert.Equal(blankWidth, flagWidth);
-        Assert.Equal(3, flagWidth);
+        Assert.Equal(3, statusWidth);
+        Assert.Equal(3, priorityWidth);
+        Assert.Equal(3, blankWidth);
     }
 
     [Fact]
-    public void LeadingFlagBadge_ColumnsMatchBaseRenderer()
+    public void StatusChip_ColumnsMatchBaseRenderer()
     {
-        // The flag occupies chars [0,3); its overlay must paint exactly columns [0,3) — the base
-        // renderer's width for the same span — so the colour lands on the flag and its two spaces.
-        var task = new TaskItem { Id = "1", Name = "Ship it", PriorityName = "Urgent", PriorityColor = "#f50000" };
+        // The status chip occupies chars [0,3); its overlay must paint exactly columns [0,3) — the base
+        // renderer's width for the same span — so the colour lands on the glyph and its two spaces.
+        var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", StatusColor = "#87909e" };
         var row = TaskRowFormatter.Format(task);
 
-        Assert.Equal(0, row.PriorityFlagStart);
-        var end = row.PriorityFlagStart + row.PriorityFlagLength;
+        Assert.Equal(0, row.StatusStart);
+        var end = row.StatusStart + row.StatusLength;
         Assert.Equal(row.Text[..end].GetColumns(), LaidOutColumnAt(row.Text, end));
     }
 

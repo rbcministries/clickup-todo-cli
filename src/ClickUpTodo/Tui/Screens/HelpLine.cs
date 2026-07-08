@@ -101,6 +101,7 @@ public static class HelpItemSets
         new("F3", "filter/sort/group"),
         new("F4", "subtasks"),
         new("F5", "feed"),
+        new("F6", "badges"),
         new("→/←", "expand/collapse"),
         new("Ctrl+→/←", "all"),
         new("Ctrl+Q", "quit"),
