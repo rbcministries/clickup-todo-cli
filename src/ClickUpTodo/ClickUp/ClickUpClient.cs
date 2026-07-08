@@ -148,13 +148,18 @@ public sealed class ClickUpClient : IDisposable
                 cfg.QueryParameters.Subtasks = true;
             }, ct), ct));
 
-    /// <summary>All open tasks on a specific list, de-paged.</summary>
-    public Task<List<TaskItem>> GetListTasksAsync(string listId, CancellationToken ct = default)
+    /// <summary>
+    /// Tasks on a specific list, de-paged, subtasks included. Open-only by default; set
+    /// <paramref name="includeClosed"/> to also return closed tasks — the adaptive whole-list subtask
+    /// fetch (#87) needs closed intermediates so an open descendant under a closed parent still chains up
+    /// (matching <see cref="GetSubtasksAsync"/>, which keeps closed). Archived tasks are always dropped.
+    /// </summary>
+    public Task<List<TaskItem>> GetListTasksAsync(string listId, bool includeClosed = false, CancellationToken ct = default)
         => Guard("GetTasks", () => PageAsync(page =>
             _client.V2.List[listId].Task.GetAsync(cfg =>
             {
                 cfg.QueryParameters.Page = page;
-                cfg.QueryParameters.IncludeClosed = false;
+                cfg.QueryParameters.IncludeClosed = includeClosed;
                 cfg.QueryParameters.Subtasks = true;
                 cfg.QueryParameters.Archived = false;
             }, ct), ct));

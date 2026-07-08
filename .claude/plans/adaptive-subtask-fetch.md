@@ -76,9 +76,13 @@ Deterministic ordering so the heuristic is unit-testable.
 ### `TaskService.ResolveForeignSubtasksAsync` (executor, reasoning-verified)
 
 - `Plan(snapshot)`.
-- Whole-list: for each `WholeListIds` entry, `GetListTasksAsync(listId)` -> pool.
-  A whole list contains intra-list chains at any depth, so `ForeignDescendants`
-  captures deep same-list descendants without recursion.
+- Whole-list: for each `WholeListIds` entry, `GetListTasksAsync(listId,
+  includeClosed: true)` -> pool. A whole list contains intra-list chains at any
+  depth, so `ForeignDescendants` captures deep same-list descendants without
+  recursion. Closed tasks are included so a closed intermediate parent doesn't
+  break the chain to an open descendant — parity with the per-parent
+  `GetSubtasksAsync` (which keeps closed); `TaskView.Apply` does the status
+  filtering downstream either way.
 - Per-parent: the existing BFS, but **seeded only from `PerParentIds`** (not the
   whole snapshot), still recursing into pulled-in children so cross-list /
   deeper descendants are reached for that branch. Best-effort per-parent skip on

@@ -30,7 +30,7 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
         // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone. A
         // username/email rule is resolved to an id via the workspace-members lookup (#73).
         var assigned = await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), ct);
-        var personal = await client.GetListTasksAsync(config.PersonalTasksListId, ct);
+        var personal = await client.GetListTasksAsync(config.PersonalTasksListId, ct: ct);
 
         // De-dup by task id; a task assigned to me that also lives on my personal list appears once.
         var byId = new Dictionary<string, TaskItem>();
@@ -347,7 +347,9 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     /// recovered by that branch (the pre-#84 limitation) — only heavily-clustered lists take that path;
     /// see <c>.claude/plans/adaptive-subtask-fetch.md</c>.
     /// </para>
-    /// Worst cases are bounded by the plan's caps; a cap that drops work is logged (never silent).
+    /// Worst cases are bounded by the plan's caps; a cap that drops work emits a diagnostic trace
+    /// (<see cref="Debug"/>) rather than truncating silently — stderr is avoided so it can't smear the
+    /// live TUI.
     /// Best-effort: a task/list whose fetch fails is skipped rather than failing the whole load.
     /// Non-assignee filters (status/closed) still apply — the pulled-in children flow through
     /// <c>TaskView.Apply</c> like any other task.
@@ -364,13 +366,15 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
         var fetched = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
 
         // Whole-list branch: one round-trip per dense list; ForeignDescendants narrows the whole list to
-        // the real descendants of in-view parents. Best-effort per list.
+        // the real descendants of in-view parents. Include closed tasks so a closed intermediate parent
+        // doesn't break the chain to an open descendant — parity with the per-parent GetSubtasksAsync,
+        // which keeps closed; TaskView.Apply does the status filtering downstream either way. Best-effort.
         foreach (var listId in plan.WholeListIds)
         {
             IReadOnlyList<TaskItem> listTasks;
             try
             {
-                listTasks = await client.GetListTasksAsync(listId, ct);
+                listTasks = await client.GetListTasksAsync(listId, includeClosed: true, ct: ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
