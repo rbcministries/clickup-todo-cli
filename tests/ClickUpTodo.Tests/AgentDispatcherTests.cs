@@ -1,5 +1,6 @@
 using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
+using ClickUpTodo.Configuration;
 
 namespace ClickUpTodo.Tests;
 
@@ -122,6 +123,92 @@ public sealed class AgentDispatcherTests : IDisposable
         await dispatcher.DispatchAsync(Detail(), Comments(), "go");
 
         Assert.Null(launcher.WorkingDir);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_PassesPreambleThrough_ToComposedFile()
+    {
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
+        var task = Detail();
+        var comments = Comments();
+
+        var result = await dispatcher.DispatchAsync(task, comments, "go", preamble: "Custom preamble line");
+
+        // The custom preamble reaches the composed file, and differs from the default preamble.
+        var expected = AgentPromptComposer.Compose(task, comments, "go", "Custom preamble line");
+        Assert.Equal(expected, File.ReadAllText(result.PromptFilePath));
+        Assert.Contains("Custom preamble line", File.ReadAllText(result.PromptFilePath));
+        Assert.DoesNotContain(AgentPromptComposer.Preamble, File.ReadAllText(result.PromptFilePath));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task DispatchAsync_BlankPreamble_UsesDefault(string? preamble)
+    {
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
+        var task = Detail();
+        var comments = Comments();
+
+        var result = await dispatcher.DispatchAsync(task, comments, "go", preamble: preamble);
+
+        // A blank preamble keeps the default — byte-for-byte the no-preamble compose.
+        Assert.Equal(AgentPromptComposer.Compose(task, comments, "go"), File.ReadAllText(result.PromptFilePath));
+    }
+
+    // ── Settings → dispatcher wiring (#91) ──────────────────────────────────────────
+    // These mirror the glue TodoApp performs (options from ToLauncherOptions, working dir from
+    // ResolveWorkingDirectory, preamble from settings) at the unit-testable dispatcher seam, since
+    // the TodoApp wiring itself is Terminal.Gui and not testable in CI.
+
+    [Fact]
+    public async Task Dispatcher_BuiltFromSettings_ForwardsOptionsWorkingDirAndPreamble()
+    {
+        var settings = new AgentDispatchSettings
+        {
+            ClaudeExecutable = "claude-dev",
+            ExtraArgs = ["--model", "opus"],
+            PreferredTerminal = PreferredTerminal.Pwsh,
+            WorkingDirectory = AgentWorkingDirectory.Fixed,
+            FixedWorkingDirectory = "/projects/foo",
+            PromptPreamble = "Custom preamble line",
+        };
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, settings.ToLauncherOptions(), _dir);
+        var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: null, homeDirectory: "/home/me");
+        var task = Detail();
+        var comments = Comments();
+
+        var result = await dispatcher.DispatchAsync(task, comments, "go", workingDir, settings.PromptPreamble);
+
+        Assert.Equal("claude-dev", launcher.Options!.ClaudeExecutable);
+        Assert.Equal(["--model", "opus"], launcher.Options!.ExtraArgs);
+        Assert.Equal(PreferredTerminal.Pwsh, launcher.Options!.Preferred);
+        Assert.Equal("/projects/foo", launcher.WorkingDir);
+        Assert.Equal(AgentPromptComposer.Compose(task, comments, "go", "Custom preamble line"),
+            File.ReadAllText(result.PromptFilePath));
+    }
+
+    [Fact]
+    public async Task Dispatcher_BuiltFromDefaultSettings_MatchesZeroConfigBehaviour()
+    {
+        var settings = new AgentDispatchSettings(); // all defaults ⇒ zero-config
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, settings.ToLauncherOptions(), _dir);
+        var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: null, homeDirectory: "/home/me");
+        var task = Detail();
+        var comments = Comments();
+
+        var result = await dispatcher.DispatchAsync(task, comments, "go", workingDir, settings.PromptPreamble);
+
+        Assert.Equal("claude", launcher.Options!.ClaudeExecutable);
+        Assert.Empty(launcher.Options!.ExtraArgs);
+        Assert.Equal(PreferredTerminal.Auto, launcher.Options!.Preferred);
+        Assert.Null(launcher.WorkingDir); // TaskDerived + null candidate ⇒ inherit
+        Assert.Equal(AgentPromptComposer.Compose(task, comments, "go"), File.ReadAllText(result.PromptFilePath));
     }
 
     [Fact]
