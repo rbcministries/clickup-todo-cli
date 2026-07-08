@@ -17,15 +17,50 @@ public static class SetupWizard
         Console.WriteLine($"  {AppBranding.SetupHeading}");
         Console.WriteLine("  " + new string('─', AppBranding.SetupHeading.Length));
         Console.WriteLine();
-        Console.WriteLine("  You'll need a ClickUp personal API token.");
-        Console.WriteLine("  Get one at: ClickUp -> Settings -> Apps -> API Token (starts with 'pk_').");
-        Console.WriteLine();
 
         ClickUpClient? client = null;
         ClickUpUser? me = null;
         string token = "";
+        var authMode = AuthMode.PersonalToken;
 
-        // 1. Token entry + validation (retry until valid or the user gives up).
+        // 0. If the user registered their own ClickUp OAuth app, offer OAuth as an opt-in
+        //    alternative. The personal-token path stays the default (and the only path otherwise).
+        var oauthCreds = new OAuthAppCredentialStore().Load();
+        if (oauthCreds is not null && PromptUseOAuth())
+        {
+            var accessToken = await RunOAuthSignInAsync(oauthCreds, ct);
+            if (accessToken is not null)
+            {
+                client = new ClickUpClient(ClickUpClientFactory.AuthProviderFor(AuthMode.OAuth, accessToken));
+                try
+                {
+                    me = await client.GetMeAsync(ct);
+                    token = accessToken;
+                    authMode = AuthMode.OAuth;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // Ctrl+C during the OAuth identity check should abort, not fall back.
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  The OAuth token was rejected by ClickUp: {ex.Message}");
+                    client.Dispose();
+                    client = null;
+                }
+            }
+            if (me is null)
+                Console.WriteLine("  Falling back to personal-token sign-in.");
+        }
+
+        // 1. Personal-token entry + validation (retry until valid or the user gives up), unless
+        //    OAuth already signed us in above.
+        if (me is null)
+        {
+            Console.WriteLine("  You'll need a ClickUp personal API token.");
+            Console.WriteLine("  Get one at: ClickUp -> Settings -> Apps -> API Token (starts with 'pk_').");
+            Console.WriteLine();
+        }
         while (me is null)
         {
             token = ReadSecret("  Paste your personal API token: ");
@@ -40,6 +75,7 @@ public static class SetupWizard
             try
             {
                 me = await client.GetMeAsync(ct);
+                authMode = AuthMode.PersonalToken;
             }
             catch (ClickUpApiException ex) when (ex.IsAuthFailure)
             {
@@ -94,6 +130,7 @@ public static class SetupWizard
             PersonalTasksListName = personal.Name,
             RefreshSeconds = refresh,
             DefaultWorkingDirectory = workingDir,
+            AuthMode = authMode,
         };
         configStore.Save(config);
         tokenStore.Save(token);
@@ -104,6 +141,42 @@ public static class SetupWizard
         Console.WriteLine("  Starting…");
         await Task.Delay(600, ct);
         return true;
+    }
+
+    /// <summary>
+    /// Asks whether to sign in with OAuth instead of a personal token. Defaults to <b>no</b> (the
+    /// personal-token path) on Enter or any answer other than "2", so OAuth is strictly opt-in.
+    /// </summary>
+    private static bool PromptUseOAuth()
+    {
+        Console.WriteLine("  A ClickUp OAuth app is configured. How would you like to sign in?");
+        Console.WriteLine("    1. Personal API token (default)");
+        Console.WriteLine("    2. Sign in with ClickUp (OAuth)");
+        Console.Write("  Enter 1 or 2 [1]: ");
+        var choice = Console.ReadLine();
+        Console.WriteLine();
+        return choice?.Trim() == "2";
+    }
+
+    /// <summary>
+    /// Runs the interactive OAuth flow with the real browser/listener/exchange seams. Returns the
+    /// access token, or <see langword="null"/> if the user cancelled or a step failed.
+    /// </summary>
+    private static async Task<string?> RunOAuthSignInAsync(OAuthAppCredentials creds, CancellationToken ct)
+    {
+        var redirectUri = LoopbackOAuthCallbackListener.ResolveRedirectUri();
+        using var listener = new LoopbackOAuthCallbackListener(redirectUri);
+        using var http = new HttpClient();
+        var oauth = new ClickUpOAuth(http);
+
+        var flow = new OAuthSignIn(
+            listener,
+            new SystemBrowserLauncher(),
+            (c, code, token) => oauth.ExchangeCodeForTokenAsync(c, code, token),
+            line => Console.WriteLine("  " + line),
+            Console.ReadLine);
+
+        return await flow.RunAsync(creds, ct);
     }
 
     /// <summary>A flattened list entry with a breadcrumb label for display.</summary>

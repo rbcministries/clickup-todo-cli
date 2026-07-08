@@ -19,6 +19,13 @@ public sealed class AppConfig
 
     public string WorkspaceName { get; set; } = "";
 
+    /// <summary>
+    /// Which auth scheme the saved token uses (#52). Persisted as a string; absent ⇒
+    /// <see cref="AuthMode.PersonalToken"/>, so existing personal-token users are unaffected and
+    /// startup picks the right provider. OAuth is opt-in and set only by the OAuth sign-in flow.
+    /// </summary>
+    public AuthMode AuthMode { get; set; } = AuthMode.PersonalToken;
+
     /// <summary>The list the user treats as their "Personal Tasks" list.</summary>
     public string PersonalTasksListId { get; set; } = "";
 

@@ -57,7 +57,9 @@ if (string.IsNullOrWhiteSpace(token) || !config.IsConfigured)
     config = configStore.Load();
 }
 
-using var client = new ClickUpClient(token!);
+// Build the client with the provider that matches how the saved token was obtained (raw personal
+// token vs OAuth Bearer), recorded in config.AuthMode.
+using var client = ClickUpClientFactory.Create(config, token!);
 
 long userId;
 try
