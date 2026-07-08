@@ -198,15 +198,27 @@ public sealed class ClickUpClient : IDisposable
         });
 
     /// <summary>
-    /// The comments on a task, mapped to the stable <see cref="CommentItem"/> shape and stamped with
-    /// <paramref name="taskId"/> so a caller aggregating comments across tasks (the feed, #109) can
-    /// attribute each one. ClickUp returns comments most-recent-first; this is a single-page fetch —
-    /// the generated endpoint exposes no pagination cursor to de-page (see #111's deferred de-paging).
+    /// The comments on a task, <b>de-paged</b>, mapped to the stable <see cref="CommentItem"/> shape and
+    /// stamped with <paramref name="taskId"/> so a caller aggregating comments across tasks (the feed,
+    /// #109) can attribute each one. ClickUp returns comments most-recent-first, 25 per page, and
+    /// paginates by a <c>start</c>/<c>start_id</c> cursor rather than a page number;
+    /// <see cref="DePageCommentsAsync"/> walks that cursor to gather a busy task's full history, bounded
+    /// at <see cref="MaxCommentPages"/> pages (~1000 comments) so a looping cursor can't fetch forever.
     /// </summary>
     public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
         => Guard("GetTaskComments", async () =>
         {
-            var comments = (await _client.V2.Task[taskId].Comment.GetAsync(cancellationToken: ct))?.Comments ?? [];
+            var comments = await DePageCommentsAsync(
+                (cursor, token) => _client.V2.Task[taskId].Comment.GetAsync(cfg =>
+                {
+                    if (cursor is { } c)
+                    {
+                        cfg.QueryParameters.Start = c.Start;
+                        cfg.QueryParameters.StartId = c.StartId;
+                    }
+                }, token),
+                onCapReached: null,
+                ct);
             return (IReadOnlyList<CommentItem>)comments.Select(c => MapComment(c, taskId)).ToList();
         });
 
@@ -364,6 +376,89 @@ public sealed class ClickUpClient : IDisposable
             if (resp?.LastPage == true || tasks is null || tasks.Count < PageSize)
                 break;
         }
+        return all;
+    }
+
+    // ClickUp's GET /task/{id}/comment returns at most 25 comments per page, most-recent-first.
+    private const int CommentPageSize = 25;
+
+    // Hard cap on comment pages walked, so a stuck/looping cursor can never fetch unbounded history.
+    // 40 × 25 ⇒ up to ~1000 comments; reaching it fires the onCapReached seam rather than truncating
+    // silently (#130). No realistic feed use (#112) needs a single task's entire history beyond this.
+    private const int MaxCommentPages = 40;
+
+    /// <summary>The next-page cursor for ClickUp's comment endpoint: the epoch-ms <c>date</c> and
+    /// <c>id</c> of the oldest comment received so far, passed back as <c>start</c>/<c>start_id</c> to
+    /// page toward older comments.</summary>
+    internal readonly record struct CommentCursor(long Start, string StartId);
+
+    /// <summary>
+    /// Derives the next-page cursor from a page of comments. Comments arrive most-recent-first, so the
+    /// oldest — the anchor for the next (older) page — is the last element; this scans from the end for
+    /// the first entry with a non-empty id and a parseable epoch-ms date. Returns null when the page is
+    /// empty or nothing qualifies, so the caller stops rather than re-paging on a bad cursor.
+    /// </summary>
+    internal static CommentCursor? NextCommentCursor(IReadOnlyList<Comment> page)
+    {
+        for (var i = page.Count - 1; i >= 0; i--)
+        {
+            var id = page[i].Id;
+            if (!string.IsNullOrEmpty(id) && ParseMs(page[i].Date) is { } start)
+                return new CommentCursor(start, id);
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Walks ClickUp's cursor-paginated comment endpoint (most-recent-first, <see cref="CommentPageSize"/>
+    /// per page) until a task's whole history is gathered. Unlike page-number-driven <see cref="PageAsync"/>,
+    /// it threads the <see cref="NextCommentCursor"/> (<c>start</c>/<c>start_id</c>) between calls. Comments
+    /// are de-duped by id — a boundary cursor can re-return its anchor — and the walk stops on a
+    /// short/empty page, when a full page adds nothing new (a stuck cursor), or at the
+    /// <see cref="MaxCommentPages"/> cap. Reaching the cap invokes <paramref name="onCapReached"/> (with the
+    /// count gathered) so the truncation is observable, never silent (#130). The page fetch is injected so
+    /// the loop is unit-testable offline against constructed responses.
+    /// </summary>
+    internal static async Task<List<Comment>> DePageCommentsAsync(
+        Func<CommentCursor?, CancellationToken, Task<CommentsResponse?>> fetchPage,
+        Action<int>? onCapReached,
+        CancellationToken ct)
+    {
+        var all = new List<Comment>();
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        CommentCursor? cursor = null;
+
+        for (var pagesFetched = 1; ; pagesFetched++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var page = (await fetchPage(cursor, ct))?.Comments ?? [];
+
+            var freshCount = 0;
+            foreach (var c in page)
+            {
+                // A blank id can't be de-duped (and can't anchor a cursor) — keep it either way.
+                if (string.IsNullOrEmpty(c.Id) || seenIds.Add(c.Id!))
+                {
+                    all.Add(c);
+                    freshCount++;
+                }
+            }
+
+            // Last page (short/empty), or a full page that added nothing new (cursor stuck) ⇒ done.
+            if (page.Count < CommentPageSize || freshCount == 0)
+                break;
+
+            if (pagesFetched >= MaxCommentPages)
+            {
+                onCapReached?.Invoke(all.Count);
+                break;
+            }
+
+            cursor = NextCommentCursor(page);
+            if (cursor is null)
+                break; // couldn't derive a cursor from a full page ⇒ stop rather than refetch page 0.
+        }
+
         return all;
     }
 
