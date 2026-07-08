@@ -217,7 +217,12 @@ public sealed class ClickUpClient : IDisposable
                         cfg.QueryParameters.StartId = c.StartId;
                     }
                 }, token),
-                onCapReached: null,
+                // No app logger reaches this facade, and writing to the console would corrupt the TUI —
+                // so surface the (unrealistic, ~1000-comment) cap via a diagnostic trace rather than
+                // silently dropping older history (#130). Harmless with no trace listener attached.
+                onCapReached: count => System.Diagnostics.Trace.TraceWarning(
+                    $"ClickUp task '{taskId}': comment history capped at {count} comments " +
+                    $"({MaxCommentPages} pages); older comments were not fetched."),
                 ct);
             return (IReadOnlyList<CommentItem>)comments.Select(c => MapComment(c, taskId)).ToList();
         });
@@ -433,19 +438,25 @@ public sealed class ClickUpClient : IDisposable
             ct.ThrowIfCancellationRequested();
             var page = (await fetchPage(cursor, ct))?.Comments ?? [];
 
-            var freshCount = 0;
+            var madeProgress = false;
             foreach (var c in page)
             {
-                // A blank id can't be de-duped (and can't anchor a cursor) — keep it either way.
-                if (string.IsNullOrEmpty(c.Id) || seenIds.Add(c.Id!))
+                if (string.IsNullOrEmpty(c.Id))
+                {
+                    // A blank id can't be de-duped or anchor a cursor. Keep the content, but it doesn't
+                    // count as progress — else a stuck cursor re-returning a page that holds one blank-id
+                    // comment would fool the guard below and run all the way to the cap.
+                    all.Add(c);
+                }
+                else if (seenIds.Add(c.Id!))
                 {
                     all.Add(c);
-                    freshCount++;
+                    madeProgress = true;
                 }
             }
 
-            // Last page (short/empty), or a full page that added nothing new (cursor stuck) ⇒ done.
-            if (page.Count < CommentPageSize || freshCount == 0)
+            // Last page (short/empty), or a full page that surfaced no new id'd comment (cursor stuck) ⇒ done.
+            if (page.Count < CommentPageSize || !madeProgress)
                 break;
 
             if (pagesFetched >= MaxCommentPages)

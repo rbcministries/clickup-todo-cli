@@ -168,4 +168,44 @@ public sealed class ClickUpClientCommentDePageTests
         Assert.Equal(1, calls);
         Assert.Empty(result);
     }
+
+    [Fact]
+    public async Task DePage_StuckPageContainingBlankIdComment_TerminatesPromptlyNotAtCap()
+    {
+        // A full page that repeats every fetch AND carries a blank-id comment. Because a blank id
+        // isn't counted as progress, the "no new id'd comment" guard still fires on the second fetch —
+        // the walk must stop at 2 pages, not run all the way to the cap re-adding the blank comment.
+        var calls = 0;
+        var capReported = false;
+        CommentsResponse StuckPage() => Page(
+            Enumerable.Range(0, PageSize - 1).Select(i => C($"s-{i}", 1000 - i))
+                .Append(C(id: "", date: "900"))); // one blank-id comment, oldest
+
+        var result = await ClickUpClient.DePageCommentsAsync((cursor, _) =>
+        {
+            calls++;
+            return Task.FromResult<CommentsResponse?>(StuckPage());
+        }, onCapReached: _ => capReported = true, CancellationToken.None);
+
+        Assert.Equal(2, calls);
+        Assert.False(capReported);
+        Assert.Equal(PageSize - 1, result.Count(c => !string.IsNullOrEmpty(c.Id))); // each id'd comment once
+    }
+
+    [Fact]
+    public async Task DePage_FullPageButNoDerivableCursor_StopsWithoutRefetching()
+    {
+        // A full page of new (so progress is made) but cursor-unusable comments — every date is
+        // unparseable — must break on the NextCommentCursor-returns-null guard rather than re-fetch page 0.
+        var calls = 0;
+        var result = await ClickUpClient.DePageCommentsAsync((cursor, _) =>
+        {
+            calls++;
+            return Task.FromResult<CommentsResponse?>(
+                Page(Enumerable.Range(0, PageSize).Select(i => C($"u-{i}", date: "not-a-number"))));
+        }, onCapReached: null, CancellationToken.None);
+
+        Assert.Equal(1, calls);
+        Assert.Equal(PageSize, result.Count);
+    }
 }
