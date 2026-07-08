@@ -164,6 +164,36 @@ public sealed class OAuthCallbackListenerTests
         await Assert.ThrowsAsync<OAuthCallbackException>(() => waitTask);
     }
 
+    [SkippableFact]
+    public async Task WaitForCodeAsync_IgnoresIncidentalRequestThenReceivesCode()
+    {
+        var port = FreeLoopbackPort();
+        var redirectUri = $"http://localhost:{port}/callback";
+        using var listener = new LoopbackOAuthCallbackListener(redirectUri);
+        Skip.IfNot(listener.TryStart(), "HttpListener could not bind a loopback port in this environment.");
+
+        var waitTask = listener.WaitForCodeAsync("st", TimeSpan.FromSeconds(10));
+
+        using var http = new HttpClient();
+        // A stray request (favicon, port probe, browser preconnect) must be ignored — not abort sign-in.
+        using var stray = await http.GetAsync($"http://localhost:{port}/favicon.ico");
+        using var callback = await http.GetAsync($"{redirectUri}?code=after_probe&state=st");
+
+        Assert.Equal(HttpStatusCode.NoContent, stray.StatusCode);
+        Assert.Equal("after_probe", await waitTask);
+    }
+
+    [SkippableFact]
+    public async Task WaitForCodeAsync_Timeout_Throws()
+    {
+        var redirectUri = $"http://localhost:{FreeLoopbackPort()}/callback";
+        using var listener = new LoopbackOAuthCallbackListener(redirectUri);
+        Skip.IfNot(listener.TryStart(), "HttpListener could not bind a loopback port in this environment.");
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => listener.WaitForCodeAsync("st", TimeSpan.FromMilliseconds(200)));
+    }
+
     /// <summary>Grabs a currently-free loopback TCP port so the listener test doesn't collide.</summary>
     private static int FreeLoopbackPort()
     {

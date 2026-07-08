@@ -90,19 +90,21 @@ public sealed class LoopbackOAuthCallbackListener : IOAuthCallbackListener
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(timeout);
 
-        // Loop so incidental requests (e.g. /favicon.ico) don't consume the wait — only a request
-        // that actually carries a code or error resolves it.
+        // Loop so incidental requests to the loopback port (favicon, browser preconnects, security
+        // port probes) don't consume the wait — only the real OAuth redirect, which carries a code
+        // or an error, resolves it.
         while (true)
         {
             var context = await GetContextAsync(timeoutCts.Token).ConfigureAwait(false);
-            var result = ParseCallback(context.Request.Url!, expectedState);
+            var requestUrl = context.Request.Url!;
 
-            if (result.Code is null && result.Error is null)
+            if (!LooksLikeCallback(requestUrl))
             {
                 Respond(context, HttpStatusCode.NoContent, body: null);
                 continue;
             }
 
+            var result = ParseCallback(requestUrl, expectedState);
             Respond(
                 context,
                 result.Error is null ? HttpStatusCode.OK : HttpStatusCode.BadRequest,
@@ -119,8 +121,20 @@ public sealed class LoopbackOAuthCallbackListener : IOAuthCallbackListener
         var getContext = _listener!.GetContextAsync();
         var completed = await Task.WhenAny(getContext, Task.Delay(Timeout.Infinite, ct)).ConfigureAwait(false);
         if (completed != getContext)
+        {
+            // Timed out / cancelled. The GetContextAsync stays pending and will fault when the
+            // listener is disposed — observe that fault so it isn't an unobserved task exception.
+            _ = getContext.ContinueWith(static t => _ = t.Exception, TaskScheduler.Default);
             throw new OperationCanceledException(ct);
+        }
         return await getContext.ConfigureAwait(false);
+    }
+
+    /// <summary>Whether a request to the loopback port is the OAuth redirect (carries code or error).</summary>
+    private static bool LooksLikeCallback(Uri url)
+    {
+        var query = ParseQuery(url.Query);
+        return query.ContainsKey("code") || query.ContainsKey("error");
     }
 
     public void Dispose() => _listener?.Close();

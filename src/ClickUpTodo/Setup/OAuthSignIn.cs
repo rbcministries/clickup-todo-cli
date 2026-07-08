@@ -105,6 +105,9 @@ public sealed class OAuthSignIn
 
     private string? PromptForCode()
     {
+        // The paste fallback can't validate the CSRF state (the user copies the code from their own
+        // browser's address bar), unlike the listener path. That's an accepted trade-off for the
+        // locked-down / timeout case — the user is manually relaying their own authorization.
         _write("Paste the authorization code (or the full redirect URL) here and press Enter:");
         return LoopbackOAuthCallbackListener.ExtractCode(_readLine());
     }

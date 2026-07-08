@@ -37,6 +37,10 @@ public static class SetupWizard
                     token = accessToken;
                     authMode = AuthMode.OAuth;
                 }
+                catch (OperationCanceledException)
+                {
+                    throw; // Ctrl+C during the OAuth identity check should abort, not fall back.
+                }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"  The OAuth token was rejected by ClickUp: {ex.Message}");
