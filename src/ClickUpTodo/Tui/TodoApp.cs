@@ -9,6 +9,7 @@ using ClickUpTodo.Tui.Screens;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
+using Terminal.Gui.Text;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using Attribute = Terminal.Gui.Drawing.Attribute;
@@ -235,6 +236,10 @@ public sealed class TodoApp
         };
 
         _window.Add(_frame, _statusLabel, _helpLabel);
+        // Re-fit the help line whenever the window re-lays out (i.e. on terminal resize). Terminal.Gui
+        // 2.4 has no static Application size-changed event; SubViewsLaidOut is the framework's
+        // post-layout hook. UpdateHelpLine only reassigns the text when it changed, so this can't loop.
+        _window.SubViewsLaidOut += (_, _) => UpdateHelpLine();
         _list.SetFocus();
     }
 
@@ -586,9 +591,25 @@ public sealed class TodoApp
         ShowScreen(new HelpScreen(), static () => { });
     }
 
-    /// <summary>Sets the shared help line to the active screen's shortcuts, or the list's when idle.</summary>
+    /// <summary>
+    /// Sets the shared help line to the active screen's shortcuts (or the list's when idle), fitted to
+    /// the footer's current width (#H2/#104): when they don't all fit, the trailing item becomes
+    /// <c>F1 Help + Shortcuts</c>. Widths are measured column-aware (<c>GetColumns</c>) so the footer's
+    /// emoji/wide glyphs count correctly. Re-runs on resize via <c>_window.SubViewsLaidOut</c>; the text
+    /// is only reassigned when it actually changes, so that layout pass can't loop.
+    /// </summary>
     private void UpdateHelpLine()
-        => _helpLabel.Text = HelpLine.Format(HelpLine.ForActiveScreen(ActiveScreen?.HelpItems, HelpItemSets.MainList));
+    {
+        var items = HelpLine.ForActiveScreen(ActiveScreen?.HelpItems, HelpItemSets.MainList);
+        // The label's laid-out content width. Before the first layout it's 0 — render the full set and
+        // let the first SubViewsLaidOut re-fit it.
+        var width = _helpLabel.Frame.Width;
+        var text = width > 0
+            ? HelpLine.Format(HelpLine.Fit(items, width, static s => s.GetColumns()))
+            : HelpLine.Format(items);
+        if (_helpLabel.Text != text)
+            _helpLabel.Text = text;
+    }
 
     /// <summary>The task on the selected row, or null if a header row (or nothing) is selected.</summary>
     private TaskItem? CurrentTask()
