@@ -1,3 +1,5 @@
+using ClickUpTodo.Agent;
+
 namespace ClickUpTodo.Configuration;
 
 /// <summary>
@@ -8,7 +10,7 @@ namespace ClickUpTodo.Configuration;
 public static class ConfigMigrations
 {
     /// <summary>The version an up-to-date config carries once all migrations have run.</summary>
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     /// <summary>Applies any migrations the config hasn't seen yet, then stamps it current.</summary>
     public static void Apply(AppConfig config)
@@ -32,7 +34,23 @@ public static class ConfigMigrations
         if (config.SchemaVersion < 2)
             MigrateStatusExclusions(config);
 
+        // v3 (#100): the single-line PromptPreamble override was superseded by a full, editable
+        // PromptTemplate. Carry a saved non-blank preamble forward — it was live at dispatch (#91), so
+        // dropping it would silently change a user's prompt — by seeding the equivalent full template
+        // (the default with its preamble line swapped). Version-gated so a user who later clears their
+        // template isn't re-seeded. The legacy shim is nulled regardless so it stops being persisted.
+        if (config.SchemaVersion < 3)
+            MigratePromptPreamble(config.AgentDispatch);
+
         config.SchemaVersion = CurrentVersion;
+    }
+
+    private static void MigratePromptPreamble(AgentDispatchSettings dispatch)
+    {
+        var legacy = dispatch.LegacyPromptPreamble;
+        if (!string.IsNullOrWhiteSpace(legacy) && string.IsNullOrWhiteSpace(dispatch.PromptTemplate))
+            dispatch.PromptTemplate = AgentPromptComposer.DefaultTemplateWithPreamble(legacy);
+        dispatch.LegacyPromptPreamble = null;
     }
 
     private static void SeedDefaultAssigneeRule(ViewSettings view)

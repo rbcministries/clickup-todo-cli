@@ -17,8 +17,9 @@ public sealed record SettingsResult(int RefreshSeconds, string DefaultWorkingDir
 
 /// <summary>
 /// A full-window settings screen. The left column changes the refresh interval; the right column
-/// configures agent dispatch (#27) — preferred terminal, <c>claude</c> executable + extra args,
-/// working directory, and a prompt-preamble override. Hiding statuses is no longer here — it's a
+/// configures agent dispatch (#27) — preferred terminal, <c>claude</c> executable + extra args, and
+/// working directory. The dispatch prompt template (#100) is edited on its own screen. Hiding
+/// statuses is no longer here — it's a
 /// regular F3 filter rule (<c>Status IS NOT …</c>) as of #69. On Save it exposes the new values via
 /// <see cref="Result"/> and closes; Cancel/Esc close with <see cref="Result"/> left null. The host
 /// reads <see cref="Result"/> in its close handler.
@@ -33,12 +34,20 @@ public sealed class SettingsScreen : Screen
 
     private readonly TextField _refreshField;
 
+    /// <summary>
+    /// The dispatch prompt template (#100), carried through this screen unchanged and edited on the
+    /// dedicated editor screen. Kept here so an F2 Save preserves it (rather than resetting it to
+    /// blank) and so a returning edit can be folded back in.
+    /// </summary>
+    private string _promptTemplate;
+
     /// <summary>The saved settings, or null if the screen was cancelled.</summary>
     public SettingsResult? Result { get; private set; }
 
     public SettingsScreen(int refreshSeconds, string defaultWorkingDirectory, AgentDispatchSettings dispatch)
     {
         Title = "Settings";
+        _promptTemplate = dispatch.PromptTemplate;
 
         // Home directory used to expand a leading `~` in the working-dir field on Save.
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -105,9 +114,6 @@ public sealed class SettingsScreen : Screen
         var fixedDirLabel = new Label { X = rightX, Y = 9, Text = "Fixed dir (when Working dir = Fixed):" };
         var fixedDirField = new TextField { X = rightX, Y = 10, Width = Dim.Fill(2), Text = dispatch.FixedWorkingDirectory };
 
-        var preambleLabel = new Label { X = rightX, Y = 12, Text = "Prompt preamble (blank = default):" };
-        var preambleField = new TextField { X = rightX, Y = 13, Width = Dim.Fill(2), Text = dispatch.PromptPreamble };
-
         var save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var cancel = new Button { X = Pos.Right(save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         save.Accepting += (_, _) =>
@@ -122,7 +128,7 @@ public sealed class SettingsScreen : Screen
                     ExtraArgs = SettingsForm.ParseExtraArgs(argsField.Text),
                     WorkingDirectory = workingDir,
                     FixedWorkingDirectory = fixedDirField.Text?.Trim() ?? "",
-                    PromptPreamble = preambleField.Text?.Trim() ?? "",
+                    PromptTemplate = _promptTemplate,
                 });
             Close();
         };
@@ -148,7 +154,7 @@ public sealed class SettingsScreen : Screen
             refreshLabel, _refreshField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
             agentHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
-            fixedDirLabel, fixedDirField, preambleLabel, preambleField,
+            fixedDirLabel, fixedDirField,
             save, cancel,
         ]);
     }

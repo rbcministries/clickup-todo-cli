@@ -36,7 +36,7 @@ public sealed class AgentDispatchSettingsTests
         Assert.False(new AgentDispatchSettings { ExtraArgs = ["--model", "opus"] }.IsDefault);
         Assert.False(new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.Home }.IsDefault);
         Assert.False(new AgentDispatchSettings { FixedWorkingDirectory = "/work" }.IsDefault);
-        Assert.False(new AgentDispatchSettings { PromptPreamble = "Custom." }.IsDefault);
+        Assert.False(new AgentDispatchSettings { PromptTemplate = "Custom {userPrompt}" }.IsDefault);
     }
 
     // ── ToLauncherOptions ──────────────────────────────────────────────────────────

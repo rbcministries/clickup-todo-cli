@@ -74,7 +74,7 @@ public sealed class ConfigStoreTests : IDisposable
                 ExtraArgs = ["--model", "opus"],
                 WorkingDirectory = AgentWorkingDirectory.Fixed,
                 FixedWorkingDirectory = "/work",
-                PromptPreamble = "Use the JSON.",
+                PromptTemplate = "Lead: {userPrompt}\n{contextJson}",
             },
         };
 
@@ -87,7 +87,7 @@ public sealed class ConfigStoreTests : IDisposable
         Assert.Equal(["--model", "opus"], d.ExtraArgs);
         Assert.Equal(AgentWorkingDirectory.Fixed, d.WorkingDirectory);
         Assert.Equal("/work", d.FixedWorkingDirectory);
-        Assert.Equal("Use the JSON.", d.PromptPreamble);
+        Assert.Equal("Lead: {userPrompt}\n{contextJson}", d.PromptTemplate);
     }
 
     [Fact]

@@ -852,14 +852,14 @@ public sealed class TodoApp
         var settings = _config.AgentDispatch;
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: null, homeDirectory: home);
-        var preamble = settings.PromptPreamble;
+        var template = settings.PromptTemplate;
 
         Flash($"Launching Claude for '{detail.Name}'…");
         _ = Task.Run(async () =>
         {
             try
             {
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, preamble);
+                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template);
                 Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)

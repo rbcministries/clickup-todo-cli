@@ -1,3 +1,4 @@
+using ClickUpTodo.Agent;
 using ClickUpTodo.Configuration;
 
 namespace ClickUpTodo.Tests;
@@ -227,6 +228,85 @@ public sealed class ConfigMigrationsTests : IDisposable
         store.Save(loaded);
         var json = File.ReadAllText(store.ConfigPath);
         Assert.DoesNotContain("excludedStatuses", json);
+    }
+
+    // ── v3 (#100): PromptPreamble → PromptTemplate ──────────────────────────────────
+
+    [Fact]
+    public void Apply_LegacyPromptPreamble_IsCarriedForwardIntoTemplate_AndKeyDropped()
+    {
+        // A saved (and, since #91, live) single-line preamble must not be silently lost: it migrates
+        // into the equivalent full template (the default with its preamble line swapped).
+        var config = new AppConfig
+        {
+            SchemaVersion = 2,
+            AgentDispatch = new AgentDispatchSettings { LegacyPromptPreamble = "Only use the JSON." },
+        };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(ConfigMigrations.CurrentVersion, config.SchemaVersion);
+        Assert.Equal(AgentPromptComposer.DefaultTemplateWithPreamble("Only use the JSON."), config.AgentDispatch.PromptTemplate);
+        Assert.Null(config.AgentDispatch.LegacyPromptPreamble); // dropped after one-shot migration
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Apply_BlankLegacyPreamble_SeedsNoTemplate_ButDropsTheKey(string? legacy)
+    {
+        var config = new AppConfig
+        {
+            SchemaVersion = 2,
+            AgentDispatch = new AgentDispatchSettings { LegacyPromptPreamble = legacy },
+        };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal("", config.AgentDispatch.PromptTemplate); // blank ⇒ still the default template
+        Assert.True(config.AgentDispatch.IsDefault);
+        Assert.Null(config.AgentDispatch.LegacyPromptPreamble);
+    }
+
+    [Fact]
+    public void Apply_ExistingTemplate_IsNotOverwrittenByLegacyPreamble()
+    {
+        // If a user somehow has both, the explicit template wins; the legacy shim is still dropped.
+        var config = new AppConfig
+        {
+            SchemaVersion = 2,
+            AgentDispatch = new AgentDispatchSettings
+            {
+                PromptTemplate = "MY TEMPLATE {userPrompt}",
+                LegacyPromptPreamble = "Only use the JSON.",
+            },
+        };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal("MY TEMPLATE {userPrompt}", config.AgentDispatch.PromptTemplate);
+        Assert.Null(config.AgentDispatch.LegacyPromptPreamble);
+    }
+
+    [Fact]
+    public void Load_LegacyConfigWithPromptPreamble_MigratesOnDisk_AndDropsTheKey()
+    {
+        var store = new ConfigStore(_dir);
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(store.ConfigPath,
+            """{ "schemaVersion": 2, "workspaceId": "1", "personalTasksListId": "2", "agentDispatch": { "promptPreamble": "Only use the JSON." }, "view": { "filters": [] } }""");
+
+        var loaded = store.Load();
+
+        Assert.Equal(ConfigMigrations.CurrentVersion, loaded.SchemaVersion);
+        Assert.Null(loaded.AgentDispatch.LegacyPromptPreamble);
+        Assert.Equal(AgentPromptComposer.DefaultTemplateWithPreamble("Only use the JSON."), loaded.AgentDispatch.PromptTemplate);
+
+        store.Save(loaded);
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.DoesNotContain("promptPreamble", json);
+        Assert.Contains("promptTemplate", json);
     }
 
     [Fact]

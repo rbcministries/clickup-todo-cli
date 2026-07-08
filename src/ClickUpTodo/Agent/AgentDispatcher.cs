@@ -33,20 +33,21 @@ public sealed class AgentDispatcher
     /// Writes the composed prompt for <paramref name="task"/> to a temp file, then launches a terminal
     /// running <c>claude</c> seeded from it. The prompt content stays in the file (only its path enters
     /// the command), which is what keeps the launch safe (#23). <paramref name="workingDir"/> (the
-    /// resolved start directory) and <paramref name="preamble"/> (a blank value keeps the composer's
-    /// default) are the dispatch-time settings threaded in by the caller (#91).
+    /// resolved start directory) and <paramref name="template"/> (a blank value keeps the composer's
+    /// <see cref="AgentPromptComposer.DefaultTemplate"/>) are the dispatch-time settings threaded in by
+    /// the caller (#91, #100).
     /// </summary>
     public async Task<AgentDispatchResult> DispatchAsync(
         TaskDetail task,
         IReadOnlyList<CommentItem> comments,
         string userPrompt,
         string? workingDir = null,
-        string? preamble = null,
+        string? template = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, preamble);
+        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template);
         var result = await _launcher.LaunchAsync(promptFile, workingDir, _options, ct).ConfigureAwait(false);
         return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile);
     }

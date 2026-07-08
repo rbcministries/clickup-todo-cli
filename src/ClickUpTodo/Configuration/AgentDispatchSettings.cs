@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClickUpTodo.Agent;
 
 namespace ClickUpTodo.Configuration;
@@ -39,10 +40,22 @@ public sealed class AgentDispatchSettings
     public string FixedWorkingDirectory { get; set; } = "";
 
     /// <summary>
-    /// Overrides the composer's fixed preamble line (the text between the user prompt and the JSON
-    /// payload). Blank ⇒ the default <see cref="AgentPromptComposer.Preamble"/>.
+    /// The whole dispatch prompt as an editable template of placeholders (#100). Blank ⇒ the
+    /// <see cref="AgentPromptComposer.DefaultTemplate"/> (whose rendering is byte-for-byte the pre-#100
+    /// output). Supersedes the #27 single-line preamble override; edited on the dedicated template
+    /// editor screen reached from F2.
     /// </summary>
-    public string PromptPreamble { get; set; } = "";
+    public string PromptTemplate { get; set; } = "";
+
+    /// <summary>
+    /// Deserialize-only migration shim (#100) for the retired #27 <c>promptPreamble</c> key. A saved
+    /// non-blank value is carried forward into <see cref="PromptTemplate"/> by
+    /// <see cref="ConfigMigrations"/>, which then nulls this out so it is never written again (the
+    /// <see cref="JsonIgnoreCondition.WhenWritingNull"/> ignore drops it from <c>config.json</c>).
+    /// </summary>
+    [JsonPropertyName("promptPreamble")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LegacyPromptPreamble { get; set; }
 
     /// <summary>True when nothing has been customised, so all launcher/composer defaults apply.</summary>
     public bool IsDefault =>
@@ -51,7 +64,7 @@ public sealed class AgentDispatchSettings
         && ExtraArgs.Count == 0
         && WorkingDirectory == AgentWorkingDirectory.TaskDerived
         && string.IsNullOrWhiteSpace(FixedWorkingDirectory)
-        && string.IsNullOrWhiteSpace(PromptPreamble);
+        && string.IsNullOrWhiteSpace(PromptTemplate);
 
     /// <summary>
     /// Projects these settings onto the launcher's <see cref="TerminalLauncherOptions"/>, coalescing a
