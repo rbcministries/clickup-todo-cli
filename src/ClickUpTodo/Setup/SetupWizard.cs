@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
+using ClickUpTodo.Tui.Screens;
 
 namespace ClickUpTodo.Setup;
 
@@ -81,7 +82,10 @@ public static class SetupWizard
         // 4. Refresh interval.
         var refresh = ReadInt("  Refresh interval in seconds", defaultValue: 60, min: 10, max: 3600);
 
-        // 5. Persist.
+        // 5. Base working directory (#92).
+        var workingDir = ReadWorkingDirectory();
+
+        // 6. Persist.
         var config = new AppConfig
         {
             WorkspaceId = workspace.Id,
@@ -89,6 +93,7 @@ public static class SetupWizard
             PersonalTasksListId = personal.Id,
             PersonalTasksListName = personal.Name,
             RefreshSeconds = refresh,
+            DefaultWorkingDirectory = workingDir,
         };
         configStore.Save(config);
         tokenStore.Save(token);
@@ -210,6 +215,29 @@ public static class SetupWizard
                 return items[choice - 1];
             Console.WriteLine("  Invalid selection. Try again.");
         }
+    }
+
+    /// <summary>
+    /// Prompts for the base working directory (#92). Blank keeps the <c>~/ClickUp-Tasks</c> default
+    /// (stored as blank so read-time resolution owns the fallback). A leading <c>~</c> is expanded to
+    /// an absolute path; a not-yet-existing path is accepted with a note (created on first use, #98).
+    /// </summary>
+    private static string ReadWorkingDirectory()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var fallback = Path.Combine(home, SettingsForm.DefaultWorkingDirectoryFolderName);
+
+        Console.WriteLine();
+        Console.WriteLine("  Base working directory — the local root where your ClickUp-tracked work lives");
+        Console.WriteLine("  (e.g. a repositories folder). Dispatched agent sessions start here.");
+        Console.Write($"  Path, or press Enter for the default [{fallback}]: ");
+
+        var expanded = SettingsForm.ExpandHomePath(Console.ReadLine(), home);
+        if (expanded.Length == 0)
+            return "";
+        if (!Directory.Exists(expanded))
+            Console.WriteLine($"  Note: {expanded} doesn't exist yet — it'll be created when first needed.");
+        return expanded;
     }
 
     private static int ReadInt(string prompt, int defaultValue, int min, int max)

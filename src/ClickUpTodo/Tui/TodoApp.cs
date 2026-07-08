@@ -406,7 +406,7 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.AgentDispatch);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.DefaultWorkingDirectory, _config.AgentDispatch);
         ShowScreen(screen, () =>
         {
             var result = screen.Result;
@@ -414,6 +414,7 @@ public sealed class TodoApp
                 return;
 
             _config.RefreshSeconds = result.RefreshSeconds;
+            _config.DefaultWorkingDirectory = result.DefaultWorkingDirectory;
             _config.AgentDispatch = result.AgentDispatch;
             _configStore.Save(_config);
 

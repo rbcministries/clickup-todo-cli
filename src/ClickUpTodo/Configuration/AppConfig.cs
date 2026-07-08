@@ -53,6 +53,18 @@ public sealed class AppConfig
     /// <summary>Configuration for dispatching an interactive <c>claude</c> session (#23); all optional.</summary>
     public AgentDispatchSettings AgentDispatch { get; set; } = new();
 
+    /// <summary>
+    /// The base working directory (#92) — the local root where most of the user's ClickUp-tracked
+    /// work lives. It's the root the Dispatch file-tree browser (#95) hangs off and the parent a
+    /// task-derived launch (#98) starts in. Blank/absent is the sentinel for the default
+    /// <c>~/ClickUp-Tasks</c>, resolved at read time via
+    /// <see cref="Tui.Screens.SettingsForm.ResolveDefaultWorkingDirectory"/> (so old configs stay
+    /// backward-compatible with no migration). This is a <b>root</b>, distinct from
+    /// <see cref="AgentDispatchSettings.FixedWorkingDirectory"/>, which is an explicit "always start
+    /// in exactly this dir" override mode.
+    /// </summary>
+    public string DefaultWorkingDirectory { get; set; } = "";
+
     /// <summary>True once the setup wizard has completed at least once.</summary>
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(WorkspaceId) && !string.IsNullOrWhiteSpace(PersonalTasksListId);
