@@ -17,7 +17,7 @@ namespace ClickUpTodo.Tui.Screens;
 /// <para>
 /// Esc returns to the list; Ctrl+B requests opening the task in the browser (the host reads
 /// <see cref="OpenBrowserRequested"/> in its close handler and owns the launch). Tab cycles tabs;
-/// ↑/↓/PgUp/PgDn scroll the focused pane. Tab bodies come from the unit-tested
+/// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. Tab bodies come from the unit-tested
 /// <see cref="TaskDetailFormatter"/>, so this class is only the (CI-untestable) Terminal.Gui glue.
 /// </para>
 /// <para>
@@ -123,21 +123,14 @@ public sealed class TaskDetailScreen : Screen
             _tabs.InsertTab(i, _tabContents[i]);
         _tabs.Value = description;
 
-        var hint = new Label
-        {
-            X = 1,
-            Y = Pos.AnchorEnd(1),
-            Width = Dim.Fill(1),
-            Text = " Tab switch tab · ↑/↓ PgUp/PgDn scroll · Ctrl+A dispatch to Claude · Ctrl+B browser · Esc back",
-        };
-
         // The Dispatch pane (#93, D1 of the #90 epic; superseding the single-line #26 prompt): a
         // bottom-anchored FrameView hosting the prompt plus placeholder controls for the one-off/
         // interactive (#94), working-dir (#95) and post-to-Comments (#97) options. Hidden until Ctrl+A.
         // A transient child view within the single already-open screen — not a nested run-loop or a
         // second toplevel (the #26 design note) — so the dashboard's single-ListView model (#3) is
         // untouched. Its height is computed on show (ShowPrompt) so it degrades gracefully on short
-        // terminals: the prompt stays visible; the bottom stub controls clip first.
+        // terminals: the prompt stays visible; the bottom stub controls clip first. The screen's own
+        // shortcuts (incl. Ctrl+A) show in the window-owned contextual help footer via HelpItems (#103).
         var promptLabel = new Label { X = 1, Y = 0, Text = "Prompt:" };
         _promptField = new TextField { X = 9, Y = 0, Width = Dim.Fill(1) };
         // Stubs: present so the pane's layout + Tab/Shift+Tab focus order are real, but not yet read
@@ -168,13 +161,15 @@ public sealed class TaskDetailScreen : Screen
             control.KeyDown += OnDispatchKey;
 
         // Focus lives in whichever scroll target (TextView) is front-most, so the key handler is wired
-        // to each to reliably intercept Tab/Esc/Ctrl+B/Ctrl+A before the read-only TextView sees them.
+        // to each to reliably intercept Tab/Esc/Ctrl+B/Ctrl+A/F1 before the read-only TextView sees them.
         foreach (var target in _scrollTargets)
             target.KeyDown += OnKey;
         KeyDown += OnKey;
 
-        Add([header, _tabs, hint, _promptBox]);
+        Add([header, _tabs, _promptBox]);
     }
+
+    public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Detail;
 
     public override void OnShown() => _scrollTargets[0].SetFocus();
 
@@ -203,6 +198,10 @@ public sealed class TaskDetailScreen : Screen
             case KeyCode.Tab:
                 key.Handled = true;
                 CycleTab(forward: !key.IsShift);
+                break;
+            case KeyCode.F1:
+                key.Handled = true;
+                RequestHelp();
                 break;
             case KeyCode.Esc:
                 key.Handled = true;

@@ -143,8 +143,13 @@ public sealed record CustomFieldItem(
     public IReadOnlyList<CustomFieldOption> Options { get; init; } = Options ?? [];
 }
 
-/// <summary>A comment on a task, as shown in the detail view's Comments tab.</summary>
-public sealed record CommentItem(string Id, string Author, long? DateMs, string Text, bool Resolved);
+/// <summary>
+/// A comment on a task, as shown in the detail view's Comments tab and — aggregated across many
+/// tasks — in the mentions/comments feed (#109). <see cref="TaskId"/> attributes the comment to the
+/// task it belongs to so the feed can group it and open that task from a feed entry (#111 / #115); it
+/// is null for callers (like the single-task detail view) that don't need attribution.
+/// </summary>
+public sealed record CommentItem(string Id, string Author, long? DateMs, string Text, bool Resolved, string? TaskId = null);
 
 /// <summary>
 /// The full detail of a single task, fetched on demand for the detail view (issue #17). Richer than

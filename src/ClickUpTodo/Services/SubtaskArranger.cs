@@ -142,4 +142,50 @@ public static class SubtaskArranger
 
         return result;
     }
+
+    /// <summary>
+    /// The ids of every <b>user-foldable parent</b> in <paramref name="tasks"/> — a task that is present
+    /// in the set and is the <b>direct</b> parent of at least one other present task. These are exactly the
+    /// ids a non-null <c>expanded</c> set toggles in <see cref="Arrange"/>: a present task with a present
+    /// child is emitted as a real row and marked <see cref="FoldState.Collapsed"/>/<see cref="FoldState.Expanded"/>.
+    /// Such a parent may itself sit at any depth (a foldable parent can be the child of another), so
+    /// expanding the whole set reveals every level — which is what lets "expand all" reach parents whose
+    /// collapsed subtree isn't in the rendered rows (#83). Context parents (#46) are absent from
+    /// <paramref name="tasks"/>, so they're never included — they exist only to display a child and are
+    /// never user-foldable. Independent of any current fold state; ordinal comparer to match the caller's
+    /// expanded-id set.
+    /// </summary>
+    public static IReadOnlySet<string> FoldableParentIds(IReadOnlyList<TaskItem> tasks)
+    {
+        var present = new HashSet<string>(tasks.Select(t => t.Id), StringComparer.Ordinal);
+        var foldable = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var t in tasks)
+            if (!string.IsNullOrEmpty(t.ParentId) && present.Contains(t.ParentId!))
+                foldable.Add(t.ParentId!);
+        return foldable;
+    }
+
+    /// <summary>
+    /// The top-most ancestor of <paramref name="id"/> reachable within <paramref name="tasks"/>: walk up
+    /// the parent chain, stopping at the first task whose parent isn't present in the set — a genuine
+    /// top-level task, or one whose parent is a not-in-set context parent (#46, always shown). Returns
+    /// <paramref name="id"/> itself when it has no in-set parent. Cycle-safe (visits each id at most once).
+    /// Lets "collapse all" land the cursor on a row that stays visible once every parent folds (#83).
+    /// Dup-safe over the id column (last wins), so a caller needn't pre-dedupe the set.
+    /// </summary>
+    public static string TopLevelAncestorId(IReadOnlyList<TaskItem> tasks, string id)
+    {
+        var byId = new Dictionary<string, TaskItem>(tasks.Count, StringComparer.Ordinal);
+        foreach (var t in tasks)
+            byId[t.Id] = t;
+
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = id;
+        while (seen.Add(current)
+               && byId.TryGetValue(current, out var task)
+               && !string.IsNullOrEmpty(task.ParentId)
+               && byId.ContainsKey(task.ParentId!))
+            current = task.ParentId!;
+        return current;
+    }
 }

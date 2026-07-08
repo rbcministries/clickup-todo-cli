@@ -34,6 +34,7 @@ public sealed class HelpScreen : Screen
                 + "  F3          Filter / sort / group the list\n"
                 + "  F4          Show / hide subtasks (shown nested under their parent)\n"
                 + "  → / ←       Expand / collapse the selected parent's subtasks (▶ collapsed, ▼ expanded)\n"
+                + "  Ctrl+→ / ←  Expand / collapse all parents at once\n"
                 + "              F3 can also nest a parent's subtasks that aren't assigned to you\n"
                 + "  Ctrl+Q/Esc  Quit\n"
                 + "\n"
@@ -54,6 +55,8 @@ public sealed class HelpScreen : Screen
 
         Add(body);
     }
+
+    public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Help;
 
     public override void OnShown() => SetFocus();
 }

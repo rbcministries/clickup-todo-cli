@@ -1,5 +1,6 @@
 using ClickUpTodo.Agent;
 using ClickUpTodo.Configuration;
+using ClickUpTodo.Tui.Screens;
 
 namespace ClickUpTodo.Tests;
 
@@ -101,6 +102,49 @@ public sealed class ConfigStoreTests : IDisposable
         var json = File.ReadAllText(store.ConfigPath);
         Assert.Contains("WindowsTerminal", json);
         Assert.DoesNotContain("\"preferredTerminal\":1", json);
+    }
+
+    [Fact]
+    public void SaveThenLoad_RoundTripsDefaultWorkingDirectory()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig
+        {
+            WorkspaceId = "1",
+            PersonalTasksListId = "2",
+            DefaultWorkingDirectory = "/home/dev/source/repos",
+        });
+
+        var loaded = store.Load();
+
+        Assert.Equal("/home/dev/source/repos", loaded.DefaultWorkingDirectory);
+    }
+
+    [Fact]
+    public void Save_PersistsDefaultWorkingDirectoryAsCamelCase()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig { DefaultWorkingDirectory = "/work" });
+
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.Contains("\"defaultWorkingDirectory\": \"/work\"", json);
+    }
+
+    [Fact]
+    public void Load_WhenFileMissingWorkingDirKey_DefaultsToBlankAndResolvesToClickUpTasks()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig { WorkspaceId = "1", PersonalTasksListId = "2" });
+        // Rewrite without a defaultWorkingDirectory key (simulates a pre-#92 config.json).
+        File.WriteAllText(store.ConfigPath, "{\"workspaceId\":\"1\",\"personalTasksListId\":\"2\"}");
+
+        var loaded = store.Load();
+
+        // Absent key ⇒ blank sentinel, which resolves to the ~/ClickUp-Tasks default at read time.
+        Assert.Equal("", loaded.DefaultWorkingDirectory);
+        Assert.Equal(
+            Path.Combine("/home/tester", SettingsForm.DefaultWorkingDirectoryFolderName),
+            SettingsForm.ResolveDefaultWorkingDirectory(loaded.DefaultWorkingDirectory, "/home/tester"));
     }
 
     [Fact]
