@@ -18,7 +18,9 @@ namespace ClickUpTodo.Tui.Screens;
 /// Esc returns to the list; Ctrl+B requests opening the task in the browser (the host reads
 /// <see cref="OpenBrowserRequested"/> in its close handler and owns the launch). Tab cycles tabs;
 /// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. The Stream tab (#106) is the default;
-/// Ctrl+PgUp/Ctrl+PgDn sort it oldest-first / newest-first and re-render it in place. Tab bodies come
+/// Ctrl+PgUp/Ctrl+PgDn sort it oldest-first / newest-first and re-render it in place, and it opens
+/// auto-scrolled to the newest (or oldest) entry per the <see cref="Configuration.StreamAutoScroll"/> preference
+/// (#107). Tab bodies come
 /// from the unit-tested
 /// <see cref="TaskDetailFormatter"/>, so this class is only the (CI-untestable) Terminal.Gui glue.
 /// </para>
@@ -61,6 +63,11 @@ public sealed class TaskDetailScreen : Screen
     private readonly IReadOnlyList<CommentItem> _comments;
     private StreamSort _streamSort = StreamSort.Ascending;
 
+    // Where the Stream tab is scrolled to on open (#107). Content-relative (newest/oldest) so it stays
+    // correct across both sort directions; the concrete edge is resolved by DetailScrollModel. #108
+    // (S3) will feed the persisted preference through this seam; until then it defaults to Newest.
+    private readonly Configuration.StreamAutoScroll _streamAutoScroll;
+
     /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>
     public bool OpenBrowserRequested { get; private set; }
 
@@ -72,10 +79,14 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     public event EventHandler<DispatchRequest>? AgentDispatchRequested;
 
-    public TaskDetailScreen(TaskDetail task, IReadOnlyList<CommentItem> comments)
+    public TaskDetailScreen(
+        TaskDetail task,
+        IReadOnlyList<CommentItem> comments,
+        Configuration.StreamAutoScroll streamAutoScroll = Configuration.StreamAutoScroll.Newest)
     {
         _task = task;
         _comments = comments;
+        _streamAutoScroll = streamAutoScroll;
         Title = task.Name.Length > 60 ? task.Name[..59] + "…" : task.Name;
 
         var headerText = TaskDetailFormatter.Header(task);
@@ -165,7 +176,13 @@ public sealed class TaskDetailScreen : Screen
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Detail;
 
-    public override void OnShown() => _scrollTargets[0].SetFocus();
+    public override void OnShown()
+    {
+        _scrollTargets[0].SetFocus();
+        // Land on the newest (or oldest) Stream entry per the preference (#107). Done after the screen
+        // is shown so the pane has a laid-out viewport for MoveEnd/MoveHome to scroll within.
+        ApplyStreamAutoScroll();
+    }
 
     private void OnKey(object? sender, Key key)
     {
@@ -328,13 +345,32 @@ public sealed class TaskDetailScreen : Screen
 
     /// <summary>Sets the Stream sort direction and re-renders the Stream body in place (#106). No-op if
     /// unchanged. Works regardless of the active tab — the new order is visible when the Stream tab is
-    /// shown. (Auto-scroll on toggle is the follow-up #S2 / #107.)</summary>
+    /// shown. Re-asserts the auto-scroll edge (#107) so, e.g., "scroll to newest" keeps landing on the
+    /// newest entry after the sort flips which end of the body that is.</summary>
     private void SetStreamSort(StreamSort sort)
     {
         if (_streamSort == sort)
             return;
         _streamSort = sort;
         _streamPane.Text = TaskDetailFormatter.Stream(_task, _comments, _streamSort);
+        ApplyStreamAutoScroll();
+    }
+
+    /// <summary>Scrolls the Stream pane to the newest/oldest entry per the preference (#107). The pure
+    /// <see cref="DetailScrollModel"/> resolves the content-relative preference + current sort to a
+    /// concrete edge; the actual viewport move uses TG's read-only-safe scroll API
+    /// (<c>MoveEnd()</c>/<c>MoveHome()</c>), so it is the (CI-untestable) Terminal.Gui glue.</summary>
+    private void ApplyStreamAutoScroll()
+    {
+        switch (DetailScrollModel.ResolveEdge(_streamAutoScroll, _streamSort))
+        {
+            case DetailScrollModel.Edge.Bottom:
+                _streamPane.MoveEnd();
+                break;
+            default:
+                _streamPane.MoveHome();
+                break;
+        }
     }
 
     /// <summary>Advances the selected tab and moves focus into its scroll target so ↑/↓ scroll it.</summary>
