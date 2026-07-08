@@ -131,6 +131,103 @@ public sealed class AgentPromptComposerTests
         }
     }
 
+    // ── output subdirectory (task-derived working dir, #98) ─────────────────────────
+
+    [Fact]
+    public void OutputSubdirectoryToken_PrefersCustomId_WhenSet()
+        => Assert.Equal("TEAM-42", AgentPromptComposer.OutputSubdirectoryToken(Task(id: "abc123", customId: "TEAM-42")));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void OutputSubdirectoryToken_FallsBackToTaskId_WhenCustomIdBlank(string? customId)
+        => Assert.Equal("abc123", AgentPromptComposer.OutputSubdirectoryToken(Task(id: "abc123", customId: customId)));
+
+    [Fact]
+    public void OutputSubdirectoryToken_BothIdsBlank_FallsBackToSafeTokenDefault()
+        => Assert.Equal("task", AgentPromptComposer.OutputSubdirectoryToken(Task(id: "", customId: null)));
+
+    [Fact]
+    public void OutputSubdirectoryToken_SanitizesUnsafeChars_NoPathTraversal()
+    {
+        var token = AgentPromptComposer.OutputSubdirectoryToken(Task(customId: "../../etc/p w?d"));
+        Assert.DoesNotContain("..", token);
+        Assert.DoesNotContain('/', token);
+        Assert.DoesNotContain('\\', token);
+        // Letters/digits survive; every other char collapses to '-' (mirrors the temp-file token).
+        Assert.Equal("------etc-p-w-d", token);
+    }
+
+    [Fact]
+    public void Compose_OutputSubdirectory_InsertsInstructionBetweenPromptAndPreamble()
+    {
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", outputSubdirectory: "TEAM-42");
+
+        Assert.StartsWith(
+            $"triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n{AgentPromptComposer.Preamble}\n\n{{",
+            composed);
+    }
+
+    [Fact]
+    public void Compose_OutputSubdirectory_IsTrimmed()
+    {
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", outputSubdirectory: "  TEAM-42  ");
+        Assert.StartsWith("triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n", composed);
+    }
+
+    [Fact]
+    public void Compose_OutputSubdirectory_EmptyPrompt_InstructionLeads()
+    {
+        var composed = AgentPromptComposer.Compose(Task(), [], "", outputSubdirectory: "TEAM-42");
+        Assert.StartsWith(
+            $"Write any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n{AgentPromptComposer.Preamble}\n\n{{",
+            composed);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Compose_BlankOutputSubdirectory_IsByteIdenticalToNoArg(string? subdir)
+    {
+        var expected = AgentPromptComposer.Compose(Task(), [Comment()], "triage");
+        var actual = AgentPromptComposer.Compose(Task(), [Comment()], "triage", outputSubdirectory: subdir);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void Compose_OutputSubdirectory_CombinesWithCustomPreamble()
+    {
+        var composed = AgentPromptComposer.Compose(
+            Task(), [], "triage", preamble: "Use only the JSON.", outputSubdirectory: "TEAM-42");
+        Assert.StartsWith(
+            "triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\nUse only the JSON.\n\n{",
+            composed);
+    }
+
+    [Fact]
+    public void WritePromptFile_HonorsOutputSubdirectory()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "clickup-todo-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var path = AgentPromptComposer.WritePromptFile(Task(), [], "triage", dir, outputSubdirectory: "TEAM-42");
+            Assert.Equal(
+                AgentPromptComposer.Compose(Task(), [], "triage", outputSubdirectory: "TEAM-42"),
+                File.ReadAllText(path));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OutputSubdirectoryToken_NullTask_Throws()
+        => Assert.Throws<ArgumentNullException>(() => AgentPromptComposer.OutputSubdirectoryToken(null!));
+
     // ── task subset ──────────────────────────────────────────────────────────────
 
     [Fact]

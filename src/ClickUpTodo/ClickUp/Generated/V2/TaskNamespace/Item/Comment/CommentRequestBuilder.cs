@@ -22,7 +22,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment
         /// </summary>
         /// <param name="pathParameters">Path parameters for the request</param>
         /// <param name="requestAdapter">The request adapter to use to execute the requests.</param>
-        public CommentRequestBuilder(Dictionary<string, object> pathParameters, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/task/{task_id}/comment", pathParameters)
+        public CommentRequestBuilder(Dictionary<string, object> pathParameters, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/task/{task_id}/comment{?start*,start_id*}", pathParameters)
         {
         }
         /// <summary>
@@ -30,7 +30,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment
         /// </summary>
         /// <param name="rawUrl">The raw URL to use for the request builder.</param>
         /// <param name="requestAdapter">The request adapter to use to execute the requests.</param>
-        public CommentRequestBuilder(string rawUrl, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/task/{task_id}/comment", rawUrl)
+        public CommentRequestBuilder(string rawUrl, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/task/{task_id}/comment{?start*,start_id*}", rawUrl)
         {
         }
         /// <summary>
@@ -41,11 +41,11 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
-        public async Task<global::ClickUpTodo.ClickUp.Generated.Models.CommentsResponse?> GetAsync(Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
+        public async Task<global::ClickUpTodo.ClickUp.Generated.Models.CommentsResponse?> GetAsync(Action<RequestConfiguration<global::ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment.CommentRequestBuilder.CommentRequestBuilderGetQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
         {
 #nullable restore
 #else
-        public async Task<global::ClickUpTodo.ClickUp.Generated.Models.CommentsResponse> GetAsync(Action<RequestConfiguration<DefaultQueryParameters>> requestConfiguration = default, CancellationToken cancellationToken = default)
+        public async Task<global::ClickUpTodo.ClickUp.Generated.Models.CommentsResponse> GetAsync(Action<RequestConfiguration<global::ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment.CommentRequestBuilder.CommentRequestBuilderGetQueryParameters>> requestConfiguration = default, CancellationToken cancellationToken = default)
         {
 #endif
             var requestInfo = ToGetRequestInformation(requestConfiguration);
@@ -58,11 +58,11 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
-        public RequestInformation ToGetRequestInformation(Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default)
+        public RequestInformation ToGetRequestInformation(Action<RequestConfiguration<global::ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment.CommentRequestBuilder.CommentRequestBuilderGetQueryParameters>>? requestConfiguration = default)
         {
 #nullable restore
 #else
-        public RequestInformation ToGetRequestInformation(Action<RequestConfiguration<DefaultQueryParameters>> requestConfiguration = default)
+        public RequestInformation ToGetRequestInformation(Action<RequestConfiguration<global::ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment.CommentRequestBuilder.CommentRequestBuilderGetQueryParameters>> requestConfiguration = default)
         {
 #endif
             var requestInfo = new RequestInformation(Method.GET, UrlTemplate, PathParameters);
@@ -78,6 +78,26 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment
         public global::ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment.CommentRequestBuilder WithUrl(string rawUrl)
         {
             return new global::ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment.CommentRequestBuilder(rawUrl, RequestAdapter);
+        }
+        /// <summary>
+        /// Get the comments on a task (most recent first).
+        /// </summary>
+        [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
+        public partial class CommentRequestBuilderGetQueryParameters 
+        {
+            /// <summary>Cursor: epoch-ms of the oldest comment from the previous page. Returns comments older than this.</summary>
+            [QueryParameter("start")]
+            public long? Start { get; set; }
+            /// <summary>Cursor: id of the oldest comment from the previous page, paired with &apos;start&apos;.</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+            [QueryParameter("start_id")]
+            public string? StartId { get; set; }
+#nullable restore
+#else
+            [QueryParameter("start_id")]
+            public string StartId { get; set; }
+#endif
         }
     }
 }
