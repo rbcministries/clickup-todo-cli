@@ -19,6 +19,8 @@ public sealed class AgentDispatchSettingsTests
         Assert.Equal("claude", s.ClaudeExecutable);
         Assert.Empty(s.ExtraArgs);
         Assert.Equal(AgentWorkingDirectory.TaskDerived, s.WorkingDirectory);
+        Assert.Equal(AgentSessionMode.Interactive, s.DefaultSessionMode);
+        Assert.False(s.DefaultPostResultsToComments);
     }
 
     [Theory]
@@ -36,6 +38,8 @@ public sealed class AgentDispatchSettingsTests
         Assert.False(new AgentDispatchSettings { ExtraArgs = ["--model", "opus"] }.IsDefault);
         Assert.False(new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.Home }.IsDefault);
         Assert.False(new AgentDispatchSettings { FixedWorkingDirectory = "/work" }.IsDefault);
+        Assert.False(new AgentDispatchSettings { DefaultSessionMode = AgentSessionMode.OneOff }.IsDefault);
+        Assert.False(new AgentDispatchSettings { DefaultPostResultsToComments = true }.IsDefault);
         Assert.False(new AgentDispatchSettings { PromptPreamble = "Custom." }.IsDefault);
     }
 
@@ -130,5 +134,53 @@ public sealed class AgentDispatchSettingsTests
     {
         var s = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.Fixed, FixedWorkingDirectory = "" };
         Assert.Null(s.ResolveWorkingDirectory("/repos/task", "/home/me"));
+    }
+
+    // ── ResolveEffectiveWorkingDirectory (#101 precedence: cache → default mode) ─────
+
+    [Fact]
+    public void ResolveEffectiveWorkingDirectory_CachedDirectory_WinsOverEverything()
+    {
+        // Even a Fixed mode with a fixed dir is overridden by a per-task cache hit (#96).
+        var s = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.Fixed, FixedWorkingDirectory = "/fixed" };
+        Assert.Equal("/cache/task", s.ResolveEffectiveWorkingDirectory("/cache/task", "/repos/task", "/home/me"));
+    }
+
+    [Fact]
+    public void ResolveEffectiveWorkingDirectory_CachedDirectory_IsTrimmed()
+    {
+        var s = new AgentDispatchSettings();
+        Assert.Equal("/cache/task", s.ResolveEffectiveWorkingDirectory("  /cache/task  ", "/repos/task", "/home/me"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ResolveEffectiveWorkingDirectory_BlankCache_FallsThroughToTaskDerivedMode(string? cache)
+    {
+        var s = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.TaskDerived };
+        Assert.Equal("/repos/task", s.ResolveEffectiveWorkingDirectory(cache, "/repos/task", "/home/me"));
+    }
+
+    [Fact]
+    public void ResolveEffectiveWorkingDirectory_BlankCache_FallsThroughToHomeMode()
+    {
+        var s = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.Home };
+        Assert.Equal("/home/me", s.ResolveEffectiveWorkingDirectory(null, "/repos/task", "/home/me"));
+    }
+
+    [Fact]
+    public void ResolveEffectiveWorkingDirectory_BlankCache_FallsThroughToFixedMode()
+    {
+        var s = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.Fixed, FixedWorkingDirectory = "/work" };
+        Assert.Equal("/work", s.ResolveEffectiveWorkingDirectory(null, "/repos/task", "/home/me"));
+    }
+
+    [Fact]
+    public void ResolveEffectiveWorkingDirectory_NoCacheAndNoCandidate_Inherits()
+    {
+        var s = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.TaskDerived };
+        Assert.Null(s.ResolveEffectiveWorkingDirectory(null, null, "/home/me"));
     }
 }
