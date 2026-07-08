@@ -197,17 +197,17 @@ public sealed class ClickUpClient : IDisposable
                 .ToList() ?? []);
         });
 
-    /// <summary>The comments on a task, mapped to the stable <see cref="CommentItem"/> shape.</summary>
+    /// <summary>
+    /// The comments on a task, mapped to the stable <see cref="CommentItem"/> shape and stamped with
+    /// <paramref name="taskId"/> so a caller aggregating comments across tasks (the feed, #109) can
+    /// attribute each one. ClickUp returns comments most-recent-first; this is a single-page fetch —
+    /// the generated endpoint exposes no pagination cursor to de-page (see #111's deferred de-paging).
+    /// </summary>
     public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
         => Guard("GetTaskComments", async () =>
         {
             var comments = (await _client.V2.Task[taskId].Comment.GetAsync(cancellationToken: ct))?.Comments ?? [];
-            return (IReadOnlyList<CommentItem>)comments.Select(c => new CommentItem(
-                Id: c.Id ?? "",
-                Author: DisplayName(c.User),
-                DateMs: ParseMs(c.Date),
-                Text: c.CommentText ?? "",
-                Resolved: c.Resolved == true)).ToList();
+            return (IReadOnlyList<CommentItem>)comments.Select(c => MapComment(c, taskId)).ToList();
         });
 
     // ── Mapping & plumbing ──────────────────────────────────────────────────
@@ -254,6 +254,20 @@ public sealed class ClickUpClient : IDisposable
             .Where(m => m.Id != 0)
             .ToList()
            ?? [];
+
+    /// <summary>
+    /// Maps a generated <see cref="Comment"/> onto the stable <see cref="CommentItem"/>, stamping the
+    /// owning <paramref name="taskId"/> for feed attribution (#111). Author uses the same
+    /// username → email → id fallback as task assignees; a missing/unparseable date yields a null
+    /// <see cref="CommentItem.DateMs"/>. internal (not private) so it can be unit-tested offline.
+    /// </summary>
+    internal static CommentItem MapComment(Comment c, string? taskId) => new(
+        Id: c.Id ?? "",
+        Author: DisplayName(c.User),
+        DateMs: ParseMs(c.Date),
+        Text: c.CommentText ?? "",
+        Resolved: c.Resolved == true,
+        TaskId: taskId);
 
     // internal (not private) so the mapping can be unit-tested without hitting the live API.
     internal static TaskDetail MapDetail(TaskObject t) => new()
