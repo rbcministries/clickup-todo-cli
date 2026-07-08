@@ -647,9 +647,10 @@ public sealed class TodoApp
                     if (_activeScreen is not null)
                         return;
                     var screen = new TaskDetailScreen(detail, comments);
-                    // A (in the detail view) → compose + launch an interactive claude session (#26).
-                    // The detail view stays open; dispatch runs off the UI thread so the TUI stays live.
-                    screen.AgentDispatchRequested += (_, prompt) => DispatchAgent(detail, comments, prompt);
+                    // Ctrl+A (in the detail view) → compose + launch an interactive claude session
+                    // (#26/#93). The detail view stays open; dispatch runs off the UI thread so the TUI
+                    // stays live. Only the prompt is consumed today; #94/#95/#97 add the pane's options.
+                    screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request.Prompt);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
