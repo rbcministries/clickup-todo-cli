@@ -45,8 +45,9 @@ public sealed class TodoApp
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
     // Composes the seed prompt + launches an interactive `claude` session for the detail view's A
-    // keybinding (#26). Zero-config defaults today; #27 (S4) will populate its options from AppConfig.
-    private readonly AgentDispatcher _agent = new(new TerminalLauncher());
+    // keybinding (#26). Built from the persisted AgentDispatch settings (#91) and rebuilt after the F2
+    // settings dialog saves, so a custom terminal / claude path / extra args apply without a restart.
+    private AgentDispatcher _agent = null!;
     // True while a dispatch is in flight, so a rapid second submit doesn't launch a duplicate session.
     // Only touched on the UI thread (set in DispatchAgent, cleared via Application.Invoke).
     private bool _dispatching;
@@ -113,7 +114,15 @@ public sealed class TodoApp
         _config = config;
         _configStore = configStore;
         _focus = focus;
+        _agent = BuildAgentDispatcher();
     }
+
+    // Builds the dispatcher from the current AgentDispatch settings (#91), so the preferred terminal,
+    // custom claude executable, and extra args take effect. Zero-config settings project onto the
+    // default TerminalLauncherOptions, keeping behaviour byte-for-byte identical. A field initializer
+    // can't read _config, so this runs from the constructor (and again after an F2 settings save).
+    private AgentDispatcher BuildAgentDispatcher() =>
+        new(new TerminalLauncher(), _config.AgentDispatch.ToLauncherOptions());
 
     public void Run(string? driverName = null)
     {
@@ -396,6 +405,11 @@ public sealed class TodoApp
             _config.AgentDispatch = result.AgentDispatch;
             _configStore.Save(_config);
 
+            // Rebuild the dispatcher so edited terminal / claude path / extra args apply without a
+            // restart (#91). Runs on the UI thread; DispatchAgent captures _agent into a local before
+            // its background hand-off, so an in-flight dispatch keeps the instance it started with.
+            _agent = BuildAgentDispatcher();
+
             _refresh.IntervalSeconds = result.RefreshSeconds;
             Flash($"Settings saved · refresh {result.RefreshSeconds}s");
             _refresh.RequestRefresh();
@@ -670,7 +684,9 @@ public sealed class TodoApp
     /// Composes the seed prompt for <paramref name="detail"/> and launches an interactive
     /// <c>claude</c> session in a new terminal (#26). Runs off the UI thread (file write + process
     /// launch), then reports the outcome on the status line; the detail view and background refresh
-    /// keep running. Working directory / claude path / preferred terminal become configurable in #27.
+    /// keep running. The working directory and prompt preamble are resolved from the AgentDispatch
+    /// settings on the UI thread and threaded into the dispatch (#91); the task-derived working-dir
+    /// candidate lands in #98, so it's <c>null</c> here (Home/Fixed modes already resolve).
     /// </summary>
     private void DispatchAgent(TaskDetail detail, IReadOnlyList<CommentItem> comments, string prompt)
     {
@@ -684,12 +700,21 @@ public sealed class TodoApp
         }
         _dispatching = true;
 
+        // Resolve the dispatch settings on the UI thread before the background hand-off (#91).
+        // Capture _agent locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap
+        // the instance mid-dispatch. The task-derived working-dir candidate is null until #98.
+        var agent = _agent;
+        var settings = _config.AgentDispatch;
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: null, homeDirectory: home);
+        var preamble = settings.PromptPreamble;
+
         Flash($"Launching Claude for '{detail.Name}'…");
         _ = Task.Run(async () =>
         {
             try
             {
-                var result = await _agent.DispatchAsync(detail, comments, prompt);
+                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, preamble);
                 Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)
