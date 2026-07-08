@@ -116,4 +116,3 @@ an "old list help line" underneath, because it *is* the one contextual line.
   (its stale "excluded statuses" line is #69 follow-up, not this).
 - #93's Dispatch-trigger footer entry — whichever of #93/#103 lands second adds
   the Dispatch item to the detail screen's declared set (coordination note).
-</content>
