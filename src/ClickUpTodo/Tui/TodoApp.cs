@@ -926,7 +926,11 @@ public sealed class TodoApp
         // through to the to-do set un-indented; those pulled-in subtask ids are excluded from the
         // non-pinned set below so they don't render twice. Pins ignore F3 filters/grouping. (#75)
         var pinnedIds = _all.Where(t => _focus.IsPinned(t.Id)).Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
-        var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection, _expanded);
+        // Feed the pulled-in teammate-owned subtasks (#70) into the Focus layout too, so a foreign child of
+        // a pinned parent nests under it in Focus rather than vanishing (#85). NestedSubtaskIds then covers
+        // both in-snapshot and foreign rows pulled into Focus — the exact set to keep out of the to-do list.
+        var foreignList = nest && _foreignSubtasks.Count > 0 ? _foreignSubtasks.Values.ToList() : null;
+        var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection, _expanded, foreignList);
         _focusNestedIds = focus.NestedSubtaskIds;
 
         // The non-pinned set feeds the F3 view. Drop pinned tasks and (when nesting) any subtask pulled
@@ -938,11 +942,11 @@ public sealed class TodoApp
         // When nesting, fold in the teammate-owned subtasks of my parents (#70) before Apply, so they're
         // filtered (Status IS NOT etc.), sorted, and grouped consistently and the arranger can nest them
         // under their present parent. Populated only when the F4 view + the setting are both on. Foreign
-        // children of a *pinned* parent are dropped here (they'd render detached — nesting them in the
-        // Focus section is deferred to #85).
+        // children whose ancestor is pinned were already pulled into the Focus section above (#85), so
+        // exclude exactly those (NestedSubtaskIds) here — the rest nest under their non-pinned parent.
         else if (_foreignSubtasks.Count > 0)
             nonPinned = nonPinned.Concat(
-                TaskService.ForeignSubtasksNotUnderPinned(_all, _foreignSubtasks.Values.ToList(), pinnedIds));
+                _foreignSubtasks.Values.Where(t => !focus.NestedSubtaskIds.Contains(t.Id)));
         var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
         var grouped = view.GroupField is not null;
@@ -968,7 +972,10 @@ public sealed class TodoApp
         if (pinnedIds.Count > 0)
             AddHeader($"{FocusHeaderPrefix} ({pinnedIds.Count})");
         foreach (var row in focus.Rows)
-            AddTask(row.Task, row.Depth, row.IsContextParent, groupedBy: null, fold: row.Fold);
+            // A pulled-in teammate-owned subtask (#70/#85) nested under a pinned parent gets the not-mine
+            // marker, exactly as it would in the to-do section.
+            AddTask(row.Task, row.Depth, row.IsContextParent, groupedBy: null, fold: row.Fold,
+                isForeignSubtask: _foreignSubtasks.ContainsKey(row.Task.Id));
 
         // The single tasks-section header only appears (when ungrouped) to separate the to-do rows
         // from a pinned section above them.
