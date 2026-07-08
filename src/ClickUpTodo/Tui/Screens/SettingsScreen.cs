@@ -13,7 +13,7 @@ using Terminal.Gui.Views;
 namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>The result of editing settings, or null when the user cancels.</summary>
-public sealed record SettingsResult(int RefreshSeconds, AgentDispatchSettings AgentDispatch);
+public sealed record SettingsResult(int RefreshSeconds, string DefaultWorkingDirectory, AgentDispatchSettings AgentDispatch);
 
 /// <summary>
 /// A full-window settings screen. The left column changes the refresh interval; the right column
@@ -36,9 +36,12 @@ public sealed class SettingsScreen : Screen
     /// <summary>The saved settings, or null if the screen was cancelled.</summary>
     public SettingsResult? Result { get; private set; }
 
-    public SettingsScreen(int refreshSeconds, AgentDispatchSettings dispatch)
+    public SettingsScreen(int refreshSeconds, string defaultWorkingDirectory, AgentDispatchSettings dispatch)
     {
         Title = "Settings";
+
+        // Home directory used to expand a leading `~` in the working-dir field on Save.
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         // ── Left column: refresh interval ──────────────────────────────────────
         var refreshLabel = new Label { X = 1, Y = 1, Text = "Refresh interval (seconds):" };
@@ -57,6 +60,18 @@ public sealed class SettingsScreen : Screen
             Y = 3,
             Width = Dim.Percent(48),
             Text = "To hide statuses, add a Status IS NOT rule in the F3 filter view.",
+        };
+
+        // Base working directory (#92): a root, distinct from the Agent "Fixed dir" mode.
+        // Widths are capped to the left column so long text can't overflow into the right column.
+        var workingDirLabel = new Label { X = 1, Y = 5, Width = Dim.Percent(48), Text = "Default working directory:" };
+        var workingDirField = new TextField { X = 1, Y = 6, Width = Dim.Percent(48), Text = defaultWorkingDirectory };
+        var workingDirNote = new Label
+        {
+            X = 1,
+            Y = 7,
+            Width = Dim.Percent(48),
+            Text = "Blank = ~/ClickUp-Tasks. A root for agent launches (≠ Fixed dir).",
         };
 
         // ── Right column: agent dispatch (#27) ─────────────────────────────────
@@ -107,6 +122,7 @@ public sealed class SettingsScreen : Screen
         {
             Result = new SettingsResult(
                 SettingsForm.ParseRefreshSeconds(_refreshField.Text, refreshSeconds),
+                SettingsForm.ExpandHomePath(workingDirField.Text, home),
                 new AgentDispatchSettings
                 {
                     PreferredTerminal = terminal,
@@ -132,6 +148,7 @@ public sealed class SettingsScreen : Screen
 
         Add([
             refreshLabel, _refreshField, excludedNote,
+            workingDirLabel, workingDirField, workingDirNote,
             agentHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, preambleLabel, preambleField,
             hint, save, cancel,
