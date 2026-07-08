@@ -383,4 +383,67 @@ public sealed class SubtaskArrangerTests
         Assert.DoesNotContain(rows, r => r.Fold == FoldState.Collapsed);
         Assert.Equal(Expanded("p1", "c1", "p2"), foldable);
     }
+
+    // ── Top-level ancestor for collapse-all cursor-keep (#83) ────────────────
+
+    [Fact]
+    public void TopLevelAncestorId_DirectChild_ReturnsTheParent()
+    {
+        TaskItem[] tasks = [Task("p"), Task("c", parent: "p")];
+
+        Assert.Equal("p", SubtaskArranger.TopLevelAncestorId(tasks, "c"));
+    }
+
+    [Fact]
+    public void TopLevelAncestorId_DeepChain_ReturnsTheRoot()
+    {
+        TaskItem[] tasks = [Task("a"), Task("b", parent: "a"), Task("c", parent: "b")];
+
+        Assert.Equal("a", SubtaskArranger.TopLevelAncestorId(tasks, "c"));
+    }
+
+    [Fact]
+    public void TopLevelAncestorId_TopLevelTask_ReturnsItself()
+    {
+        TaskItem[] tasks = [Task("a"), Task("b")];
+
+        Assert.Equal("a", SubtaskArranger.TopLevelAncestorId(tasks, "a"));
+    }
+
+    [Fact]
+    public void TopLevelAncestorId_ChildOfNotInSetParent_StopsAtTheChild()
+    {
+        // 'c's parent P isn't in the set (it's a context parent, always shown). The walk stops at c, so
+        // collapse-all keeps the cursor on c — which stays visible nested under the context parent.
+        TaskItem[] tasks = [Task("c", parent: "P"), Task("g", parent: "c")];
+
+        Assert.Equal("c", SubtaskArranger.TopLevelAncestorId(tasks, "g"));
+    }
+
+    [Fact]
+    public void TopLevelAncestorId_OrphanPointingAtMissingParent_ReturnsItself()
+    {
+        TaskItem[] tasks = [Task("orphan", parent: "missing")];
+
+        Assert.Equal("orphan", SubtaskArranger.TopLevelAncestorId(tasks, "orphan"));
+    }
+
+    [Fact]
+    public void TopLevelAncestorId_IdNotInSet_ReturnsItself()
+    {
+        TaskItem[] tasks = [Task("a"), Task("b", parent: "a")];
+
+        Assert.Equal("ghost", SubtaskArranger.TopLevelAncestorId(tasks, "ghost"));
+    }
+
+    [Fact]
+    public void TopLevelAncestorId_ParentCycle_Terminates()
+    {
+        // Pathological a↔b: must not loop forever. Returns an id in the cycle (each visited at most once).
+        TaskItem[] tasks = [Task("a", parent: "b"), Task("b", parent: "a")];
+
+        var result = SubtaskArranger.TopLevelAncestorId(tasks, "a");
+
+        Assert.Contains(result, new[] { "a", "b" });
+    }
 }

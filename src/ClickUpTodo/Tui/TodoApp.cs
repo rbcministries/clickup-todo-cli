@@ -594,7 +594,7 @@ public sealed class TodoApp
             return;
         }
         _expanded.UnionWith(foldable);
-        Render(keepTaskId: CurrentTask()?.Id);
+        RenderKeepingCursor(CurrentTask()?.Id);
         Flash("Expanded all subtasks.");
     }
 
@@ -611,14 +611,33 @@ public sealed class TodoApp
             Flash("All subtasks already collapsed.");
             return;
         }
-        var keep = TopLevelAncestorId(CurrentTask()?.Id);
+        // Resolve the ancestor against the same universe once (avoids rebuilding it), then fold.
+        var keep = CurrentTask()?.Id is { } id
+            ? SubtaskArranger.TopLevelAncestorId(CandidateUniverse(), id)
+            : null;
         _expanded.Clear();
-        Render(keepTaskId: keep);
+        RenderKeepingCursor(keep);
         Flash("Collapsed all subtasks.");
     }
 
+    /// <summary>
+    /// <see cref="Render"/>, but when there's no task row to anchor to (<paramref name="keepTaskId"/> is
+    /// null because the cursor sat on a header/spacer) keep the cursor near where it was instead of letting
+    /// Render fall back to the very first row — a bulk fold shouldn't teleport the cursor to the top (#83).
+    /// The row index is clamped to the (possibly shorter) new list.
+    /// </summary>
+    private void RenderKeepingCursor(string? keepTaskId)
+    {
+        var priorRow = _list.SelectedItem ?? -1;
+        Render(keepTaskId);
+        if (keepTaskId is null && priorRow >= 0 && _display.Count > 0)
+            _list.SelectedItem = Math.Min(priorRow, _display.Count - 1);
+    }
+
     /// <summary>Every task that can appear in the subtasks view — the snapshot plus the teammate-owned
-    /// subtasks pulled in under my parents (#70) — the universe over which foldable parents are found.</summary>
+    /// subtasks pulled in under my parents (#70) — the universe over which foldable parents and ancestor
+    /// walks are computed. The two sources are disjoint with unique ids: <see cref="TaskService"/>'s
+    /// foreign-subtask resolution (#70) excludes snapshot ids and de-dupes.</summary>
     private IReadOnlyList<TaskItem> CandidateUniverse()
     {
         if (_foreignSubtasks.Count == 0)
@@ -627,24 +646,6 @@ public sealed class TodoApp
         universe.AddRange(_all);
         universe.AddRange(_foreignSubtasks.Values);
         return universe;
-    }
-
-    /// <summary>Walks up the parent chain (within the candidate universe) to the top-most ancestor of
-    /// <paramref name="taskId"/>, so collapse-all can land the cursor on a row that stays visible. Returns
-    /// the id unchanged when it has no in-universe parent, or null when null is passed. Cycle-safe.</summary>
-    private string? TopLevelAncestorId(string? taskId)
-    {
-        if (taskId is null)
-            return null;
-        var byId = CandidateUniverse().ToDictionary(t => t.Id, StringComparer.Ordinal);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var current = taskId;
-        while (seen.Add(current)
-               && byId.TryGetValue(current, out var task)
-               && !string.IsNullOrEmpty(task.ParentId)
-               && byId.ContainsKey(task.ParentId!))
-            current = task.ParentId!;
-        return current;
     }
 
     // ── Actions ────────────────────────────────────────────────────────────

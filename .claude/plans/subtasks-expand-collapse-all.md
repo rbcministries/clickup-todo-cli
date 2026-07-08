@@ -57,9 +57,15 @@ structural scan.
 ### Pure / unit-tested (`Services/SubtaskArranger.cs`)
 
 - New `SubtaskArranger.FoldableParentIds(IReadOnlyList<TaskItem> tasks)` →
-  `IReadOnlySet<string>`: the ids of every task present in `tasks` that has at
-  least one present child. Independent of any current fold state, so it drives
+  `IReadOnlySet<string>`: the ids of every task present in `tasks` that is the
+  **direct** parent of at least one present task. Such a parent may itself sit
+  at any depth, so expanding the whole set reveals every level — driving
   expand-all across every depth. Ordinal comparer, matching `_expanded`.
+- New `SubtaskArranger.TopLevelAncestorId(tasks, id)`: walks up the parent chain
+  within `tasks` to the top-most in-set ancestor (stops at a task whose parent
+  isn't present — a root, or a not-in-set context parent). Cycle-safe, dup-safe.
+  Backs collapse-all's cursor-keep and is unit-tested (nested child, deep chain,
+  context-parent child, orphan, id-not-in-set, cycle).
 - Tested in `SubtaskArrangerTests`: flat list → empty; a parent with a child →
   that parent; deep chain → every intermediate parent (all depths); a parent
   whose only child is absent → excluded; an orphan pointing at a missing parent
