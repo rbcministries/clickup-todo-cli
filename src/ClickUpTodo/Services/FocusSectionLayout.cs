@@ -38,13 +38,21 @@ public static class FocusSectionLayout
     /// The ids of expanded parents for per-parent folding (#76), forwarded to <see cref="SubtaskArranger"/>
     /// so a pinned parent folds like any other. <c>null</c> ⇒ every parent expanded (pre-#76 behaviour).
     /// </param>
+    /// <param name="foreignSubtasks">
+    /// Teammate-owned subtasks of in-view parents pulled in by #70 — <b>not</b> part of
+    /// <paramref name="allTasks"/>. When supplied (and nesting), the descend-from-pins walk runs over the
+    /// snapshot ∪ these, so a foreign subtask whose ancestor is pinned nests under that pin in Focus and
+    /// is returned in <see cref="FocusSection.NestedSubtaskIds"/> — the exact set the caller must exclude
+    /// from the to-do list to avoid a double render (#85). <c>null</c>/empty ⇒ pre-#85 behaviour.
+    /// </param>
     public static FocusSection Build(
         IReadOnlyList<TaskItem> allTasks,
         IReadOnlySet<string> pinnedIds,
         bool nest,
         TaskField? sortField,
         SortDirection sortDirection,
-        IReadOnlySet<string>? expanded = null)
+        IReadOnlySet<string>? expanded = null,
+        IReadOnlyList<TaskItem>? foreignSubtasks = null)
     {
         var pinned = allTasks.Where(t => pinnedIds.Contains(t.Id));
 
@@ -59,20 +67,26 @@ public static class FocusSectionLayout
             return new FocusSection(flat, EmptyIds);
         }
 
-        // Direct children per parent across the whole snapshot.
+        // Direct children per parent across the snapshot plus any pulled-in foreign subtasks (#85), so a
+        // pinned parent's teammate-owned children (which live outside `allTasks`) descend into Focus too.
+        // Snapshot wins on an id collision (foreign ids never collide by construction — ForeignDescendants
+        // excludes present ids — but de-dup defensively so a child is never listed twice).
         var childrenByParent = new Dictionary<string, List<TaskItem>>();
-        foreach (var t in allTasks)
+        var seenChild = new HashSet<string>(StringComparer.Ordinal);
+        var universe = foreignSubtasks is { Count: > 0 } ? allTasks.Concat(foreignSubtasks) : allTasks;
+        foreach (var t in universe)
         {
-            if (string.IsNullOrEmpty(t.ParentId))
+            if (string.IsNullOrEmpty(t.ParentId) || !seenChild.Add(t.Id))
                 continue;
             if (!childrenByParent.TryGetValue(t.ParentId!, out var siblings))
                 childrenByParent[t.ParentId!] = siblings = [];
             siblings.Add(t);
         }
 
-        // Pull in every in-snapshot descendant of a pinned task (transitively — grandchildren included),
-        // except tasks that are themselves pinned (they already ride in via `pinned`). These are exactly
-        // the rows that must move out of the to-do set and nest under their pinned ancestor instead.
+        // Pull in every descendant of a pinned task — in-snapshot or foreign (#85), transitively so
+        // grandchildren are included — except tasks that are themselves pinned (they already ride in via
+        // `pinned`). These are exactly the rows that must move out of the to-do set and nest under their
+        // pinned ancestor instead.
         var nested = new HashSet<string>(StringComparer.Ordinal);
         var pulledTasks = new List<TaskItem>();
         var walked = new HashSet<string>(pinnedIds, StringComparer.Ordinal);
