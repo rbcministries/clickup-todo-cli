@@ -830,8 +830,11 @@ public sealed class TodoApp
     /// <c>claude</c> session in a new terminal (#26). Runs off the UI thread (file write + process
     /// launch), then reports the outcome on the status line; the detail view and background refresh
     /// keep running. The working directory and prompt preamble are resolved from the AgentDispatch
-    /// settings on the UI thread and threaded into the dispatch (#91); the task-derived working-dir
-    /// candidate lands in #98, so it's <c>null</c> here (Home/Fixed modes already resolve).
+    /// settings on the UI thread and threaded into the dispatch (#91). In the default
+    /// <see cref="AgentWorkingDirectory.TaskDerived"/> mode the launch starts in the saved base
+    /// working directory (#92, created on first use) and the prompt instructs the agent to write
+    /// outputs to a per-task <c>./{custom-id}</c> subdir (#98); Home/Fixed modes resolve to their
+    /// own dir with no subdir instruction.
     /// </summary>
     private void DispatchAgent(TaskDetail detail, IReadOnlyList<CommentItem> comments, string prompt)
     {
@@ -847,11 +850,18 @@ public sealed class TodoApp
 
         // Resolve the dispatch settings on the UI thread before the background hand-off (#91).
         // Capture _agent locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap
-        // the instance mid-dispatch. The task-derived working-dir candidate is null until #98.
+        // the instance mid-dispatch.
         var agent = _agent;
         var settings = _config.AgentDispatch;
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: null, homeDirectory: home);
+        // The task-derived candidate is the saved base working directory (#92); ResolveWorkingDirectory
+        // only uses it in TaskDerived mode, so Home/Fixed are unaffected. In TaskDerived mode we also
+        // seed a per-task ./{custom-id} output-subdir instruction so each task's work stays separated
+        // inside the shared base dir (#98).
+        var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
+        var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: home);
+        var isTaskDerived = settings.WorkingDirectory == AgentWorkingDirectory.TaskDerived;
+        var outputSubdir = isTaskDerived ? AgentPromptComposer.OutputSubdirectoryToken(detail) : null;
         var preamble = settings.PromptPreamble;
 
         Flash($"Launching Claude for '{detail.Name}'…");
@@ -859,7 +869,13 @@ public sealed class TodoApp
         {
             try
             {
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, preamble);
+                // A task-derived launch starts in the base dir; create it on first use (#98) so
+                // Process.Start doesn't fail on a not-yet-existing path. Home/Fixed dirs are the
+                // user's own (Home always exists; a Fixed dir is their explicit external choice).
+                if (isTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
+                    Directory.CreateDirectory(workingDir);
+
+                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, preamble, outputSubdir);
                 Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)
