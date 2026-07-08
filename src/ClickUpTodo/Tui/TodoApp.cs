@@ -198,7 +198,7 @@ public sealed class TodoApp
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · →/← expand/collapse · Ctrl+Q quit · type to search",
+            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · →/← expand/collapse (Ctrl: all) · Ctrl+Q quit · type to search",
         };
 
         _window.Add(_frame, _statusLabel, help);
@@ -232,6 +232,23 @@ public sealed class TodoApp
                 case KeyCode.C: // Ctrl+C as a quit alias (the OS/terminal may intercept it first).
                     key.Handled = true;
                     Application.RequestStop();
+                    break;
+                case KeyCode.CursorRight:
+                    // Ctrl+→/Ctrl+← = expand-all / collapse-all — the bulk counterpart to the per-parent
+                    // →/← fold (#83). Active only while the subtasks view is on; off, they stay unhandled
+                    // and fall through to the ListView's native handling (like the bare arrows).
+                    if (_config.View.ShowSubtasks && _activeScreen is null)
+                    {
+                        key.Handled = true;
+                        ExpandAll();
+                    }
+                    break;
+                case KeyCode.CursorLeft:
+                    if (_config.View.ShowSubtasks && _activeScreen is null)
+                    {
+                        key.Handled = true;
+                        CollapseAll();
+                    }
                     break;
             }
             return;
@@ -559,6 +576,75 @@ public sealed class TodoApp
         {
             _list.SelectedItem = j; // context parent (not foldable) — just select it
         }
+    }
+
+    /// <summary>
+    /// Ctrl+→ in the subtasks view (#83): expand every foldable parent in the current view at once.
+    /// Foldable parents are derived from the whole candidate universe (the snapshot ∪ pulled-in foreign
+    /// subtasks), not just the rendered rows, so parents whose collapsed subtree is currently hidden are
+    /// reached too. Extra ids that aren't foldable in a given section are harmlessly ignored by the
+    /// arranger. The selected row stays visible (expanding only reveals more), so the cursor is kept.
+    /// </summary>
+    private void ExpandAll()
+    {
+        var foldable = SubtaskArranger.FoldableParentIds(CandidateUniverse());
+        if (foldable.Count == 0)
+        {
+            Flash("No subtasks to expand.");
+            return;
+        }
+        _expanded.UnionWith(foldable);
+        Render(keepTaskId: CurrentTask()?.Id);
+        Flash("Expanded all subtasks.");
+    }
+
+    /// <summary>
+    /// Ctrl+← in the subtasks view (#83): collapse every parent at once by clearing the expanded set (the
+    /// default state). The cursor is kept on the selected task's top-level ancestor, since a nested
+    /// child's own row disappears once its parents fold; a child under a (never-folded) context parent
+    /// stays put.
+    /// </summary>
+    private void CollapseAll()
+    {
+        if (_expanded.Count == 0)
+        {
+            Flash("All subtasks already collapsed.");
+            return;
+        }
+        var keep = TopLevelAncestorId(CurrentTask()?.Id);
+        _expanded.Clear();
+        Render(keepTaskId: keep);
+        Flash("Collapsed all subtasks.");
+    }
+
+    /// <summary>Every task that can appear in the subtasks view — the snapshot plus the teammate-owned
+    /// subtasks pulled in under my parents (#70) — the universe over which foldable parents are found.</summary>
+    private IReadOnlyList<TaskItem> CandidateUniverse()
+    {
+        if (_foreignSubtasks.Count == 0)
+            return _all;
+        var universe = new List<TaskItem>(_all.Count + _foreignSubtasks.Count);
+        universe.AddRange(_all);
+        universe.AddRange(_foreignSubtasks.Values);
+        return universe;
+    }
+
+    /// <summary>Walks up the parent chain (within the candidate universe) to the top-most ancestor of
+    /// <paramref name="taskId"/>, so collapse-all can land the cursor on a row that stays visible. Returns
+    /// the id unchanged when it has no in-universe parent, or null when null is passed. Cycle-safe.</summary>
+    private string? TopLevelAncestorId(string? taskId)
+    {
+        if (taskId is null)
+            return null;
+        var byId = CandidateUniverse().ToDictionary(t => t.Id, StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var current = taskId;
+        while (seen.Add(current)
+               && byId.TryGetValue(current, out var task)
+               && !string.IsNullOrEmpty(task.ParentId)
+               && byId.ContainsKey(task.ParentId!))
+            current = task.ParentId!;
+        return current;
     }
 
     // ── Actions ────────────────────────────────────────────────────────────
