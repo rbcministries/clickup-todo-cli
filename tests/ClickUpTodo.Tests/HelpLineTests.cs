@@ -1,4 +1,5 @@
 using ClickUpTodo.Tui.Screens;
+using Terminal.Gui.Text;
 
 namespace ClickUpTodo.Tests;
 
@@ -27,11 +28,15 @@ public sealed class HelpLineTests
     {
         const string expected =
             "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · "
-            + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · →/← expand/collapse · Ctrl+→/← all · "
-            + "Ctrl+Q quit · type to search";
+            + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 feed · →/← expand/collapse · "
+            + "Ctrl+→/← all · Ctrl+Q quit · type to search";
 
         Assert.Equal(expected, HelpLine.Format(HelpItemSets.MainList));
     }
+
+    [Fact]
+    public void Format_NotificationsFeed_RendersF1AndEscOnly()
+        => Assert.Equal("F1 help · Esc back", HelpLine.Format(HelpItemSets.NotificationsFeed));
 
     [Fact]
     public void ForActiveScreen_PrefersScreenItems_WhenPresent()
@@ -64,6 +69,7 @@ public sealed class HelpLineTests
         HelpItemSets.Settings,
         HelpItemSets.FilterSortGroup,
         HelpItemSets.StatusPicker,
+        HelpItemSets.NotificationsFeed,
         HelpItemSets.Help,
     };
 
@@ -80,6 +86,7 @@ public sealed class HelpLineTests
         HelpItemSets.Settings,
         HelpItemSets.FilterSortGroup,
         HelpItemSets.StatusPicker,
+        HelpItemSets.NotificationsFeed,
     };
 
     [Theory]
@@ -95,4 +102,89 @@ public sealed class HelpLineTests
     [Fact]
     public void HelpSet_DoesNotOfferF1_SinceItIsTheHelp()
         => Assert.DoesNotContain(HelpItemSets.Help, i => i.Key == "F1");
+
+    // ── #H2 / #104: responsive width fitting ─────────────────────────────────────────────────
+
+    /// <summary>Column-aware measure matching the host (Terminal.Gui's grapheme-aware GetColumns).</summary>
+    private static int Cols(string s) => s.GetColumns();
+
+    /// <summary>Naïve char-count measure — the wrong one; kept only to contrast against <see cref="Cols"/>.</summary>
+    private static int Chars(string s) => s.Length;
+
+    [Fact]
+    public void Fit_ReturnsSetUnchanged_WhenEverythingFits()
+    {
+        // Far wider than the 205-column full main-list footer.
+        var result = HelpLine.Fit(HelpItemSets.MainList, width: 1000, Cols);
+
+        Assert.Same(HelpItemSets.MainList, result);
+    }
+
+    [Fact]
+    public void Fit_EmptySet_ReturnsEmpty()
+        => Assert.Empty(HelpLine.Fit([], width: 5, Cols));
+
+    [Fact]
+    public void Fit_Truncates_KeepingLeadingPrefixThenFallbackLast()
+    {
+        // At 70 columns the main-list footer fits its first four items plus the reserved fallback
+        // ("↑/↓ move · →| next section · ␣ status · ↩ detail · F1 Help + Shortcuts" = 70 cols).
+        var result = HelpLine.Fit(HelpItemSets.MainList, width: 70, Cols);
+
+        Assert.Equal(HelpLine.HelpFallback, result[^1]);
+        Assert.Equal(HelpItemSets.MainList.Take(4), result.Take(result.Count - 1));
+        Assert.True(Cols(HelpLine.Format(result)) <= 70);
+    }
+
+    [Fact]
+    public void Fit_ShowsMoreItems_AsWidthGrows()
+    {
+        var narrow = HelpLine.Fit(HelpItemSets.MainList, width: 70, Cols);
+        var wide = HelpLine.Fit(HelpItemSets.MainList, width: 94, Cols);
+
+        // Both end with the fallback (still truncating), and the wider line carries strictly more.
+        Assert.Equal(HelpLine.HelpFallback, narrow[^1]);
+        Assert.Equal(HelpLine.HelpFallback, wide[^1]);
+        Assert.True(wide.Count > narrow.Count);
+        Assert.True(Cols(HelpLine.Format(wide)) <= 94);
+    }
+
+    [Fact]
+    public void Fit_VeryNarrow_ShowsOnlyTheFallback()
+    {
+        // Narrower than the 19-column fallback itself: it's still returned (and clipped by the host).
+        var result = HelpLine.Fit(HelpItemSets.MainList, width: 10, Cols);
+
+        HelpItem[] onlyFallback = [HelpLine.HelpFallback];
+        Assert.Equal(onlyFallback, result);
+    }
+
+    [Fact]
+    public void Fit_NeverDuplicatesF1_TheFallbackSubsumesTheScreenF1Item()
+    {
+        // 120 columns truncates past the main list's own "F1 help" item (index 7), which must be
+        // dropped so the trailing "F1 Help + Shortcuts" fallback is the only F1 on the line.
+        var result = HelpLine.Fit(HelpItemSets.MainList, width: 120, Cols);
+
+        Assert.Equal(HelpLine.HelpFallback, result[^1]);
+        Assert.Single(result, i => i.Key == "F1");
+    }
+
+    [Fact]
+    public void Fit_UsesColumnWidth_NotCharCount_ForWideGlyphs()
+    {
+        // "中" is a wide glyph: 2 display columns but a single UTF-16 char. This footer renders as
+        // "中中 中中" — 9 columns but only 5 chars — so a char-count measure and a column measure
+        // disagree at width 6, and the fit must follow the column measure.
+        IReadOnlyList<HelpItem> items = [new("中中", "中中")];
+
+        var byChars = HelpLine.Fit(items, width: 6, Chars);
+        var byColumns = HelpLine.Fit(items, width: 6, Cols);
+
+        // Char-count wrongly thinks it fits (5 ≤ 6) and leaves the line unchanged...
+        Assert.Same(items, byChars);
+        // ...while the column measure correctly truncates (9 > 6) down to just the fallback.
+        HelpItem[] onlyFallback = [HelpLine.HelpFallback];
+        Assert.Equal(onlyFallback, byColumns);
+    }
 }

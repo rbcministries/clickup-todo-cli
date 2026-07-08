@@ -265,6 +265,7 @@ public sealed class AgentPromptComposerTests
         var known = AgentPromptComposer.Placeholders.Select(p => p.Name).ToHashSet();
         Assert.Contains("userPrompt", known);
         Assert.Contains("contextJson", known);
+        Assert.Contains("outputDirInstruction", known);
     }
 
     // ── #27 → #100 preamble migration helper ────────────────────────────────────────
@@ -274,9 +275,9 @@ public sealed class AgentPromptComposerTests
     {
         var template = AgentPromptComposer.DefaultTemplateWithPreamble("  Only use the JSON.  ");
 
-        Assert.Equal("{userPrompt}\n\nOnly use the JSON.\n\n{contextJson}", template);
+        Assert.Equal("{userPrompt}\n\n{outputDirInstruction}Only use the JSON.\n\n{contextJson}", template);
         Assert.DoesNotContain(AgentPromptComposer.Preamble, template);
-        // Renders like the old custom-preamble output.
+        // Renders like the old custom-preamble output (no output subdir ⇒ {outputDirInstruction} empty).
         var composed = AgentPromptComposer.Compose(Task(), [], "go", template);
         Assert.StartsWith("go\n\nOnly use the JSON.\n\n{", composed);
     }
@@ -287,6 +288,108 @@ public sealed class AgentPromptComposerTests
     [InlineData("   ")]
     public void DefaultTemplateWithPreamble_BlankValue_YieldsTheUnchangedDefault(string? preamble)
         => Assert.Equal(AgentPromptComposer.DefaultTemplate, AgentPromptComposer.DefaultTemplateWithPreamble(preamble));
+
+    // ── output subdirectory (task-derived working dir, #98) ─────────────────────────
+
+    [Fact]
+    public void OutputSubdirectoryToken_PrefersCustomId_WhenSet()
+        => Assert.Equal("TEAM-42", AgentPromptComposer.OutputSubdirectoryToken(Task(id: "abc123", customId: "TEAM-42")));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void OutputSubdirectoryToken_FallsBackToTaskId_WhenCustomIdBlank(string? customId)
+        => Assert.Equal("abc123", AgentPromptComposer.OutputSubdirectoryToken(Task(id: "abc123", customId: customId)));
+
+    [Fact]
+    public void OutputSubdirectoryToken_BothIdsBlank_FallsBackToSafeTokenDefault()
+        => Assert.Equal("task", AgentPromptComposer.OutputSubdirectoryToken(Task(id: "", customId: null)));
+
+    [Fact]
+    public void OutputSubdirectoryToken_SanitizesUnsafeChars_NoPathTraversal()
+    {
+        var token = AgentPromptComposer.OutputSubdirectoryToken(Task(customId: "../../etc/p w?d"));
+        Assert.DoesNotContain("..", token);
+        Assert.DoesNotContain('/', token);
+        Assert.DoesNotContain('\\', token);
+        // Letters/digits survive; every other char collapses to '-' (mirrors the temp-file token).
+        Assert.Equal("------etc-p-w-d", token);
+    }
+
+    [Fact]
+    public void Compose_OutputSubdirectory_InsertsInstructionBetweenPromptAndPreamble()
+    {
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", outputSubdirectory: "TEAM-42");
+
+        Assert.StartsWith(
+            $"triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n{AgentPromptComposer.Preamble}\n\n{{",
+            composed);
+    }
+
+    [Fact]
+    public void Compose_OutputSubdirectory_IsTrimmed()
+    {
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", outputSubdirectory: "  TEAM-42  ");
+        Assert.StartsWith("triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n", composed);
+    }
+
+    [Fact]
+    public void Compose_OutputSubdirectory_EmptyPrompt_YieldsLeadingBlankThenInstruction()
+    {
+        // With the #100 template model an empty {userPrompt} leaves the template's leading "\n\n"
+        // (consistent with Compose_EmptyPrompt_StillEmitsPreambleAndJson), then the instruction
+        // paragraph. (Pre-#100 #98 special-cased this to drop the blank; templatization unifies it.)
+        var composed = AgentPromptComposer.Compose(Task(), [], "", outputSubdirectory: "TEAM-42");
+        Assert.StartsWith(
+            $"\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n{AgentPromptComposer.Preamble}\n\n{{",
+            composed);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Compose_BlankOutputSubdirectory_IsByteIdenticalToNoArg(string? subdir)
+    {
+        var expected = AgentPromptComposer.Compose(Task(), [Comment()], "triage");
+        var actual = AgentPromptComposer.Compose(Task(), [Comment()], "triage", outputSubdirectory: subdir);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void Compose_OutputSubdirectory_CombinesWithCustomTemplatePreamble()
+    {
+        // A custom preamble is now expressed as a template; the #98 output-subdir instruction still
+        // slots in ahead of it via {outputDirInstruction}.
+        var template = AgentPromptComposer.DefaultTemplateWithPreamble("Use only the JSON.");
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", template, outputSubdirectory: "TEAM-42");
+        Assert.StartsWith(
+            "triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\nUse only the JSON.\n\n{",
+            composed);
+    }
+
+    [Fact]
+    public void WritePromptFile_HonorsOutputSubdirectory()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "clickup-todo-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var path = AgentPromptComposer.WritePromptFile(Task(), [], "triage", dir, outputSubdirectory: "TEAM-42");
+            Assert.Equal(
+                AgentPromptComposer.Compose(Task(), [], "triage", outputSubdirectory: "TEAM-42"),
+                File.ReadAllText(path));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void OutputSubdirectoryToken_NullTask_Throws()
+        => Assert.Throws<ArgumentNullException>(() => AgentPromptComposer.OutputSubdirectoryToken(null!));
 
     // ── task subset ──────────────────────────────────────────────────────────────
 

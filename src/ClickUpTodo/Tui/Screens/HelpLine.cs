@@ -21,6 +21,53 @@ public static class HelpLine
         => string.Join(" · ", items.Select(i => $"{i.Key} {i.Label}"));
 
     /// <summary>
+    /// The trailing item shown when the full set doesn't fit (#H2/#104): <c>F1 Help + Shortcuts</c>
+    /// opens the full list via the F1 <c>HelpScreen</c>, which #103 made reachable from every context.
+    /// </summary>
+    public static readonly HelpItem HelpFallback = new("F1", "Help + Shortcuts");
+
+    /// <summary>
+    /// Fits <paramref name="items"/> to <paramref name="width"/> display columns (#H2/#104). When the
+    /// full line fits, returns <paramref name="items"/> unchanged. When it doesn't, returns the longest
+    /// leading prefix that fits <em>alongside</em> a reserved trailing <see cref="HelpFallback"/>, with
+    /// the fallback appended — so <c>F1 Help + Shortcuts</c> is always the last thing shown when
+    /// truncated and the full list stays one keypress away. Item order is priority order: the leading
+    /// (highest-value) shortcuts are kept first. Any existing F1-keyed item is dropped from the
+    /// candidates while truncating (the fallback subsumes it) so F1 never renders twice. At a width too
+    /// narrow for even the fallback, returns just <see cref="HelpFallback"/> (it still renders, clipped
+    /// by the host) — the "only F1 fits" case.
+    /// <para>
+    /// <paramref name="measure"/> returns the display-column width of a rendered string; callers pass a
+    /// grapheme/column-aware measure (Terminal.Gui's <c>StringExtensions.GetColumns</c>) so the wide
+    /// glyphs/emoji already in the footers count as their true column width, not their char count. Kept
+    /// free of Terminal.Gui (the measure is injected) so the fit rule stays unit-testable.
+    /// </para>
+    /// </summary>
+    public static IReadOnlyList<HelpItem> Fit(
+        IReadOnlyList<HelpItem> items, int width, Func<string, int> measure)
+    {
+        if (items.Count == 0 || measure(Format(items)) <= width)
+            return items;
+
+        // Truncating: reserve the F1 fallback as the last item and keep the longest leading prefix that
+        // still fits with it. Skip any existing F1 item — the fallback already covers "F1 → Help".
+        var kept = new List<HelpItem>();
+        foreach (var item in items)
+        {
+            if (item.Key == HelpFallback.Key)
+                continue;
+            List<HelpItem> candidate = [.. kept, item, HelpFallback];
+            if (measure(Format(candidate)) <= width)
+                kept.Add(item);
+            else
+                break;
+        }
+
+        kept.Add(HelpFallback);
+        return kept;
+    }
+
+    /// <summary>
     /// The selection rule: the active screen's items when a screen is open (and it declares any),
     /// otherwise the list's items. A screen that declares an empty set falls back to the list's set
     /// rather than showing a blank footer.
@@ -53,6 +100,7 @@ public static class HelpItemSets
         new("F2", "⚙"),
         new("F3", "filter/sort/group"),
         new("F4", "subtasks"),
+        new("F5", "feed"),
         new("→/←", "expand/collapse"),
         new("Ctrl+→/←", "all"),
         new("Ctrl+Q", "quit"),
@@ -64,7 +112,7 @@ public static class HelpItemSets
     [
         new("Tab", "switch tab"),
         new("↑/↓ PgUp/PgDn", "scroll"),
-        new("A", "dispatch to Claude"),
+        new("Ctrl+A", "dispatch to Claude"),
         new("Ctrl+B", "browser"),
         new("F1", "help"),
         new("Esc", "back"),
@@ -105,6 +153,14 @@ public static class HelpItemSets
         new("Ctrl+Alt+R", "reset to default"),
         new("F1", "help"),
         new("Esc", "cancel"),
+    ];
+
+    /// <summary>The mentions &amp; comments feed screen (F5, #110). Scaffold set — scroll / open-task
+    /// items arrive with the data-bearing follow-ups (#114/#115).</summary>
+    public static readonly IReadOnlyList<HelpItem> NotificationsFeed =
+    [
+        new("F1", "help"),
+        new("Esc", "back"),
     ];
 
     /// <summary>The help screen itself (no F1 — it is the help).</summary>

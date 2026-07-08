@@ -9,6 +9,7 @@ using ClickUpTodo.Tui.Screens;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
+using Terminal.Gui.Text;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using Attribute = Terminal.Gui.Drawing.Attribute;
@@ -107,6 +108,10 @@ public sealed class TodoApp
     // _contextParents. They render as not-mine rows nested under their parent and aren't my work
     // (status/pin are blocked on them).
     private volatile IReadOnlyDictionary<string, TaskItem> _foreignSubtasks = EmptyParents;
+    // Set when the adaptive foreign-subtask fetch hit a round-trip cap (#87) and omitted some subtasks;
+    // surfaced as a note on the post-refresh status line so the truncation isn't silent. Written in
+    // FetchAsync (off-thread) and read on the UI thread in OnTasksLoaded, so volatile like _foreignSubtasks.
+    private volatile bool _foreignSubtasksTruncated;
     // Ids of the non-pinned subtasks pulled into the Current Focus section (nested under a pinned
     // parent, #75). Set during Render; read by UpdateTaskRow so an in-place status update treats a
     // pulled-in Focus row like a Focus row (keeps every segment) rather than a to-do row.
@@ -184,9 +189,17 @@ public sealed class TodoApp
         // Pull in a parent's teammate-owned subtasks (regardless of assignee) only when both the
         // subtasks view and the ShowAllSubtasksOfAssignedParents setting are on (#70). Off → skip the
         // extra list-scoped round-trips. Keyed by id for fast Render/guard lookups.
-        _foreignSubtasks = _config.View.ShowSubtasks && _config.View.ShowAllSubtasksOfAssignedParents
-            ? (await _tasks.ResolveForeignSubtasksAsync(tasks, ct)).ToDictionary(t => t.Id, StringComparer.Ordinal)
-            : EmptyParents;
+        if (_config.View.ShowSubtasks && _config.View.ShowAllSubtasksOfAssignedParents)
+        {
+            var foreign = await _tasks.ResolveForeignSubtasksAsync(tasks, ct: ct);
+            _foreignSubtasks = foreign.Subtasks.ToDictionary(t => t.Id, StringComparer.Ordinal);
+            _foreignSubtasksTruncated = foreign.Truncated;
+        }
+        else
+        {
+            _foreignSubtasks = EmptyParents;
+            _foreignSubtasksTruncated = false;
+        }
         // List colors are only needed to tint headers when grouping by List; skip the fetches otherwise.
         _listColors = _config.View.GroupField == TaskField.List
             ? await _tasks.ResolveListColorsAsync(tasks.Select(t => t.ListId ?? ""), ct)
@@ -223,6 +236,10 @@ public sealed class TodoApp
         };
 
         _window.Add(_frame, _statusLabel, _helpLabel);
+        // Re-fit the help line whenever the window re-lays out (i.e. on terminal resize). Terminal.Gui
+        // 2.4 has no static Application size-changed event; SubViewsLaidOut is the framework's
+        // post-layout hook. UpdateHelpLine only reassigns the text when it changed, so this can't loop.
+        _window.SubViewsLaidOut += (_, _) => UpdateHelpLine();
         _list.SetFocus();
     }
 
@@ -325,7 +342,25 @@ public sealed class TodoApp
                 key.Handled = true;
                 ToggleShowSubtasks();
                 break;
+            case KeyCode.F5:
+                key.Handled = true;
+                OpenNotificationsFeed();
+                break;
         }
+    }
+
+    /// <summary>
+    /// F5 — opens the mentions &amp; comments feed screen (#110, epic #109). Currently a walking-skeleton
+    /// scaffold rendering an empty-state placeholder; the data layers land in #112–#116. Opens through
+    /// the shared screen seam (guarded on <see cref="ActiveScreen"/> like the other list-initiated opens)
+    /// with no result to read back.
+    /// </summary>
+    private void OpenNotificationsFeed()
+    {
+        if (ActiveScreen is not null)
+            return;
+
+        ShowScreen(new NotificationsFeedScreen(), static () => { });
     }
 
     /// <summary>Toggles the subtasks view (F4, #46) — hidden vs. shown nested — and persists it.</summary>
@@ -346,6 +381,7 @@ public sealed class TodoApp
         {
             _contextParents = EmptyParents;
             _foreignSubtasks = EmptyParents; // no nesting when subtasks are hidden (#70 is a no-op then)
+            _foreignSubtasksTruncated = false;
         }
         Render(keepTaskId: CurrentTask()?.Id);
         _signature = CurrentSignature(_all);
@@ -389,7 +425,10 @@ public sealed class TodoApp
         var pullChildrenNowOn = result.ShowAllSubtasksOfAssignedParents && result.ShowSubtasks;
         var pullChildrenNeedsFetch = pullChildrenNowOn && !previous.ShowAllSubtasksOfAssignedParents;
         if (!result.ShowAllSubtasksOfAssignedParents)
+        {
             _foreignSubtasks = EmptyParents;
+            _foreignSubtasksTruncated = false;
+        }
 
         if (assigneeChanged || pullChildrenNeedsFetch)
         {
@@ -566,9 +605,25 @@ public sealed class TodoApp
         ShowScreen(new HelpScreen(), static () => { });
     }
 
-    /// <summary>Sets the shared help line to the active screen's shortcuts, or the list's when idle.</summary>
+    /// <summary>
+    /// Sets the shared help line to the active screen's shortcuts (or the list's when idle), fitted to
+    /// the footer's current width (#H2/#104): when they don't all fit, the trailing item becomes
+    /// <c>F1 Help + Shortcuts</c>. Widths are measured column-aware (<c>GetColumns</c>) so the footer's
+    /// emoji/wide glyphs count correctly. Re-runs on resize via <c>_window.SubViewsLaidOut</c>; the text
+    /// is only reassigned when it actually changes, so that layout pass can't loop.
+    /// </summary>
     private void UpdateHelpLine()
-        => _helpLabel.Text = HelpLine.Format(HelpLine.ForActiveScreen(ActiveScreen?.HelpItems, HelpItemSets.MainList));
+    {
+        var items = HelpLine.ForActiveScreen(ActiveScreen?.HelpItems, HelpItemSets.MainList);
+        // The label's laid-out content width. Before the first layout it's 0 — render the full set and
+        // let the first SubViewsLaidOut re-fit it.
+        var width = _helpLabel.Frame.Width;
+        var text = width > 0
+            ? HelpLine.Format(HelpLine.Fit(items, width, static s => s.GetColumns()))
+            : HelpLine.Format(items);
+        if (_helpLabel.Text != text)
+            _helpLabel.Text = text;
+    }
 
     /// <summary>The task on the selected row, or null if a header row (or nothing) is selected.</summary>
     private TaskItem? CurrentTask()
@@ -820,9 +875,10 @@ public sealed class TodoApp
                     if (ActiveScreen is not null)
                         return;
                     var screen = new TaskDetailScreen(detail, comments);
-                    // A (in the detail view) → compose + launch an interactive claude session (#26).
-                    // The detail view stays open; dispatch runs off the UI thread so the TUI stays live.
-                    screen.AgentDispatchRequested += (_, prompt) => DispatchAgent(detail, comments, prompt);
+                    // Ctrl+A (in the detail view) → compose + launch an interactive claude session
+                    // (#26/#93). The detail view stays open; dispatch runs off the UI thread so the TUI
+                    // stays live. Only the prompt is consumed today; #94/#95/#97 add the pane's options.
+                    screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request.Prompt);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -844,8 +900,11 @@ public sealed class TodoApp
     /// <c>claude</c> session in a new terminal (#26). Runs off the UI thread (file write + process
     /// launch), then reports the outcome on the status line; the detail view and background refresh
     /// keep running. The working directory and prompt preamble are resolved from the AgentDispatch
-    /// settings on the UI thread and threaded into the dispatch (#91); the task-derived working-dir
-    /// candidate lands in #98, so it's <c>null</c> here (Home/Fixed modes already resolve).
+    /// settings on the UI thread and threaded into the dispatch (#91). In the default
+    /// <see cref="AgentWorkingDirectory.TaskDerived"/> mode the launch starts in the saved base
+    /// working directory (#92, created on first use) and the prompt instructs the agent to write
+    /// outputs to a per-task <c>./{custom-id}</c> subdir (#98); Home/Fixed modes resolve to their
+    /// own dir with no subdir instruction.
     /// </summary>
     private void DispatchAgent(TaskDetail detail, IReadOnlyList<CommentItem> comments, string prompt)
     {
@@ -861,11 +920,19 @@ public sealed class TodoApp
 
         // Resolve the dispatch settings on the UI thread before the background hand-off (#91).
         // Capture _agent locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap
-        // the instance mid-dispatch. The task-derived working-dir candidate is null until #98.
+        // the instance mid-dispatch.
         var agent = _agent;
         var settings = _config.AgentDispatch;
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: null, homeDirectory: home);
+        // The task-derived candidate is the saved base working directory (#92); ResolveWorkingDirectory
+        // only uses it in TaskDerived mode, so Home/Fixed are unaffected. In TaskDerived mode we also
+        // seed a per-task ./{custom-id} output-subdir instruction so each task's work stays separated
+        // inside the shared base dir (#98). The prompt template (#100) is threaded in as the composer's
+        // template (blank ⇒ default); its {outputDirInstruction} placeholder consumes the subdir.
+        var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
+        var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: home);
+        var isTaskDerived = settings.WorkingDirectory == AgentWorkingDirectory.TaskDerived;
+        var outputSubdir = isTaskDerived ? AgentPromptComposer.OutputSubdirectoryToken(detail) : null;
         var template = settings.PromptTemplate;
 
         Flash($"Launching Claude for '{detail.Name}'…");
@@ -873,7 +940,13 @@ public sealed class TodoApp
         {
             try
             {
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template);
+                // A task-derived launch starts in the base dir; create it on first use (#98) so
+                // Process.Start doesn't fail on a not-yet-existing path. Home/Fixed dirs are the
+                // user's own (Home always exists; a Fixed dir is their explicit external choice).
+                if (isTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
+                    Directory.CreateDirectory(workingDir);
+
+                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir);
                 Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)
@@ -1030,6 +1103,10 @@ public sealed class TodoApp
     {
         _all = tasks;
         _status = $"Updated {DateTime.Now:HH:mm:ss} · {tasks.Count} task(s) · refresh every {_config.RefreshSeconds}s";
+        // Surface an adaptive-fetch cap (#87) on the persisted status line — a Flash here would be
+        // repainted away by this same success path, so it's folded into the line the path writes.
+        if (_foreignSubtasksTruncated)
+            _status += " · some subtasks omitted";
 
         // Warm the status cache for the lists currently on screen (best-effort, off the UI thread), so
         // pressing Space opens the picker from cache instead of paying a round-trip (#10).

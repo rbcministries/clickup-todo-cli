@@ -25,9 +25,10 @@ public sealed record PromptTemplateEditRequest(string CurrentTemplate, Action<st
 
 /// <summary>
 /// A full-window settings screen. The left column changes the refresh interval; the right column
-/// configures agent dispatch (#27) — preferred terminal, <c>claude</c> executable + extra args, and
-/// working directory. The dispatch prompt template (#100) is edited on its own screen. Hiding
-/// statuses is no longer here — it's a
+/// is the consolidated <b>Dispatch</b> section (#27, #101) — preferred terminal, <c>claude</c>
+/// executable + extra args, working directory, the per-dispatch-pane defaults (#94 session mode,
+/// #97 post-to-Comments) the pane initializes from, and a button to edit the prompt template (#100)
+/// on its own screen. Hiding statuses is no longer here — it's a
 /// regular F3 filter rule (<c>Status IS NOT …</c>) as of #69. On Save it exposes the new values via
 /// <see cref="Result"/> and closes; Cancel/Esc close with <see cref="Result"/> left null. The host
 /// reads <see cref="Result"/> in its close handler.
@@ -98,9 +99,9 @@ public sealed class SettingsScreen : Screen
             Text = "Blank = ~/ClickUp-Tasks (≠ Fixed dir).",
         };
 
-        // ── Right column: agent dispatch (#27) ─────────────────────────────────
+        // ── Right column: Dispatch (#27, consolidated in #101) ──────────────────
         var rightX = Pos.Percent(50) + 1;
-        var agentHeader = new Label { X = rightX, Y = 0, Text = "─ Agent dispatch (A) ─" };
+        var dispatchHeader = new Label { X = rightX, Y = 0, Text = "─ Dispatch ─" };
 
         var exeLabel = new Label { X = rightX, Y = 1, Text = "Claude executable (blank = claude):" };
         var exeField = new TextField { X = rightX, Y = 2, Width = Dim.Fill(2), Text = dispatch.ClaudeExecutable };
@@ -134,6 +135,24 @@ public sealed class SettingsScreen : Screen
         templateButton.Accepting += (_, _) =>
             EditPromptTemplateRequested?.Invoke(this, new PromptTemplateEditRequest(_promptTemplate, t => _promptTemplate = t));
 
+        // Dispatch-pane defaults (#101): the per-dispatch toggles #94/#97 add to the pane initialize
+        // from these. Cycle buttons mirror the terminal/working-dir buttons above.
+        var sessionMode = dispatch.DefaultSessionMode;
+        var sessionModeButton = new Button { X = rightX, Y = 15, Text = SessionModeText(sessionMode) };
+        sessionModeButton.Accepting += (_, _) =>
+        {
+            sessionMode = sessionMode == AgentSessionMode.Interactive ? AgentSessionMode.OneOff : AgentSessionMode.Interactive;
+            sessionModeButton.Text = SessionModeText(sessionMode);
+        };
+
+        var postToComments = dispatch.DefaultPostResultsToComments;
+        var postToCommentsButton = new Button { X = rightX, Y = 16, Text = PostToCommentsText(postToComments) };
+        postToCommentsButton.Accepting += (_, _) =>
+        {
+            postToComments = !postToComments;
+            postToCommentsButton.Text = PostToCommentsText(postToComments);
+        };
+
         var save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var cancel = new Button { X = Pos.Right(save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         save.Accepting += (_, _) =>
@@ -148,6 +167,8 @@ public sealed class SettingsScreen : Screen
                     ExtraArgs = SettingsForm.ParseExtraArgs(argsField.Text),
                     WorkingDirectory = workingDir,
                     FixedWorkingDirectory = fixedDirField.Text?.Trim() ?? "",
+                    DefaultSessionMode = sessionMode,
+                    DefaultPostResultsToComments = postToComments,
                     PromptTemplate = _promptTemplate,
                 });
             Close();
@@ -173,8 +194,9 @@ public sealed class SettingsScreen : Screen
         Add([
             refreshLabel, _refreshField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
-            agentHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
+            dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, templateButton,
+            sessionModeButton, postToCommentsButton,
             save, cancel,
         ]);
     }
@@ -198,4 +220,12 @@ public sealed class SettingsScreen : Screen
         AgentWorkingDirectory.Fixed => "Fixed",
         _ => "Task-derived",
     };
+
+    private static string SessionModeText(AgentSessionMode m) => "Default session: " + m switch
+    {
+        AgentSessionMode.OneOff => "One-off",
+        _ => "Interactive",
+    };
+
+    private static string PostToCommentsText(bool on) => "Default post to Comments: " + (on ? "On" : "Off");
 }
