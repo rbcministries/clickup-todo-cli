@@ -142,4 +142,24 @@ public static class SubtaskArranger
 
         return result;
     }
+
+    /// <summary>
+    /// The ids of every <b>user-foldable parent</b> in <paramref name="tasks"/> — a task that is present
+    /// in the set and has at least one child (at any depth) also present. These are exactly the ids a
+    /// non-null <c>expanded</c> set toggles in <see cref="Arrange"/>: a present task with a present child
+    /// is emitted as a real row and marked <see cref="FoldState.Collapsed"/>/<see cref="FoldState.Expanded"/>.
+    /// Context parents (#46) are absent from <paramref name="tasks"/>, so they're never included — they
+    /// exist only to display a child and are never user-foldable. The result is independent of any current
+    /// fold state, so it drives an "expand all" that reaches parents whose collapsed subtree isn't in the
+    /// rendered rows (#83). Uses an ordinal comparer to match the caller's expanded-id set.
+    /// </summary>
+    public static IReadOnlySet<string> FoldableParentIds(IReadOnlyList<TaskItem> tasks)
+    {
+        var present = new HashSet<string>(tasks.Select(t => t.Id), StringComparer.Ordinal);
+        var foldable = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var t in tasks)
+            if (!string.IsNullOrEmpty(t.ParentId) && present.Contains(t.ParentId!))
+                foldable.Add(t.ParentId!);
+        return foldable;
+    }
 }

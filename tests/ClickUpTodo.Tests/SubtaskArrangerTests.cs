@@ -289,4 +289,98 @@ public sealed class SubtaskArrangerTests
         Assert.Equal(["P", "c"], rows.Select(r => r.Task.Id));
         Assert.Equal(FoldState.Collapsed, rows[1].Fold); // c is a collapsed parent
     }
+
+    // ── Foldable-parent ids for expand-all / collapse-all (#83) ──────────────
+
+    [Fact]
+    public void FoldableParentIds_FlatList_IsEmpty()
+    {
+        TaskItem[] tasks = [Task("a"), Task("b"), Task("c")];
+
+        Assert.Empty(SubtaskArranger.FoldableParentIds(tasks));
+    }
+
+    [Fact]
+    public void FoldableParentIds_ParentWithChild_IsJustTheParent()
+    {
+        TaskItem[] tasks = [Task("p"), Task("c", parent: "p"), Task("other")];
+
+        Assert.Equal(Expanded("p"), SubtaskArranger.FoldableParentIds(tasks));
+    }
+
+    [Fact]
+    public void FoldableParentIds_DeepChain_IncludesEveryIntermediateParent_AtAllDepths()
+    {
+        // a → b → c → d: a, b, c are foldable (each has a present child); d (leaf) is not. The point of
+        // #83 is that this reaches c even though c's subtree is hidden when a/b are collapsed.
+        TaskItem[] tasks = [Task("a"), Task("b", parent: "a"), Task("c", parent: "b"), Task("d", parent: "c")];
+
+        Assert.Equal(Expanded("a", "b", "c"), SubtaskArranger.FoldableParentIds(tasks));
+    }
+
+    [Fact]
+    public void FoldableParentIds_ParentWhoseOnlyChildIsAbsent_IsExcluded()
+    {
+        // 'p' is present but its child was filtered out of the view → p isn't foldable in this set.
+        TaskItem[] tasks = [Task("p"), Task("other")];
+
+        Assert.Empty(SubtaskArranger.FoldableParentIds(tasks));
+    }
+
+    [Fact]
+    public void FoldableParentIds_OrphanPointingAtMissingParent_IsExcluded()
+    {
+        // The referenced parent isn't present, so it can't be a foldable row (it'd be a context parent,
+        // which is never user-foldable). The orphan itself has no children → not foldable either.
+        TaskItem[] tasks = [Task("orphan", parent: "missing")];
+
+        Assert.Empty(SubtaskArranger.FoldableParentIds(tasks));
+    }
+
+    [Fact]
+    public void FoldableParentIds_MultipleParents_ReturnsEachOnce()
+    {
+        TaskItem[] tasks =
+        [
+            Task("p1"), Task("c1", parent: "p1"),
+            Task("p2"), Task("c2a", parent: "p2"), Task("c2b", parent: "p2"),
+        ];
+
+        Assert.Equal(Expanded("p1", "p2"), SubtaskArranger.FoldableParentIds(tasks));
+    }
+
+    [Fact]
+    public void FoldableParentIds_ParentCycle_TerminatesAndReturnsBoth()
+    {
+        // Pathological a↔b: both are "present with a present child", so both are foldable. Must not loop.
+        TaskItem[] tasks = [Task("a", parent: "b"), Task("b", parent: "a")];
+
+        Assert.Equal(Expanded("a", "b"), SubtaskArranger.FoldableParentIds(tasks));
+    }
+
+    [Fact]
+    public void FoldableParentIds_MatchesTheParentsArrangeMarksExpanded()
+    {
+        // Cross-check the helper against the arranger's own notion of "foldable": expanding exactly the
+        // helper's set must mark every one of those rows Expanded and leave no other row folded.
+        TaskItem[] tasks =
+        [
+            Task("p1"), Task("c1", parent: "p1"), Task("g1", parent: "c1"),
+            Task("p2"), Task("c2", parent: "p2"),
+            Task("leaf"),
+        ];
+
+        var foldable = SubtaskArranger.FoldableParentIds(tasks);
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, foldable);
+
+        var markedFoldable = rows
+            .Where(r => r.Fold is FoldState.Expanded or FoldState.Collapsed)
+            .Select(r => r.Task.Id)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Equal(foldable, markedFoldable);
+        // With every foldable parent expanded, none is left Collapsed.
+        Assert.DoesNotContain(rows, r => r.Fold == FoldState.Collapsed);
+        Assert.Equal(Expanded("p1", "c1", "p2"), foldable);
+    }
 }
