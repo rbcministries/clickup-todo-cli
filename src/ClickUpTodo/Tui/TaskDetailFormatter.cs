@@ -32,7 +32,17 @@ public static class TaskDetailFormatter
     public static string Description(TaskDetail task)
         => string.IsNullOrWhiteSpace(task.Description) ? "(no description)" : task.Description!.Trim();
 
-    /// <summary>The Comments tab body: one block per comment, in the order ClickUp returns them.</summary>
+    /// <summary>
+    /// Horizontal rule drawn between adjacent comment blocks (#105) so each comment reads as its own
+    /// block instead of being divided only by an easy-to-miss blank line. A fixed-width run of the
+    /// box-drawing light-horizontal glyph — long enough to read as a divider, short enough not to fold
+    /// on a normal-width terminal (the Comments/Stream panes word-wrap, so an over-long rule would
+    /// wrap). Exposed so the Stream tab (#106) reuses the same separator for a consistent look.
+    /// </summary>
+    public const string CommentSeparator = "────────────────────────────────────────";
+
+    /// <summary>The Comments tab body: one block per comment, in the order ClickUp returns them,
+    /// separated by <see cref="CommentSeparator"/> (only between comments — never leading/trailing).</summary>
     public static string Comments(IReadOnlyList<CommentItem> comments)
     {
         if (comments.Count == 0)
@@ -42,8 +52,10 @@ public static class TaskDetailFormatter
         for (var i = 0; i < comments.Count; i++)
         {
             var c = comments[i];
+            // Between blocks: a blank line, the rule, then a blank line, so the divider sits clear of
+            // both the previous body and the next comment's header.
             if (i > 0)
-                sb.Append('\n');
+                sb.Append('\n').Append(CommentSeparator).Append('\n').Append('\n');
             sb.Append(string.IsNullOrWhiteSpace(c.Author) ? "(unknown)" : c.Author);
             if (c.DateMs is { } ms)
                 sb.Append("  ·  ").Append(FormatDate(ms));

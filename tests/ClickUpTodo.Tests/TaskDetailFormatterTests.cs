@@ -120,6 +120,60 @@ public sealed class TaskDetailFormatterTests
     }
 
     [Fact]
+    public void Comments_SeparatorAppearsBetweenAdjacentComments()
+    {
+        CommentItem[] comments =
+        [
+            new("1", "ben", DateMs: null, Text: "First!", Resolved: false),
+            new("2", "sam", DateMs: null, Text: "Second.", Resolved: false),
+        ];
+
+        var text = TaskDetailFormatter.Comments(comments);
+
+        Assert.Contains(TaskDetailFormatter.CommentSeparator, text);
+        // The rule sits between the two bodies, on its own line flanked by blank lines.
+        Assert.Contains("First!\n\n" + TaskDetailFormatter.CommentSeparator + "\n\nsam", text);
+    }
+
+    [Fact]
+    public void Comments_SingleCommentHasNoSeparator()
+    {
+        var text = TaskDetailFormatter.Comments([new("1", "ben", null, "Only one.", false)]);
+        Assert.DoesNotContain(TaskDetailFormatter.CommentSeparator, text);
+    }
+
+    [Fact]
+    public void Comments_SeparatorIsNeverLeadingOrTrailing()
+    {
+        CommentItem[] comments =
+        [
+            new("1", "ben", DateMs: null, Text: "First!", Resolved: false),
+            new("2", "sam", DateMs: null, Text: "Second.", Resolved: false),
+        ];
+
+        var text = TaskDetailFormatter.Comments(comments);
+
+        Assert.False(text.StartsWith(TaskDetailFormatter.CommentSeparator, StringComparison.Ordinal));
+        Assert.False(text.TrimEnd('\n').EndsWith(TaskDetailFormatter.CommentSeparator, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Comments_ThreeCommentsHaveExactlyTwoSeparators()
+    {
+        CommentItem[] comments =
+        [
+            new("1", "ben", DateMs: null, Text: "A", Resolved: false),
+            new("2", "sam", DateMs: null, Text: "B", Resolved: false),
+            new("3", "kim", DateMs: null, Text: "C", Resolved: false),
+        ];
+
+        var text = TaskDetailFormatter.Comments(comments);
+
+        var count = text.Split(TaskDetailFormatter.CommentSeparator).Length - 1;
+        Assert.Equal(2, count);
+    }
+
+    [Fact]
     public void OtherAttributes_IncludesListAndDateLabels()
     {
         var text = TaskDetailFormatter.OtherAttributes(Sample());
