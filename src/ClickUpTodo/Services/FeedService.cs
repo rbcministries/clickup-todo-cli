@@ -53,10 +53,10 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
     /// Fans <paramref name="fetchComments"/> out over <paramref name="taskIds"/> with at most
     /// <paramref name="maxConcurrency"/> in flight, gathers the per-task results, and merges them via
     /// <see cref="Aggregate"/> into a newest-first, de-duplicated list capped to
-    /// <paramref name="maxEntries"/>. Best-effort: a task whose fetch throws contributes nothing (mirrors
-    /// <see cref="TaskService.ResolveContextParentsAsync"/>); an <see cref="OperationCanceledException"/>
-    /// propagates so genuine cancellation isn't swallowed. <c>internal</c> and delegate-driven so it can
-    /// be unit-tested with an in-memory fetcher.
+    /// <paramref name="maxEntries"/>. Best-effort: a task whose fetch throws — including a transient
+    /// per-task timeout (a <see cref="TaskCanceledException"/>) — contributes nothing rather than failing
+    /// the whole feed; only a genuine caller cancellation (<paramref name="ct"/> signalled) propagates.
+    /// <c>internal</c> and delegate-driven so it can be unit-tested with an in-memory fetcher.
     /// </summary>
     internal static async Task<IReadOnlyList<CommentItem>> GatherAsync(
         IReadOnlyList<string> taskIds,
@@ -78,9 +78,17 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
             {
                 results[index] = await fetchComments(taskIds[index], ct);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                results[index] = []; // best-effort: a task we can't fetch contributes nothing
+                throw; // genuine caller cancellation (e.g. app shutdown) — let it propagate
+            }
+            catch (Exception)
+            {
+                // Best-effort: a task we can't fetch contributes nothing. This deliberately also
+                // swallows a per-task HttpClient timeout, which surfaces as a TaskCanceledException
+                // (an OperationCanceledException) even though our ct wasn't signalled — so one slow
+                // task can't abort the whole feed. Mirrors TaskService.ResolveAssigneeIdsAsync.
+                results[index] = [];
             }
             finally
             {

@@ -66,7 +66,9 @@ Against `Aggregate` (pure):
 
 Against `GatherAsync` (fake fetcher):
 - Aggregates fanned-out results newest-first, de-duped and capped.
-- Best-effort: a task whose fetch throws is skipped; the rest still appear.
+- Best-effort: a task whose fetch throws is skipped; the rest still appear. A per-task timeout
+  (a `TaskCanceledException`, when the caller's token is *not* signalled) is treated best-effort
+  too, while a genuine caller cancellation (token signalled) propagates.
 - Concurrency is bounded: with `maxConcurrency = k` and a gate, peak in-flight never exceeds `k`
   and reaches `k` (deterministic gate + peak counter).
 - Empty task-id set short-circuits to an empty feed.

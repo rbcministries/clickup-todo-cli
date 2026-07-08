@@ -131,11 +131,29 @@ public sealed class FeedServiceTests
     [Fact]
     public async Task GatherAsync_PropagatesGenuineCancellation()
     {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel(); // caller cancelled (e.g. app shutdown) — must not be swallowed as best-effort
         Func<string, CancellationToken, Task<IReadOnlyList<CommentItem>>> fetch =
-            (_, _) => throw new OperationCanceledException();
+            (id, _) => Task.FromResult<IReadOnlyList<CommentItem>>(new[] { C($"c-{id}", 1) });
 
-        await Assert.ThrowsAsync<OperationCanceledException>(
-            () => FeedService.GatherAsync(new[] { "t1" }, fetch, maxConcurrency: 4, maxEntries: 100));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => FeedService.GatherAsync(new[] { "t1" }, fetch, maxConcurrency: 4, maxEntries: 100, cts.Token));
+    }
+
+    [Fact]
+    public async Task GatherAsync_TreatsPerTaskTimeoutAsBestEffort()
+    {
+        // An HttpClient timeout surfaces as a TaskCanceledException (an OperationCanceledException)
+        // even though the caller's token was never signalled; one slow task must not abort the feed.
+        Func<string, CancellationToken, Task<IReadOnlyList<CommentItem>>> fetch = (id, _) =>
+            id == "slow"
+                ? throw new TaskCanceledException()
+                : Task.FromResult<IReadOnlyList<CommentItem>>(new[] { C($"c-{id}", 1) });
+
+        var feed = await FeedService.GatherAsync(
+            new[] { "ok1", "slow", "ok2" }, fetch, maxConcurrency: 4, maxEntries: 100);
+
+        Assert.Equal(new[] { "c-ok1", "c-ok2" }, feed.Select(c => c.Id).OrderBy(x => x, StringComparer.Ordinal));
     }
 
     [Fact]
