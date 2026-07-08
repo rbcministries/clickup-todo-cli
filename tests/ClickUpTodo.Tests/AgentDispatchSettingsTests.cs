@@ -40,7 +40,7 @@ public sealed class AgentDispatchSettingsTests
         Assert.False(new AgentDispatchSettings { FixedWorkingDirectory = "/work" }.IsDefault);
         Assert.False(new AgentDispatchSettings { DefaultSessionMode = AgentSessionMode.OneOff }.IsDefault);
         Assert.False(new AgentDispatchSettings { DefaultPostResultsToComments = true }.IsDefault);
-        Assert.False(new AgentDispatchSettings { PromptPreamble = "Custom." }.IsDefault);
+        Assert.False(new AgentDispatchSettings { PromptTemplate = "Custom {userPrompt}" }.IsDefault);
     }
 
     // ── ToLauncherOptions ──────────────────────────────────────────────────────────

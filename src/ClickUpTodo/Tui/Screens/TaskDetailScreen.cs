@@ -13,12 +13,16 @@ namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>
 /// A full-window screen showing a task's detail (issue #17): a header (title, tags, assignees) above
-/// a tabbed, scrollable pane — Description / Comments / Other attributes. Built on the shared screen
-/// seam (#38) — swapped into the dashboard's single toplevel, not a nested modal <c>Dialog</c>.
+/// a tabbed, scrollable pane — Stream / Description / Comments / Other attributes. Built on the shared
+/// screen seam (#38) — swapped into the dashboard's single toplevel, not a nested modal <c>Dialog</c>.
 /// <para>
 /// Esc returns to the list; Ctrl+B requests opening the task in the browser (the host reads
 /// <see cref="OpenBrowserRequested"/> in its close handler and owns the launch). Tab cycles tabs;
-/// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. Tab bodies come from the unit-tested
+/// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. The Stream tab (#106) is the default;
+/// Ctrl+PgUp/Ctrl+PgDn sort it oldest-first / newest-first and re-render it in place, and it opens
+/// auto-scrolled to the newest (or oldest) entry per the <see cref="Configuration.StreamAutoScroll"/> preference
+/// (#107). Tab bodies come
+/// from the unit-tested
 /// <see cref="TaskDetailFormatter"/>, so this class is only the (CI-untestable) Terminal.Gui glue.
 /// </para>
 /// <para>
@@ -52,6 +56,19 @@ public sealed class TaskDetailScreen : Screen
     private readonly TextField _workingDirField;
     private readonly CheckBox _postToCommentsToggle;
 
+    // The Stream tab (#106) and the data it re-renders from on a sort toggle. Default oldest-first
+    // (Description then comments ascending) — the issue's "Description followed by the comments in
+    // order" reading; #S3 (#108) makes the default configurable.
+    private readonly TextView _streamPane;
+    private readonly TaskDetail _task;
+    private readonly IReadOnlyList<CommentItem> _comments;
+    private StreamSort _streamSort = StreamSort.Ascending;
+
+    // Where the Stream tab is scrolled to on open (#107). Content-relative (newest/oldest) so it stays
+    // correct across both sort directions; the concrete edge is resolved by DetailScrollModel. #108
+    // (S3) will feed the persisted preference through this seam; until then it defaults to Newest.
+    private readonly Configuration.StreamAutoScroll _streamAutoScroll;
+
     /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>
     public bool OpenBrowserRequested { get; private set; }
 
@@ -68,9 +85,14 @@ public sealed class TaskDetailScreen : Screen
     /// can flip it per dispatch. Defaults to <see cref="AgentSessionMode.Interactive"/>.
     /// </param>
     public TaskDetailScreen(
-        TaskDetail task, IReadOnlyList<CommentItem> comments,
+        TaskDetail task,
+        IReadOnlyList<CommentItem> comments,
+        Configuration.StreamAutoScroll streamAutoScroll = Configuration.StreamAutoScroll.Newest,
         AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive)
     {
+        _task = task;
+        _comments = comments;
+        _streamAutoScroll = streamAutoScroll;
         Title = task.Name.Length > 60 ? task.Name[..59] + "…" : task.Name;
 
         var headerText = TaskDetailFormatter.Header(task);
@@ -92,6 +114,9 @@ public sealed class TaskDetailScreen : Screen
             Height = Dim.Fill(1),
         };
 
+        // The Stream tab (#106): Description + comments as one timeline, sortable in place. Built first
+        // so it's the default selected tab below.
+        _streamPane = NewPane("Stream", TaskDetailFormatter.Stream(task, comments, _streamSort));
         var description = NewPane("Description", TaskDetailFormatter.Description(task));
         var commentsPane = NewPane($"Comments ({comments.Count})", TaskDetailFormatter.Comments(comments));
 
@@ -102,12 +127,12 @@ public sealed class TaskDetailScreen : Screen
         var headerLines = TaskDetailFormatter.HeaderAttributeLines(task);
         var other = new DetailOtherTabView(headerLines, TaskDetailFormatter.CustomFieldsBody(task));
 
-        _tabContents = [description, commentsPane, other];
-        _scrollTargets = [description, commentsPane, other.ScrollTarget];
+        _tabContents = [_streamPane, description, commentsPane, other];
+        _scrollTargets = [_streamPane, description, commentsPane, other.ScrollTarget];
 
         for (var i = 0; i < _tabContents.Length; i++)
             _tabs.InsertTab(i, _tabContents[i]);
-        _tabs.Value = description;
+        _tabs.Value = _streamPane;
 
         // The Dispatch pane (#93, D1 of the #90 epic; superseding the single-line #26 prompt): a
         // bottom-anchored FrameView hosting the prompt plus placeholder controls for the one-off/
@@ -163,7 +188,13 @@ public sealed class TaskDetailScreen : Screen
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Detail;
 
-    public override void OnShown() => _scrollTargets[0].SetFocus();
+    public override void OnShown()
+    {
+        _scrollTargets[0].SetFocus();
+        // Land on the newest (or oldest) Stream entry per the preference (#107). Done after the screen
+        // is shown so the pane has a laid-out viewport for MoveEnd/MoveHome to scroll within.
+        ApplyStreamAutoScroll();
+    }
 
     private void OnKey(object? sender, Key key)
     {
@@ -182,6 +213,22 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             ShowPrompt();
+            return;
+        }
+
+        // Ctrl+PgUp = oldest-first, Ctrl+PgDn = newest-first for the Stream tab (#106); re-renders it in
+        // place. Ctrl-modified so they never collide with the panes' bare PgUp/PgDn scrolling (which the
+        // read-only TextView still handles because we only consume the Ctrl-modified chord here).
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.PageUp)
+        {
+            key.Handled = true;
+            SetStreamSort(StreamSort.Ascending);
+            return;
+        }
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.PageDown)
+        {
+            key.Handled = true;
+            SetStreamSort(StreamSort.Descending);
             return;
         }
 
@@ -310,6 +357,36 @@ public sealed class TaskDetailScreen : Screen
         if (current < 0)
             current = 0;
         _scrollTargets[current].SetFocus();
+    }
+
+    /// <summary>Sets the Stream sort direction and re-renders the Stream body in place (#106). No-op if
+    /// unchanged. Works regardless of the active tab — the new order is visible when the Stream tab is
+    /// shown. Re-asserts the auto-scroll edge (#107) so, e.g., "scroll to newest" keeps landing on the
+    /// newest entry after the sort flips which end of the body that is.</summary>
+    private void SetStreamSort(StreamSort sort)
+    {
+        if (_streamSort == sort)
+            return;
+        _streamSort = sort;
+        _streamPane.Text = TaskDetailFormatter.Stream(_task, _comments, _streamSort);
+        ApplyStreamAutoScroll();
+    }
+
+    /// <summary>Scrolls the Stream pane to the newest/oldest entry per the preference (#107). The pure
+    /// <see cref="DetailScrollModel"/> resolves the content-relative preference + current sort to a
+    /// concrete edge; the actual viewport move uses TG's read-only-safe scroll API
+    /// (<c>MoveEnd()</c>/<c>MoveHome()</c>), so it is the (CI-untestable) Terminal.Gui glue.</summary>
+    private void ApplyStreamAutoScroll()
+    {
+        switch (DetailScrollModel.ResolveEdge(_streamAutoScroll, _streamSort))
+        {
+            case DetailScrollModel.Edge.Bottom:
+                _streamPane.MoveEnd();
+                break;
+            default:
+                _streamPane.MoveHome();
+                break;
+        }
     }
 
     /// <summary>Advances the selected tab and moves focus into its scroll target so ↑/↓ scroll it.</summary>

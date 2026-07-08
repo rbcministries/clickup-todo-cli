@@ -346,7 +346,26 @@ public sealed class TodoApp
                 key.Handled = true;
                 OpenNotificationsFeed();
                 break;
+            case KeyCode.F6:
+                key.Handled = true;
+                CycleBadgeDisplay();
+                break;
         }
+    }
+
+    /// <summary>F6 — cycles how Status/Priority badges render (icons → text → hidden → icons), persists
+    /// the choice, and re-renders. A pure display toggle: it re-decorates the same rows, so it keeps the
+    /// cursor on the current task.</summary>
+    private void CycleBadgeDisplay()
+    {
+        if (ActiveScreen is not null)
+            return;
+
+        var mode = _config.BadgeDisplay.Next();
+        _config.BadgeDisplay = mode;
+        _configStore.Save(_config);
+        Flash(mode.Describe());
+        Render(keepTaskId: CurrentTask()?.Id);
     }
 
     /// <summary>
@@ -463,6 +482,20 @@ public sealed class TodoApp
             return;
 
         var screen = new SettingsScreen(_config.RefreshSeconds, _config.DefaultWorkingDirectory, _config.AgentDispatch);
+
+        // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
+        // save it folds the edited template back into the settings screen via the request's callback, so
+        // the settings screen's own Save is the transaction boundary (an F2 Cancel discards the edit).
+        screen.EditPromptTemplateRequested += (_, req) =>
+        {
+            var editor = new PromptTemplateEditorScreen(req.CurrentTemplate);
+            ShowScreen(editor, () =>
+            {
+                if (editor.Result is not null)
+                    req.Apply(editor.Result);
+            });
+        };
+
         ShowScreen(screen, () =>
         {
             var result = screen.Result;
@@ -860,7 +893,7 @@ public sealed class TodoApp
                 {
                     if (ActiveScreen is not null)
                         return;
-                    var screen = new TaskDetailScreen(detail, comments, _config.AgentDispatch.DefaultSessionMode);
+                    var screen = new TaskDetailScreen(detail, comments, defaultSessionMode: _config.AgentDispatch.DefaultSessionMode);
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt and the one-off/interactive mode (#94) are consumed; #95/#97 add the rest.
@@ -917,12 +950,13 @@ public sealed class TodoApp
         // The task-derived candidate is the saved base working directory (#92); ResolveWorkingDirectory
         // only uses it in TaskDerived mode, so Home/Fixed are unaffected. In TaskDerived mode we also
         // seed a per-task ./{custom-id} output-subdir instruction so each task's work stays separated
-        // inside the shared base dir (#98).
+        // inside the shared base dir (#98). The prompt template (#100) is threaded in as the composer's
+        // template (blank ⇒ default); its {outputDirInstruction} placeholder consumes the subdir.
         var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
         var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: home);
         var isTaskDerived = settings.WorkingDirectory == AgentWorkingDirectory.TaskDerived;
         var outputSubdir = isTaskDerived ? AgentPromptComposer.OutputSubdirectoryToken(detail) : null;
-        var preamble = settings.PromptPreamble;
+        var template = settings.PromptTemplate;
 
         Flash($"Launching Claude for '{detail.Name}'…");
         _ = Task.Run(async () =>
@@ -935,7 +969,7 @@ public sealed class TodoApp
                 if (isTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
                     Directory.CreateDirectory(workingDir);
 
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, preamble, outputSubdir, oneOff);
+                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff);
                 Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)
@@ -1072,7 +1106,7 @@ public sealed class TodoApp
         var groupedBy = inFocus ? (TaskField?)null : _config.View.GroupField;
         // Reproduce the row's ▶/▼ fold marker from its stored state so an in-place update keeps it (#76).
         var marker = FoldMarker(index < _folds.Count ? _folds[index] : FoldState.None, _config.View.ShowSubtasks);
-        var (text, badges) = BuildRow(updated, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy, marker: marker);
+        var (text, badges) = BuildRow(updated, _config.BadgeDisplay, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy, marker: marker);
         _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
@@ -1295,7 +1329,7 @@ public sealed class TodoApp
 
     private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None, bool isForeignSubtask = false)
     {
-        var (text, badges) = BuildRow(task, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask);
+        var (text, badges) = BuildRow(task, _config.BadgeDisplay, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask);
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);
@@ -1319,16 +1353,15 @@ public sealed class TodoApp
 
     /// <summary>The display text and the row's color badge overlays (status, then priority when set).
     /// <paramref name="groupedBy"/> omits the grouped field's segment (its header already conveys it, #67).
-    /// <paramref name="marker"/> is the leading ▶/▼ fold marker or gutter (#76).</summary>
+    /// <paramref name="marker"/> is the leading ▶/▼ fold marker or gutter (#76). <paramref name="badges"/>
+    /// selects how the leading Status/Priority badges render (F6).</summary>
     private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
-        TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
+        TaskItem task, BadgeDisplay badgeDisplay, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
     {
-        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask);
-        var badges = new List<StatusBadgeListSource.Badge>(3);
-        // The leading priority flag (its space-flag-space span) is tinted with the priority colour; the
-        // blank-gutter state carries no span so TryCreate returns null and it stays unshaded.
-        if (StatusBadgeListSource.TryCreate(row.PriorityFlagStart, row.PriorityFlagLength, task.PriorityColor) is { } flag)
-            badges.Add(flag);
+        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask, badgeDisplay);
+        var badges = new List<StatusBadgeListSource.Badge>(2);
+        // The Status/Priority badges (icon chip or bracketed text) are tinted with their field colours;
+        // an absent/hidden badge carries no span, so TryCreate returns null and nothing is shaded.
         if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
             badges.Add(status);
         if (StatusBadgeListSource.TryCreate(row.PriorityStart, row.PriorityLength, task.PriorityColor) is { } priority)

@@ -34,6 +34,7 @@ public sealed class HelpScreen : Screen
                 + "  F3          Filter / sort / group the list\n"
                 + "  F4          Show / hide subtasks (shown nested under their parent)\n"
                 + "  F5          Open the mentions & comments feed\n"
+                + "  F6          Cycle status/priority badges (icons ○ ⚑, text, hidden)\n"
                 + "  → / ←       Expand / collapse the selected parent's subtasks (▶ collapsed, ▼ expanded)\n"
                 + "  Ctrl+→ / ←  Expand / collapse all parents at once\n"
                 + "              F3 can also nest a parent's subtasks that aren't assigned to you\n"

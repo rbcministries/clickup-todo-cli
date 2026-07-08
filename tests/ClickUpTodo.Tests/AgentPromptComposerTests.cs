@@ -86,14 +86,28 @@ public sealed class AgentPromptComposerTests
         Assert.StartsWith($"\n\n{AgentPromptComposer.Preamble}\n\n{{", composed);
     }
 
-    // ── preamble override (#27) ───────────────────────────────────────────────────
+    // ── template model (#100) ─────────────────────────────────────────────────────
 
     [Fact]
-    public void Compose_CustomPreamble_ReplacesTheDefaultLine()
+    public void DefaultTemplate_RendersIdenticalToLegacyLayout()
     {
-        var composed = AgentPromptComposer.Compose(Task(), [], "triage", preamble: "Use only the JSON below.");
+        // Regression guard: the default template must reproduce the pre-#100 output byte-for-byte
+        // (trimmed prompt · blank · fixed preamble · blank · combined JSON).
+        var task = Task();
+        var comments = new[] { Comment() };
 
-        Assert.StartsWith("triage\n\nUse only the JSON below.\n\n{", composed);
+        var composed = AgentPromptComposer.Compose(task, comments, "  triage  ");
+
+        var expected = $"triage\n\n{AgentPromptComposer.Preamble}\n\n{AgentPromptComposer.BuildJson(task, comments)}";
+        Assert.Equal(expected, composed);
+    }
+
+    [Fact]
+    public void Compose_CustomTemplate_OverridesTheDefault()
+    {
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", template: "LEAD: {userPrompt}!");
+
+        Assert.Equal("LEAD: triage!", composed);
         Assert.DoesNotContain(AgentPromptComposer.Preamble, composed);
     }
 
@@ -101,28 +115,97 @@ public sealed class AgentPromptComposerTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void Compose_BlankPreamble_FallsBackToTheDefault(string? preamble)
+    public void Compose_BlankTemplate_FallsBackToTheDefault(string? template)
     {
-        var composed = AgentPromptComposer.Compose(Task(), [], "triage", preamble);
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", template);
         Assert.StartsWith($"triage\n\n{AgentPromptComposer.Preamble}\n\n{{", composed);
     }
 
     [Fact]
-    public void Compose_CustomPreamble_IsTrimmed()
+    public void Compose_SubstitutesScalarPlaceholders()
     {
-        var composed = AgentPromptComposer.Compose(Task(), [], "triage", preamble: "  Custom lead.  ");
-        Assert.StartsWith("triage\n\nCustom lead.\n\n{", composed);
+        var task = Task(id: "abc123", customId: "TEAM-42");
+        var composed = AgentPromptComposer.Compose(
+            task, [], "  go  ", template: "p={userPrompt} id={taskId} cid={customId}");
+
+        Assert.Equal("p=go id=abc123 cid=TEAM-42", composed);
     }
 
     [Fact]
-    public void WritePromptFile_HonorsCustomPreamble()
+    public void Compose_CustomId_FallsBackToTaskId_WhenAbsent()
+    {
+        var composed = AgentPromptComposer.Compose(Task(id: "abc123", customId: null), [], "go", template: "{customId}");
+        Assert.Equal("abc123", composed);
+    }
+
+    [Fact]
+    public void Compose_TaskAndCommentsJsonPlaceholders_MatchTheirBuilders()
+    {
+        var task = Task();
+        var comments = new[] { Comment() };
+
+        var composed = AgentPromptComposer.Compose(task, comments, "go", template: "T:{taskJson}\nC:{commentsJson}");
+
+        Assert.Equal(
+            $"T:{AgentPromptComposer.BuildTaskJson(task)}\nC:{AgentPromptComposer.BuildCommentsJson(comments)}",
+            composed);
+    }
+
+    [Fact]
+    public void Compose_ContextJsonPlaceholder_MatchesBuildJson()
+    {
+        var task = Task();
+        var comments = new[] { Comment() };
+
+        var composed = AgentPromptComposer.Compose(task, comments, "go", template: "{contextJson}");
+        Assert.Equal(AgentPromptComposer.BuildJson(task, comments), composed);
+    }
+
+    [Fact]
+    public void Compose_ToggleInstructionPlaceholders_RenderEmpty_UntilTheirTogglesLand()
+    {
+        // #97/#98 supply these; until then they expand to empty so a template referencing them is inert.
+        var composed = AgentPromptComposer.Compose(
+            Task(), [], "go", template: "[{postCommentInstruction}][{outputDirInstruction}]");
+        Assert.Equal("[][]", composed);
+    }
+
+    [Fact]
+    public void BuildTaskJson_MatchesTheTaskObjectInBuildJson()
+    {
+        // The standalone task JSON must be the same object as the "task" nested in BuildJson — compared
+        // canonically (compact) since the nested copy carries deeper indentation from WriteIndented.
+        var task = Task();
+        using var whole = JsonDocument.Parse(AgentPromptComposer.BuildJson(task, []));
+        using var standalone = JsonDocument.Parse(AgentPromptComposer.BuildTaskJson(task));
+
+        Assert.Equal(
+            JsonSerializer.Serialize(whole.RootElement.GetProperty("task")),
+            JsonSerializer.Serialize(standalone.RootElement));
+    }
+
+    [Fact]
+    public void BuildCommentsJson_MatchesTheCommentsArrayInBuildJson()
+    {
+        // Same drift guard for the comments element shape (compared canonically for indentation).
+        var task = Task();
+        var comments = new[] { Comment(id: "c1"), Comment(id: "c2", author: "Sam", resolved: true) };
+        using var whole = JsonDocument.Parse(AgentPromptComposer.BuildJson(task, comments));
+        using var standalone = JsonDocument.Parse(AgentPromptComposer.BuildCommentsJson(comments));
+
+        Assert.Equal(
+            JsonSerializer.Serialize(whole.RootElement.GetProperty("comments")),
+            JsonSerializer.Serialize(standalone.RootElement));
+    }
+
+    [Fact]
+    public void WritePromptFile_HonorsCustomTemplate()
     {
         var dir = Path.Combine(Path.GetTempPath(), "clickup-todo-tests", Guid.NewGuid().ToString("N"));
         try
         {
-            var path = AgentPromptComposer.WritePromptFile(Task(), [], "triage", dir, preamble: "Lead X.");
-            var text = File.ReadAllText(path);
-            Assert.StartsWith("triage\n\nLead X.\n\n{", text);
+            var path = AgentPromptComposer.WritePromptFile(Task(), [], "triage", dir, template: "LEAD: {userPrompt}");
+            Assert.Equal("LEAD: triage", File.ReadAllText(path));
         }
         finally
         {
@@ -130,6 +213,81 @@ public sealed class AgentPromptComposerTests
                 Directory.Delete(dir, recursive: true);
         }
     }
+
+    // ── template rendering (#100) ──────────────────────────────────────────────────
+
+    [Fact]
+    public void Render_KnownPlaceholder_IsSubstituted()
+        => Assert.Equal("hi X", AgentPromptComposer.Render("hi {a}", new Dictionary<string, string> { ["a"] = "X" }));
+
+    [Fact]
+    public void Render_UnknownPlaceholder_IsLeftLiteral()
+        => Assert.Equal("hi {b}", AgentPromptComposer.Render("hi {b}", new Dictionary<string, string> { ["a"] = "X" }));
+
+    [Fact]
+    public void Render_DoubledBraces_EscapeToLiteralBraces()
+        => Assert.Equal("{a} {X}",
+            AgentPromptComposer.Render("{{a}} {{{a}}}", new Dictionary<string, string> { ["a"] = "X" }));
+
+    [Fact]
+    public void Render_LoneBraces_AreLiteral()
+        => Assert.Equal("a { b } c",
+            AgentPromptComposer.Render("a { b } c", new Dictionary<string, string> { ["b"] = "NO" }));
+
+    [Fact]
+    public void Render_SubstitutedValue_IsNotRescanned()
+    {
+        // A value that itself looks like a placeholder must not be re-substituted.
+        var values = new Dictionary<string, string> { ["a"] = "{b}", ["b"] = "SHOULD-NOT-APPEAR" };
+        Assert.Equal("{b}", AgentPromptComposer.Render("{a}", values));
+    }
+
+    [Fact]
+    public void Render_LoneBrace_DoesNotSwallowAFollowingPlaceholder()
+    {
+        // A lone '{' must not capture forward to a later placeholder's '}' — the real {a} still expands.
+        var values = new Dictionary<string, string> { ["a"] = "X" };
+        Assert.Equal("the set { a, b and X", AgentPromptComposer.Render("the set { a, b and {a}", values));
+        Assert.Equal("x { y X z", AgentPromptComposer.Render("x { y {a} z", values));
+    }
+
+    [Fact]
+    public void Render_TokenSpanningANewline_IsNotTreatedAsAPlaceholder()
+    {
+        // A '{' whose matching '}' is on another line isn't a token; it stays literal and later tokens work.
+        var values = new Dictionary<string, string> { ["a"] = "X" };
+        Assert.Equal("{ not\na token } X=X", AgentPromptComposer.Render("{ not\na token } {a}=X", values));
+    }
+
+    [Fact]
+    public void Placeholders_CoverEveryTokenTheDefaultTemplateUses()
+    {
+        var known = AgentPromptComposer.Placeholders.Select(p => p.Name).ToHashSet();
+        Assert.Contains("userPrompt", known);
+        Assert.Contains("contextJson", known);
+        Assert.Contains("outputDirInstruction", known);
+    }
+
+    // ── #27 → #100 preamble migration helper ────────────────────────────────────────
+
+    [Fact]
+    public void DefaultTemplateWithPreamble_SwapsThePreambleLine()
+    {
+        var template = AgentPromptComposer.DefaultTemplateWithPreamble("  Only use the JSON.  ");
+
+        Assert.Equal("{userPrompt}\n\n{outputDirInstruction}Only use the JSON.\n\n{contextJson}", template);
+        Assert.DoesNotContain(AgentPromptComposer.Preamble, template);
+        // Renders like the old custom-preamble output (no output subdir ⇒ {outputDirInstruction} empty).
+        var composed = AgentPromptComposer.Compose(Task(), [], "go", template);
+        Assert.StartsWith("go\n\nOnly use the JSON.\n\n{", composed);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void DefaultTemplateWithPreamble_BlankValue_YieldsTheUnchangedDefault(string? preamble)
+        => Assert.Equal(AgentPromptComposer.DefaultTemplate, AgentPromptComposer.DefaultTemplateWithPreamble(preamble));
 
     // ── output subdirectory (task-derived working dir, #98) ─────────────────────────
 
@@ -177,11 +335,14 @@ public sealed class AgentPromptComposerTests
     }
 
     [Fact]
-    public void Compose_OutputSubdirectory_EmptyPrompt_InstructionLeads()
+    public void Compose_OutputSubdirectory_EmptyPrompt_YieldsLeadingBlankThenInstruction()
     {
+        // With the #100 template model an empty {userPrompt} leaves the template's leading "\n\n"
+        // (consistent with Compose_EmptyPrompt_StillEmitsPreambleAndJson), then the instruction
+        // paragraph. (Pre-#100 #98 special-cased this to drop the blank; templatization unifies it.)
         var composed = AgentPromptComposer.Compose(Task(), [], "", outputSubdirectory: "TEAM-42");
         Assert.StartsWith(
-            $"Write any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n{AgentPromptComposer.Preamble}\n\n{{",
+            $"\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n{AgentPromptComposer.Preamble}\n\n{{",
             composed);
     }
 
@@ -197,10 +358,12 @@ public sealed class AgentPromptComposerTests
     }
 
     [Fact]
-    public void Compose_OutputSubdirectory_CombinesWithCustomPreamble()
+    public void Compose_OutputSubdirectory_CombinesWithCustomTemplatePreamble()
     {
-        var composed = AgentPromptComposer.Compose(
-            Task(), [], "triage", preamble: "Use only the JSON.", outputSubdirectory: "TEAM-42");
+        // A custom preamble is now expressed as a template; the #98 output-subdir instruction still
+        // slots in ahead of it via {outputDirInstruction}.
+        var template = AgentPromptComposer.DefaultTemplateWithPreamble("Use only the JSON.");
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", template, outputSubdirectory: "TEAM-42");
         Assert.StartsWith(
             "triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\nUse only the JSON.\n\n{",
             composed);

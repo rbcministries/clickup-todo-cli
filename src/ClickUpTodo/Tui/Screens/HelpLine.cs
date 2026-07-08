@@ -101,6 +101,7 @@ public static class HelpItemSets
         new("F3", "filter/sort/group"),
         new("F4", "subtasks"),
         new("F5", "feed"),
+        new("F6", "badges"),
         new("→/←", "expand/collapse"),
         new("Ctrl+→/←", "all"),
         new("Ctrl+Q", "quit"),
@@ -112,6 +113,7 @@ public static class HelpItemSets
     [
         new("Tab", "switch tab"),
         new("↑/↓ PgUp/PgDn", "scroll"),
+        new("Ctrl+PgUp/PgDn", "sort stream"),
         new("Ctrl+A", "dispatch to Claude"),
         new("Ctrl+B", "browser"),
         new("F1", "help"),
@@ -142,6 +144,15 @@ public static class HelpItemSets
     [
         new("↑/↓", "move"),
         new("Enter", "select"),
+        new("F1", "help"),
+        new("Esc", "cancel"),
+    ];
+
+    /// <summary>The dispatch prompt-template editor (#100), reached from F2.</summary>
+    public static readonly IReadOnlyList<HelpItem> PromptTemplateEditor =
+    [
+        new("Tab", "moves"),
+        new("Ctrl+Alt+R", "reset to default"),
         new("F1", "help"),
         new("Esc", "cancel"),
     ];

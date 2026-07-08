@@ -33,26 +33,26 @@ public sealed class AgentDispatcher
     /// Writes the composed prompt for <paramref name="task"/> to a temp file, then launches a terminal
     /// running <c>claude</c> seeded from it. The prompt content stays in the file (only its path enters
     /// the command), which is what keeps the launch safe (#23). <paramref name="workingDir"/> (the
-    /// resolved start directory) and <paramref name="preamble"/> (a blank value keeps the composer's
-    /// default) are the dispatch-time settings threaded in by the caller (#91).
-    /// <paramref name="outputSubdirectory"/> (blank unless the task-derived working-dir mode is
-    /// active, #98) adds a "write outputs to <c>./{subdir}</c>" instruction to the seed prompt.
-    /// <paramref name="oneOff"/> selects a one-off <c>claude -p</c> run over the default interactive
-    /// session (#94).
+    /// resolved start directory) and <paramref name="template"/> (a blank value keeps the composer's
+    /// <see cref="AgentPromptComposer.DefaultTemplate"/>) are the dispatch-time settings threaded in by
+    /// the caller (#91, #100). <paramref name="outputSubdirectory"/> (blank unless the task-derived
+    /// working-dir mode is active, #98) fills the template's <c>{outputDirInstruction}</c> with a
+    /// "write outputs to <c>./{subdir}</c>" instruction. <paramref name="oneOff"/> selects a one-off
+    /// <c>claude -p</c> run over the default interactive session (#94).
     /// </summary>
     public async Task<AgentDispatchResult> DispatchAsync(
         TaskDetail task,
         IReadOnlyList<CommentItem> comments,
         string userPrompt,
         string? workingDir = null,
-        string? preamble = null,
+        string? template = null,
         string? outputSubdirectory = null,
         bool oneOff = false,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, preamble, outputSubdirectory);
+        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, outputSubdirectory);
         var result = await _launcher.LaunchAsync(promptFile, workingDir, _options, oneOff, ct).ConfigureAwait(false);
         return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile);
     }

@@ -173,6 +173,129 @@ public sealed class TaskDetailFormatterTests
         Assert.Equal(2, count);
     }
 
+    // ---- Stream tab (#106) --------------------------------------------------
+
+    // Comments deliberately supplied out of date order to prove the formatter sorts them.
+    private static CommentItem[] ScrambledDatedComments() =>
+    [
+        new("2", "sam", DateMs: 2000, Text: "BBB", Resolved: false),
+        new("3", "kim", DateMs: 3000, Text: "CCC", Resolved: false),
+        new("1", "ben", DateMs: 1000, Text: "AAA", Resolved: false),
+    ];
+
+    [Fact]
+    public void Stream_Ascending_DescriptionFirstThenCommentsOldestToNewest()
+    {
+        var text = TaskDetailFormatter.Stream(Sample(description: "DESCBODY"), ScrambledDatedComments(), StreamSort.Ascending);
+
+        Assert.StartsWith("Description", text);
+        // Description, then AAA (oldest) < BBB < CCC (newest).
+        Assert.True(text.IndexOf("DESCBODY", StringComparison.Ordinal) < text.IndexOf("AAA", StringComparison.Ordinal));
+        Assert.True(text.IndexOf("AAA", StringComparison.Ordinal) < text.IndexOf("BBB", StringComparison.Ordinal));
+        Assert.True(text.IndexOf("BBB", StringComparison.Ordinal) < text.IndexOf("CCC", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Stream_Descending_CommentsNewestToOldestThenDescriptionLast()
+    {
+        var text = TaskDetailFormatter.Stream(Sample(description: "DESCBODY"), ScrambledDatedComments(), StreamSort.Descending);
+
+        // CCC (newest) < BBB < AAA (oldest) < Description body (last).
+        Assert.True(text.IndexOf("CCC", StringComparison.Ordinal) < text.IndexOf("BBB", StringComparison.Ordinal));
+        Assert.True(text.IndexOf("BBB", StringComparison.Ordinal) < text.IndexOf("AAA", StringComparison.Ordinal));
+        Assert.True(text.IndexOf("AAA", StringComparison.Ordinal) < text.IndexOf("DESCBODY", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Stream_UndatedComments_SortAsOldest()
+    {
+        CommentItem[] comments =
+        [
+            new("d", "sam", DateMs: 2000, Text: "DAT", Resolved: false),
+            new("u", "ben", DateMs: null, Text: "UND", Resolved: false),
+        ];
+
+        var asc = TaskDetailFormatter.Stream(Sample(description: "DESCBODY"), comments, StreamSort.Ascending);
+        // Ascending: Description, then the undated comment (oldest), then the dated one.
+        Assert.True(asc.IndexOf("DESCBODY", StringComparison.Ordinal) < asc.IndexOf("UND", StringComparison.Ordinal));
+        Assert.True(asc.IndexOf("UND", StringComparison.Ordinal) < asc.IndexOf("DAT", StringComparison.Ordinal));
+
+        var desc = TaskDetailFormatter.Stream(Sample(description: "DESCBODY"), comments, StreamSort.Descending);
+        // Descending is the exact reverse: dated, then undated, then Description last.
+        Assert.True(desc.IndexOf("DAT", StringComparison.Ordinal) < desc.IndexOf("UND", StringComparison.Ordinal));
+        Assert.True(desc.IndexOf("UND", StringComparison.Ordinal) < desc.IndexOf("DESCBODY", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Stream_SeparatesEveryBlockWithTheSharedRule()
+    {
+        // Description + 3 comments = 4 blocks → exactly 3 separators, never leading/trailing.
+        var text = TaskDetailFormatter.Stream(Sample(), ScrambledDatedComments(), StreamSort.Ascending);
+
+        var count = text.Split(TaskDetailFormatter.CommentSeparator).Length - 1;
+        Assert.Equal(3, count);
+        Assert.False(text.StartsWith(TaskDetailFormatter.CommentSeparator, StringComparison.Ordinal));
+        Assert.False(text.TrimEnd('\n').EndsWith(TaskDetailFormatter.CommentSeparator, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Stream_NoComments_ShowsOnlyDescriptionWithNoSeparator()
+    {
+        var text = TaskDetailFormatter.Stream(Sample(description: "DESCBODY"), [], StreamSort.Ascending);
+
+        Assert.StartsWith("Description", text);
+        Assert.Contains("DESCBODY", text);
+        Assert.DoesNotContain(TaskDetailFormatter.CommentSeparator, text);
+    }
+
+    [Fact]
+    public void Stream_NoDescription_ShowsPlaceholderBlock()
+    {
+        var text = TaskDetailFormatter.Stream(Sample(description: null), [], StreamSort.Ascending);
+        Assert.Contains("(no description)", text);
+    }
+
+    [Fact]
+    public void Stream_CommentBlocks_MatchTheCommentsTabShape()
+    {
+        // The Stream reuses the same block shape as the Comments tab, so a single comment renders
+        // byte-for-byte the same body there as in Comments (author/date/resolved header + body).
+        CommentItem[] one = [new("1", "ben", DateMs: 1000, Text: "hello", Resolved: true)];
+        var commentsBody = TaskDetailFormatter.Comments(one);
+        var stream = TaskDetailFormatter.Stream(Sample(description: "DESCBODY"), one, StreamSort.Ascending);
+        Assert.Contains(commentsBody, stream);
+    }
+
+    [Fact]
+    public void Stream_DescriptionHeader_ShowsCreatedDateOnlyWhenPresent()
+    {
+        // No CreatedMs → the header is just "Description" directly above the body.
+        var noDate = TaskDetailFormatter.Stream(Sample(description: "DESCBODY"), [], StreamSort.Ascending);
+        Assert.StartsWith("Description\nDESCBODY", noDate);
+
+        // CreatedMs present → the header carries the date in the comment header's "·" shape.
+        var withDate = TaskDetailFormatter.Stream(
+            Sample(description: "DESCBODY") with { CreatedMs = 1_719_939_120_000 }, [], StreamSort.Ascending);
+        Assert.Contains("Description  ·  ", withDate);
+    }
+
+    [Fact]
+    public void Stream_DuplicateDates_OrderByIdOrdinal_AndDescendingReverses()
+    {
+        // Same DateMs → deterministic ordinal Id tiebreak ("a" before "b"); descending flips it.
+        CommentItem[] comments =
+        [
+            new("b", "sam", DateMs: 1000, Text: "BODYB", Resolved: false),
+            new("a", "ben", DateMs: 1000, Text: "BODYA", Resolved: false),
+        ];
+
+        var asc = TaskDetailFormatter.Stream(Sample(description: "DESC"), comments, StreamSort.Ascending);
+        Assert.True(asc.IndexOf("BODYA", StringComparison.Ordinal) < asc.IndexOf("BODYB", StringComparison.Ordinal));
+
+        var desc = TaskDetailFormatter.Stream(Sample(description: "DESC"), comments, StreamSort.Descending);
+        Assert.True(desc.IndexOf("BODYB", StringComparison.Ordinal) < desc.IndexOf("BODYA", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void OtherAttributes_IncludesListAndDateLabels()
     {

@@ -6,6 +6,20 @@ using ClickUpTodo.ClickUp;
 namespace ClickUpTodo.Tui;
 
 /// <summary>
+/// Sort direction for the detail view's Stream tab (#106): <see cref="Ascending"/> is oldest-first
+/// (Description, then comments by date ascending); <see cref="Descending"/> is newest-first (comments
+/// by date descending, then Description last).
+/// </summary>
+public enum StreamSort
+{
+    /// <summary>Oldest-first: Description block, then comments by date ascending.</summary>
+    Ascending,
+
+    /// <summary>Newest-first: comments by date descending, then the Description block last.</summary>
+    Descending,
+}
+
+/// <summary>
 /// Pure text formatting for the task detail view (issue #17). Builds the header line and the body of
 /// each tab from the domain DTOs, with no Terminal.Gui dependency, so the layout logic is unit-tested
 /// while the (untestable) Terminal.Gui glue in <see cref="TaskDetailView"/> stays thin.
@@ -44,29 +58,79 @@ public static class TaskDetailFormatter
     /// <summary>The Comments tab body: one block per comment, in the order ClickUp returns them,
     /// separated by <see cref="CommentSeparator"/> (only between comments — never leading/trailing).</summary>
     public static string Comments(IReadOnlyList<CommentItem> comments)
-    {
-        if (comments.Count == 0)
-            return "(no comments)";
+        => comments.Count == 0 ? "(no comments)" : JoinBlocks(comments.Select(CommentBlock));
 
-        var sb = new StringBuilder();
-        for (var i = 0; i < comments.Count; i++)
-        {
-            var c = comments[i];
-            // Between blocks: a blank line, the rule, then a blank line, so the divider sits clear of
-            // both the previous body and the next comment's header.
-            if (i > 0)
-                sb.Append('\n').Append(CommentSeparator).Append('\n').Append('\n');
-            sb.Append(string.IsNullOrWhiteSpace(c.Author) ? "(unknown)" : c.Author);
-            if (c.DateMs is { } ms)
-                sb.Append("  ·  ").Append(FormatDate(ms));
-            if (c.Resolved)
-                sb.Append("  ·  [resolved]");
-            sb.Append('\n');
-            sb.Append(string.IsNullOrWhiteSpace(c.Text) ? "(empty comment)" : c.Text.Trim());
-            sb.Append('\n');
-        }
-        return sb.ToString().TrimEnd('\n');
+    /// <summary>
+    /// The Stream tab body (#106): the Description and the comments as a single timeline of blocks,
+    /// separated by the shared <see cref="CommentSeparator"/> so it reads consistently with the
+    /// Comments tab. Ordering:
+    /// <list type="bullet">
+    /// <item><see cref="StreamSort.Ascending"/> (oldest-first): the Description block, then the
+    /// comments by date ascending.</item>
+    /// <item><see cref="StreamSort.Descending"/> (newest-first): the comments by date descending,
+    /// then the Description block last.</item>
+    /// </list>
+    /// <para>
+    /// Comments without a date are treated as the <em>oldest</em> (sort key <c>DateMs ?? long.MinValue</c>,
+    /// with an ordinal <c>Id</c> tiebreak for determinism), so they cluster at the same end as the
+    /// Description — matching the feed's "nulls last in newest-first order" convention (#112).
+    /// Descending is the exact reverse of ascending. The Description is always present (it shows
+    /// <c>(no description)</c> when empty), so unlike <see cref="Comments"/> there is no empty
+    /// placeholder.
+    /// </para>
+    /// Terminal.Gui-free, so the ordering and layout are unit-tested; the screen glue just re-renders
+    /// this on a sort toggle.
+    /// </summary>
+    public static string Stream(TaskDetail task, IReadOnlyList<CommentItem> comments, StreamSort sort)
+    {
+        var ascending = comments
+            .OrderBy(c => c.DateMs ?? long.MinValue)
+            .ThenBy(c => c.Id, StringComparer.Ordinal)
+            .ToList();
+        var ordered = sort == StreamSort.Ascending ? ascending : Enumerable.Reverse(ascending);
+
+        var description = DescriptionBlock(task);
+        var commentBlocks = ordered.Select(CommentBlock);
+        var blocks = sort == StreamSort.Ascending
+            ? new[] { description }.Concat(commentBlocks)
+            : commentBlocks.Append(description);
+        return JoinBlocks(blocks);
     }
+
+    /// <summary>One comment as a Stream/Comments block: an <c>author · date · [resolved]</c> header
+    /// line above the (trimmed) body, with no trailing newline. The single source of the block shape
+    /// both tabs render.</summary>
+    private static string CommentBlock(CommentItem c)
+    {
+        var sb = new StringBuilder();
+        sb.Append(string.IsNullOrWhiteSpace(c.Author) ? "(unknown)" : c.Author);
+        if (c.DateMs is { } ms)
+            sb.Append("  ·  ").Append(FormatDate(ms));
+        if (c.Resolved)
+            sb.Append("  ·  [resolved]");
+        sb.Append('\n');
+        sb.Append(string.IsNullOrWhiteSpace(c.Text) ? "(empty comment)" : c.Text.Trim());
+        return sb.ToString();
+    }
+
+    /// <summary>The Description as a Stream block: a <c>Description</c> header line (with the task's
+    /// created date when present, in the comment header's <c>·</c> shape) above the description body.</summary>
+    private static string DescriptionBlock(TaskDetail task)
+    {
+        var sb = new StringBuilder();
+        sb.Append("Description");
+        if (task.CreatedMs is { } ms)
+            sb.Append("  ·  ").Append(FormatDate(ms));
+        sb.Append('\n');
+        sb.Append(Description(task));
+        return sb.ToString();
+    }
+
+    /// <summary>Joins blocks with the standard divider — a blank line, the <see cref="CommentSeparator"/>
+    /// rule, then a blank line — so it sits clear of both the previous body and the next header, and is
+    /// never leading or trailing. Each block carries no trailing newline.</summary>
+    private static string JoinBlocks(IEnumerable<string> blocks)
+        => string.Join("\n\n" + CommentSeparator + "\n\n", blocks);
 
     /// <summary>One coloured span of a detail line: its text and, when it should be badged, a ClickUp
     /// hex colour (null = rendered in the view's normal attribute). Terminal.Gui-free (the colour is a

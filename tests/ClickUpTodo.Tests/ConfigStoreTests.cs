@@ -76,7 +76,7 @@ public sealed class ConfigStoreTests : IDisposable
                 FixedWorkingDirectory = "/work",
                 DefaultSessionMode = AgentSessionMode.OneOff,
                 DefaultPostResultsToComments = true,
-                PromptPreamble = "Use the JSON.",
+                PromptTemplate = "Lead: {userPrompt}\n{contextJson}",
             },
         };
 
@@ -91,7 +91,7 @@ public sealed class ConfigStoreTests : IDisposable
         Assert.Equal("/work", d.FixedWorkingDirectory);
         Assert.Equal(AgentSessionMode.OneOff, d.DefaultSessionMode);
         Assert.True(d.DefaultPostResultsToComments);
-        Assert.Equal("Use the JSON.", d.PromptPreamble);
+        Assert.Equal("Lead: {userPrompt}\n{contextJson}", d.PromptTemplate);
     }
 
     [Fact]

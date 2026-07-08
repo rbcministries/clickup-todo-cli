@@ -67,7 +67,7 @@ public sealed class AgentDispatcherTests : IDisposable
         Assert.Equal("/work", launcher.WorkingDir);
         Assert.Same(options, launcher.Options);
 
-        // The file content is exactly what the composer produces (prompt + preamble + JSON).
+        // The file content is exactly what the composer produces (default template render).
         var expected = AgentPromptComposer.Compose(task, comments, "please triage this");
         Assert.Equal(expected, File.ReadAllText(launcher.PromptFilePath!));
 
@@ -128,19 +128,20 @@ public sealed class AgentDispatcherTests : IDisposable
     }
 
     [Fact]
-    public async Task DispatchAsync_PassesPreambleThrough_ToComposedFile()
+    public async Task DispatchAsync_PassesTemplateThrough_ToComposedFile()
     {
+        const string template = "CUSTOM LEAD: {userPrompt}\n---\n{taskJson}";
         var launcher = new FakeLauncher();
         var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
         var task = Detail();
         var comments = Comments();
 
-        var result = await dispatcher.DispatchAsync(task, comments, "go", preamble: "Custom preamble line");
+        var result = await dispatcher.DispatchAsync(task, comments, "go", template: template);
 
-        // The custom preamble reaches the composed file, and differs from the default preamble.
-        var expected = AgentPromptComposer.Compose(task, comments, "go", "Custom preamble line");
+        // The custom template renders the composed file, replacing the default layout/preamble.
+        var expected = AgentPromptComposer.Compose(task, comments, "go", template);
         Assert.Equal(expected, File.ReadAllText(result.PromptFilePath));
-        Assert.Contains("Custom preamble line", File.ReadAllText(result.PromptFilePath));
+        Assert.Contains("CUSTOM LEAD:", File.ReadAllText(result.PromptFilePath));
         Assert.DoesNotContain(AgentPromptComposer.Preamble, File.ReadAllText(result.PromptFilePath));
     }
 
@@ -148,16 +149,16 @@ public sealed class AgentDispatcherTests : IDisposable
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public async Task DispatchAsync_BlankPreamble_UsesDefault(string? preamble)
+    public async Task DispatchAsync_BlankTemplate_UsesDefault(string? template)
     {
         var launcher = new FakeLauncher();
         var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
         var task = Detail();
         var comments = Comments();
 
-        var result = await dispatcher.DispatchAsync(task, comments, "go", preamble: preamble);
+        var result = await dispatcher.DispatchAsync(task, comments, "go", template: template);
 
-        // A blank preamble keeps the default — byte-for-byte the no-preamble compose.
+        // A blank template keeps the default — byte-for-byte the default-template compose.
         Assert.Equal(AgentPromptComposer.Compose(task, comments, "go"), File.ReadAllText(result.PromptFilePath));
     }
 
@@ -211,7 +212,7 @@ public sealed class AgentDispatcherTests : IDisposable
         var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: "/home/me");
         var subdir = AgentPromptComposer.OutputSubdirectoryToken(task);
 
-        var result = await dispatcher.DispatchAsync(task, comments, "go", workingDir, settings.PromptPreamble, subdir);
+        var result = await dispatcher.DispatchAsync(task, comments, "go", workingDir, settings.PromptTemplate, subdir);
 
         Assert.Equal(baseDir, launcher.WorkingDir);
         Assert.Equal(
@@ -243,14 +244,15 @@ public sealed class AgentDispatcherTests : IDisposable
         Assert.True(launcher.OneOff);
     }
 
-    // ── Settings → dispatcher wiring (#91) ──────────────────────────────────────────
+    // ── Settings → dispatcher wiring (#91, #100) ─────────────────────────────────────
     // These mirror the glue TodoApp performs (options from ToLauncherOptions, working dir from
-    // ResolveWorkingDirectory, preamble from settings) at the unit-testable dispatcher seam, since
+    // ResolveWorkingDirectory, template from settings) at the unit-testable dispatcher seam, since
     // the TodoApp wiring itself is Terminal.Gui and not testable in CI.
 
     [Fact]
-    public async Task Dispatcher_BuiltFromSettings_ForwardsOptionsWorkingDirAndPreamble()
+    public async Task Dispatcher_BuiltFromSettings_ForwardsOptionsWorkingDirAndTemplate()
     {
+        const string template = "CUSTOM LEAD: {userPrompt}\n---\n{contextJson}";
         var settings = new AgentDispatchSettings
         {
             ClaudeExecutable = "claude-dev",
@@ -258,7 +260,7 @@ public sealed class AgentDispatcherTests : IDisposable
             PreferredTerminal = PreferredTerminal.Pwsh,
             WorkingDirectory = AgentWorkingDirectory.Fixed,
             FixedWorkingDirectory = "/projects/foo",
-            PromptPreamble = "Custom preamble line",
+            PromptTemplate = template,
         };
         var launcher = new FakeLauncher();
         var dispatcher = new AgentDispatcher(launcher, settings.ToLauncherOptions(), _dir);
@@ -266,13 +268,13 @@ public sealed class AgentDispatcherTests : IDisposable
         var task = Detail();
         var comments = Comments();
 
-        var result = await dispatcher.DispatchAsync(task, comments, "go", workingDir, settings.PromptPreamble);
+        var result = await dispatcher.DispatchAsync(task, comments, "go", workingDir, settings.PromptTemplate);
 
         Assert.Equal("claude-dev", launcher.Options!.ClaudeExecutable);
         Assert.Equal(["--model", "opus"], launcher.Options!.ExtraArgs);
         Assert.Equal(PreferredTerminal.Pwsh, launcher.Options!.Preferred);
         Assert.Equal("/projects/foo", launcher.WorkingDir);
-        Assert.Equal(AgentPromptComposer.Compose(task, comments, "go", "Custom preamble line"),
+        Assert.Equal(AgentPromptComposer.Compose(task, comments, "go", template),
             File.ReadAllText(result.PromptFilePath));
     }
 
@@ -286,7 +288,7 @@ public sealed class AgentDispatcherTests : IDisposable
         var task = Detail();
         var comments = Comments();
 
-        var result = await dispatcher.DispatchAsync(task, comments, "go", workingDir, settings.PromptPreamble);
+        var result = await dispatcher.DispatchAsync(task, comments, "go", workingDir, settings.PromptTemplate);
 
         Assert.Equal("claude", launcher.Options!.ClaudeExecutable);
         Assert.Empty(launcher.Options!.ExtraArgs);
