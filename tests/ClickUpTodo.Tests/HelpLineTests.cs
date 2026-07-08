@@ -28,8 +28,8 @@ public sealed class HelpLineTests
     {
         const string expected =
             "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · "
-            + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 feed · →/← expand/collapse · "
-            + "Ctrl+→/← all · Ctrl+Q quit · type to search";
+            + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 feed · F6 badges · "
+            + "→/← expand/collapse · Ctrl+→/← all · Ctrl+Q quit · type to search";
 
         Assert.Equal(expected, HelpLine.Format(HelpItemSets.MainList));
     }

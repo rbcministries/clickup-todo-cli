@@ -35,6 +35,13 @@ public sealed class AppConfig
     public int RefreshSeconds { get; set; } = 60;
 
     /// <summary>
+    /// How the task list renders each row's Status/Priority badges (F6 cycles Icons → Text → Hidden).
+    /// A cosmetic display preference, deliberately kept out of <see cref="ViewSettings"/> so it's
+    /// independent of the F3 filter/sort/group view (and its <see cref="ViewSettings.IsDefault"/>).
+    /// </summary>
+    public BadgeDisplay BadgeDisplay { get; set; } = BadgeDisplay.Icons;
+
+    /// <summary>
     /// Legacy status-exclusion setting, retained only as a <b>deserialize-only migration shim</b>
     /// (#69). Status exclusion is now expressed as ordinary F3 <c>Status IS NOT</c> filter rules;
     /// <see cref="ConfigMigrations"/> reads any saved <c>excludedStatuses</c> array on load, converts
