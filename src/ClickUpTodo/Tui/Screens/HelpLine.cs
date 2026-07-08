@@ -53,6 +53,7 @@ public static class HelpItemSets
         new("F2", "⚙"),
         new("F3", "filter/sort/group"),
         new("F4", "subtasks"),
+        new("F5", "feed"),
         new("→/←", "expand/collapse"),
         new("Ctrl+→/←", "all"),
         new("Ctrl+Q", "quit"),
@@ -96,6 +97,14 @@ public static class HelpItemSets
         new("Enter", "select"),
         new("F1", "help"),
         new("Esc", "cancel"),
+    ];
+
+    /// <summary>The mentions &amp; comments feed screen (F5, #110). Scaffold set — scroll / open-task
+    /// items arrive with the data-bearing follow-ups (#114/#115).</summary>
+    public static readonly IReadOnlyList<HelpItem> NotificationsFeed =
+    [
+        new("F1", "help"),
+        new("Esc", "back"),
     ];
 
     /// <summary>The help screen itself (no F1 — it is the help).</summary>

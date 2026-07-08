@@ -325,7 +325,25 @@ public sealed class TodoApp
                 key.Handled = true;
                 ToggleShowSubtasks();
                 break;
+            case KeyCode.F5:
+                key.Handled = true;
+                OpenNotificationsFeed();
+                break;
         }
+    }
+
+    /// <summary>
+    /// F5 — opens the mentions &amp; comments feed screen (#110, epic #109). Currently a walking-skeleton
+    /// scaffold rendering an empty-state placeholder; the data layers land in #112–#116. Opens through
+    /// the shared screen seam (guarded on <see cref="ActiveScreen"/> like the other list-initiated opens)
+    /// with no result to read back.
+    /// </summary>
+    private void OpenNotificationsFeed()
+    {
+        if (ActiveScreen is not null)
+            return;
+
+        ShowScreen(new NotificationsFeedScreen(), static () => { });
     }
 
     /// <summary>Toggles the subtasks view (F4, #46) — hidden vs. shown nested — and persists it.</summary>
