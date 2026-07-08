@@ -8,7 +8,7 @@ namespace ClickUpTodo.Services;
 /// Fetches and merges the user's actionable tasks (assigned-to-me ∪ Personal Tasks list),
 /// de-duplicated and stably ordered, and resolves per-list status options on demand (cached).
 /// </summary>
-public sealed class TaskService(ClickUpClient client, AppConfig config, long userId, TimeProvider? timeProvider = null)
+public sealed class TaskService(IClickUpClient client, AppConfig config, long userId, TimeProvider? timeProvider = null)
 {
     // Per-list status options, cached with a long TTL (statuses rarely change) and warmed by
     // PrefetchStatusesAsync so the picker opens from cache in the common case.
@@ -29,7 +29,7 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
         // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone. A
         // username/email rule is resolved to an id via the workspace-members lookup (#73).
         var assigned = await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), ct);
-        var personal = await client.GetListTasksAsync(config.PersonalTasksListId, ct);
+        var personal = await client.GetListTasksAsync(config.PersonalTasksListId, ct: ct);
 
         // De-dup by task id; a task assigned to me that also lives on my personal list appears once.
         var byId = new Dictionary<string, TaskItem>();
@@ -330,34 +330,83 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     /// <summary>
     /// Fetches the teammate-owned subtasks of in-view parents so they can nest beneath them regardless
     /// of assignee (#70). The assignee constraint is server-side (#68), so these children fall outside
-    /// the main fetch; we recover them with a <b>per-parent</b> fetch
-    /// (<see cref="ClickUpClient.GetSubtasksAsync"/> — <c>GET /task/{id}?include_subtasks=true</c>),
-    /// walking outward from each in-view task and recursing into each pulled-in child so deeper
-    /// descendants (grandchildren) are gathered too. The flat pool is then run through the pure
-    /// <see cref="ForeignDescendants"/> selector for dedup / present-exclusion / cycle-safety.
+    /// the main fetch; we recover them via an <b>adaptive</b> plan (<see cref="SubtaskFetchStrategy"/>,
+    /// #87) that picks the fetch shape from the shape of the snapshot, then runs the pooled result through
+    /// the pure <see cref="ForeignDescendants"/> selector for dedup / present-exclusion / cycle-safety.
     /// <para>
-    /// Unlike the earlier list-scoped fetch, this pulls exactly the subtrees we need — no whole-list
-    /// payloads, and it works even when a subtask lives in a <em>different</em> list than its parent.
-    /// The tradeoff is one round-trip per expanded task; a smart/adaptive strategy that chooses between
-    /// per-parent and bulk fetches by parent count is tracked in #87.
+    /// <b>Per-parent</b> (<see cref="ClickUpClient.GetSubtasksAsync"/> —
+    /// <c>GET /task/{id}?include_subtasks=true</c>): one round-trip per parent, minimal payload, and works
+    /// even when a subtask lives in a <em>different</em> list than its parent; each pulled-in child is
+    /// recursed into so deeper descendants are gathered. Used for the whole snapshot when parents are few,
+    /// and for the sparse remainder otherwise. <b>Whole-list</b>
+    /// (<see cref="ClickUpClient.GetListTasksAsync"/> — <c>GET /list/{id}/task?subtasks=true</c>): one
+    /// round-trip pulls a list entire (intra-list chains of any depth included, so no recursion needed),
+    /// chosen for lists where enough in-view parents cluster that it beats the per-parent calls it
+    /// replaces. Its one tradeoff is that a routed parent's <em>cross-list</em> descendants aren't
+    /// recovered by that branch (the pre-#84 limitation) — only heavily-clustered lists take that path;
+    /// see <c>.claude/plans/adaptive-subtask-fetch.md</c>.
     /// </para>
-    /// Best-effort: a task whose subtasks can't be fetched is skipped rather than failing the whole load.
+    /// Worst cases are bounded: the plan caps the whole-list and per-parent <em>seeds</em>, and the
+    /// per-parent BFS below counts <em>every</em> <c>GetSubtasksAsync</c> round-trip (seeds + recursion)
+    /// against <see cref="SubtaskFetchOptions.MaxPerParentFetches"/> so a deep/wide foreign subtree can't
+    /// blow the budget. Any cap that drops work sets <see cref="ForeignSubtaskResolution.Truncated"/> so
+    /// the caller can surface it (the TUI appends a note to the post-refresh status line) rather than
+    /// truncating silently.
+    /// Best-effort: a task/list whose fetch fails is skipped rather than failing the whole load.
     /// Non-assignee filters (status/closed) still apply — the pulled-in children flow through
     /// <c>TaskView.Apply</c> like any other task.
     /// </summary>
-    public async Task<IReadOnlyList<TaskItem>> ResolveForeignSubtasksAsync(
-        IReadOnlyList<TaskItem> snapshot, CancellationToken ct = default)
+    public async Task<ForeignSubtaskResolution> ResolveForeignSubtasksAsync(
+        IReadOnlyList<TaskItem> snapshot, SubtaskFetchOptions? options = null, CancellationToken ct = default)
     {
+        var opts = options ?? SubtaskFetchOptions.Default;
+        var plan = SubtaskFetchStrategy.Plan(snapshot, opts);
+        var truncated = plan.Truncated;
+
         var fetched = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
+
+        // Whole-list branch: one round-trip per dense list; ForeignDescendants narrows the whole list to
+        // the real descendants of in-view parents. Include closed tasks so a closed intermediate parent
+        // doesn't break the chain to an open descendant — parity with the per-parent GetSubtasksAsync,
+        // which keeps closed; TaskView.Apply does the status filtering downstream either way. Best-effort.
+        foreach (var listId in plan.WholeListIds)
+        {
+            IReadOnlyList<TaskItem> listTasks;
+            try
+            {
+                listTasks = await client.GetListTasksAsync(listId, includeClosed: true, ct: ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                continue; // best-effort: a list we can't fetch contributes nothing
+            }
+            foreach (var t in listTasks)
+            {
+                if (!string.IsNullOrEmpty(t.Id))
+                    fetched.TryAdd(t.Id, t);
+            }
+        }
+
+        // Per-parent branch: seed the BFS only from the parents the plan left to us, recursing into each
+        // pulled-in child so deeper / cross-list descendants are reached. A child already gathered by a
+        // whole-list fetch is skipped (and not re-enqueued) by the dedup add below. The budget bounds the
+        // TOTAL round-trips (seeds + recursion), not just the seed count, so an unexpectedly deep/wide
+        // subtree stops at the cap and flags truncation instead of fanning out unboundedly.
+        var budget = opts.MaxPerParentFetches;
+        var spent = 0;
         var expanded = new HashSet<string>(StringComparer.Ordinal);
-        // Expand outward from every in-view task; recurse into pulled-in children so grandchildren are
-        // reached regardless of whether the API returns one level or the whole subtree per call.
-        var toExpand = new Queue<string>(snapshot.Select(t => t.Id).Where(id => !string.IsNullOrEmpty(id)).Distinct(StringComparer.Ordinal));
+        var toExpand = new Queue<string>(plan.PerParentIds);
         while (toExpand.Count > 0)
         {
             var id = toExpand.Dequeue();
             if (!expanded.Add(id))
                 continue;
+            if (spent >= budget)
+            {
+                truncated = true; // still-pending ids we won't reach this refresh
+                break;
+            }
+            spent++;
             IReadOnlyList<TaskItem> children;
             try
             {
@@ -369,13 +418,13 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
             }
             foreach (var child in children)
             {
-                if (string.IsNullOrEmpty(child.Id) || fetched.ContainsKey(child.Id))
+                if (string.IsNullOrEmpty(child.Id) || !fetched.TryAdd(child.Id, child))
                     continue;
-                fetched[child.Id] = child;
                 toExpand.Enqueue(child.Id); // its own subtasks may be foreign too
             }
         }
-        return ForeignDescendants(snapshot, fetched.Values.ToList());
+
+        return new ForeignSubtaskResolution(ForeignDescendants(snapshot, fetched.Values.ToList()), truncated);
     }
 
     /// <summary>Stable ordering: by due date (soonest first, undated last), then by name.</summary>
