@@ -55,10 +55,42 @@ Windows DPAPI (current-user scope); on other platforms it falls back to a base64
 
 Run `clickup-todo --reset` to forget the token and settings and start over.
 
-> **Why a personal token and not OAuth sign-in?** ClickUp's OAuth flow requires a client **secret**,
-> which can't be safely shipped in a public repo (there's no PKCE/public-client flow). A personal
-> token is equally capable for your own tasks and keeps nothing secret in the repo. OAuth with
-> user-supplied app credentials is tracked as a follow-up issue.
+> **Why a personal token by default?** ClickUp's OAuth flow requires a client **secret**, which
+> can't be safely shipped in a public repo (there's no PKCE/public-client flow). A personal token is
+> equally capable for your own tasks and keeps nothing secret in the repo, so it's the default path.
+> If you'd rather sign in with OAuth, you can — using **your own** ClickUp app (below).
+
+### Optional: sign in with OAuth (bring your own app)
+
+OAuth is an **opt-in alternative** to the personal token — the personal-token path stays the default
+and is unaffected. To enable it you register your own ClickUp OAuth app so no secret ever lives in
+this repo:
+
+1. In ClickUp, go to **Settings → Apps → API → Create an App** (or ClickUp's OAuth app settings) and
+   register an app. Set its **Redirect URL** to `http://localhost:53682/callback`.
+2. Provide the app's credentials to the CLI, either via environment variables:
+
+   ```bash
+   export CLICKUP_OAUTH_CLIENT_ID=...       # your app's client id
+   export CLICKUP_OAUTH_CLIENT_SECRET=...   # your app's client secret
+   ```
+
+   or via a **gitignored** `oauth-app.json` in the config directory
+   (`~/.config/clickup-todo/` or `%APPDATA%\clickup-todo\`):
+
+   ```json
+   { "clientId": "...", "clientSecret": "..." }
+   ```
+
+3. Run the app (or `clickup-todo --reset`). When credentials are present, setup asks whether to use a
+   personal token (default) or **Sign in with ClickUp (OAuth)**. Choosing OAuth opens your browser to
+   authorize; the CLI captures the redirect on `localhost` and exchanges it for an access token. If
+   the local listener can't bind (locked-down environment), it falls back to letting you **paste the
+   `code`** from the browser's address bar.
+
+The OAuth access token is stored the same way as a personal token (encrypted at rest), and the active
+auth mode is recorded in `config.json` so startup uses the right scheme. To use a different registered
+redirect URL, set `CLICKUP_OAUTH_REDIRECT_URI` (it must match the URL registered in your app).
 
 ## Keyboard shortcuts
 
