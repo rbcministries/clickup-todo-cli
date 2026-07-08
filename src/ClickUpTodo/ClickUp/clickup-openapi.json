@@ -196,7 +196,9 @@
         "operationId": "GetTaskComments",
         "summary": "Get the comments on a task (most recent first).",
         "parameters": [
-          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "start", "in": "query", "description": "Cursor: epoch-ms of the oldest comment from the previous page. Returns comments older than this.", "schema": { "type": "integer", "format": "int64" } },
+          { "name": "start_id", "in": "query", "description": "Cursor: id of the oldest comment from the previous page, paired with 'start'.", "schema": { "type": "string" } }
         ],
         "responses": {
           "200": {
