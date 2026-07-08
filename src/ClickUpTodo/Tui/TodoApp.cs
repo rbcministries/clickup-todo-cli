@@ -55,10 +55,19 @@ public sealed class TodoApp
     private FrameView _frame = null!;
     private ListView _list = null!;
     private Label _statusLabel = null!;
+    // The single window-owned contextual help line (#103): shows the active screen's shortcuts, or the
+    // list's when no screen is open. One shared bottom row — screens no longer hand-roll their own.
+    private Label _helpLabel = null!;
     private RefreshService _refresh = null!;
-    // The full-window screen currently swapped in over the list (Settings / status picker / Help),
-    // or null when the list is showing. Only one screen is open at a time.
-    private Screen? _activeScreen;
+    // The stack of full-window screens swapped in over the list (Settings / status picker / detail /
+    // Help). The top is visible + focused; any beneath it are mounted-but-hidden so we can return to
+    // them (F1 opens Help *over* the current screen and Esc pops back to it with its state intact).
+    // Still one visible/focusable screen at a time within the single toplevel (no nested run loop) —
+    // the #3/#38 invariants hold. List-initiated opens guard on ActiveScreen, so only Help ever stacks.
+    private readonly List<Screen> _screens = [];
+
+    /// <summary>The screen currently on top (visible + focused), or null when the task list is showing.</summary>
+    private Screen? ActiveScreen => _screens.Count > 0 ? _screens[^1] : null;
 
     private IReadOnlyList<TaskItem> _all = [];
     // Parallel to the ListView's rows: the task on each row, or null for a header/spacer row.
@@ -193,15 +202,18 @@ public sealed class TodoApp
         _frame.Add(_list);
 
         _statusLabel = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = _status };
-        var help = new Label
+        // The single contextual help line (#103). Seeded with the list's shortcuts; UpdateHelpLine swaps
+        // in the active screen's shortcuts on show and back to the list's on close. Format of the list
+        // set is byte-for-byte the pre-#103 text, so the default footer is unchanged.
+        _helpLabel = new Label
         {
             X = 1,
             Y = Pos.AnchorEnd(1),
             Width = Dim.Fill(1),
-            Text = "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · →/← expand/collapse · Ctrl+Q quit · type to search",
+            Text = HelpLine.Format(HelpItemSets.MainList),
         };
 
-        _window.Add(_frame, _statusLabel, help);
+        _window.Add(_frame, _statusLabel, _helpLabel);
         _list.SetFocus();
     }
 
@@ -254,14 +266,14 @@ public sealed class TodoApp
             case KeyCode.CursorRight:
                 // ←/→ drive per-parent fold only while the subtasks view is on (#76); off, they fall
                 // through to the ListView's native horizontal scroll.
-                if (_config.View.ShowSubtasks && _activeScreen is null)
+                if (_config.View.ShowSubtasks && ActiveScreen is null)
                 {
                     key.Handled = true;
                     ExpandOrEnter();
                 }
                 break;
             case KeyCode.CursorLeft:
-                if (_config.View.ShowSubtasks && _activeScreen is null)
+                if (_config.View.ShowSubtasks && ActiveScreen is null)
                 {
                     key.Handled = true;
                     CollapseOrJumpToParent();
@@ -293,7 +305,7 @@ public sealed class TodoApp
     /// <summary>Toggles the subtasks view (F4, #46) — hidden vs. shown nested — and persists it.</summary>
     private void ToggleShowSubtasks()
     {
-        if (_activeScreen is not null)
+        if (ActiveScreen is not null)
             return;
 
         var on = !_config.View.ShowSubtasks;
@@ -317,7 +329,7 @@ public sealed class TodoApp
 
     private void OpenViewSettings()
     {
-        if (_activeScreen is not null)
+        if (ActiveScreen is not null)
             return;
 
         var screen = new FilterSortGroupScreen(_config.View);
@@ -382,7 +394,7 @@ public sealed class TodoApp
 
     private void OpenSettings()
     {
-        if (_activeScreen is not null)
+        if (ActiveScreen is not null)
             return;
 
         var screen = new SettingsScreen(_config.RefreshSeconds, _config.AgentDispatch);
@@ -407,22 +419,31 @@ public sealed class TodoApp
     // Application.Run). #17's detail view builds on this. See the class header / #38.
 
     /// <summary>
-    /// Mounts a screen over the task list: hides the list frame, adds the screen to the window, and
-    /// focuses it. When the screen raises <see cref="Screen.Closed"/>, <paramref name="onClosed"/>
-    /// runs (to read any result) and then the list is restored. No-ops if a screen is already open.
+    /// Mounts a screen on top of the stack: hides whatever is currently visible (the list frame, or the
+    /// screen already showing), adds the screen to the window, updates the shared help line, and
+    /// focuses it. When the screen raises <see cref="Screen.Closed"/>, <paramref name="onClosed"/> runs
+    /// (to read any result) and then the screen beneath it — or the list — is restored.
+    /// <para>
+    /// Callers that open a screen from the list guard on <see cref="ActiveScreen"/>, so in practice only
+    /// Help (via F1, <see cref="OnScreenHelpRequested"/>) ever stacks on top of another screen.
+    /// </para>
     /// </summary>
     private void ShowScreen(Screen screen, Action onClosed)
     {
-        if (_activeScreen is not null)
-            return;
+        // Hide the currently-visible layer so only the new top draws/focuses (one visible screen at a
+        // time — #3). It stays mounted so Esc can return to it with its state intact.
+        if (_screens.Count == 0)
+            _frame.Visible = false;
+        else
+            _screens[^1].Visible = false;
 
-        _activeScreen = screen;
+        _screens.Add(screen);
 
         EventHandler? handler = null;
         handler = (_, _) =>
         {
             // Guard against a double-fire (e.g. two Esc presses before teardown runs).
-            if (_activeScreen != screen)
+            if (!_screens.Contains(screen))
                 return;
             screen.Closed -= handler;
             // Defer teardown out of the screen's own key handler: disposing the view mid-keypress
@@ -430,25 +451,31 @@ public sealed class TodoApp
             // next loop iteration lets the current input cycle finish first.
             Application.Invoke(() =>
             {
-                onClosed();      // read the screen's result while it's still intact
-                CloseScreen();   // then tear it down and restore the list
+                onClosed();          // read the screen's result while it's still intact
+                CloseScreen(screen); // then tear it down and restore the layer beneath it
             });
         };
         screen.Closed += handler;
+        // The shared footer + status line replace each screen's hand-rolled hint Label (#103).
+        screen.FlashRequested += OnScreenFlash;
+        screen.HelpRequested += OnScreenHelpRequested;
 
-        _frame.Visible = false;
         _window.Add(screen);
+        UpdateHelpLine();
         screen.OnShown();
     }
 
-    /// <summary>Tears down the active screen and restores the list with its cursor intact.</summary>
-    private void CloseScreen()
+    /// <summary>
+    /// Tears down <paramref name="screen"/> (which must be on the stack) and restores the layer beneath
+    /// it — the screen below, or the task list with its cursor intact when the stack empties.
+    /// </summary>
+    private void CloseScreen(Screen screen)
     {
-        if (_activeScreen is null)
+        if (!_screens.Remove(screen))
             return;
 
-        var screen = _activeScreen;
-        _activeScreen = null;
+        screen.FlashRequested -= OnScreenFlash;
+        screen.HelpRequested -= OnScreenHelpRequested;
         _window.Remove(screen);
         // Terminal.Gui 2.4.10 can throw from View/Tabs.Dispose while tearing down a view's subviews
         // (disposing a child mutates the parent's subview list mid-iteration → IndexOutOfRange; hit
@@ -463,9 +490,39 @@ public sealed class TodoApp
         {
             Debug.WriteLine($"Screen dispose threw (Terminal.Gui teardown bug), ignoring: {ex}");
         }
-        _frame.Visible = true;
-        _list.SetFocus();
+
+        // Restore the layer beneath: the screen now on top, or the list when the stack is empty.
+        if (_screens.Count > 0)
+        {
+            var below = _screens[^1];
+            below.Visible = true;
+            below.SetFocus();
+        }
+        else
+        {
+            _frame.Visible = true;
+            _list.SetFocus();
+        }
+        UpdateHelpLine();
     }
+
+    /// <summary>Routes a screen's transient message (e.g. a validation error) to the status line.</summary>
+    private void OnScreenFlash(object? sender, string message) => Flash(message);
+
+    /// <summary>
+    /// F1 from a screen opens Help stacked over it (Esc returns to the underlying screen). Ignored when
+    /// Help is already on top so F1-in-Help can't restack it.
+    /// </summary>
+    private void OnScreenHelpRequested(object? sender, EventArgs e)
+    {
+        if (ActiveScreen is HelpScreen)
+            return;
+        ShowScreen(new HelpScreen(), static () => { });
+    }
+
+    /// <summary>Sets the shared help line to the active screen's shortcuts, or the list's when idle.</summary>
+    private void UpdateHelpLine()
+        => _helpLabel.Text = HelpLine.Format(HelpLine.ForActiveScreen(ActiveScreen?.HelpItems, HelpItemSets.MainList));
 
     /// <summary>The task on the selected row, or null if a header row (or nothing) is selected.</summary>
     private TaskItem? CurrentTask()
@@ -630,7 +687,7 @@ public sealed class TodoApp
     private void OpenDetail()
     {
         var task = CurrentTask();
-        if (task is null || _activeScreen is not null)
+        if (task is null || ActiveScreen is not null)
             return;
 
         Flash("Loading details…");
@@ -644,7 +701,7 @@ public sealed class TodoApp
                 var comments = await _tasks.GetTaskCommentsAsync(task.Id);
                 Application.Invoke(() =>
                 {
-                    if (_activeScreen is not null)
+                    if (ActiveScreen is not null)
                         return;
                     var screen = new TaskDetailScreen(detail, comments);
                     // A (in the detail view) → compose + launch an interactive claude session (#26).
@@ -755,7 +812,7 @@ public sealed class TodoApp
             return;
         }
 
-        if (_activeScreen is not null)
+        if (ActiveScreen is not null)
             return;
 
         var screen = new StatusPickerScreen(task.Name, statuses, task.StatusName);
@@ -835,7 +892,7 @@ public sealed class TodoApp
 
     private void ShowHelp()
     {
-        if (_activeScreen is not null)
+        if (ActiveScreen is not null)
             return;
         ShowScreen(new HelpScreen(), static () => { });
     }

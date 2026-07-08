@@ -93,14 +93,6 @@ public sealed class SettingsScreen : Screen
         var preambleLabel = new Label { X = rightX, Y = 12, Text = "Prompt preamble (blank = default):" };
         var preambleField = new TextField { X = rightX, Y = 13, Width = Dim.Fill(2), Text = dispatch.PromptPreamble };
 
-        var hint = new Label
-        {
-            X = 1,
-            Y = Pos.AnchorEnd(2),
-            Width = Dim.Fill(1),
-            Text = "Tab moves · Space cycles buttons · Esc cancels",
-        };
-
         var save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var cancel = new Button { X = Pos.Right(save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         save.Accepting += (_, _) =>
@@ -120,13 +112,19 @@ public sealed class SettingsScreen : Screen
         };
         cancel.Accepting += (_, _) => Close();
 
-        // Esc cancels from anywhere on the screen (Result stays null).
+        // Esc cancels from anywhere on the screen (Result stays null); F1 opens Help (#103).
         KeyDown += (_, key) =>
         {
-            if (key.KeyCode == KeyCode.Esc)
+            switch (key.KeyCode)
             {
-                key.Handled = true;
-                Close();
+                case KeyCode.Esc:
+                    key.Handled = true;
+                    Close();
+                    break;
+                case KeyCode.F1:
+                    key.Handled = true;
+                    RequestHelp();
+                    break;
             }
         };
 
@@ -134,9 +132,11 @@ public sealed class SettingsScreen : Screen
             refreshLabel, _refreshField, excludedNote,
             agentHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, preambleLabel, preambleField,
-            hint, save, cancel,
+            save, cancel,
         ]);
     }
+
+    public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Settings;
 
     public override void OnShown() => _refreshField.SetFocus();
 
