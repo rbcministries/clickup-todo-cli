@@ -58,4 +58,56 @@ public sealed class SettingsFormTests
         string[] args = ["--model", "opus", "--dangerously-skip-permissions"];
         Assert.Equal(args, SettingsForm.ParseExtraArgs(SettingsForm.FormatExtraArgs(args)));
     }
+
+    // ── base working directory (#92) ────────────────────────────────────────────
+
+    private const string Home = "/home/tester";
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ExpandHomePath_BlankYieldsEmpty(string? text)
+        => Assert.Equal("", SettingsForm.ExpandHomePath(text, Home));
+
+    [Fact]
+    public void ExpandHomePath_BareTildeIsHome()
+        => Assert.Equal(Home, SettingsForm.ExpandHomePath("~", Home));
+
+    [Fact]
+    public void ExpandHomePath_TildeSlashExpandsUnderHome()
+        => Assert.Equal(Path.Combine(Home, "source", "repos"), SettingsForm.ExpandHomePath("~/source/repos", Home));
+
+    [Fact]
+    public void ExpandHomePath_TildeBackslashExpandsUnderHome()
+        => Assert.Equal(Path.Combine(Home, "source\\repos"), SettingsForm.ExpandHomePath("~\\source\\repos", Home));
+
+    [Fact]
+    public void ExpandHomePath_AbsolutePathPassesThroughUnchanged()
+        => Assert.Equal("/opt/work", SettingsForm.ExpandHomePath("/opt/work", Home));
+
+    [Fact]
+    public void ExpandHomePath_TrimsSurroundingWhitespace()
+        => Assert.Equal("/opt/work", SettingsForm.ExpandHomePath("  /opt/work  ", Home));
+
+    [Fact]
+    public void ExpandHomePath_MidStringTildeIsNotExpanded()
+        => Assert.Equal("/opt/~/work", SettingsForm.ExpandHomePath("/opt/~/work", Home));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ResolveDefaultWorkingDirectory_BlankFallsBackToClickUpTasks(string? stored)
+        => Assert.Equal(
+            Path.Combine(Home, SettingsForm.DefaultWorkingDirectoryFolderName),
+            SettingsForm.ResolveDefaultWorkingDirectory(stored, Home));
+
+    [Fact]
+    public void ResolveDefaultWorkingDirectory_ExpandsTildeInStoredValue()
+        => Assert.Equal(Path.Combine(Home, "repos"), SettingsForm.ResolveDefaultWorkingDirectory("~/repos", Home));
+
+    [Fact]
+    public void ResolveDefaultWorkingDirectory_PassesAbsoluteStoredValueThrough()
+        => Assert.Equal("/opt/work", SettingsForm.ResolveDefaultWorkingDirectory("/opt/work", Home));
 }
