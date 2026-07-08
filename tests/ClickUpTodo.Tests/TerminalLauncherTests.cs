@@ -178,6 +178,95 @@ public sealed class TerminalLauncherTests
             inner);
     }
 
+    // ── session mode: one-off `claude -p` vs interactive (#94) ─────────────────
+
+    private static IReadOnlyList<LaunchSpec> PlanOneOff(
+        OSPlatformKind os, Func<string, bool> exists, TerminalLauncherOptions? options = null, Func<string, string?>? env = null)
+        => TerminalCommandPlanner.Plan(os, exists, env ?? NoEnv, PromptFile, null, options ?? Defaults, oneOff: true);
+
+    [Fact]
+    public void OneOff_Pwsh_InsertsDashP_AfterExecutable_BeforeExtraArgs_PromptStillFileRead()
+    {
+        var options = Defaults with { ExtraArgs = ["--model", "opus"] };
+
+        var command = PlanOneOff(OSPlatformKind.Windows, Present("pwsh"), options)[0].Arguments[^1];
+
+        // `-p` lands right after the executable, before the user's extra args; prompt still file-read.
+        Assert.Equal(
+            "& 'claude' '-p' '--model' 'opus' (Get-Content -Raw '/tmp/clickup-todo/agent-prompt.txt')",
+            command);
+    }
+
+    [Fact]
+    public void Interactive_Pwsh_OmitsDashP()
+    {
+        var command = Plan(OSPlatformKind.Windows, Present("pwsh"))[0].Arguments[^1];
+
+        Assert.DoesNotContain("'-p'", command);
+    }
+
+    [Fact]
+    public void OneOff_Pwsh_NeedsNoKeepAlive_HostsAlreadyUseNoExit()
+    {
+        // The PowerShell hosts launch with -NoExit, so the window survives a one-off; no `read`
+        // keep-alive is appended (that's the POSIX-only concern).
+        var command = PlanOneOff(OSPlatformKind.Windows, Present("pwsh"))[0].Arguments[^1];
+
+        Assert.DoesNotContain("read -r", command);
+        Assert.Contains("-NoExit", Plan(OSPlatformKind.Windows, Present("pwsh"))[0].Arguments); // sanity
+    }
+
+    [Fact]
+    public void OneOff_Posix_InsertsDashP_AndAppendsKeepAlive_PromptStillFileRead()
+    {
+        var options = Defaults with { ExtraArgs = ["--model", "opus"] };
+
+        var inner = PlanOneOff(OSPlatformKind.Linux, Present("konsole"), options)[0].Arguments[3];
+
+        // `-p` after the executable, prompt still read from the file, and a keep-alive so the terminal
+        // doesn't close before the user reads the output.
+        Assert.StartsWith(
+            "'claude' -p '--model' 'opus' \"$(cat '/tmp/clickup-todo/agent-prompt.txt')\"",
+            inner);
+        Assert.Contains("$(cat '/tmp/clickup-todo/agent-prompt.txt')", inner); // file-read, not inlined
+        Assert.Contains("read -r _", inner);                                   // keep-alive
+    }
+
+    [Fact]
+    public void Interactive_Posix_OmitsDashP_AndKeepAlive()
+    {
+        var inner = Plan(OSPlatformKind.Linux, Present("konsole"))[0].Arguments[3];
+
+        Assert.Equal("'claude' \"$(cat '/tmp/clickup-todo/agent-prompt.txt')\"", inner);
+        Assert.DoesNotContain("read -r", inner);
+    }
+
+    [Fact]
+    public void OneOff_MacOS_InsertsDashP_AndKeepAlive_InTheDoScript()
+    {
+        var script = PlanOneOff(OSPlatformKind.MacOS, Present("osascript"))[0].Arguments[1];
+
+        Assert.Contains("'claude' -p ", script);
+        Assert.Contains("$(cat '/tmp/clickup-todo/agent-prompt.txt')", script); // file-read
+        Assert.Contains("read -r _", script);                                   // keep-alive
+    }
+
+    [Fact]
+    public void OneOff_AllPlatforms_KeepPromptFileIndirected_NeverInlineContent()
+    {
+        foreach (var (os, exists, env) in new (OSPlatformKind, Func<string, bool>, Func<string, string?>)[]
+        {
+            (OSPlatformKind.Windows, Present("pwsh"), NoEnv),
+            (OSPlatformKind.MacOS, Present("osascript"), NoEnv),
+            (OSPlatformKind.Linux, Present("gnome-terminal"), NoEnv),
+        })
+        {
+            var command = string.Join(" ", PlanOneOff(os, exists, env: env)[0].Arguments);
+            Assert.Contains(PromptFile, command);
+            Assert.Matches("Get-Content -Raw|cat ", command);
+        }
+    }
+
     // ── macOS ────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -394,7 +483,22 @@ public sealed class TerminalLauncherTests
         cts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => launcher.LaunchAsync(PromptFile, null, Defaults, cts.Token));
+            () => launcher.LaunchAsync(PromptFile, null, Defaults, ct: cts.Token));
         Assert.False(started); // cancelled before any process was started
+    }
+
+    [Fact]
+    public async Task Launch_ThreadsOneOff_IntoTheBuiltCommand()
+    {
+        LaunchSpec? captured = null;
+        Func<LaunchSpec, bool> start = s => { captured = s; return true; };
+        var launcher = Launcher(OSPlatformKind.Linux, Present("konsole"), start);
+
+        await launcher.LaunchAsync(PromptFile, null, Defaults, oneOff: true);
+
+        Assert.NotNull(captured);
+        var command = string.Join(" ", captured!.Arguments);
+        Assert.Contains("'claude' -p ", command); // one-off flag reached the planned command
+        Assert.Contains("read -r _", command);     // and the POSIX keep-alive
     }
 }
