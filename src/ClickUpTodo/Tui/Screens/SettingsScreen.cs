@@ -77,7 +77,7 @@ public sealed class SettingsScreen : Screen
 
         // ── Right column: Dispatch (#27, consolidated in #101) ──────────────────
         var rightX = Pos.Percent(50) + 1;
-        var agentHeader = new Label { X = rightX, Y = 0, Text = "─ Dispatch ─" };
+        var dispatchHeader = new Label { X = rightX, Y = 0, Text = "─ Dispatch ─" };
 
         var exeLabel = new Label { X = rightX, Y = 1, Text = "Claude executable (blank = claude):" };
         var exeField = new TextField { X = rightX, Y = 2, Width = Dim.Fill(2), Text = dispatch.ClaudeExecutable };
@@ -168,7 +168,7 @@ public sealed class SettingsScreen : Screen
         Add([
             refreshLabel, _refreshField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
-            agentHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
+            dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, preambleLabel, preambleField,
             sessionModeButton, postToCommentsButton,
             save, cancel,

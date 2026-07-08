@@ -85,8 +85,13 @@ In `SettingsScreen`:
 
 - `dotnet build -c Release` (0 warn / 0 err) + `dotnet test -c Release` (green; integration
   skipped without token) + `dotnet format`.
-- TUI (build-verified per the repo rule): open F2, cycle the two new buttons, Save, confirm
-  `config.json` shows `defaultSessionMode` / `defaultPostResultsToComments`; reopen shows
-  the persisted values. No new focusable list pane — the two buttons sit in the existing
-  single settings screen (the #3 latency model is untouched; this screen already has
-  focusable controls).
+- TUI: `tui-validate` PTY pass confirms the change didn't perturb the shared render/latency
+  path — keypress latency 51 ms median, ~0.9 KB/press, and the dashboard + detail A/B are
+  byte-identical to the stock renderer (only the wall-clock timestamp row differs, the
+  documented mask). The harness has no F2-settings scenario, so the two new buttons
+  themselves are verified by build + reasoning (the first-pass review confirmed both fields
+  thread into the saved `SettingsResult`). Manual check: open F2, cycle the two new buttons,
+  Save, confirm `config.json` shows `defaultSessionMode` / `defaultPostResultsToComments`;
+  reopen shows the persisted values. No new focusable list pane — the two buttons sit in the
+  existing single settings screen (the #3 latency model is untouched; this screen already
+  has focusable controls).
