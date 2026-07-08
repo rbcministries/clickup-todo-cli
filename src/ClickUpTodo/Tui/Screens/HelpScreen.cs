@@ -56,5 +56,7 @@ public sealed class HelpScreen : Screen
         Add(body);
     }
 
+    public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Help;
+
     public override void OnShown() => SetFocus();
 }

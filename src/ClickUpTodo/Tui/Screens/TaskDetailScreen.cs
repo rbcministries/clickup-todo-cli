@@ -112,17 +112,9 @@ public sealed class TaskDetailScreen : Screen
             _tabs.InsertTab(i, _tabContents[i]);
         _tabs.Value = description;
 
-        var hint = new Label
-        {
-            X = 1,
-            Y = Pos.AnchorEnd(1),
-            Width = Dim.Fill(1),
-            Text = " Tab switch tab · ↑/↓ PgUp/PgDn scroll · A dispatch to Claude · Ctrl+B browser · Esc back",
-        };
-
         // The "Prompt for Claude:" input (#26): a transient single-line field, hidden until A is
         // pressed. Single-line so Enter unambiguously submits (Esc cancels); the composer trims the
-        // text. Overlaid near the bottom and added last so it draws on top of the panes/hint.
+        // text. Overlaid near the bottom and added last so it draws on top of the panes.
         _promptField = new TextField { X = 0, Y = 0, Width = Dim.Fill() };
         _promptBox = new FrameView
         {
@@ -142,8 +134,10 @@ public sealed class TaskDetailScreen : Screen
             target.KeyDown += OnKey;
         KeyDown += OnKey;
 
-        Add([header, _tabs, hint, _promptBox]);
+        Add([header, _tabs, _promptBox]);
     }
+
+    public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Detail;
 
     public override void OnShown() => _scrollTargets[0].SetFocus();
 
@@ -173,6 +167,10 @@ public sealed class TaskDetailScreen : Screen
             case KeyCode.Tab:
                 key.Handled = true;
                 CycleTab(forward: !key.IsShift);
+                break;
+            case KeyCode.F1:
+                key.Handled = true;
+                RequestHelp();
                 break;
             case KeyCode.Esc:
                 key.Handled = true;

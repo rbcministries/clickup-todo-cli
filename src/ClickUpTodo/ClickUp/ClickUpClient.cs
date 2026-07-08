@@ -181,6 +181,22 @@ public sealed class ClickUpClient : IDisposable
             return MapDetail(t);
         });
 
+    /// <summary>
+    /// The direct subtasks of a task, regardless of assignee, mapped to the stable <see cref="TaskItem"/>
+    /// shape (#70). Uses <c>GET /task/{id}?include_subtasks=true</c>; the archived ones are dropped to
+    /// mirror the list/team fetches. The result carries each child's own <c>parent</c>, so the caller can
+    /// recurse to gather deeper descendants. Returns an empty list when the task has no subtasks.
+    /// </summary>
+    public Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default)
+        => Guard("GetTask", async () =>
+        {
+            var t = await _client.V2.Task[taskId].GetAsync(cfg => cfg.QueryParameters.IncludeSubtasks = true, ct);
+            return (IReadOnlyList<TaskItem>)(t?.Subtasks?
+                .Where(s => s.Archived != true)
+                .Select(Map)
+                .ToList() ?? []);
+        });
+
     /// <summary>The comments on a task, mapped to the stable <see cref="CommentItem"/> shape.</summary>
     public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
         => Guard("GetTaskComments", async () =>

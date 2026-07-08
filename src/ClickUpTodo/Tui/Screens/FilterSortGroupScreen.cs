@@ -91,21 +91,15 @@ public sealed class FilterSortGroupScreen : Screen
             pullChildrenButton.Text = PullChildrenText(pullChildren);
         };
 
-        var hint = new Label
-        {
-            X = 1,
-            Y = Pos.AnchorEnd(2),
-            Width = Dim.Fill(1),
-            Text = "Tab moves · Enter in Value adds · Del removes selected filter · Esc cancels",
-        };
-
         void AddFilter()
         {
             var field = FilterSortGroupForm.Fields[FilterSortGroupForm.Clamp(_fieldList.SelectedItem, FilterSortGroupForm.Fields.Count)];
             var op = FilterSortGroupForm.Ops[FilterSortGroupForm.Clamp(opList.SelectedItem, FilterSortGroupForm.Ops.Count)];
             if (!FilterSortGroupForm.TryBuildRule(field, op, valueField.Text, out var rule, out var error))
             {
-                hint.Text = error!;
+                // The hint Label that used to show this error is gone (#103) — the shared footer keeps
+                // the shortcuts; surface the validation error on the host's transient status line.
+                RequestFlash(error!);
                 return;
             }
             working.Add(rule!);
@@ -179,13 +173,19 @@ public sealed class FilterSortGroupScreen : Screen
             pullChildrenButton.Text = PullChildrenText(pullChildren);
         };
 
-        // Esc cancels from anywhere on the screen (Result stays null).
+        // Esc cancels from anywhere on the screen (Result stays null); F1 opens Help (#103).
         KeyDown += (_, key) =>
         {
-            if (key.KeyCode == KeyCode.Esc)
+            switch (key.KeyCode)
             {
-                key.Handled = true;
-                Close();
+                case KeyCode.Esc:
+                    key.Handled = true;
+                    Close();
+                    break;
+                case KeyCode.F1:
+                    key.Handled = true;
+                    RequestHelp();
+                    break;
             }
         };
 
@@ -194,9 +194,11 @@ public sealed class FilterSortGroupScreen : Screen
             activeHeader, filtersList,
             sortHeader, sortLabel, sortList, dirButton, groupHeader, groupLabel, groupList,
             subtasksHeader, pullChildrenButton,
-            hint, save, cancel, clear,
+            save, cancel, clear,
         ]);
     }
+
+    public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.FilterSortGroup;
 
     public override void OnShown() => _fieldList.SetFocus();
 
