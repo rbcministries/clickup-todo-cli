@@ -424,6 +424,20 @@ public sealed class TodoApp
             return;
 
         var screen = new SettingsScreen(_config.RefreshSeconds, _config.DefaultWorkingDirectory, _config.AgentDispatch);
+
+        // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
+        // save it folds the edited template back into the settings screen via the request's callback, so
+        // the settings screen's own Save is the transaction boundary (an F2 Cancel discards the edit).
+        screen.EditPromptTemplateRequested += (_, req) =>
+        {
+            var editor = new PromptTemplateEditorScreen(req.CurrentTemplate);
+            ShowScreen(editor, () =>
+            {
+                if (editor.Result is not null)
+                    req.Apply(editor.Result);
+            });
+        };
+
         ShowScreen(screen, () =>
         {
             var result = screen.Result;

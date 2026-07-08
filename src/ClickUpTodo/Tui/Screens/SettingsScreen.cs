@@ -16,6 +16,14 @@ namespace ClickUpTodo.Tui.Screens;
 public sealed record SettingsResult(int RefreshSeconds, string DefaultWorkingDirectory, AgentDispatchSettings AgentDispatch);
 
 /// <summary>
+/// Carries a prompt-template edit request from the settings screen to the host (#100): the current
+/// template plus an <see cref="Apply"/> callback the host invokes with the edited value once the
+/// editor screen returns. The settings screen folds the value back into its carried template, so an
+/// F2 Save persists it (and an F2 Cancel discards it).
+/// </summary>
+public sealed record PromptTemplateEditRequest(string CurrentTemplate, Action<string> Apply);
+
+/// <summary>
 /// A full-window settings screen. The left column changes the refresh interval; the right column
 /// configures agent dispatch (#27) — preferred terminal, <c>claude</c> executable + extra args, and
 /// working directory. The dispatch prompt template (#100) is edited on its own screen. Hiding
@@ -43,6 +51,13 @@ public sealed class SettingsScreen : Screen
 
     /// <summary>The saved settings, or null if the screen was cancelled.</summary>
     public SettingsResult? Result { get; private set; }
+
+    /// <summary>
+    /// Raised when the user opens the prompt-template editor (#100). The host shows the editor screen
+    /// and applies the returned template back via <see cref="PromptTemplateEditRequest.Apply"/>; the
+    /// TUI editor screen itself isn't unit-testable, so this seam keeps the settings screen thin.
+    /// </summary>
+    public event EventHandler<PromptTemplateEditRequest>? EditPromptTemplateRequested;
 
     public SettingsScreen(int refreshSeconds, string defaultWorkingDirectory, AgentDispatchSettings dispatch)
     {
@@ -114,6 +129,11 @@ public sealed class SettingsScreen : Screen
         var fixedDirLabel = new Label { X = rightX, Y = 9, Text = "Fixed dir (when Working dir = Fixed):" };
         var fixedDirField = new TextField { X = rightX, Y = 10, Width = Dim.Fill(2), Text = dispatch.FixedWorkingDirectory };
 
+        // The prompt template (#100) is edited on its own screen; this button opens it via the host.
+        var templateButton = new Button { X = rightX, Y = 12, Text = "Edit prompt template…" };
+        templateButton.Accepting += (_, _) =>
+            EditPromptTemplateRequested?.Invoke(this, new PromptTemplateEditRequest(_promptTemplate, t => _promptTemplate = t));
+
         var save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var cancel = new Button { X = Pos.Right(save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         save.Accepting += (_, _) =>
@@ -154,7 +174,7 @@ public sealed class SettingsScreen : Screen
             refreshLabel, _refreshField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
             agentHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
-            fixedDirLabel, fixedDirField,
+            fixedDirLabel, fixedDirField, templateButton,
             save, cancel,
         ]);
     }
