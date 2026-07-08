@@ -16,6 +16,21 @@ public enum AgentWorkingDirectory
 }
 
 /// <summary>
+/// How a dispatched <c>claude</c> session runs (issue #94): an <see cref="Interactive"/> session
+/// (<c>claude "[prompt]"</c>, today's behaviour) the user drives, or a <see cref="OneOff"/> run
+/// (<c>claude -p "[prompt]"</c>) that executes the prompt non-interactively and exits. This is the
+/// persisted <b>default</b> for the per-dispatch toggle #94 adds to the Dispatch pane.
+/// </summary>
+public enum AgentSessionMode
+{
+    /// <summary>An interactive session the user drives (default).</summary>
+    Interactive,
+
+    /// <summary>A non-interactive one-off run (<c>claude -p</c>) that executes and exits.</summary>
+    OneOff,
+}
+
+/// <summary>
 /// User-facing configuration for the agent-dispatch feature (#23), persisted in
 /// <c>config.json</c>. Every setting is optional with a sensible default, so dispatch works with
 /// zero configuration; this record is the seam that populates <see cref="TerminalLauncherOptions"/>
@@ -39,6 +54,22 @@ public sealed class AgentDispatchSettings
     public string FixedWorkingDirectory { get; set; } = "";
 
     /// <summary>
+    /// The default session mode (#94) the Dispatch pane's toggle initializes from —
+    /// <see cref="AgentSessionMode.Interactive"/> (today's behaviour) or a one-off <c>claude -p</c>
+    /// run. The per-dispatch toggle (#93/#94) may override it; #94 threads the chosen mode into
+    /// dispatch. Absent in an old config ⇒ <see cref="AgentSessionMode.Interactive"/>.
+    /// </summary>
+    public AgentSessionMode DefaultSessionMode { get; set; } = AgentSessionMode.Interactive;
+
+    /// <summary>
+    /// The default for the "post results to Comments" toggle (#97) the Dispatch pane initializes
+    /// from. When on, the dispatched agent is instructed (in the composed prompt) to post a summary
+    /// comment back to the task. Off by default; absent in an old config ⇒ off. The per-dispatch
+    /// toggle may override it.
+    /// </summary>
+    public bool DefaultPostResultsToComments { get; set; }
+
+    /// <summary>
     /// Overrides the composer's fixed preamble line (the text between the user prompt and the JSON
     /// payload). Blank ⇒ the default <see cref="AgentPromptComposer.Preamble"/>.
     /// </summary>
@@ -51,6 +82,8 @@ public sealed class AgentDispatchSettings
         && ExtraArgs.Count == 0
         && WorkingDirectory == AgentWorkingDirectory.TaskDerived
         && string.IsNullOrWhiteSpace(FixedWorkingDirectory)
+        && DefaultSessionMode == AgentSessionMode.Interactive
+        && !DefaultPostResultsToComments
         && string.IsNullOrWhiteSpace(PromptPreamble);
 
     /// <summary>
@@ -78,6 +111,18 @@ public sealed class AgentDispatchSettings
         AgentWorkingDirectory.Fixed => Blank(FixedWorkingDirectory),
         _ => Blank(taskDerivedDirectory),
     };
+
+    /// <summary>
+    /// Resolves the working directory a dispatch should start in, applying the epic-#90 precedence:
+    /// a <b>per-task cached directory</b> (#96) wins when present, otherwise the configured default
+    /// mode via <see cref="ResolveWorkingDirectory"/> (which itself backstops onto the task-derived
+    /// candidate #98 / base dir #92). Pure so it can be unit-tested; a blank/whitespace cache entry
+    /// is treated as "no cache" and falls through. Today all call sites pass a null
+    /// <paramref name="cachedDirectory"/> (the #96 cache lands later), so behaviour is unchanged.
+    /// </summary>
+    public string? ResolveEffectiveWorkingDirectory(
+        string? cachedDirectory, string? taskDerivedDirectory, string? homeDirectory)
+        => Blank(cachedDirectory) ?? ResolveWorkingDirectory(taskDerivedDirectory, homeDirectory);
 
     /// <summary>Null out blank/whitespace so the launcher inherits the current directory.</summary>
     private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

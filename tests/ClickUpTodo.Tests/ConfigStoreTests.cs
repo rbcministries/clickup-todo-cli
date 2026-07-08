@@ -74,6 +74,8 @@ public sealed class ConfigStoreTests : IDisposable
                 ExtraArgs = ["--model", "opus"],
                 WorkingDirectory = AgentWorkingDirectory.Fixed,
                 FixedWorkingDirectory = "/work",
+                DefaultSessionMode = AgentSessionMode.OneOff,
+                DefaultPostResultsToComments = true,
                 PromptPreamble = "Use the JSON.",
             },
         };
@@ -87,7 +89,41 @@ public sealed class ConfigStoreTests : IDisposable
         Assert.Equal(["--model", "opus"], d.ExtraArgs);
         Assert.Equal(AgentWorkingDirectory.Fixed, d.WorkingDirectory);
         Assert.Equal("/work", d.FixedWorkingDirectory);
+        Assert.Equal(AgentSessionMode.OneOff, d.DefaultSessionMode);
+        Assert.True(d.DefaultPostResultsToComments);
         Assert.Equal("Use the JSON.", d.PromptPreamble);
+    }
+
+    [Fact]
+    public void Save_PersistsDispatchDefaultSessionModeAsReadableString()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig
+        {
+            AgentDispatch = new AgentDispatchSettings { DefaultSessionMode = AgentSessionMode.OneOff },
+        });
+
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.Contains("OneOff", json);
+        Assert.DoesNotContain("\"defaultSessionMode\":1", json);
+    }
+
+    [Fact]
+    public void Load_WhenFileMissingDispatchDefaultKeys_DefaultsToInteractiveAndPostOff()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig { WorkspaceId = "1", PersonalTasksListId = "2" });
+        // Rewrite with an agentDispatch block from before #101 — no defaultSessionMode /
+        // defaultPostResultsToComments keys (simulates a pre-#101 config.json).
+        File.WriteAllText(
+            store.ConfigPath,
+            "{\"workspaceId\":\"1\",\"personalTasksListId\":\"2\",\"agentDispatch\":{\"claudeExecutable\":\"claude\"}}");
+
+        var loaded = store.Load();
+
+        Assert.Equal(AgentSessionMode.Interactive, loaded.AgentDispatch.DefaultSessionMode);
+        Assert.False(loaded.AgentDispatch.DefaultPostResultsToComments);
+        Assert.True(loaded.AgentDispatch.IsDefault);
     }
 
     [Fact]
