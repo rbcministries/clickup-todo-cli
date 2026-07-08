@@ -290,6 +290,23 @@ public sealed class ConfigMigrationsTests : IDisposable
     }
 
     [Fact]
+    public void Apply_AlreadyV3_WithStrayPreambleKey_DropsIt_WithoutMigrating()
+    {
+        // A hand-added promptPreamble on an already-v3 config isn't migrated (version-gated), but the
+        // deserialize-only shim is still nulled so it stops being persisted.
+        var config = new AppConfig
+        {
+            SchemaVersion = 3,
+            AgentDispatch = new AgentDispatchSettings { LegacyPromptPreamble = "stray" },
+        };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal("", config.AgentDispatch.PromptTemplate); // not migrated (already current)
+        Assert.Null(config.AgentDispatch.LegacyPromptPreamble); // but dropped
+    }
+
+    [Fact]
     public void Load_LegacyConfigWithPromptPreamble_MigratesOnDisk_AndDropsTheKey()
     {
         var store = new ConfigStore(_dir);

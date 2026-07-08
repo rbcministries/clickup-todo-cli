@@ -38,9 +38,13 @@ public static class ConfigMigrations
         // PromptTemplate. Carry a saved non-blank preamble forward — it was live at dispatch (#91), so
         // dropping it would silently change a user's prompt — by seeding the equivalent full template
         // (the default with its preamble line swapped). Version-gated so a user who later clears their
-        // template isn't re-seeded. The legacy shim is nulled regardless so it stops being persisted.
+        // template isn't re-seeded.
         if (config.SchemaVersion < 3)
             MigratePromptPreamble(config.AgentDispatch);
+
+        // The preamble shim is deserialize-only: null it regardless of version so a stray promptPreamble
+        // key (e.g. hand-added to an already-v3 config) is dropped rather than re-persisted forever.
+        config.AgentDispatch.LegacyPromptPreamble = null;
 
         config.SchemaVersion = CurrentVersion;
     }
@@ -50,7 +54,6 @@ public static class ConfigMigrations
         var legacy = dispatch.LegacyPromptPreamble;
         if (!string.IsNullOrWhiteSpace(legacy) && string.IsNullOrWhiteSpace(dispatch.PromptTemplate))
             dispatch.PromptTemplate = AgentPromptComposer.DefaultTemplateWithPreamble(legacy);
-        dispatch.LegacyPromptPreamble = null;
     }
 
     private static void SeedDefaultAssigneeRule(ViewSettings view)

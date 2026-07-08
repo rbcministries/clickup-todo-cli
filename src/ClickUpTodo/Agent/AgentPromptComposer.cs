@@ -94,10 +94,13 @@ public static class AgentPromptComposer
 
     /// <summary>
     /// Renders <paramref name="template"/> in a single left-to-right pass: <c>{{</c> and <c>}}</c>
-    /// escape to a literal brace, <c>{name}</c> is replaced by <paramref name="values"/>[name] when
-    /// known and emitted <b>literally</b> otherwise, and a lone <c>{</c>/<c>}</c> is emitted as-is.
-    /// Substituted values are never rescanned, so JSON braces inside a value (e.g. <c>{contextJson}</c>)
-    /// are not re-interpreted as placeholders.
+    /// escape to a literal brace, and <c>{name}</c> — a brace pair whose contents are a single-line
+    /// token with no nested <c>{</c> — is replaced by <paramref name="values"/>[name] when known and
+    /// emitted <b>literally</b> otherwise. Any other <c>{</c> (no closing brace, or a span that reaches
+    /// across a newline or a nested <c>{</c> before the next <c>}</c>) is emitted as a literal single
+    /// character and scanning resumes at the next character — so a stray brace never swallows a real
+    /// placeholder that follows it. Substituted values are never rescanned, so JSON braces inside a
+    /// value (e.g. <c>{contextJson}</c>) are not re-interpreted as placeholders.
     /// </summary>
     public static string Render(string template, IReadOnlyDictionary<string, string> values)
     {
@@ -122,15 +125,22 @@ public static class AgentPromptComposer
                 if (end > i)
                 {
                     var name = template[(i + 1)..end];
-                    if (values.TryGetValue(name, out var value))
-                        sb.Append(value);
-                    else
-                        sb.Append(template, i, end - i + 1); // unknown token: leave literal
-                    i = end + 1;
-                    continue;
+                    // A real token name is a single line with no nested '{'. If the span isn't one, this
+                    // '{' doesn't open a token — emit it literally and let the scan find a genuine token
+                    // later in the span (otherwise a lone '{' would capture forward to a downstream
+                    // placeholder's '}' and swallow it).
+                    if (!name.Contains('{') && !name.Contains('\n'))
+                    {
+                        if (values.TryGetValue(name, out var value))
+                            sb.Append(value);
+                        else
+                            sb.Append(template, i, end - i + 1); // unknown token: leave literal
+                        i = end + 1;
+                        continue;
+                    }
                 }
 
-                sb.Append('{'); // no closing brace: literal
+                sb.Append('{'); // no closing brace (or not a token span): literal
                 i++;
                 continue;
             }

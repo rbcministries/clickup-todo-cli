@@ -185,6 +185,20 @@ public sealed class AgentPromptComposerTests
     }
 
     [Fact]
+    public void BuildCommentsJson_MatchesTheCommentsArrayInBuildJson()
+    {
+        // Same drift guard for the comments element shape (compared canonically for indentation).
+        var task = Task();
+        var comments = new[] { Comment(id: "c1"), Comment(id: "c2", author: "Sam", resolved: true) };
+        using var whole = JsonDocument.Parse(AgentPromptComposer.BuildJson(task, comments));
+        using var standalone = JsonDocument.Parse(AgentPromptComposer.BuildCommentsJson(comments));
+
+        Assert.Equal(
+            JsonSerializer.Serialize(whole.RootElement.GetProperty("comments")),
+            JsonSerializer.Serialize(standalone.RootElement));
+    }
+
+    [Fact]
     public void WritePromptFile_HonorsCustomTemplate()
     {
         var dir = Path.Combine(Path.GetTempPath(), "clickup-todo-tests", Guid.NewGuid().ToString("N"));
@@ -226,6 +240,23 @@ public sealed class AgentPromptComposerTests
         // A value that itself looks like a placeholder must not be re-substituted.
         var values = new Dictionary<string, string> { ["a"] = "{b}", ["b"] = "SHOULD-NOT-APPEAR" };
         Assert.Equal("{b}", AgentPromptComposer.Render("{a}", values));
+    }
+
+    [Fact]
+    public void Render_LoneBrace_DoesNotSwallowAFollowingPlaceholder()
+    {
+        // A lone '{' must not capture forward to a later placeholder's '}' — the real {a} still expands.
+        var values = new Dictionary<string, string> { ["a"] = "X" };
+        Assert.Equal("the set { a, b and X", AgentPromptComposer.Render("the set { a, b and {a}", values));
+        Assert.Equal("x { y X z", AgentPromptComposer.Render("x { y {a} z", values));
+    }
+
+    [Fact]
+    public void Render_TokenSpanningANewline_IsNotTreatedAsAPlaceholder()
+    {
+        // A '{' whose matching '}' is on another line isn't a token; it stays literal and later tokens work.
+        var values = new Dictionary<string, string> { ["a"] = "X" };
+        Assert.Equal("{ not\na token } X=X", AgentPromptComposer.Render("{ not\na token } {a}=X", values));
     }
 
     [Fact]

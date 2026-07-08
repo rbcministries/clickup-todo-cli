@@ -31,12 +31,15 @@ public sealed class PromptTemplateEditorScreen : Screen
     {
         Title = "Edit dispatch prompt template";
 
+        var referenceText = PlaceholderReference();
+        var referenceLines = referenceText.Split('\n').Length;
+
         _editor = new TextView
         {
             X = 1,
             Y = 0,
             Width = Dim.Fill(1),
-            Height = Dim.Fill(PlaceholderReference().Split('\n').Length + 3),
+            Height = Dim.Fill(referenceLines + 3),
             Text = PromptTemplateEditor.Seed(currentTemplate),
             // Let Tab move focus to Save/Cancel instead of inserting a tab into the template.
             TabKeyAddsTab = false,
@@ -48,9 +51,9 @@ public sealed class PromptTemplateEditorScreen : Screen
             X = 1,
             Y = Pos.Bottom(_editor),
             Width = Dim.Fill(1),
-            Height = PlaceholderReference().Split('\n').Length,
+            Height = referenceLines,
             CanFocus = false,
-            Text = PlaceholderReference(),
+            Text = referenceText,
         };
 
         // Inline reset confirmation (shown only while a reset is pending). Kept on its own row so it
