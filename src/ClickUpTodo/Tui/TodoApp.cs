@@ -183,9 +183,12 @@ public sealed class TodoApp
             : EmptyParents;
         // Pull in a parent's teammate-owned subtasks (regardless of assignee) only when both the
         // subtasks view and the ShowAllSubtasksOfAssignedParents setting are on (#70). Off → skip the
-        // extra list-scoped round-trips. Keyed by id for fast Render/guard lookups.
+        // extra round-trips. The fetch shape (per-parent vs whole-list) is chosen adaptively (#87); if
+        // its worst-case cap truncates the pull we surface that via the status line rather than silently
+        // dropping subtasks. Keyed by id for fast Render/guard lookups.
         _foreignSubtasks = _config.View.ShowSubtasks && _config.View.ShowAllSubtasksOfAssignedParents
-            ? (await _tasks.ResolveForeignSubtasksAsync(tasks, ct)).ToDictionary(t => t.Id, StringComparer.Ordinal)
+            ? (await _tasks.ResolveForeignSubtasksAsync(tasks, ct,
+                    onCapped: msg => Application.Invoke(() => Flash(msg)))).ToDictionary(t => t.Id, StringComparer.Ordinal)
             : EmptyParents;
         // List colors are only needed to tint headers when grouping by List; skip the fetches otherwise.
         _listColors = _config.View.GroupField == TaskField.List
