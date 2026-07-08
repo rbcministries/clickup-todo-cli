@@ -159,6 +159,64 @@ public sealed class AgentDispatcherTests : IDisposable
         Assert.Equal(AgentPromptComposer.Compose(task, comments, "go"), File.ReadAllText(result.PromptFilePath));
     }
 
+    // ── output subdirectory (task-derived working dir, #98) ─────────────────────────
+
+    [Fact]
+    public async Task DispatchAsync_PassesOutputSubdirectory_ToComposedFile()
+    {
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
+        var task = Detail();
+        var comments = Comments();
+
+        var result = await dispatcher.DispatchAsync(task, comments, "go", outputSubdirectory: "TEAM-42");
+
+        Assert.Equal(
+            AgentPromptComposer.Compose(task, comments, "go", outputSubdirectory: "TEAM-42"),
+            File.ReadAllText(result.PromptFilePath));
+        Assert.Contains("Write any output files to the subdirectory ./TEAM-42 (create it if needed).",
+            File.ReadAllText(result.PromptFilePath));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task DispatchAsync_BlankOutputSubdirectory_MatchesDefault(string? subdir)
+    {
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
+        var task = Detail();
+        var comments = Comments();
+
+        var result = await dispatcher.DispatchAsync(task, comments, "go", outputSubdirectory: subdir);
+
+        Assert.Equal(AgentPromptComposer.Compose(task, comments, "go"), File.ReadAllText(result.PromptFilePath));
+    }
+
+    [Fact]
+    public async Task Dispatcher_TaskDerivedGlue_LaunchesInBaseDir_AndInjectsSubdirInstruction()
+    {
+        // Mirrors the TodoApp task-derived glue at the unit-testable seam: the base working dir (#92)
+        // becomes the launch cwd, and the task's output-subdir token seeds the prompt instruction.
+        var settings = new AgentDispatchSettings(); // default ⇒ TaskDerived
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, settings.ToLauncherOptions(), _dir);
+        var task = Detail(id: "abc123");
+        var comments = Comments();
+
+        var baseDir = "/home/me/ClickUp-Tasks";
+        var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: "/home/me");
+        var subdir = AgentPromptComposer.OutputSubdirectoryToken(task);
+
+        var result = await dispatcher.DispatchAsync(task, comments, "go", workingDir, settings.PromptPreamble, subdir);
+
+        Assert.Equal(baseDir, launcher.WorkingDir);
+        Assert.Equal(
+            AgentPromptComposer.Compose(task, comments, "go", outputSubdirectory: "abc123"),
+            File.ReadAllText(result.PromptFilePath));
+    }
+
     // ── Settings → dispatcher wiring (#91) ──────────────────────────────────────────
     // These mirror the glue TodoApp performs (options from ToLauncherOptions, working dir from
     // ResolveWorkingDirectory, preamble from settings) at the unit-testable dispatcher seam, since
