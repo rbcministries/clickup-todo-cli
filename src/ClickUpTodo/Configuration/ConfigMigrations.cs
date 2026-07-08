@@ -13,6 +13,12 @@ public static class ConfigMigrations
     /// <summary>Applies any migrations the config hasn't seen yet, then stamps it current.</summary>
     public static void Apply(AppConfig config)
     {
+        // Normalize a null sub-object from a hand-edited/corrupted config.json ("AgentDispatch": null):
+        // the property's `= new()` default only fills a *missing* key, not an explicit null. Dispatch
+        // settings are now read at startup (#91), so a null here would fault the whole launch, not just
+        // the F2 dialog — coalesce it back to defaults so a bad key degrades to zero-config, not a crash.
+        config.AgentDispatch ??= new AgentDispatchSettings();
+
         // v1 (#68): assignee became a first-class filter field. Seed the default "Assignee IS me" rule
         // so an existing/blank view keeps reproducing the original "my tasks" fetch. Version-gated (not
         // "seed whenever absent") so a user who deliberately clears the assignee rule to see everyone

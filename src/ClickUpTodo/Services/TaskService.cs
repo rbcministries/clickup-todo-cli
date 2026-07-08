@@ -279,22 +279,23 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     }
 
     /// <summary>
-    /// The tasks from <paramref name="listTasks"/> to pull into the view as not-mine subtasks of an
+    /// The tasks from <paramref name="fetched"/> to pull into the view as not-mine subtasks of an
     /// in-view parent (#70): those absent from <paramref name="snapshot"/> whose <c>parent</c> chain
     /// reaches a task that <em>is</em> in the snapshot. Grandchildren are included (a chain through
     /// other not-in-snapshot children still counts), and a task already in the snapshot is never
-    /// duplicated. Pure and order-deterministic (follows <paramref name="listTasks"/> order),
-    /// cycle-guarded, deduped by id — so the fetch selection is unit-testable.
+    /// duplicated. Pure and order-deterministic (follows <paramref name="fetched"/> order),
+    /// cycle-guarded, deduped by id — so the fetch selection is unit-testable independent of how the
+    /// pool was gathered (per-parent today, #87 may vary it).
     /// </summary>
     internal static IReadOnlyList<TaskItem> ForeignDescendants(
-        IReadOnlyList<TaskItem> snapshot, IReadOnlyList<TaskItem> listTasks)
+        IReadOnlyList<TaskItem> snapshot, IReadOnlyList<TaskItem> fetched)
     {
         var present = new HashSet<string>(snapshot.Select(t => t.Id));
 
         // parent-of lookup across snapshot ∪ fetched; snapshot wins on id collisions (its mapping is
         // the one the rest of the view uses).
         var parentOf = new Dictionary<string, string?>();
-        foreach (var t in listTasks)
+        foreach (var t in fetched)
             parentOf[t.Id] = t.ParentId;
         foreach (var t in snapshot)
             parentOf[t.Id] = t.ParentId;
@@ -316,7 +317,7 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
 
         var result = new List<TaskItem>();
         var added = new HashSet<string>();
-        foreach (var t in listTasks)
+        foreach (var t in fetched)
         {
             if (present.Contains(t.Id) || !added.Add(t.Id))
                 continue;
@@ -327,78 +328,54 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     }
 
     /// <summary>
-    /// Filters the pulled-in foreign subtasks (#70) down to those whose in-snapshot ancestor is <b>not</b>
-    /// pinned. A foreign child whose ancestor is pinned belongs under that parent in the Current Focus
-    /// section, but Focus is built from the snapshot alone — so nesting it there is deferred (#85). Until
-    /// then we drop those children rather than let them render <em>detached</em> at the top of the to-do
-    /// list (their pinned parent isn't in the non-pinned set, so the arranger would emit them flat).
-    /// Children of non-pinned parents are kept and nest normally. Pure and cycle-guarded.
-    /// </summary>
-    internal static IReadOnlyList<TaskItem> ForeignSubtasksNotUnderPinned(
-        IReadOnlyList<TaskItem> snapshot, IReadOnlyList<TaskItem> foreign, IReadOnlySet<string> pinnedIds)
-    {
-        var present = new HashSet<string>(snapshot.Select(t => t.Id));
-        var parentOf = new Dictionary<string, string?>();
-        foreach (var t in foreign)
-            parentOf[t.Id] = t.ParentId;
-        foreach (var t in snapshot)
-            parentOf[t.Id] = t.ParentId;
-
-        bool RootIsPinned(string id)
-        {
-            var seen = new HashSet<string>();
-            var current = id;
-            while (parentOf.TryGetValue(current, out var parent) && !string.IsNullOrEmpty(parent))
-            {
-                if (!seen.Add(parent))
-                    return false; // cycle — treat as not-pinned rather than loop
-                if (present.Contains(parent))
-                    return pinnedIds.Contains(parent); // reached the in-snapshot ancestor
-                current = parent;
-            }
-            return false;
-        }
-
-        return foreign.Where(t => !RootIsPinned(t.Id)).ToList();
-    }
-
-    /// <summary>
     /// Fetches the teammate-owned subtasks of in-view parents so they can nest beneath them regardless
     /// of assignee (#70). The assignee constraint is server-side (#68), so these children fall outside
-    /// the main fetch; we recover them with a list-scoped fetch (<see cref="ClickUpClient.GetListTasksAsync"/>,
-    /// which returns every task in a list — any assignee — with subtasks), one per distinct list holding
-    /// an in-view task, and keep only those that chain up to a snapshot task (<see cref="ForeignDescendants"/>).
-    /// Best-effort: a list we can't fetch is skipped rather than failing the whole load. Non-assignee
-    /// filters (status/closed) still apply — the pulled-in children flow through <c>TaskView.Apply</c>
-    /// like any other task.
+    /// the main fetch; we recover them with a <b>per-parent</b> fetch
+    /// (<see cref="ClickUpClient.GetSubtasksAsync"/> — <c>GET /task/{id}?include_subtasks=true</c>),
+    /// walking outward from each in-view task and recursing into each pulled-in child so deeper
+    /// descendants (grandchildren) are gathered too. The flat pool is then run through the pure
+    /// <see cref="ForeignDescendants"/> selector for dedup / present-exclusion / cycle-safety.
     /// <para>
-    /// Scope caveat: we only fetch lists that already hold an in-view task, so a subtask that lives in a
-    /// <em>different</em> list than its in-view parent (ClickUp permits this) isn't pulled in. Same-list
-    /// is the common case; the per-parent targeted fetch that would close this gap is tracked in #86.
+    /// Unlike the earlier list-scoped fetch, this pulls exactly the subtrees we need — no whole-list
+    /// payloads, and it works even when a subtask lives in a <em>different</em> list than its parent.
+    /// The tradeoff is one round-trip per expanded task; a smart/adaptive strategy that chooses between
+    /// per-parent and bulk fetches by parent count is tracked in #87.
     /// </para>
+    /// Best-effort: a task whose subtasks can't be fetched is skipped rather than failing the whole load.
+    /// Non-assignee filters (status/closed) still apply — the pulled-in children flow through
+    /// <c>TaskView.Apply</c> like any other task.
     /// </summary>
     public async Task<IReadOnlyList<TaskItem>> ResolveForeignSubtasksAsync(
         IReadOnlyList<TaskItem> snapshot, CancellationToken ct = default)
     {
-        var listIds = snapshot
-            .Select(t => t.ListId)
-            .Where(id => !string.IsNullOrWhiteSpace(id))
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
-
-        var listTasks = new List<TaskItem>();
-        foreach (var listId in listIds)
+        var fetched = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
+        var expanded = new HashSet<string>(StringComparer.Ordinal);
+        // Expand outward from every in-view task; recurse into pulled-in children so grandchildren are
+        // reached regardless of whether the API returns one level or the whole subtree per call.
+        var toExpand = new Queue<string>(snapshot.Select(t => t.Id).Where(id => !string.IsNullOrEmpty(id)).Distinct(StringComparer.Ordinal));
+        while (toExpand.Count > 0)
         {
+            var id = toExpand.Dequeue();
+            if (!expanded.Add(id))
+                continue;
+            IReadOnlyList<TaskItem> children;
             try
             {
-                listTasks.AddRange(await client.GetListTasksAsync(listId!, ct));
+                children = await client.GetSubtasksAsync(id, ct);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                // Best-effort: a list we can't fetch just contributes no pulled-in children.
+                continue; // best-effort: a task whose subtasks we can't fetch contributes nothing
+            }
+            foreach (var child in children)
+            {
+                if (string.IsNullOrEmpty(child.Id) || fetched.ContainsKey(child.Id))
+                    continue;
+                fetched[child.Id] = child;
+                toExpand.Enqueue(child.Id); // its own subtasks may be foreign too
             }
         }
-        return ForeignDescendants(snapshot, listTasks);
+        return ForeignDescendants(snapshot, fetched.Values.ToList());
     }
 
     /// <summary>Stable ordering: by due date (soonest first, undated last), then by name.</summary>
