@@ -8,7 +8,7 @@ namespace ClickUpTodo.Services;
 /// Fetches and merges the user's actionable tasks (assigned-to-me ∪ Personal Tasks list),
 /// de-duplicated and stably ordered, and resolves per-list status options on demand (cached).
 /// </summary>
-public sealed class TaskService(ClickUpClient client, AppConfig config, long userId, TimeProvider? timeProvider = null)
+public sealed class TaskService(IClickUpClient client, AppConfig config, long userId, TimeProvider? timeProvider = null)
 {
     // Per-list status options, cached with a long TTL (statuses rarely change) and warmed by
     // PrefetchStatusesAsync so the picker opens from cache in the common case.
@@ -357,9 +357,9 @@ public sealed class TaskService(ClickUpClient client, AppConfig config, long use
     /// <c>TaskView.Apply</c> like any other task.
     /// </summary>
     public async Task<ForeignSubtaskResolution> ResolveForeignSubtasksAsync(
-        IReadOnlyList<TaskItem> snapshot, CancellationToken ct = default)
+        IReadOnlyList<TaskItem> snapshot, SubtaskFetchOptions? options = null, CancellationToken ct = default)
     {
-        var opts = SubtaskFetchOptions.Default;
+        var opts = options ?? SubtaskFetchOptions.Default;
         var plan = SubtaskFetchStrategy.Plan(snapshot, opts);
         var truncated = plan.Truncated;
 

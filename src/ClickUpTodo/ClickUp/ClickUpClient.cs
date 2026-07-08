@@ -15,7 +15,7 @@ namespace ClickUpTodo.ClickUp;
 /// paging and maps the generated models into the app's stable <see cref="TaskItem"/> /
 /// <see cref="StatusOption"/> / <see cref="NamedEntity"/> records, so the TUI never sees generated types.
 /// </summary>
-public sealed class ClickUpClient : IDisposable
+public sealed class ClickUpClient : IClickUpClient, IDisposable
 {
     private const int PageSize = 100; // ClickUp returns at most 100 tasks per page.
 

@@ -190,7 +190,7 @@ public sealed class TodoApp
         // extra list-scoped round-trips. Keyed by id for fast Render/guard lookups.
         if (_config.View.ShowSubtasks && _config.View.ShowAllSubtasksOfAssignedParents)
         {
-            var foreign = await _tasks.ResolveForeignSubtasksAsync(tasks, ct);
+            var foreign = await _tasks.ResolveForeignSubtasksAsync(tasks, ct: ct);
             _foreignSubtasks = foreign.Subtasks.ToDictionary(t => t.Id, StringComparer.Ordinal);
             _foreignSubtasksTruncated = foreign.Truncated;
         }
