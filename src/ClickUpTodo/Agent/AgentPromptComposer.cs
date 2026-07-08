@@ -40,7 +40,7 @@ public static class AgentPromptComposer
     /// throughout so the output is identical across platforms. A blank <paramref name="preamble"/>
     /// (the default) uses the fixed <see cref="Preamble"/>; a non-blank value overrides it (#27).
     /// A non-blank <paramref name="outputSubdirectory"/> (the task-derived working-dir mode, #98)
-    /// inserts an "write outputs to <c>./{subdir}</c>" instruction as its own paragraph after the
+    /// inserts a "write outputs to <c>./{subdir}</c>" instruction as its own paragraph after the
     /// user prompt; a blank value leaves the layout byte-identical to zero-config dispatch.
     /// </summary>
     public static string Compose(

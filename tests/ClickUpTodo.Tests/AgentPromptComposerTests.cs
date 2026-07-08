@@ -145,6 +145,10 @@ public sealed class AgentPromptComposerTests
         => Assert.Equal("abc123", AgentPromptComposer.OutputSubdirectoryToken(Task(id: "abc123", customId: customId)));
 
     [Fact]
+    public void OutputSubdirectoryToken_BothIdsBlank_FallsBackToSafeTokenDefault()
+        => Assert.Equal("task", AgentPromptComposer.OutputSubdirectoryToken(Task(id: "", customId: null)));
+
+    [Fact]
     public void OutputSubdirectoryToken_SanitizesUnsafeChars_NoPathTraversal()
     {
         var token = AgentPromptComposer.OutputSubdirectoryToken(Task(customId: "../../etc/p w?d"));
