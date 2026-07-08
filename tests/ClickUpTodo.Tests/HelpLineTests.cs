@@ -20,15 +20,15 @@ public sealed class HelpLineTests
     public void Format_SingleItem_HasNoSeparator()
         => Assert.Equal("Esc/Enter close", HelpLine.Format(HelpItemSets.Help));
 
-    // The main-list footer text must stay byte-for-byte what it was before #103, so the default
-    // (list-active) footer — and the tui-validate baseline — is unchanged.
+    // Pins the full main-list footer. It was byte-for-byte the pre-#103 line until #83 added the
+    // bulk expand/collapse-all chord (Ctrl+→/←) right after the per-parent →/← item.
     [Fact]
-    public void Format_MainList_ReproducesThePreExistingHelpLine()
+    public void Format_MainList_RendersTheFullFooter()
     {
         const string expected =
             "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · "
-            + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · →/← expand/collapse · Ctrl+Q quit · "
-            + "type to search";
+            + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · →/← expand/collapse · Ctrl+→/← all · "
+            + "Ctrl+Q quit · type to search";
 
         Assert.Equal(expected, HelpLine.Format(HelpItemSets.MainList));
     }

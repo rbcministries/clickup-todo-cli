@@ -254,6 +254,23 @@ public sealed class TodoApp
                     key.Handled = true;
                     Application.RequestStop();
                     break;
+                case KeyCode.CursorRight:
+                    // Ctrl+→/Ctrl+← = expand-all / collapse-all — the bulk counterpart to the per-parent
+                    // →/← fold (#83). Active only while the subtasks view is on; off, they stay unhandled
+                    // and fall through to the ListView's native handling (like the bare arrows).
+                    if (_config.View.ShowSubtasks && ActiveScreen is null)
+                    {
+                        key.Handled = true;
+                        ExpandAll();
+                    }
+                    break;
+                case KeyCode.CursorLeft:
+                    if (_config.View.ShowSubtasks && ActiveScreen is null)
+                    {
+                        key.Handled = true;
+                        CollapseAll();
+                    }
+                    break;
             }
             return;
         }
@@ -631,6 +648,76 @@ public sealed class TodoApp
         {
             _list.SelectedItem = j; // context parent (not foldable) — just select it
         }
+    }
+
+    /// <summary>
+    /// Ctrl+→ in the subtasks view (#83): expand every foldable parent in the current view at once.
+    /// Foldable parents are derived from the whole candidate universe (the snapshot ∪ pulled-in foreign
+    /// subtasks), not just the rendered rows, so parents whose collapsed subtree is currently hidden are
+    /// reached too. Extra ids that aren't foldable in a given section are harmlessly ignored by the
+    /// arranger. The selected row stays visible (expanding only reveals more), so the cursor is kept.
+    /// </summary>
+    private void ExpandAll()
+    {
+        var foldable = SubtaskArranger.FoldableParentIds(CandidateUniverse());
+        if (foldable.Count == 0)
+        {
+            Flash("No subtasks to expand.");
+            return;
+        }
+        _expanded.UnionWith(foldable);
+        RenderKeepingCursor(CurrentTask()?.Id);
+        Flash("Expanded all subtasks.");
+    }
+
+    /// <summary>
+    /// Ctrl+← in the subtasks view (#83): collapse every parent at once by clearing the expanded set (the
+    /// default state). The cursor is kept on the selected task's top-level ancestor, since a nested
+    /// child's own row disappears once its parents fold; a child under a (never-folded) context parent
+    /// stays put.
+    /// </summary>
+    private void CollapseAll()
+    {
+        if (_expanded.Count == 0)
+        {
+            Flash("All subtasks already collapsed.");
+            return;
+        }
+        // Resolve the ancestor against the same universe once (avoids rebuilding it), then fold.
+        var keep = CurrentTask()?.Id is { } id
+            ? SubtaskArranger.TopLevelAncestorId(CandidateUniverse(), id)
+            : null;
+        _expanded.Clear();
+        RenderKeepingCursor(keep);
+        Flash("Collapsed all subtasks.");
+    }
+
+    /// <summary>
+    /// <see cref="Render"/>, but when there's no task row to anchor to (<paramref name="keepTaskId"/> is
+    /// null because the cursor sat on a header/spacer) keep the cursor near where it was instead of letting
+    /// Render fall back to the very first row — a bulk fold shouldn't teleport the cursor to the top (#83).
+    /// The row index is clamped to the (possibly shorter) new list.
+    /// </summary>
+    private void RenderKeepingCursor(string? keepTaskId)
+    {
+        var priorRow = _list.SelectedItem ?? -1;
+        Render(keepTaskId);
+        if (keepTaskId is null && priorRow >= 0 && _display.Count > 0)
+            _list.SelectedItem = Math.Min(priorRow, _display.Count - 1);
+    }
+
+    /// <summary>Every task that can appear in the subtasks view — the snapshot plus the teammate-owned
+    /// subtasks pulled in under my parents (#70) — the universe over which foldable parents and ancestor
+    /// walks are computed. The two sources are disjoint with unique ids: <see cref="TaskService"/>'s
+    /// foreign-subtask resolution (#70) excludes snapshot ids and de-dupes.</summary>
+    private IReadOnlyList<TaskItem> CandidateUniverse()
+    {
+        if (_foreignSubtasks.Count == 0)
+            return _all;
+        var universe = new List<TaskItem>(_all.Count + _foreignSubtasks.Count);
+        universe.AddRange(_all);
+        universe.AddRange(_foreignSubtasks.Values);
+        return universe;
     }
 
     // ── Actions ────────────────────────────────────────────────────────────

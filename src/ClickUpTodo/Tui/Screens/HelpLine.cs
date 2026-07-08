@@ -54,6 +54,7 @@ public static class HelpItemSets
         new("F3", "filter/sort/group"),
         new("F4", "subtasks"),
         new("→/←", "expand/collapse"),
+        new("Ctrl+→/←", "all"),
         new("Ctrl+Q", "quit"),
         new("type", "to search"),
     ];
