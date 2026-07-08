@@ -76,9 +76,18 @@ public sealed class DirectoryBrowserModel
     /// </summary>
     public static string Normalize(string? directory)
     {
-        var full = Path.GetFullPath(string.IsNullOrWhiteSpace(directory)
-            ? Directory.GetCurrentDirectory()
-            : directory.Trim());
+        var input = string.IsNullOrWhiteSpace(directory) ? Directory.GetCurrentDirectory() : directory.Trim();
+        string full;
+        try
+        {
+            full = Path.GetFullPath(input);
+        }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException)
+        {
+            // A malformed path can't be canonicalized; fall back to the raw input so navigation stays
+            // resilient (List() will then surface just "..") rather than throwing into the key handler.
+            return input;
+        }
         var trimmed = full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         // Trimming a root would leave "" (POSIX "/") or a bare drive ("C:") — keep the full form there.
         if (trimmed.Length == 0 || (trimmed.Length == 2 && trimmed[1] == ':'))

@@ -183,4 +183,34 @@ public sealed class AgentDispatchSettingsTests
         var s = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.TaskDerived };
         Assert.Null(s.ResolveEffectiveWorkingDirectory(null, null, "/home/me"));
     }
+
+    // ── UsesTaskDerivedOutput (#95: explicit pane pick suppresses the ./{custom-id} subdir) ─────
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void UsesTaskDerivedOutput_TaskDerivedModeWithoutPick_IsTrue(string? chosen)
+    {
+        var s = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.TaskDerived };
+        Assert.True(s.UsesTaskDerivedOutput(chosen));
+    }
+
+    [Fact]
+    public void UsesTaskDerivedOutput_TaskDerivedModeWithExplicitPick_IsFalse()
+    {
+        // The crux of #95: an explicit working-dir pick means no forced ./{custom-id} subdir / auto-create.
+        var s = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.TaskDerived };
+        Assert.False(s.UsesTaskDerivedOutput("/repos/picked"));
+    }
+
+    [Theory]
+    [InlineData(AgentWorkingDirectory.Home)]
+    [InlineData(AgentWorkingDirectory.Fixed)]
+    public void UsesTaskDerivedOutput_NonTaskDerivedMode_IsFalse(AgentWorkingDirectory mode)
+    {
+        var s = new AgentDispatchSettings { WorkingDirectory = mode };
+        Assert.False(s.UsesTaskDerivedOutput(null));      // even with no explicit pick
+        Assert.False(s.UsesTaskDerivedOutput("/picked")); // and with one
+    }
 }

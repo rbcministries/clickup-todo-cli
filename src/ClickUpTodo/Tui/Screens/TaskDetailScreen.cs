@@ -333,8 +333,7 @@ public sealed class TaskDetailScreen : Screen
                 break;
             case KeyCode.CursorLeft:
                 key.Handled = true;
-                _browser.NavigateUp();
-                RefreshBrowser();
+                NavigateBrowserUp();
                 break;
             default:
                 // Tab/Esc/PgUp/PgDn and pass-through keys (↑/↓ list navigation) behave as elsewhere.
@@ -346,11 +345,34 @@ public sealed class TaskDetailScreen : Screen
     /// <summary>The highlighted browser row (0 = ".."), clamped to a valid index.</summary>
     private int SelectedBrowserIndex() => _dirBrowser.SelectedItem is int i && i >= 0 ? i : 0;
 
-    /// <summary>Refreshes the ListView from the model's current listing, re-selecting the first row.</summary>
-    private void RefreshBrowser()
+    /// <summary>
+    /// Refreshes the ListView from the model's current listing. Highlights <paramref name="selectEntry"/>
+    /// if present (so going up lands on the directory you came out of), else the first row ("..").
+    /// </summary>
+    private void RefreshBrowser(string? selectEntry = null)
     {
         _dirBrowser.SetSource(new ObservableCollection<string>(_browser.Entries));
-        _dirBrowser.SelectedItem = 0;
+        var index = 0;
+        if (selectEntry is { Length: > 0 })
+        {
+            for (var i = 0; i < _browser.Entries.Count; i++)
+            {
+                if (string.Equals(_browser.Entries[i], selectEntry, StringComparison.Ordinal))
+                {
+                    index = i;
+                    break;
+                }
+            }
+        }
+        _dirBrowser.SelectedItem = index;
+    }
+
+    /// <summary>Goes up one level and highlights the directory we came out of (rather than "..").</summary>
+    private void NavigateBrowserUp()
+    {
+        var leaving = Path.GetFileName(_browser.CurrentDirectory);
+        _browser.NavigateUp();
+        RefreshBrowser(selectEntry: leaving);
     }
 
     /// <summary>Enter: select the highlighted directory into the field and advance focus; ".." goes up.</summary>
@@ -359,8 +381,7 @@ public sealed class TaskDetailScreen : Screen
         var index = SelectedBrowserIndex();
         if (_browser.IsParent(index))
         {
-            _browser.NavigateUp();
-            RefreshBrowser();
+            NavigateBrowserUp();
             return;
         }
         _workingDirField.Text = _browser.PathAt(index);
@@ -370,7 +391,13 @@ public sealed class TaskDetailScreen : Screen
     /// <summary>→: descend into the highlighted directory (or up, for "..") to browse deeper.</summary>
     private void DescendBrowserEntry()
     {
-        _browser.Descend(SelectedBrowserIndex());
+        var index = SelectedBrowserIndex();
+        if (_browser.IsParent(index))
+        {
+            NavigateBrowserUp();
+            return;
+        }
+        _browser.Descend(index);
         RefreshBrowser();
     }
 

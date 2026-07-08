@@ -142,4 +142,32 @@ public sealed class DirectoryBrowserModelTests : IDisposable
         => Assert.Equal(
             DirectoryBrowserModel.Normalize(Directory.GetCurrentDirectory()),
             DirectoryBrowserModel.Normalize(input));
+
+    [Fact]
+    public void Normalize_TrimsTrailingSeparator_ButNotForARoot()
+    {
+        Assert.Equal(
+            DirectoryBrowserModel.Normalize(_root),
+            DirectoryBrowserModel.Normalize(_root + Path.DirectorySeparatorChar));
+
+        // A filesystem root keeps its separator (trimming it would leave "" or a bare drive).
+        var root = Path.GetPathRoot(Path.GetTempPath())!;
+        Assert.Equal(DirectoryBrowserModel.Normalize(root), DirectoryBrowserModel.Parent(root));
+    }
+
+    [Fact]
+    public void UpNavigation_LeafNameOfChild_AppearsInParentListing()
+    {
+        // Backs the glue's up-navigation highlight: the leaf name of the dir we're leaving is
+        // recoverable from CurrentDirectory and appears among the parent's entries after going up.
+        Directory.CreateDirectory(Sub("child"));
+        var model = new DirectoryBrowserModel(_root);
+        model.Descend(1);
+
+        var leaf = Path.GetFileName(model.CurrentDirectory);
+        Assert.Equal("child", leaf);
+
+        model.NavigateUp();
+        Assert.Contains(leaf, model.Entries);
+    }
 }

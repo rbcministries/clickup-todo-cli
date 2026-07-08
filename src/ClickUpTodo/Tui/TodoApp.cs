@@ -953,17 +953,20 @@ public sealed class TodoApp
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         // An explicit pane pick (#95) is the override that wins over the configured mode via the
         // existing ResolveEffectiveWorkingDirectory "cached" slot (which #96 also seeds); a blank field
-        // ⇒ null ⇒ the configured default. The task-derived candidate is the saved base working
-        // directory (#92); ResolveWorkingDirectory only uses it in TaskDerived mode, so Home/Fixed are
-        // unaffected. In TaskDerived mode *without* an explicit pick we also seed a per-task
-        // ./{custom-id} output-subdir instruction so each task's work stays separated inside the shared
-        // base dir (#98) — an explicit pick means the user chose their exact dir, so we don't force a
-        // subdir there. The prompt template (#100) is threaded in as the composer's template (blank ⇒
-        // default); its {outputDirInstruction} placeholder consumes the subdir.
-        var chosenDir = string.IsNullOrWhiteSpace(request.WorkingDirectory) ? null : request.WorkingDirectory!.Trim();
+        // ⇒ null ⇒ the configured default. A hand-typed leading ~ is expanded (same as the F2 base-dir
+        // field) so it reaches the launcher as an absolute path. The task-derived candidate is the
+        // saved base working directory (#92); ResolveWorkingDirectory only uses it in TaskDerived mode,
+        // so Home/Fixed are unaffected. In TaskDerived mode *without* an explicit pick we also seed a
+        // per-task ./{custom-id} output-subdir instruction so each task's work stays separated inside
+        // the shared base dir (#98) — an explicit pick means the user chose their exact dir, so we
+        // don't force a subdir there (AgentDispatchSettings.UsesTaskDerivedOutput). The prompt template
+        // (#100) is threaded in as the composer's template (blank ⇒ default); its {outputDirInstruction}
+        // placeholder consumes the subdir.
+        var expandedPick = SettingsForm.ExpandHomePath(request.WorkingDirectory, home);
+        var chosenDir = expandedPick.Length == 0 ? null : expandedPick;
         var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
         var workingDir = settings.ResolveEffectiveWorkingDirectory(chosenDir, taskDerivedDirectory: baseDir, homeDirectory: home);
-        var useTaskDerived = chosenDir is null && settings.WorkingDirectory == AgentWorkingDirectory.TaskDerived;
+        var useTaskDerived = settings.UsesTaskDerivedOutput(chosenDir);
         var outputSubdir = useTaskDerived ? AgentPromptComposer.OutputSubdirectoryToken(detail) : null;
         var template = settings.PromptTemplate;
 
