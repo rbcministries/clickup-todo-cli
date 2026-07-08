@@ -463,6 +463,20 @@ public sealed class TodoApp
             return;
 
         var screen = new SettingsScreen(_config.RefreshSeconds, _config.DefaultWorkingDirectory, _config.AgentDispatch);
+
+        // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
+        // save it folds the edited template back into the settings screen via the request's callback, so
+        // the settings screen's own Save is the transaction boundary (an F2 Cancel discards the edit).
+        screen.EditPromptTemplateRequested += (_, req) =>
+        {
+            var editor = new PromptTemplateEditorScreen(req.CurrentTemplate);
+            ShowScreen(editor, () =>
+            {
+                if (editor.Result is not null)
+                    req.Apply(editor.Result);
+            });
+        };
+
         ShowScreen(screen, () =>
         {
             var result = screen.Result;
@@ -913,12 +927,13 @@ public sealed class TodoApp
         // The task-derived candidate is the saved base working directory (#92); ResolveWorkingDirectory
         // only uses it in TaskDerived mode, so Home/Fixed are unaffected. In TaskDerived mode we also
         // seed a per-task ./{custom-id} output-subdir instruction so each task's work stays separated
-        // inside the shared base dir (#98).
+        // inside the shared base dir (#98). The prompt template (#100) is threaded in as the composer's
+        // template (blank ⇒ default); its {outputDirInstruction} placeholder consumes the subdir.
         var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
         var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: home);
         var isTaskDerived = settings.WorkingDirectory == AgentWorkingDirectory.TaskDerived;
         var outputSubdir = isTaskDerived ? AgentPromptComposer.OutputSubdirectoryToken(detail) : null;
-        var preamble = settings.PromptPreamble;
+        var template = settings.PromptTemplate;
 
         Flash($"Launching Claude for '{detail.Name}'…");
         _ = Task.Run(async () =>
@@ -931,7 +946,7 @@ public sealed class TodoApp
                 if (isTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
                     Directory.CreateDirectory(workingDir);
 
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, preamble, outputSubdir);
+                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir);
                 Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)

@@ -16,10 +16,19 @@ namespace ClickUpTodo.Tui.Screens;
 public sealed record SettingsResult(int RefreshSeconds, string DefaultWorkingDirectory, AgentDispatchSettings AgentDispatch);
 
 /// <summary>
+/// Carries a prompt-template edit request from the settings screen to the host (#100): the current
+/// template plus an <see cref="Apply"/> callback the host invokes with the edited value once the
+/// editor screen returns. The settings screen folds the value back into its carried template, so an
+/// F2 Save persists it (and an F2 Cancel discards it).
+/// </summary>
+public sealed record PromptTemplateEditRequest(string CurrentTemplate, Action<string> Apply);
+
+/// <summary>
 /// A full-window settings screen. The left column changes the refresh interval; the right column
-/// is the consolidated <b>Dispatch</b> section (#101) — preferred terminal, <c>claude</c> executable
-/// + extra args, working directory, a prompt-preamble override, and the per-dispatch-pane defaults
-/// (#94 session mode, #97 post-to-Comments) the pane initializes from. Hiding statuses is no longer here — it's a
+/// is the consolidated <b>Dispatch</b> section (#27, #101) — preferred terminal, <c>claude</c>
+/// executable + extra args, working directory, the per-dispatch-pane defaults (#94 session mode,
+/// #97 post-to-Comments) the pane initializes from, and a button to edit the prompt template (#100)
+/// on its own screen. Hiding statuses is no longer here — it's a
 /// regular F3 filter rule (<c>Status IS NOT …</c>) as of #69. On Save it exposes the new values via
 /// <see cref="Result"/> and closes; Cancel/Esc close with <see cref="Result"/> left null. The host
 /// reads <see cref="Result"/> in its close handler.
@@ -34,12 +43,27 @@ public sealed class SettingsScreen : Screen
 
     private readonly TextField _refreshField;
 
+    /// <summary>
+    /// The dispatch prompt template (#100), carried through this screen unchanged and edited on the
+    /// dedicated editor screen. Kept here so an F2 Save preserves it (rather than resetting it to
+    /// blank) and so a returning edit can be folded back in.
+    /// </summary>
+    private string _promptTemplate;
+
     /// <summary>The saved settings, or null if the screen was cancelled.</summary>
     public SettingsResult? Result { get; private set; }
+
+    /// <summary>
+    /// Raised when the user opens the prompt-template editor (#100). The host shows the editor screen
+    /// and applies the returned template back via <see cref="PromptTemplateEditRequest.Apply"/>; the
+    /// TUI editor screen itself isn't unit-testable, so this seam keeps the settings screen thin.
+    /// </summary>
+    public event EventHandler<PromptTemplateEditRequest>? EditPromptTemplateRequested;
 
     public SettingsScreen(int refreshSeconds, string defaultWorkingDirectory, AgentDispatchSettings dispatch)
     {
         Title = "Settings";
+        _promptTemplate = dispatch.PromptTemplate;
 
         // Home directory used to expand a leading `~` in the working-dir field on Save.
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -106,8 +130,10 @@ public sealed class SettingsScreen : Screen
         var fixedDirLabel = new Label { X = rightX, Y = 9, Text = "Fixed dir (when Working dir = Fixed):" };
         var fixedDirField = new TextField { X = rightX, Y = 10, Width = Dim.Fill(2), Text = dispatch.FixedWorkingDirectory };
 
-        var preambleLabel = new Label { X = rightX, Y = 12, Text = "Prompt preamble (blank = default):" };
-        var preambleField = new TextField { X = rightX, Y = 13, Width = Dim.Fill(2), Text = dispatch.PromptPreamble };
+        // The prompt template (#100) is edited on its own screen; this button opens it via the host.
+        var templateButton = new Button { X = rightX, Y = 12, Text = "Edit prompt template…" };
+        templateButton.Accepting += (_, _) =>
+            EditPromptTemplateRequested?.Invoke(this, new PromptTemplateEditRequest(_promptTemplate, t => _promptTemplate = t));
 
         // Dispatch-pane defaults (#101): the per-dispatch toggles #94/#97 add to the pane initialize
         // from these. Cycle buttons mirror the terminal/working-dir buttons above.
@@ -143,7 +169,7 @@ public sealed class SettingsScreen : Screen
                     FixedWorkingDirectory = fixedDirField.Text?.Trim() ?? "",
                     DefaultSessionMode = sessionMode,
                     DefaultPostResultsToComments = postToComments,
-                    PromptPreamble = preambleField.Text?.Trim() ?? "",
+                    PromptTemplate = _promptTemplate,
                 });
             Close();
         };
@@ -169,7 +195,7 @@ public sealed class SettingsScreen : Screen
             refreshLabel, _refreshField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
-            fixedDirLabel, fixedDirField, preambleLabel, preambleField,
+            fixedDirLabel, fixedDirField, templateButton,
             sessionModeButton, postToCommentsButton,
             save, cancel,
         ]);

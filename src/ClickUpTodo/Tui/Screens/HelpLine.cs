@@ -146,6 +146,15 @@ public static class HelpItemSets
         new("Esc", "cancel"),
     ];
 
+    /// <summary>The dispatch prompt-template editor (#100), reached from F2.</summary>
+    public static readonly IReadOnlyList<HelpItem> PromptTemplateEditor =
+    [
+        new("Tab", "moves"),
+        new("Ctrl+Alt+R", "reset to default"),
+        new("F1", "help"),
+        new("Esc", "cancel"),
+    ];
+
     /// <summary>The mentions &amp; comments feed screen (F5, #110). Scaffold set — scroll / open-task
     /// items arrive with the data-bearing follow-ups (#114/#115).</summary>
     public static readonly IReadOnlyList<HelpItem> NotificationsFeed =
