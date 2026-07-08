@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using ClickUpTodo.ClickUp;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
@@ -24,13 +25,22 @@ namespace ClickUpTodo.Tui.Screens;
 /// </para>
 /// <para>
 /// <b>Ctrl+A</b> opens the inline Dispatch pane (issue #93, D1 of the #90 epic; superseding the bare
-/// <c>A</c> prompt of #26): a bottom-anchored <c>FrameView</c> hosting the prompt plus placeholder
-/// controls for the options that land in #94/#95/#97. Tab/Shift+Tab cycle its controls, PgUp/PgDn keep
-/// scrolling the tab above, Enter submits (raising <see cref="AgentDispatchRequested"/> with a
-/// <see cref="DispatchRequest"/>) and Esc cancels — all routed through the pure
+/// <c>A</c> prompt of #26): a bottom-anchored <c>FrameView</c> hosting the prompt, the working-dir
+/// control (#95 — an editable field plus a file-tree browser rooted at the base working dir #92), and
+/// placeholder controls for the options that land in #94/#97. Tab/Shift+Tab cycle its controls,
+/// PgUp/PgDn keep scrolling the tab above, Enter submits (raising <see cref="AgentDispatchRequested"/>
+/// with a <see cref="DispatchRequest"/>) and Esc cancels — all routed through the pure
 /// <see cref="DispatchPaneModel"/>. The pane is a transient child view — not a nested run-loop or a
 /// second screen — so it stays within the single already-open screen; the dashboard's
 /// single-<c>ListView</c> model (#3) is untouched.
+/// </para>
+/// <para>
+/// <b>Working-dir browser (#95):</b> a single-column <c>ListView</c> under the field, listing
+/// <c>..</c> then the current directory's subdirectories (via the unit-tested
+/// <see cref="DirectoryBrowserModel"/>). ↑/↓ move; → descends into the highlighted dir; ← goes up;
+/// <b>Enter selects</b> the highlighted dir (writes its path into the field and advances focus) —
+/// on <c>..</c>, Enter goes up so it never submits from the browser. A blank field falls through to
+/// the configured-default / task-derived working dir (#98).
 /// </para>
 /// </summary>
 public sealed class TaskDetailScreen : Screen
@@ -45,13 +55,22 @@ public sealed class TaskDetailScreen : Screen
     private readonly View[] _scrollTargets;
     private readonly FrameView _promptBox;
     private readonly TextField _promptField;
-    // The Dispatch pane's controls, in focus (Tab) order. Only the prompt feeds a dispatch today; the
-    // stubs establish the pane's layout + focus order and are wired up in #94 (one-off/interactive),
-    // #95 (working directory) and #97 (post-to-Comments).
+    // The Dispatch pane's controls, in focus (Tab) order. The prompt and the working-dir control
+    // (#95) feed a dispatch; the one-off (#94) and post-to-Comments (#97) toggles are still stubs that
+    // establish the pane's layout + focus order until those features land.
     private readonly View[] _dispatchControls;
     private readonly CheckBox _oneOffToggle;
     private readonly TextField _workingDirField;
+    private readonly ListView _dirBrowser;
+    private readonly DirectoryBrowserModel _browser;
     private readonly CheckBox _postToCommentsToggle;
+
+    // The Dispatch pane's working-dir layout (#95): rows above the browser (prompt, one-off, dir
+    // field, key hint), the browser's own rows, and rows below (post-to-Comments). Used to size the
+    // pane via DispatchPaneModel.PreferredHeightWithBrowser and to place the ListView.
+    private const int DispatchRowsAboveBrowser = 4;
+    private const int DispatchBrowserRows = 5;
+    private const int DispatchRowsBelowBrowser = 1;
 
     // The Stream tab (#106) and the data it re-renders from on a sort toggle. Default oldest-first
     // (Description then comments ascending) — the issue's "Description followed by the comments in
@@ -72,10 +91,11 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     public event EventHandler<DispatchRequest>? AgentDispatchRequested;
 
-    public TaskDetailScreen(TaskDetail task, IReadOnlyList<CommentItem> comments)
+    public TaskDetailScreen(TaskDetail task, IReadOnlyList<CommentItem> comments, string baseWorkingDirectory)
     {
         _task = task;
         _comments = comments;
+        _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         Title = task.Name.Length > 60 ? task.Name[..59] + "…" : task.Name;
 
         var headerText = TaskDetailFormatter.Header(task);
@@ -127,18 +147,39 @@ public sealed class TaskDetailScreen : Screen
         // shortcuts (incl. Ctrl+A) show in the window-owned contextual help footer via HelpItems (#103).
         var promptLabel = new Label { X = 1, Y = 0, Text = "Prompt:" };
         _promptField = new TextField { X = 9, Y = 0, Width = Dim.Fill(1) };
-        // Stubs: present so the pane's layout + Tab/Shift+Tab focus order are real, but not yet read
-        // into the DispatchRequest (that arrives with #94/#95/#97) — so dispatch behaviour is unchanged.
-        // The working-dir field is read-only for now to read as inert. Defaults are the current
-        // behaviour: interactive (one-off off), inherited working dir (blank), no comment post.
+        // #94 (one-off) and #97 (post-to-Comments) are still stubs — focusable so the pane's layout +
+        // Tab/Shift+Tab focus order are real, but not read into the DispatchRequest, so their default
+        // (interactive, no comment post) keeps dispatch behaviour unchanged. The working-dir control
+        // (#95) below is live: an editable field plus a file-tree browser; blank ⇒ default working dir.
         _oneOffToggle = new CheckBox { X = 1, Y = 1, Text = "Run one-off instead of interactive (coming soon)" };
         var dirLabel = new Label { X = 1, Y = 2, Text = "Dir:" };
-        _workingDirField = new TextField { X = 9, Y = 2, Width = Dim.Fill(1), ReadOnly = true };
-        _postToCommentsToggle = new CheckBox { X = 1, Y = 3, Text = "Post results to Comments (coming soon)" };
+        _workingDirField = new TextField { X = 9, Y = 2, Width = Dim.Fill(1) };
+        var browserHint = new Label
+        {
+            X = 1,
+            Y = 3,
+            Text = "↑↓ move · → open · ← up · Enter select (blank ⇒ default dir)",
+        };
+        _dirBrowser = new ListView
+        {
+            X = 1,
+            Y = DispatchRowsAboveBrowser,
+            Width = Dim.Fill(1),
+            Height = DispatchBrowserRows,
+        };
+        _dirBrowser.SetSource(new ObservableCollection<string>(_browser.Entries));
+        _dirBrowser.SelectedItem = 0;
+        _postToCommentsToggle = new CheckBox
+        {
+            X = 1,
+            Y = DispatchRowsAboveBrowser + DispatchBrowserRows,
+            Text = "Post results to Comments (coming soon)",
+        };
 
-        _dispatchControls = [_promptField, _oneOffToggle, _workingDirField, _postToCommentsToggle];
+        _dispatchControls = [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle];
 
-        var paneHeight = DispatchPaneModel.PreferredHeight(_dispatchControls.Length);
+        var paneHeight = DispatchPaneModel.PreferredHeightWithBrowser(
+            DispatchRowsAboveBrowser, DispatchBrowserRows, DispatchRowsBelowBrowser);
         _promptBox = new FrameView
         {
             Title = "Dispatch to Claude — Enter submit · Tab next · Esc cancel",
@@ -148,11 +189,17 @@ public sealed class TaskDetailScreen : Screen
             Height = paneHeight,
             Visible = false,
         };
-        _promptBox.Add(promptLabel, _promptField, _oneOffToggle, dirLabel, _workingDirField, _postToCommentsToggle);
-        // One handler on every dispatch control routes the pane's keys (Enter/Esc/Tab/PgUp/PgDn) via
-        // the pure DispatchPaneModel; other keys fall through so typing/Space-toggle keep working.
+        _promptBox.Add(promptLabel, _promptField, _oneOffToggle, dirLabel, _workingDirField, browserHint, _dirBrowser, _postToCommentsToggle);
+        // Each dispatch control routes the pane's keys (Enter/Esc/Tab/PgUp/PgDn) via the pure
+        // DispatchPaneModel; other keys fall through so typing/Space-toggle keep working. The browser
+        // gets its own handler so Enter/→/← navigate it instead of submitting the dispatch (#95).
         foreach (var control in _dispatchControls)
-            control.KeyDown += OnDispatchKey;
+        {
+            if (ReferenceEquals(control, _dirBrowser))
+                control.KeyDown += OnBrowserKey;
+            else
+                control.KeyDown += OnDispatchKey;
+        }
 
         // Focus lives in whichever scroll target (TextView) is front-most, so the key handler is wired
         // to each to reliably intercept Tab/Esc/Ctrl+B/Ctrl+A/F1 before the read-only TextView sees them.
@@ -265,14 +312,78 @@ public sealed class TaskDetailScreen : Screen
         _ => DispatchPaneModel.PaneKey.Other,
     };
 
-    /// <summary>Submits the pane: hides it, then (only for non-empty text) raises the dispatch event.</summary>
+    /// <summary>
+    /// Handles keys while the working-dir file-tree browser (#95) has focus. Enter selects the
+    /// highlighted directory (→ fills the field and advances focus), → descends into it, ← / a "select"
+    /// on ".." goes up; everything else (↑/↓ list navigation, Tab, Esc, PgUp/PgDn) routes through the
+    /// same <see cref="DispatchPaneModel"/> path as the other controls. Intercepting Enter here keeps it
+    /// from submitting the dispatch while browsing.
+    /// </summary>
+    private void OnBrowserKey(object? sender, Key key)
+    {
+        switch (key.KeyCode)
+        {
+            case KeyCode.Enter:
+                key.Handled = true;
+                SelectBrowserEntry();
+                break;
+            case KeyCode.CursorRight:
+                key.Handled = true;
+                DescendBrowserEntry();
+                break;
+            case KeyCode.CursorLeft:
+                key.Handled = true;
+                _browser.NavigateUp();
+                RefreshBrowser();
+                break;
+            default:
+                // Tab/Esc/PgUp/PgDn and pass-through keys (↑/↓ list navigation) behave as elsewhere.
+                OnDispatchKey(sender, key);
+                break;
+        }
+    }
+
+    /// <summary>The highlighted browser row (0 = ".."), clamped to a valid index.</summary>
+    private int SelectedBrowserIndex() => _dirBrowser.SelectedItem is int i && i >= 0 ? i : 0;
+
+    /// <summary>Refreshes the ListView from the model's current listing, re-selecting the first row.</summary>
+    private void RefreshBrowser()
+    {
+        _dirBrowser.SetSource(new ObservableCollection<string>(_browser.Entries));
+        _dirBrowser.SelectedItem = 0;
+    }
+
+    /// <summary>Enter: select the highlighted directory into the field and advance focus; ".." goes up.</summary>
+    private void SelectBrowserEntry()
+    {
+        var index = SelectedBrowserIndex();
+        if (_browser.IsParent(index))
+        {
+            _browser.NavigateUp();
+            RefreshBrowser();
+            return;
+        }
+        _workingDirField.Text = _browser.PathAt(index);
+        MoveDispatchFocus(forward: true);
+    }
+
+    /// <summary>→: descend into the highlighted directory (or up, for "..") to browse deeper.</summary>
+    private void DescendBrowserEntry()
+    {
+        _browser.Descend(SelectedBrowserIndex());
+        RefreshBrowser();
+    }
+
+    /// <summary>Submits the pane: hides it, then (only for non-empty text) raises the dispatch event
+    /// carrying the prompt and the chosen working directory (#95; blank ⇒ null ⇒ default dir).</summary>
     private void SubmitDispatch()
     {
         var text = _promptField.Text?.ToString() ?? string.Empty;
+        var dir = _workingDirField.Text?.ToString();
         HidePrompt();
         // A stray Enter shouldn't launch a session — only dispatch when something was typed.
         if (!string.IsNullOrWhiteSpace(text))
-            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text));
+            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, dir));
     }
 
     /// <summary>Moves focus to the next/previous dispatch control, wrapping at both ends.</summary>
@@ -299,10 +410,17 @@ public sealed class TaskDetailScreen : Screen
         if (_promptBox.Visible)
             return;
         _promptField.Text = string.Empty;
+        // Start each dispatch with a blank working dir (⇒ default dir #98) and the browser back at its
+        // root (the base working dir #92); #96 will later pre-fill the field from a per-task cache.
+        _workingDirField.Text = string.Empty;
+        _browser.Reset();
+        RefreshBrowser();
         // Size the pane to the current tab body so it degrades gracefully on short terminals: the
-        // prompt row + borders always survive; the bottom stub controls clip first.
+        // prompt row + borders always survive; the bottom controls (browser, post-to-Comments) clip first.
         var height = DispatchPaneModel.ClampHeight(
-            DispatchPaneModel.PreferredHeight(_dispatchControls.Length), Viewport.Height, minTabRows: 3);
+            DispatchPaneModel.PreferredHeightWithBrowser(
+                DispatchRowsAboveBrowser, DispatchBrowserRows, DispatchRowsBelowBrowser),
+            Viewport.Height, minTabRows: 3);
         _promptBox.Height = height;
         _promptBox.Y = Pos.AnchorEnd(height);
         _promptBox.Visible = true;
