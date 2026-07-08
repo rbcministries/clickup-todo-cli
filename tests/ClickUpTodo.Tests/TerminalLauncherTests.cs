@@ -249,6 +249,9 @@ public sealed class TerminalLauncherTests
         Assert.Contains("'claude' -p ", script);
         Assert.Contains("$(cat '/tmp/clickup-todo/agent-prompt.txt')", script); // file-read
         Assert.Contains("read -r _", script);                                   // keep-alive
+        // AppleScriptEscape doubles the backslash so osascript's string parse hands printf a real
+        // "\n"; pin it so a future escaping refactor can't silently break the keep-alive newline.
+        Assert.Contains(@"printf '\\n", script);
     }
 
     [Fact]

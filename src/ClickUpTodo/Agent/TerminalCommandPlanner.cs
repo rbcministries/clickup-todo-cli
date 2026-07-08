@@ -176,7 +176,7 @@ public static class TerminalCommandPlanner
     /// content enters here — it stays file-indirected.
     /// </summary>
     private const string PosixKeepAlive =
-        "; printf '\\n[claude -p finished — press Enter to close] '; read -r _";
+        "; printf '\\n[claude -p finished - press Enter to close] '; read -r _";
 
     // ── Escaping helpers ──
 
