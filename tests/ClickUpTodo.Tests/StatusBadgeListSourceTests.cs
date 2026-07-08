@@ -129,6 +129,28 @@ public sealed class StatusBadgeListSourceTests
         Assert.Equal(row.Text[..end].GetColumns(), LaidOutColumnAt(row.Text, end));
     }
 
+    [Fact]
+    public void PriorityChip_FollowingStatusChip_ColumnsMatchBaseRenderer()
+    {
+        // The priority chip sits at char-offset 3 (after the status chip); both its start and end
+        // overlay columns must equal the base renderer's cumulative width there, or the tint drifts.
+        var task = new TaskItem
+        {
+            Id = "1",
+            Name = "Ship it",
+            StatusName = "to do",
+            StatusColor = "#87909e",
+            PriorityName = "Urgent",
+            PriorityColor = "#f50000",
+        };
+        var row = TaskRowFormatter.Format(task);
+
+        Assert.Equal(TaskRowFormatter.StatusIcon.Length, row.PriorityStart);
+        Assert.Equal(row.Text[..row.PriorityStart].GetColumns(), LaidOutColumnAt(row.Text, row.PriorityStart));
+        var end = row.PriorityStart + row.PriorityLength;
+        Assert.Equal(row.Text[..end].GetColumns(), LaidOutColumnAt(row.Text, end));
+    }
+
     // ── Type-ahead search key decoupling (#76) ───────────────────────────────
 
     private static readonly IReadOnlyList<IReadOnlyList<StatusBadgeListSource.Badge>> NoBadges =

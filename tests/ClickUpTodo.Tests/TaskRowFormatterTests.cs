@@ -189,6 +189,30 @@ public sealed class TaskRowFormatterTests
         Assert.Contains("· due ", row.Text);
     }
 
+    [Fact]
+    public void HiddenMode_UnderGrouping_StillNoBadges()
+    {
+        // Hidden ignores grouping too — there are no badges to drop, so the row is unchanged.
+        var row = TaskRowFormatter.Format(FullRowTask(), groupedBy: TaskField.Status, badges: BadgeDisplay.Hidden);
+
+        Assert.StartsWith("Ship the report", row.Text);
+        Assert.Equal(-1, row.StatusStart);
+        Assert.Equal(-1, row.PriorityStart);
+    }
+
+    [Fact]
+    public void TextMode_NoStatusNoPriority_TitleLeadsAtColumnZero()
+    {
+        var task = new TaskItem { Id = "1", Name = "Bare task" };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Text);
+
+        // Both badges absent ⇒ fully ragged, so the title leads with no gutter.
+        Assert.StartsWith("Bare task", row.Text);
+        Assert.Equal(-1, row.StatusStart);
+        Assert.Equal(-1, row.PriorityStart);
+    }
+
     // ── Grouping drops the grouped field's badge (#67) ───────────────────────
 
     [Fact]
