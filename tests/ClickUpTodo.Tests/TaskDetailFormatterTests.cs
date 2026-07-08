@@ -267,6 +267,36 @@ public sealed class TaskDetailFormatterTests
     }
 
     [Fact]
+    public void Stream_DescriptionHeader_ShowsCreatedDateOnlyWhenPresent()
+    {
+        // No CreatedMs → the header is just "Description" directly above the body.
+        var noDate = TaskDetailFormatter.Stream(Sample(description: "DESCBODY"), [], StreamSort.Ascending);
+        Assert.StartsWith("Description\nDESCBODY", noDate);
+
+        // CreatedMs present → the header carries the date in the comment header's "·" shape.
+        var withDate = TaskDetailFormatter.Stream(
+            Sample(description: "DESCBODY") with { CreatedMs = 1_719_939_120_000 }, [], StreamSort.Ascending);
+        Assert.Contains("Description  ·  ", withDate);
+    }
+
+    [Fact]
+    public void Stream_DuplicateDates_OrderByIdOrdinal_AndDescendingReverses()
+    {
+        // Same DateMs → deterministic ordinal Id tiebreak ("a" before "b"); descending flips it.
+        CommentItem[] comments =
+        [
+            new("b", "sam", DateMs: 1000, Text: "BODYB", Resolved: false),
+            new("a", "ben", DateMs: 1000, Text: "BODYA", Resolved: false),
+        ];
+
+        var asc = TaskDetailFormatter.Stream(Sample(description: "DESC"), comments, StreamSort.Ascending);
+        Assert.True(asc.IndexOf("BODYA", StringComparison.Ordinal) < asc.IndexOf("BODYB", StringComparison.Ordinal));
+
+        var desc = TaskDetailFormatter.Stream(Sample(description: "DESC"), comments, StreamSort.Descending);
+        Assert.True(desc.IndexOf("BODYB", StringComparison.Ordinal) < desc.IndexOf("BODYA", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void OtherAttributes_IncludesListAndDateLabels()
     {
         var text = TaskDetailFormatter.OtherAttributes(Sample());
