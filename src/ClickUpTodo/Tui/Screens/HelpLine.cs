@@ -64,6 +64,7 @@ public static class HelpItemSets
     [
         new("Tab", "switch tab"),
         new("↑/↓ PgUp/PgDn", "scroll"),
+        new("Ctrl+PgUp/PgDn", "sort stream"),
         new("A", "dispatch to Claude"),
         new("Ctrl+B", "browser"),
         new("F1", "help"),
