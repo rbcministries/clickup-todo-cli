@@ -28,6 +28,7 @@ public sealed class ClickUpClientWriteTests
         Assert.Contains("/v2/task/t1", handler.RequestUri);
         Assert.Equal(JsonValueKind.Number, handler.Body!.RootElement.GetProperty("priority").ValueKind);
         Assert.Equal(2, handler.Body.RootElement.GetProperty("priority").GetInt32());
+        Assert.False(handler.Body.RootElement.TryGetProperty("assignees", out _), "a priority write must not touch assignees.");
         Assert.Equal(1, confirmed);
     }
 
@@ -74,6 +75,7 @@ public sealed class ClickUpClientWriteTests
         var body = handler.Body!.RootElement.GetProperty("assignees");
         Assert.Equal([123L], body.GetProperty("add").EnumerateArray().Select(e => e.GetInt64()));
         Assert.False(body.TryGetProperty("rem", out _), "add-only write must not send a 'rem' array.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("priority", out _), "an assignee write must not touch priority.");
         Assert.Equal([(123L, "alice"), (456L, "bob")], assignees.Select(a => (a.Id, a.Name)));
     }
 
@@ -88,6 +90,7 @@ public sealed class ClickUpClientWriteTests
         var body = handler.Body!.RootElement.GetProperty("assignees");
         Assert.Equal([456L], body.GetProperty("rem").EnumerateArray().Select(e => e.GetInt64()));
         Assert.False(body.TryGetProperty("add", out _), "remove-only write must not send an 'add' array.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("priority", out _), "an assignee write must not touch priority.");
         Assert.Equal([(123L, "alice")], assignees.Select(a => (a.Id, a.Name)));
     }
 
