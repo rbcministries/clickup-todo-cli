@@ -70,6 +70,16 @@ public static class DispatchPaneModel
     public static int PreferredHeight(int controlCount) => Math.Max(0, controlCount) + 2;
 
     /// <summary>
+    /// The pane's ideal height once the working-dir file-tree browser (#95) is present: the
+    /// single-row controls and hint line above the browser (<paramref name="rowsAboveBrowser"/>), the
+    /// browser's own rows (<paramref name="browserRows"/>, at least one), the single-row controls
+    /// below it (<paramref name="rowsBelowBrowser"/>), plus the top+bottom frame border. Factored out
+    /// so the (CI-untestable) glue's sizing is unit-tested.
+    /// </summary>
+    public static int PreferredHeightWithBrowser(int rowsAboveBrowser, int browserRows, int rowsBelowBrowser)
+        => Math.Max(0, rowsAboveBrowser) + Math.Max(1, browserRows) + Math.Max(0, rowsBelowBrowser) + 2;
+
+    /// <summary>
     /// The pane height clamped so at least <paramref name="minTabRows"/> of the tab above stays
     /// visible on short terminals, but never below the 3-row minimum (top border + prompt row +
     /// bottom border) that keeps the prompt on screen. When the terminal is too short to honour both,

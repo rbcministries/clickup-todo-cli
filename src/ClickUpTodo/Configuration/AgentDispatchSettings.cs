@@ -126,6 +126,18 @@ public sealed class AgentDispatchSettings
     };
 
     /// <summary>
+    /// Whether a dispatch should use the task-derived output behaviour (#98): launch in the base dir
+    /// and seed a per-task <c>./{custom-id}</c> output-subdir instruction (and create the base dir).
+    /// True only in <see cref="AgentWorkingDirectory.TaskDerived"/> mode <b>and</b> when no working
+    /// directory was explicitly picked in the Dispatch pane (#95) — an explicit pick means the user
+    /// chose their exact directory, so no subdir is forced. A blank/whitespace pick counts as "no
+    /// pick" (mirrors <see cref="ResolveEffectiveWorkingDirectory"/>). Pure so it can be unit-tested;
+    /// this is the crux of the #95 explicit-pick behaviour, factored out of the CI-untestable glue.
+    /// </summary>
+    public bool UsesTaskDerivedOutput(string? chosenDirectory)
+        => string.IsNullOrWhiteSpace(chosenDirectory) && WorkingDirectory == AgentWorkingDirectory.TaskDerived;
+
+    /// <summary>
     /// Resolves the working directory a dispatch should start in, applying the epic-#90 precedence:
     /// a <b>per-task cached directory</b> (#96) wins when present, otherwise the configured default
     /// mode via <see cref="ResolveWorkingDirectory"/> (which itself backstops onto the task-derived

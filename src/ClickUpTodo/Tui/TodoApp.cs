@@ -893,11 +893,20 @@ public sealed class TodoApp
                 {
                     if (ActiveScreen is not null)
                         return;
-                    var screen = new TaskDetailScreen(detail, comments, defaultSessionMode: _config.AgentDispatch.DefaultSessionMode);
+                    // Root the Dispatch pane's working-dir browser (#95) at the saved base dir (#92),
+                    // falling back to home if it doesn't exist yet (a task-derived launch creates it on
+                    // first use, #98, but the browser has to start somewhere that exists).
+                    var detailHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                    var detailBaseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, detailHome);
+                    var browserRoot = Directory.Exists(detailBaseDir) ? detailBaseDir : detailHome;
+                    var screen = new TaskDetailScreen(
+                        detail, comments, browserRoot,
+                        defaultSessionMode: _config.AgentDispatch.DefaultSessionMode);
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
-                    // prompt and the one-off/interactive mode (#94) are consumed; #95/#97 add the rest.
-                    screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request.Prompt, request.SessionMode);
+                    // prompt, the one-off/interactive mode (#94), and the working dir (#95) are consumed;
+                    // #97 adds the rest.
+                    screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -914,21 +923,19 @@ public sealed class TodoApp
         });
     }
 
-    /// <summary>
-    /// Composes the seed prompt for <paramref name="detail"/> and launches a <c>claude</c> session in
-    /// a new terminal (#26) — an interactive session or, when <paramref name="sessionMode"/> is
-    /// <see cref="AgentSessionMode.OneOff"/>, a one-off <c>claude -p</c> run (#94). Runs off the UI
-    /// thread (file write + process launch), then reports the outcome on the status line; the detail
-    /// view and background refresh keep running. The working directory and prompt preamble are resolved
-    /// from the AgentDispatch settings on the UI thread and threaded into the dispatch (#91). In the
-    /// default <see cref="AgentWorkingDirectory.TaskDerived"/> mode the launch starts in the saved base
-    /// working directory (#92, created on first use) and the prompt instructs the agent to write
-    /// outputs to a per-task <c>./{custom-id}</c> subdir (#98); Home/Fixed modes resolve to their
-    /// own dir with no subdir instruction.
+    /// a new terminal (#26) — an interactive session or, when the request's
+    /// <see cref="DispatchRequest.SessionMode"/> is <see cref="AgentSessionMode.OneOff"/>, a one-off
+    /// <c>claude -p</c> run (#94). Runs off the UI thread (file write + process launch), then reports
+    /// the outcome on the status line; the detail view and background refresh keep running. The working
+    /// directory and prompt preamble are resolved from the AgentDispatch settings on the UI thread and
+    /// threaded into the dispatch (#91). A working directory explicitly picked in the Dispatch pane
+    /// (#95, <see cref="DispatchRequest.WorkingDirectory"/>) overrides the configured mode and starts
+    /// the session there. Otherwise, in the default <see cref="AgentWorkingDirectory.TaskDerived"/>
+    /// mode the launch starts in the saved base working directory (#92, created on first use) and the
+    /// prompt instructs the agent to write outputs to a per-task <c>./{custom-id}</c> subdir (#98);
+    /// Home/Fixed modes resolve to their own dir with no subdir instruction.
     /// </summary>
-    private void DispatchAgent(
-        TaskDetail detail, IReadOnlyList<CommentItem> comments, string prompt,
-        AgentSessionMode sessionMode = AgentSessionMode.Interactive)
+    private void DispatchAgent(TaskDetail detail, IReadOnlyList<CommentItem> comments, DispatchRequest request)
     {
         // Re-entrancy guard: a second Enter before the first launch finishes would spawn a duplicate
         // claude session. This runs on the UI thread (invoked from the screen's key handler) and is
@@ -939,23 +946,32 @@ public sealed class TodoApp
             return;
         }
         _dispatching = true;
-        var oneOff = sessionMode == AgentSessionMode.OneOff;
+        var oneOff = request.SessionMode == AgentSessionMode.OneOff;
 
         // Resolve the dispatch settings on the UI thread before the background hand-off (#91).
         // Capture _agent locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap
         // the instance mid-dispatch.
         var agent = _agent;
+        var prompt = request.Prompt;
         var settings = _config.AgentDispatch;
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        // The task-derived candidate is the saved base working directory (#92); ResolveWorkingDirectory
-        // only uses it in TaskDerived mode, so Home/Fixed are unaffected. In TaskDerived mode we also
-        // seed a per-task ./{custom-id} output-subdir instruction so each task's work stays separated
-        // inside the shared base dir (#98). The prompt template (#100) is threaded in as the composer's
-        // template (blank ⇒ default); its {outputDirInstruction} placeholder consumes the subdir.
+        // An explicit pane pick (#95) is the override that wins over the configured mode via the
+        // existing ResolveEffectiveWorkingDirectory "cached" slot (which #96 also seeds); a blank field
+        // ⇒ null ⇒ the configured default. A hand-typed leading ~ is expanded (same as the F2 base-dir
+        // field) so it reaches the launcher as an absolute path. The task-derived candidate is the
+        // saved base working directory (#92); ResolveWorkingDirectory only uses it in TaskDerived mode,
+        // so Home/Fixed are unaffected. In TaskDerived mode *without* an explicit pick we also seed a
+        // per-task ./{custom-id} output-subdir instruction so each task's work stays separated inside
+        // the shared base dir (#98) — an explicit pick means the user chose their exact dir, so we
+        // don't force a subdir there (AgentDispatchSettings.UsesTaskDerivedOutput). The prompt template
+        // (#100) is threaded in as the composer's template (blank ⇒ default); its {outputDirInstruction}
+        // placeholder consumes the subdir.
+        var expandedPick = SettingsForm.ExpandHomePath(request.WorkingDirectory, home);
+        var chosenDir = expandedPick.Length == 0 ? null : expandedPick;
         var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
-        var workingDir = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: home);
-        var isTaskDerived = settings.WorkingDirectory == AgentWorkingDirectory.TaskDerived;
-        var outputSubdir = isTaskDerived ? AgentPromptComposer.OutputSubdirectoryToken(detail) : null;
+        var workingDir = settings.ResolveEffectiveWorkingDirectory(chosenDir, taskDerivedDirectory: baseDir, homeDirectory: home);
+        var useTaskDerived = settings.UsesTaskDerivedOutput(chosenDir);
+        var outputSubdir = useTaskDerived ? AgentPromptComposer.OutputSubdirectoryToken(detail) : null;
         var template = settings.PromptTemplate;
 
         Flash($"Launching Claude for '{detail.Name}'…");
@@ -964,9 +980,11 @@ public sealed class TodoApp
             try
             {
                 // A task-derived launch starts in the base dir; create it on first use (#98) so
-                // Process.Start doesn't fail on a not-yet-existing path. Home/Fixed dirs are the
-                // user's own (Home always exists; a Fixed dir is their explicit external choice).
-                if (isTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
+                // Process.Start doesn't fail on a not-yet-existing path. Home/Fixed dirs and an explicit
+                // pane pick are the user's own (Home always exists; a Fixed dir / explicit pick is their
+                // choice — a browser pick always exists, and a hand-typed missing path surfaces a launch
+                // error rather than being silently created).
+                if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
                     Directory.CreateDirectory(workingDir);
 
                 var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff);
