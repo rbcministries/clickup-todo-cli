@@ -481,7 +481,7 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.DefaultWorkingDirectory, _config.AgentDispatch);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.DefaultWorkingDirectory, _config.AgentDispatch, _config.DetailView);
 
         // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
         // save it folds the edited template back into the settings screen via the request's callback, so
@@ -505,6 +505,7 @@ public sealed class TodoApp
             _config.RefreshSeconds = result.RefreshSeconds;
             _config.DefaultWorkingDirectory = result.DefaultWorkingDirectory;
             _config.AgentDispatch = result.AgentDispatch;
+            _config.DetailView = result.DetailView;
             _configStore.Save(_config);
 
             // Rebuild the dispatcher so edited terminal / claude path / extra args apply without a
@@ -893,7 +894,7 @@ public sealed class TodoApp
                 {
                     if (ActiveScreen is not null)
                         return;
-                    var screen = new TaskDetailScreen(detail, comments);
+                    var screen = new TaskDetailScreen(detail, comments, _config.DetailView);
                     // Ctrl+A (in the detail view) → compose + launch an interactive claude session
                     // (#26/#93). The detail view stays open; dispatch runs off the UI thread so the TUI
                     // stays live. Only the prompt is consumed today; #94/#95/#97 add the pane's options.
