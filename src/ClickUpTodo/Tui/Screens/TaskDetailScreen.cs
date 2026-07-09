@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using ClickUpTodo.ClickUp;
+using ClickUpTodo.Configuration;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
@@ -57,9 +58,9 @@ public sealed class TaskDetailScreen : Screen
     private readonly View[] _scrollTargets;
     private readonly FrameView _promptBox;
     private readonly TextField _promptField;
-    // The Dispatch pane's controls, in focus (Tab) order. The prompt and the working-dir control
-    // (#95) feed a dispatch; the one-off (#94) and post-to-Comments (#97) toggles are still stubs that
-    // establish the pane's layout + focus order until those features land.
+    // The Dispatch pane's controls, in focus (Tab) order. The prompt, the one-off/interactive toggle
+    // (#94), and the working-dir control (#95) feed a dispatch; the post-to-Comments (#97) toggle is
+    // still a stub that establishes the pane's layout + focus order until that feature lands.
     private readonly View[] _dispatchControls;
     private readonly CheckBox _oneOffToggle;
     private readonly TextField _workingDirField;
@@ -92,17 +93,22 @@ public sealed class TaskDetailScreen : Screen
 
     /// <summary>
     /// Raised when the user submits a non-empty prompt in the Dispatch pane (Ctrl+A). The argument
-    /// carries the typed prompt (and, as #94/#95/#97 land, the pane's other options); the host composes
-    /// it with the task detail + comments and launches an interactive <c>claude</c> session. The detail
-    /// view stays open.
+    /// carries the typed prompt and the chosen session mode (#94; #95/#97 add the remaining options as
+    /// they land); the host composes it with the task detail + comments and launches an interactive
+    /// <c>claude</c> session or a one-off <c>claude -p</c> run per the mode. The detail view stays open.
     /// </summary>
     public event EventHandler<DispatchRequest>? AgentDispatchRequested;
 
+    /// <param name="defaultSessionMode">
+    /// Seeds the pane's one-off/interactive toggle (#94) from the persisted default (#101); the user
+    /// can flip it per dispatch. Defaults to <see cref="AgentSessionMode.Interactive"/>.
+    /// </param>
     public TaskDetailScreen(
         TaskDetail task,
         IReadOnlyList<CommentItem> comments,
         string baseWorkingDirectory,
-        Configuration.StreamAutoScroll streamAutoScroll = Configuration.StreamAutoScroll.Newest)
+        Configuration.StreamAutoScroll streamAutoScroll = Configuration.StreamAutoScroll.Newest,
+        AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive)
     {
         _task = task;
         _comments = comments;
@@ -159,11 +165,17 @@ public sealed class TaskDetailScreen : Screen
         // shortcuts (incl. Ctrl+A) show in the window-owned contextual help footer via HelpItems (#103).
         var promptLabel = new Label { X = 1, Y = 0, Text = "Prompt:" };
         _promptField = new TextField { X = 9, Y = 0, Width = Dim.Fill(1) };
-        // #94 (one-off) and #97 (post-to-Comments) are still stubs — focusable so the pane's layout +
-        // Tab/Shift+Tab focus order are real, but not read into the DispatchRequest, so their default
-        // (interactive, no comment post) keeps dispatch behaviour unchanged. The working-dir control
-        // (#95) below is live: an editable field plus a file-tree browser; blank ⇒ default working dir.
-        _oneOffToggle = new CheckBox { X = 1, Y = 1, Text = "Run one-off instead of interactive (coming soon)" };
+        // The one-off/interactive toggle (#94) is live: seeded from the persisted default (#101) and
+        // read into the DispatchRequest on submit. The working-dir control (#95) below is also live —
+        // an editable field plus a file-tree browser; blank ⇒ default working dir. Only the
+        // post-to-Comments (#97) toggle remains an inert stub (no comment post).
+        _oneOffToggle = new CheckBox
+        {
+            X = 1,
+            Y = 1,
+            Text = "Run one-off (claude -p) instead of an interactive session",
+            Value = defaultSessionMode == AgentSessionMode.OneOff ? CheckState.Checked : CheckState.UnChecked,
+        };
         var dirLabel = new Label { X = 1, Y = 2, Text = "Dir:" };
         _workingDirField = new TextField { X = 9, Y = 2, Width = Dim.Fill(1) };
         var browserHint = new Label
@@ -420,15 +432,19 @@ public sealed class TaskDetailScreen : Screen
     }
 
     /// <summary>Submits the pane: hides it, then (only for non-empty text) raises the dispatch event
-    /// carrying the prompt and the chosen working directory (#95; blank ⇒ null ⇒ default dir).</summary>
+    /// carrying the prompt, the one-off/interactive session mode (#94), and the chosen working
+    /// directory (#95; blank ⇒ null ⇒ default dir).</summary>
     private void SubmitDispatch()
     {
         var text = _promptField.Text?.ToString() ?? string.Empty;
+        var sessionMode = _oneOffToggle.Value == CheckState.Checked
+            ? AgentSessionMode.OneOff
+            : AgentSessionMode.Interactive;
         var dir = _workingDirField.Text?.ToString();
         HidePrompt();
         // A stray Enter shouldn't launch a session — only dispatch when something was typed.
         if (!string.IsNullOrWhiteSpace(text))
-            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, dir));
+            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, sessionMode, dir));
     }
 
     /// <summary>Moves focus to the next/previous dispatch control, wrapping at both ends.</summary>

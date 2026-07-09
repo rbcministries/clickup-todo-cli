@@ -899,10 +899,13 @@ public sealed class TodoApp
                     var detailHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                     var detailBaseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, detailHome);
                     var browserRoot = Directory.Exists(detailBaseDir) ? detailBaseDir : detailHome;
-                    var screen = new TaskDetailScreen(detail, comments, browserRoot);
+                    var screen = new TaskDetailScreen(
+                        detail, comments, browserRoot,
+                        defaultSessionMode: _config.AgentDispatch.DefaultSessionMode);
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
-                    // prompt and the working dir (#95) are consumed today; #94/#97 add the pane's options.
+                    // prompt, the one-off/interactive mode (#94), and the working dir (#95) are consumed;
+                    // #97 adds the rest.
                     screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request);
                     ShowScreen(screen, () =>
                     {
@@ -920,10 +923,10 @@ public sealed class TodoApp
         });
     }
 
-    /// <summary>
-    /// Composes the seed prompt for <paramref name="detail"/> and launches a <c>claude</c> session in
-    /// a new terminal (#26). Runs off the UI thread (file write + process launch), then reports the
-    /// outcome on the status line; the detail view and background refresh keep running. The working
+    /// a new terminal (#26) — an interactive session or, when the request's
+    /// <see cref="DispatchRequest.SessionMode"/> is <see cref="AgentSessionMode.OneOff"/>, a one-off
+    /// <c>claude -p</c> run (#94). Runs off the UI thread (file write + process launch), then reports
+    /// the outcome on the status line; the detail view and background refresh keep running. The working
     /// directory and prompt preamble are resolved from the AgentDispatch settings on the UI thread and
     /// threaded into the dispatch (#91). A working directory explicitly picked in the Dispatch pane
     /// (#95, <see cref="DispatchRequest.WorkingDirectory"/>) overrides the configured mode and starts
@@ -943,6 +946,7 @@ public sealed class TodoApp
             return;
         }
         _dispatching = true;
+        var oneOff = request.SessionMode == AgentSessionMode.OneOff;
 
         // Resolve the dispatch settings on the UI thread before the background hand-off (#91).
         // Capture _agent locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap
@@ -983,7 +987,7 @@ public sealed class TodoApp
                 if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
                     Directory.CreateDirectory(workingDir);
 
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir);
+                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff);
                 Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)
