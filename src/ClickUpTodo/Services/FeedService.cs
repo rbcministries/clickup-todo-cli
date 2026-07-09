@@ -28,14 +28,21 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
     /// more comments than this).</summary>
     public const int DefaultMaxEntries = 200;
 
+    // The signed-in user, resolved lazily on first feed load and reused thereafter so a background
+    // refresh (#116) doesn't re-fetch the (session-stable) identity every tick. Idempotent, so an
+    // unsynchronised double-fetch on the first two concurrent loads is harmless.
+    private ClickUpUser? _currentUser;
+
     /// <summary>
     /// Loads the comment feed for the user's actionable tasks: resolves the view's <c>Assignee IS</c>
     /// rules to an assignee-id set, fetches the assigned tasks (<see cref="ClickUpClient.GetAssignedTasksAsync"/>),
     /// then fans out <see cref="ClickUpClient.GetTaskCommentsAsync"/> across them and merges the results
-    /// into one newest-first, de-duplicated, capped list. Best-effort per task (a task whose comments
-    /// can't be fetched is skipped); genuine cancellation propagates.
+    /// into one newest-first, de-duplicated, capped list. Each entry is stamped with
+    /// <see cref="CommentItem.MentionsMe"/> (#113) against the signed-in user; when
+    /// <paramref name="mentionsOnly"/> is true the result is filtered to mentions only. Best-effort per
+    /// task (a task whose comments can't be fetched is skipped); genuine cancellation propagates.
     /// </summary>
-    public async Task<IReadOnlyList<CommentItem>> LoadFeedAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<CommentItem>> LoadFeedAsync(bool mentionsOnly = false, CancellationToken ct = default)
     {
         var assigneeIds = await taskService.ResolveAssigneeIdsAsync(config.View, ct);
         var tasks = await client.GetAssignedTasksAsync(config.WorkspaceId, assigneeIds, ct);
@@ -46,7 +53,30 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
-        return await GatherAsync(taskIds, client.GetTaskCommentsAsync, DefaultMaxConcurrency, DefaultMaxEntries, ct);
+        var feed = await GatherAsync(taskIds, client.GetTaskCommentsAsync, DefaultMaxConcurrency, DefaultMaxEntries, ct);
+
+        var me = _currentUser ??= await client.GetMeAsync(ct);
+        return StampMentions(feed, MentionSpec.ForUser(me), mentionsOnly);
+    }
+
+    /// <summary>
+    /// Stamps <see cref="CommentItem.MentionsMe"/> on each feed entry via <see cref="MentionDetector"/>
+    /// against <paramref name="spec"/>, and — when <paramref name="mentionsOnly"/> is true — filters the
+    /// result to mentioned entries only (newest-first order preserved). Pure and unit-testable offline.
+    /// </summary>
+    internal static IReadOnlyList<CommentItem> StampMentions(
+        IReadOnlyList<CommentItem> feed, MentionSpec spec, bool mentionsOnly)
+    {
+        var stamped = new List<CommentItem>(feed.Count);
+        foreach (var comment in feed)
+        {
+            var mentionsMe = MentionDetector.Mentions(comment, spec);
+            if (mentionsOnly && !mentionsMe)
+                continue;
+            stamped.Add(comment.MentionsMe == mentionsMe ? comment : comment with { MentionsMe = mentionsMe });
+        }
+
+        return stamped;
     }
 
     /// <summary>
