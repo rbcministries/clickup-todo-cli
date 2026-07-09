@@ -426,7 +426,6 @@ public sealed class TaskRowFormatterTests
         // White-background chip listing the other assignees' names (current user excluded), span exact.
         var chip = row.Text.Substring(row.AssigneesStart, row.AssigneesLength);
         Assert.Equal(" Jo, Sam ", chip);
-        Assert.DoesNotContain("Me", chip);
     }
 
     [Fact]
@@ -476,6 +475,7 @@ public sealed class TaskRowFormatterTests
             StatusName = "to do",
             PriorityName = "High",
             ListName = "Personal Tasks",
+            DueDateMs = DateTimeOffset.Parse("2026-07-01T12:00:00Z").ToUnixTimeMilliseconds(),
             Assignees = [new TaskAssignee(Teammate, "Jo")],
         };
 
@@ -484,11 +484,15 @@ public sealed class TaskRowFormatterTests
         var noBadge = TaskRowFormatter.Format(
             task, isForeignSubtask: true, badges: BadgeDisplay.Icons, currentUserId: Teammate);
 
-        // The 👥 chip follows the list segment and precedes the trailing "(not assigned to you)" marker.
+        // The 👥 chip follows both the · list and · due segments and precedes the trailing
+        // "(not assigned to you)" marker (per the AC, the badge coexists with the context marker).
         var chipIdx = withBadge.Text.IndexOf("👥", StringComparison.Ordinal);
         var listIdx = withBadge.Text.IndexOf("· Personal Tasks", StringComparison.Ordinal);
+        var dueIdx = withBadge.Text.IndexOf("· due ", StringComparison.Ordinal);
         var markerIdx = withBadge.Text.IndexOf("(not assigned to you)", StringComparison.Ordinal);
-        Assert.True(listIdx < chipIdx && chipIdx < markerIdx);
+        Assert.True(listIdx < chipIdx && dueIdx < chipIdx && chipIdx < markerIdx);
+        // A two-space separator (uncoloured) precedes the coloured chip.
+        Assert.Equal("  ", withBadge.Text.Substring(withBadge.AssigneesStart - 2, 2));
 
         // The leading Status/Priority chips are unaffected by whether the trailing badge is present.
         Assert.Equal(noBadge.StatusStart, withBadge.StatusStart);

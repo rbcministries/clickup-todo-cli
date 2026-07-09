@@ -1347,15 +1347,17 @@ public sealed class TodoApp
             _ => "  ",
         };
 
-    /// <summary>The display text and the row's color badge overlays (status, then priority when set).
-    /// <paramref name="groupedBy"/> omits the grouped field's segment (its header already conveys it, #67).
-    /// <paramref name="marker"/> is the leading ▶/▼ fold marker or gutter (#76). <paramref name="badges"/>
-    /// selects how the leading Status/Priority badges render (F6).</summary>
     /// <summary>Fixed white background for the trailing assignees badge (#161) — not tinted by a
     /// ClickUp field colour like Status/Priority; the readable dark foreground follows from
     /// <see cref="StatusBadgeColor.PreferDarkText"/> (black on white).</summary>
     private const string AssigneesBadgeColor = "ffffff";
 
+    /// <summary>The display text and the row's color badge overlays (status, then priority when set,
+    /// then the trailing assignees badge, #161). <paramref name="groupedBy"/> omits the grouped field's
+    /// segment (its header already conveys it, #67). <paramref name="marker"/> is the leading ▶/▼ fold
+    /// marker or gutter (#76). <paramref name="badges"/> selects how the badges render (F6).
+    /// <paramref name="currentUserId"/> decides the trailing assignees badge (shown when a non-current
+    /// user is assigned).</summary>
     private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
         TaskItem task, BadgeDisplay badgeDisplay, long currentUserId, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
     {
