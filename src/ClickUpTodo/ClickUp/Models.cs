@@ -148,8 +148,12 @@ public sealed record CustomFieldItem(
 /// tasks — in the mentions/comments feed (#109). <see cref="TaskId"/> attributes the comment to the
 /// task it belongs to so the feed can group it and open that task from a feed entry (#111 / #115); it
 /// is null for callers (like the single-task detail view) that don't need attribution.
+/// <see cref="MentionsMe"/> is stamped by the feed (#113) when the comment mentions the current user;
+/// it defaults to <c>false</c> so the mapper and non-feed callers are unaffected.
 /// </summary>
-public sealed record CommentItem(string Id, string Author, long? DateMs, string Text, bool Resolved, string? TaskId = null);
+public sealed record CommentItem(
+    string Id, string Author, long? DateMs, string Text, bool Resolved, string? TaskId = null,
+    bool MentionsMe = false);
 
 /// <summary>
 /// The full detail of a single task, fetched on demand for the detail view (issue #17). Richer than
