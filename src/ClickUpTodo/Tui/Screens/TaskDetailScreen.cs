@@ -70,6 +70,9 @@ public sealed class TaskDetailScreen : Screen
     private readonly ListView _dirBrowser;
     private readonly DirectoryBrowserModel _browser;
     private readonly CheckBox _postToCommentsToggle;
+    // The per-task cached working directory (#96) the pane's dir field is pre-filled with on each
+    // open; blank ⇒ start blank (⇒ configured default / task-derived dir #98).
+    private readonly string _initialWorkingDirectory;
 
     // The Dispatch pane's working-dir layout (#95): rows above the browser (prompt, one-off, dir
     // field, key hint), the browser's own rows, and rows below (post-to-Comments). Used to size the
@@ -115,16 +118,23 @@ public sealed class TaskDetailScreen : Screen
     /// Seeds the pane's one-off/interactive toggle (#94) from the persisted default (#101); the user
     /// can flip it per dispatch. Defaults to <see cref="AgentSessionMode.Interactive"/>.
     /// </param>
+    /// <param name="cachedWorkingDirectory">
+    /// The per-task cached working directory (#96) to pre-fill the pane's working-dir field with each
+    /// time it opens, or blank/null to start blank (⇒ configured default / task-derived dir #98). The
+    /// browser still resets to its root; pre-fill is independent of navigation.
+    /// </param>
     public TaskDetailScreen(
         TaskDetail task,
         IReadOnlyList<CommentItem> comments,
         string baseWorkingDirectory,
         DetailViewSettings? settings = null,
-        AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive)
+        AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive,
+        string? cachedWorkingDirectory = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
         _comments = comments;
+        _initialWorkingDirectory = cachedWorkingDirectory ?? string.Empty;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
@@ -491,9 +501,10 @@ public sealed class TaskDetailScreen : Screen
         if (_promptBox.Visible)
             return;
         _promptField.Text = string.Empty;
-        // Start each dispatch with a blank working dir (⇒ default dir #98) and the browser back at its
-        // root (the base working dir #92); #96 will later pre-fill the field from a per-task cache.
-        _workingDirField.Text = string.Empty;
+        // Pre-fill the working dir from the per-task cache (#96) — the last explicit dir dispatched
+        // from this task, or blank (⇒ default dir #98) if none — and reset the browser to its root
+        // (the base working dir #92). Pre-fill is independent of browser navigation.
+        _workingDirField.Text = _initialWorkingDirectory;
         _browser.Reset();
         RefreshBrowser();
         // Size the pane to the current tab body so it degrades gracefully on short terminals: the
