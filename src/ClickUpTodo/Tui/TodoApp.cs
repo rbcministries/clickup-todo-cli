@@ -1126,7 +1126,7 @@ public sealed class TodoApp
         var groupedBy = inFocus ? (TaskField?)null : _config.View.GroupField;
         // Reproduce the row's ▶/▼ fold marker from its stored state so an in-place update keeps it (#76).
         var marker = FoldMarker(index < _folds.Count ? _folds[index] : FoldState.None, _config.View.ShowSubtasks);
-        var (text, badges) = BuildRow(updated, _config.BadgeDisplay, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy, marker: marker);
+        var (text, badges) = BuildRow(updated, _config.BadgeDisplay, _tasks.UserId, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy, marker: marker);
         _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
@@ -1349,7 +1349,7 @@ public sealed class TodoApp
 
     private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None, bool isForeignSubtask = false)
     {
-        var (text, badges) = BuildRow(task, _config.BadgeDisplay, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask);
+        var (text, badges) = BuildRow(task, _config.BadgeDisplay, _tasks.UserId, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask);
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);
@@ -1371,21 +1371,32 @@ public sealed class TodoApp
             _ => "  ",
         };
 
-    /// <summary>The display text and the row's color badge overlays (status, then priority when set).
-    /// <paramref name="groupedBy"/> omits the grouped field's segment (its header already conveys it, #67).
-    /// <paramref name="marker"/> is the leading ▶/▼ fold marker or gutter (#76). <paramref name="badges"/>
-    /// selects how the leading Status/Priority badges render (F6).</summary>
+    /// <summary>Fixed white background for the trailing assignees badge (#161) — not tinted by a
+    /// ClickUp field colour like Status/Priority; the readable dark foreground follows from
+    /// <see cref="StatusBadgeColor.PreferDarkText"/> (black on white).</summary>
+    private const string AssigneesBadgeColor = "ffffff";
+
+    /// <summary>The display text and the row's color badge overlays (status, then priority when set,
+    /// then the trailing assignees badge, #161). <paramref name="groupedBy"/> omits the grouped field's
+    /// segment (its header already conveys it, #67). <paramref name="marker"/> is the leading ▶/▼ fold
+    /// marker or gutter (#76). <paramref name="badges"/> selects how the badges render (F6).
+    /// <paramref name="currentUserId"/> decides the trailing assignees badge (shown when a non-current
+    /// user is assigned).</summary>
     private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
-        TaskItem task, BadgeDisplay badgeDisplay, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
+        TaskItem task, BadgeDisplay badgeDisplay, long currentUserId, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
     {
-        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask, badgeDisplay);
-        var badges = new List<StatusBadgeListSource.Badge>(2);
+        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask, badgeDisplay, currentUserId);
+        var badges = new List<StatusBadgeListSource.Badge>(3);
         // The Status/Priority badges (icon chip or bracketed text) are tinted with their field colours;
         // an absent/hidden badge carries no span, so TryCreate returns null and nothing is shaded.
         if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
             badges.Add(status);
         if (StatusBadgeListSource.TryCreate(row.PriorityStart, row.PriorityLength, task.PriorityColor) is { } priority)
             badges.Add(priority);
+        // The trailing assignees badge (#161) is white-backed, not field-tinted; the same absent/hidden
+        // span sentinel makes TryCreate return null so nothing is shaded when it's not shown.
+        if (StatusBadgeListSource.TryCreate(row.AssigneesStart, row.AssigneesLength, AssigneesBadgeColor) is { } assignees)
+            badges.Add(assignees);
         return (row.Text, badges);
     }
 

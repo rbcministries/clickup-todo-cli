@@ -14,15 +14,18 @@ namespace ClickUpTodo.Tui;
 public static class TaskRowFormatter
 {
     /// <summary>
-    /// The display line plus the character spans of the leading Status and Priority badges. Both badges
-    /// lead the row (Status first), ahead of the title — so <paramref name="Text"/> no longer starts with
-    /// the title; the ListView's type-ahead searches the decoupled title-only keys instead (#76). When a
-    /// badge is absent (unset, grouped away, or hidden) its <c>*Length</c> is 0 and its <c>*Start</c> is -1.
+    /// The display line plus the character spans of the leading Status and Priority badges and the
+    /// trailing Assignees badge (#161). The Status/Priority badges lead the row (Status first), ahead
+    /// of the title — so <paramref name="Text"/> no longer starts with the title; the ListView's
+    /// type-ahead searches the decoupled title-only keys instead (#76). The Assignees badge trails the
+    /// title/metadata. When a badge is absent (unset, grouped away, or hidden) its <c>*Length</c> is 0
+    /// and its <c>*Start</c> is -1.
     /// </summary>
     public readonly record struct Row(
         string Text,
         int StatusStart, int StatusLength,
-        int PriorityStart, int PriorityLength);
+        int PriorityStart, int PriorityLength,
+        int AssigneesStart, int AssigneesLength);
 
     /// <summary>Two spaces of indent per nesting level in the F4 subtasks view (#46).</summary>
     private const string IndentUnit = "  ";
@@ -41,6 +44,13 @@ public static class TaskRowFormatter
     /// <summary>The blank gutter used, in icon mode, when a badge is absent — same width as an icon chip
     /// so titles still line up across rows.</summary>
     public const string BlankGutter = "   ";
+
+    /// <summary>The trailing Assignees icon chip (#161): a <c>👥</c> glyph flanked by a space on each
+    /// side, coloured with a fixed white background by the renderer. Shown, in icon mode, when a task
+    /// carries an assignee other than the current user — surfacing shared/delegated work at a glance.
+    /// This is a trailing badge, so (unlike the leading Status/Priority chips) it needs no alignment
+    /// gutter and is simply omitted when absent.</summary>
+    public const string AssigneesIcon = " 👥 ";
 
     /// <summary>Trailing marker on a parent shown only as context (its subtask is assigned to me, it isn't).</summary>
     private const string ContextParentMarker = "  · (parent — not assigned to you)";
@@ -75,11 +85,20 @@ public static class TaskRowFormatter
     /// accounted for automatically and the colour spans stay exact.
     /// </param>
     /// <param name="badges">
-    /// How the leading Status/Priority badges render (F6): icon chips, bracketed text, or hidden.
+    /// How the badges render (F6): icon chips, text, or hidden. The trailing Assignees badge (#161)
+    /// folds into this same cycle — a 👥 chip in <see cref="BadgeDisplay.Icons"/>, the assignees'
+    /// names in <see cref="BadgeDisplay.Text"/>, nothing when <see cref="BadgeDisplay.Hidden"/>.
+    /// </param>
+    /// <param name="currentUserId">
+    /// The signed-in user's ClickUp id, used to decide the trailing Assignees badge (#161): the badge
+    /// shows only when the task has an assignee whose id differs from this. When null (unknown user)
+    /// every assignee counts as "other". Grouping by <see cref="TaskField.Assignee"/> drops the badge,
+    /// mirroring how Status/Priority drop when grouped by their field (#67).
     /// </param>
     public static Row Format(
         TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null,
-        string marker = "", bool isForeignSubtask = false, BadgeDisplay badges = BadgeDisplay.Icons)
+        string marker = "", bool isForeignSubtask = false, BadgeDisplay badges = BadgeDisplay.Icons,
+        long? currentUserId = null)
     {
         var indent = depth > 0 ? string.Concat(Enumerable.Repeat(IndentUnit, depth)) : "";
 
@@ -90,12 +109,22 @@ public static class TaskRowFormatter
         var hasStatus = showStatus && !string.IsNullOrWhiteSpace(task.StatusName);
         var hasPriority = showPriority && !string.IsNullOrWhiteSpace(task.PriorityName);
 
+        // The trailing Assignees badge (#161) shows when someone other than the current user is on the
+        // task (whether or not the current user is too). It's dropped when grouped by Assignee — the
+        // group header already conveys it (#67, same as Status/Priority). A null current user means the
+        // signed-in id is unknown, so every assignee counts as "other".
+        var otherAssignees = task.Assignees
+            .Where(a => currentUserId is not { } uid || a.Id != uid)
+            .ToList();
+        var hasOtherAssignees = groupedBy != TaskField.Assignee && otherAssignees.Count > 0;
+
         // Build the line incrementally, capturing each badge's offset from the running length. This
         // keeps the spans exact regardless of indent, the marker, the title's own '[' characters, or
         // which badges are present — several coloured spans make hand-computed offsets fragile.
         var text = "";
         var (statusStart, statusLength) = (-1, 0);
         var (priorityStart, priorityLength) = (-1, 0);
+        var (assigneesStart, assigneesLength) = (-1, 0);
 
         switch (badges)
         {
@@ -124,12 +153,18 @@ public static class TaskRowFormatter
             text += $"  · {task.ListName}";
         if (groupedBy != TaskField.Due && task.DueDateMs is { } ms)
             text += $"  · due {DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime:MMM d}";
+
+        // The trailing Assignees badge follows the list/due segments but precedes the context/foreign
+        // markers, so those parentheticals still read last. Hidden mode appends nothing.
+        (assigneesStart, assigneesLength) = AppendAssigneesBadge(ref text, badges, hasOtherAssignees, otherAssignees);
+
         if (isContextParent)
             text += ContextParentMarker;
         else if (isForeignSubtask)
             text += ForeignSubtaskMarker;
 
-        return new Row(text, statusStart, statusLength, priorityStart, priorityLength);
+        return new Row(
+            text, statusStart, statusLength, priorityStart, priorityLength, assigneesStart, assigneesLength);
     }
 
     /// <summary>
@@ -166,5 +201,28 @@ public static class TaskRowFormatter
         var badge = $"[{label}]";
         text += badge + " ";
         return (start, badge.Length);
+    }
+
+    /// <summary>
+    /// Appends the trailing Assignees badge (#161) when <paramref name="show"/> and the mode isn't
+    /// <see cref="BadgeDisplay.Hidden"/>: a two-space separator (uncoloured, matching the <c>  · …</c>
+    /// trailing segments) followed by a white-background chip — the <see cref="AssigneesIcon"/> glyph
+    /// in <see cref="BadgeDisplay.Icons"/> mode, or the space-padded, comma-joined assignee names in
+    /// <see cref="BadgeDisplay.Text"/> mode. Returns the char span of the coloured chip (its padding
+    /// included), or the <c>(-1, 0)</c> "no badge" sentinel when nothing is appended.
+    /// </summary>
+    private static (int Start, int Length) AppendAssigneesBadge(
+        ref string text, BadgeDisplay badges, bool show, IReadOnlyList<TaskAssignee> others)
+    {
+        if (!show || badges == BadgeDisplay.Hidden)
+            return (-1, 0);
+
+        var chip = badges == BadgeDisplay.Text
+            ? $" {string.Join(", ", others.Select(a => a.Name))} "
+            : AssigneesIcon;
+        text += "  "; // separator (uncoloured), like the other trailing segments
+        var start = text.Length;
+        text += chip;
+        return (start, chip.Length);
     }
 }
