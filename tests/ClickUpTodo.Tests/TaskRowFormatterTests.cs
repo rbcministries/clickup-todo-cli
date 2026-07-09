@@ -353,4 +353,146 @@ public sealed class TaskRowFormatterTests
 
         Assert.Contains("(parent — not assigned to you)", row.Text);
     }
+
+    // ── Trailing assignees badge (#161) ──────────────────────────────────────
+
+    private const long Me = 100;
+    private const long Teammate = 200;
+
+    private static TaskItem TaskWithAssignees(params TaskAssignee[] assignees) => new()
+    {
+        Id = "1",
+        Name = "Shared work",
+        StatusName = "to do",
+        Assignees = assignees,
+    };
+
+    [Fact]
+    public void IconMode_OtherAssignee_AppendsTrailingChip_SpanExact()
+    {
+        var task = TaskWithAssignees(new TaskAssignee(Teammate, "Jo"));
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons, currentUserId: Me);
+
+        // The 👥 chip trails the title and its reported span lands exactly on the chip.
+        Assert.EndsWith(TaskRowFormatter.AssigneesIcon, row.Text);
+        Assert.True(row.AssigneesStart > 0);
+        Assert.Equal(TaskRowFormatter.AssigneesIcon, row.Text.Substring(row.AssigneesStart, row.AssigneesLength));
+        // It follows the title (not a leading gutter chip).
+        Assert.True(row.AssigneesStart > row.Text.IndexOf("Shared work", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void IconMode_SoloOwnAssignee_NoBadge()
+    {
+        var task = TaskWithAssignees(new TaskAssignee(Me, "Me"));
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons, currentUserId: Me);
+
+        Assert.Equal(-1, row.AssigneesStart);
+        Assert.Equal(0, row.AssigneesLength);
+        Assert.DoesNotContain("👥", row.Text);
+    }
+
+    [Fact]
+    public void IconMode_Unassigned_NoBadge()
+    {
+        var row = TaskRowFormatter.Format(TaskWithAssignees(), badges: BadgeDisplay.Icons, currentUserId: Me);
+
+        Assert.Equal(-1, row.AssigneesStart);
+        Assert.DoesNotContain("👥", row.Text);
+    }
+
+    [Fact]
+    public void IconMode_MixedMeAndTeammate_ShowsBadge()
+    {
+        // The current user is on it too, but a teammate also is — shared work, so the badge shows.
+        var task = TaskWithAssignees(new TaskAssignee(Me, "Me"), new TaskAssignee(Teammate, "Jo"));
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons, currentUserId: Me);
+
+        Assert.Contains("👥", row.Text);
+        Assert.Equal(TaskRowFormatter.AssigneesIcon, row.Text.Substring(row.AssigneesStart, row.AssigneesLength));
+    }
+
+    [Fact]
+    public void TextMode_ListsOtherAssigneeNames_ExcludingCurrentUser()
+    {
+        var task = TaskWithAssignees(
+            new TaskAssignee(Me, "Me"), new TaskAssignee(Teammate, "Jo"), new TaskAssignee(300, "Sam"));
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Text, currentUserId: Me);
+
+        // White-background chip listing the other assignees' names (current user excluded), span exact.
+        var chip = row.Text.Substring(row.AssigneesStart, row.AssigneesLength);
+        Assert.Equal(" Jo, Sam ", chip);
+        Assert.DoesNotContain("Me", chip);
+    }
+
+    [Fact]
+    public void HiddenMode_NoAssigneesBadge()
+    {
+        var task = TaskWithAssignees(new TaskAssignee(Teammate, "Jo"));
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Hidden, currentUserId: Me);
+
+        Assert.Equal(-1, row.AssigneesStart);
+        Assert.Equal(0, row.AssigneesLength);
+        Assert.DoesNotContain("👥", row.Text);
+    }
+
+    [Fact]
+    public void NullCurrentUser_TreatsEveryAssigneeAsOther()
+    {
+        var task = TaskWithAssignees(new TaskAssignee(Me, "Me"));
+
+        // With an unknown signed-in id, we can't exclude anyone — any assignee shows the badge.
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons, currentUserId: null);
+
+        Assert.Contains("👥", row.Text);
+        Assert.True(row.AssigneesStart > 0);
+    }
+
+    [Fact]
+    public void GroupedByAssignee_DropsTheBadge()
+    {
+        var task = TaskWithAssignees(new TaskAssignee(Teammate, "Jo"));
+
+        var row = TaskRowFormatter.Format(
+            task, groupedBy: TaskField.Assignee, badges: BadgeDisplay.Icons, currentUserId: Me);
+
+        // The group header already conveys the assignee (#67), so the per-row badge is dropped.
+        Assert.Equal(-1, row.AssigneesStart);
+        Assert.DoesNotContain("👥", row.Text);
+    }
+
+    [Fact]
+    public void AssigneesBadge_PrecedesContextMarker_AndLeavesStatusPrioritySpansIntact()
+    {
+        var task = new TaskItem
+        {
+            Id = "1",
+            Name = "Shared work",
+            StatusName = "to do",
+            PriorityName = "High",
+            ListName = "Personal Tasks",
+            Assignees = [new TaskAssignee(Teammate, "Jo")],
+        };
+
+        var withBadge = TaskRowFormatter.Format(
+            task, isForeignSubtask: true, badges: BadgeDisplay.Icons, currentUserId: Me);
+        var noBadge = TaskRowFormatter.Format(
+            task, isForeignSubtask: true, badges: BadgeDisplay.Icons, currentUserId: Teammate);
+
+        // The 👥 chip follows the list segment and precedes the trailing "(not assigned to you)" marker.
+        var chipIdx = withBadge.Text.IndexOf("👥", StringComparison.Ordinal);
+        var listIdx = withBadge.Text.IndexOf("· Personal Tasks", StringComparison.Ordinal);
+        var markerIdx = withBadge.Text.IndexOf("(not assigned to you)", StringComparison.Ordinal);
+        Assert.True(listIdx < chipIdx && chipIdx < markerIdx);
+
+        // The leading Status/Priority chips are unaffected by whether the trailing badge is present.
+        Assert.Equal(noBadge.StatusStart, withBadge.StatusStart);
+        Assert.Equal(noBadge.PriorityStart, withBadge.PriorityStart);
+        Assert.Equal(-1, noBadge.AssigneesStart); // Teammate is "me" here, so their own solo assignment shows no badge
+    }
 }
