@@ -6,9 +6,9 @@ namespace ClickUpTodo.Configuration;
 /// regardless of the Stream's sort direction (Ctrl+PgUp/PgDn). The mapping to a viewport edge lives
 /// in <see cref="ClickUpTodo.Tui.Screens.DetailScrollModel"/>, which also depends on the sort.
 /// <para>
-/// This is a user preference that #108 (S3) persists in <see cref="ViewSettings"/> and exposes in the
-/// F2 dialog; it lives here (not in the Tui layer) so the persistence layer can reference it without
-/// Configuration taking a dependency on Tui. Until #108 lands, the detail screen defaults it.
+/// This is a user preference that #108 (S3) persists in <see cref="DetailViewSettings"/> and exposes
+/// in the F2 dialog; it lives here (not in the Tui layer) so the persistence layer can reference it
+/// without Configuration taking a dependency on Tui.
 /// </para>
 /// </summary>
 public enum StreamAutoScroll
@@ -18,4 +18,13 @@ public enum StreamAutoScroll
 
     /// <summary>Open scrolled to the oldest entry (the Description / first comment).</summary>
     Oldest,
+}
+
+/// <summary>Pure helpers over <see cref="StreamAutoScroll"/> for the F2 cycle button (#108), kept out
+/// of the Terminal.Gui layer so they're unit-testable.</summary>
+public static class StreamAutoScrollExtensions
+{
+    /// <summary>The other position — cycles the two-value setting for the F2 button.</summary>
+    public static StreamAutoScroll Next(this StreamAutoScroll scroll) =>
+        scroll == StreamAutoScroll.Newest ? StreamAutoScroll.Oldest : StreamAutoScroll.Newest;
 }

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
+using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
@@ -19,10 +20,12 @@ namespace ClickUpTodo.Tui.Screens;
 /// <para>
 /// Esc returns to the list; Ctrl+B requests opening the task in the browser (the host reads
 /// <see cref="OpenBrowserRequested"/> in its close handler and owns the launch). Tab cycles tabs;
-/// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. The Stream tab (#106) is the default;
+/// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. The Stream tab (#106) is the out-of-the-box
+/// default (the opening tab is configurable via #108);
 /// Ctrl+PgUp/Ctrl+PgDn sort it oldest-first / newest-first and re-render it in place, and it opens
-/// auto-scrolled to the newest (or oldest) entry per the <see cref="Configuration.StreamAutoScroll"/> preference
-/// (#107). Tab bodies come
+/// auto-scrolled to the newest (or oldest) entry per the <see cref="StreamAutoScroll"/> preference
+/// (#107). The initial tab, default sort, and auto-scroll position come from the persisted
+/// <see cref="DetailViewSettings"/> (#108). Tab bodies come
 /// from the unit-tested
 /// <see cref="TaskDetailFormatter"/>, so this class is only the (CI-untestable) Terminal.Gui glue.
 /// </para>
@@ -75,18 +78,27 @@ public sealed class TaskDetailScreen : Screen
     private const int DispatchBrowserRows = 5;
     private const int DispatchRowsBelowBrowser = 1;
 
-    // The Stream tab (#106) and the data it re-renders from on a sort toggle. Default oldest-first
-    // (Description then comments ascending) — the issue's "Description followed by the comments in
-    // order" reading; #S3 (#108) makes the default configurable.
+    // The Stream tab (#106) and the data it re-renders from on a sort toggle. The initial direction is
+    // the persisted default (#108); the on-screen Ctrl+PgUp/PgDn toggle overrides it for this view only.
     private readonly TextView _streamPane;
     private readonly TaskDetail _task;
     private readonly IReadOnlyList<CommentItem> _comments;
-    private StreamSort _streamSort = StreamSort.Ascending;
+    private StreamSort _streamSort;
 
-    // Where the Stream tab is scrolled to on open (#107). Content-relative (newest/oldest) so it stays
-    // correct across both sort directions; the concrete edge is resolved by DetailScrollModel. #108
-    // (S3) will feed the persisted preference through this seam; until then it defaults to Newest.
-    private readonly Configuration.StreamAutoScroll _streamAutoScroll;
+    // Where the Stream tab is scrolled to on open (#107), from the persisted detail-view settings (#108).
+    // Content-relative (newest/oldest) so it stays correct across both sort directions; the concrete edge
+    // is resolved by DetailScrollModel.
+    private readonly StreamAutoScroll _streamAutoScroll;
+
+    // The tab the view opens on (#108), applied in OnShown — setting Tabs.Value in the constructor
+    // doesn't stick (the control resets to the first tab when it's first shown).
+    private readonly int _defaultTabIndex;
+
+    // True while an auto-scroll (#107) is owed to the Stream pane but hasn't been applied yet. Auto-scroll
+    // needs the pane's viewport laid out, which only happens once it's the visible tab — so when the
+    // default tab isn't Stream (#108) we defer the scroll until the user first tabs to it, and a sort
+    // toggle re-arms it. Applied by FlushStreamAutoScrollIfActive when Stream is (or becomes) front-most.
+    private bool _streamAutoScrollPending = true;
 
     /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>
     public bool OpenBrowserRequested { get; private set; }
@@ -107,13 +119,15 @@ public sealed class TaskDetailScreen : Screen
         TaskDetail task,
         IReadOnlyList<CommentItem> comments,
         string baseWorkingDirectory,
-        Configuration.StreamAutoScroll streamAutoScroll = Configuration.StreamAutoScroll.Newest,
+        DetailViewSettings? settings = null,
         AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive)
     {
+        var prefs = settings ?? new DetailViewSettings();
         _task = task;
         _comments = comments;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
-        _streamAutoScroll = streamAutoScroll;
+        _streamSort = prefs.StreamSort;
+        _streamAutoScroll = prefs.AutoScroll;
         Title = task.Name.Length > 60 ? task.Name[..59] + "…" : task.Name;
 
         var headerText = TaskDetailFormatter.Header(task);
@@ -153,7 +167,10 @@ public sealed class TaskDetailScreen : Screen
 
         for (var i = 0; i < _tabContents.Length; i++)
             _tabs.InsertTab(i, _tabContents[i]);
-        _tabs.Value = _streamPane;
+        // Open on the configured default tab (#108); Stream unless the user changed it in F2. The
+        // selection is (re)asserted in OnShown — setting it here alone doesn't survive first show.
+        _defaultTabIndex = prefs.DefaultTab.ToTabIndex();
+        _tabs.Value = _tabContents[_defaultTabIndex];
 
         // The Dispatch pane (#93, D1 of the #90 epic; superseding the single-line #26 prompt): a
         // bottom-anchored FrameView hosting the prompt plus placeholder controls for the one-off/
@@ -238,10 +255,13 @@ public sealed class TaskDetailScreen : Screen
 
     public override void OnShown()
     {
-        _scrollTargets[0].SetFocus();
-        // Land on the newest (or oldest) Stream entry per the preference (#107). Done after the screen
-        // is shown so the pane has a laid-out viewport for MoveEnd/MoveHome to scroll within.
-        ApplyStreamAutoScroll();
+        // Select the configured default tab (#108) now that the control is shown (a constructor-time
+        // Tabs.Value doesn't survive first display), then focus its scroll target so ↑/↓ scroll it.
+        _tabs.Value = _tabContents[_defaultTabIndex];
+        FocusCurrentPane();
+        // Land on the newest (or oldest) Stream entry per the preference (#107). Applied only if Stream
+        // is the (now laid-out) front-most tab; otherwise it's deferred until the user tabs to it (#108).
+        FlushStreamAutoScrollIfActive();
     }
 
     private void OnKey(object? sender, Key key)
@@ -507,32 +527,43 @@ public sealed class TaskDetailScreen : Screen
 
     /// <summary>Sets the Stream sort direction and re-renders the Stream body in place (#106). No-op if
     /// unchanged. Works regardless of the active tab — the new order is visible when the Stream tab is
-    /// shown. Re-asserts the auto-scroll edge (#107) so, e.g., "scroll to newest" keeps landing on the
-    /// newest entry after the sort flips which end of the body that is.</summary>
+    /// shown. Re-arms the auto-scroll edge (#107) so, e.g., "scroll to newest" keeps landing on the
+    /// newest entry after the sort flips which end of the body that is (applied now if Stream is
+    /// front-most, else deferred to the next time it's shown).</summary>
     private void SetStreamSort(StreamSort sort)
     {
         if (_streamSort == sort)
             return;
         _streamSort = sort;
         _streamPane.Text = TaskDetailFormatter.Stream(_task, _comments, _streamSort);
-        ApplyStreamAutoScroll();
+        _streamAutoScrollPending = true;
+        FlushStreamAutoScrollIfActive();
     }
 
-    /// <summary>Scrolls the Stream pane to the newest/oldest entry per the preference (#107). The pure
-    /// <see cref="DetailScrollModel"/> resolves the content-relative preference + current sort to a
-    /// concrete edge; the actual viewport move uses TG's read-only-safe scroll API
-    /// (<c>MoveEnd()</c>/<c>MoveHome()</c>), so it is the (CI-untestable) Terminal.Gui glue.</summary>
-    private void ApplyStreamAutoScroll()
+    /// <summary>Applies a pending auto-scroll (#107) to the Stream pane, but only when it is the
+    /// front-most tab — its viewport must be laid out for <c>MoveEnd()</c>/<c>MoveHome()</c> to take. A
+    /// no-op otherwise; the next time Stream is shown (OnShown or CycleTab) flushes it. The scroll is
+    /// posted via <see cref="Application.Invoke"/> so it runs after the framework has laid the pane out
+    /// following a tab switch (a synchronous move right after <c>_tabs.Value = …</c> lands against a
+    /// stale viewport). The pure <see cref="DetailScrollModel"/> resolves the content-relative
+    /// preference + current sort to a concrete edge; the viewport move is the (untestable) TG glue.</summary>
+    private void FlushStreamAutoScrollIfActive()
     {
-        switch (DetailScrollModel.ResolveEdge(_streamAutoScroll, _streamSort))
+        if (!_streamAutoScrollPending || !ReferenceEquals(_tabs.Value, _streamPane))
+            return;
+        _streamAutoScrollPending = false;
+        Application.Invoke(() =>
         {
-            case DetailScrollModel.Edge.Bottom:
-                _streamPane.MoveEnd();
-                break;
-            default:
-                _streamPane.MoveHome();
-                break;
-        }
+            switch (DetailScrollModel.ResolveEdge(_streamAutoScroll, _streamSort))
+            {
+                case DetailScrollModel.Edge.Bottom:
+                    _streamPane.MoveEnd();
+                    break;
+                default:
+                    _streamPane.MoveHome();
+                    break;
+            }
+        });
     }
 
     /// <summary>Advances the selected tab and moves focus into its scroll target so ↑/↓ scroll it.</summary>
@@ -544,6 +575,9 @@ public sealed class TaskDetailScreen : Screen
         var next = ((current + (forward ? 1 : -1)) % _tabContents.Length + _tabContents.Length) % _tabContents.Length;
         _tabs.Value = _tabContents[next];
         _scrollTargets[next].SetFocus();
+        // If the Stream tab wasn't the default, its auto-scroll (#107) was deferred until it's shown —
+        // apply it now that its viewport is laid out.
+        FlushStreamAutoScrollIfActive();
     }
 
     private static TextView NewPane(string title, string text) => new()

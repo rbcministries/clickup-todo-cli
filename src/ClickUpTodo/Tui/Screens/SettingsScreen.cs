@@ -13,7 +13,7 @@ using Terminal.Gui.Views;
 namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>The result of editing settings, or null when the user cancels.</summary>
-public sealed record SettingsResult(int RefreshSeconds, string DefaultWorkingDirectory, AgentDispatchSettings AgentDispatch);
+public sealed record SettingsResult(int RefreshSeconds, string DefaultWorkingDirectory, AgentDispatchSettings AgentDispatch, DetailViewSettings DetailView);
 
 /// <summary>
 /// Carries a prompt-template edit request from the settings screen to the host (#100): the current
@@ -60,7 +60,7 @@ public sealed class SettingsScreen : Screen
     /// </summary>
     public event EventHandler<PromptTemplateEditRequest>? EditPromptTemplateRequested;
 
-    public SettingsScreen(int refreshSeconds, string defaultWorkingDirectory, AgentDispatchSettings dispatch)
+    public SettingsScreen(int refreshSeconds, string defaultWorkingDirectory, AgentDispatchSettings dispatch, DetailViewSettings detailView)
     {
         Title = "Settings";
         _promptTemplate = dispatch.PromptTemplate;
@@ -97,6 +97,35 @@ public sealed class SettingsScreen : Screen
             Y = 7,
             Width = Dim.Percent(48),
             Text = "Blank = ~/ClickUp-Tasks (≠ Fixed dir).",
+        };
+
+        // ── Detail view (#108): default tab, Stream sort, auto-scroll ───────────
+        // Cycle buttons mirror the Dispatch section's terminal/working-dir buttons. The Stream sort is
+        // also toggleable on the detail screen (Ctrl+PgUp/PgDn, #106); here it sets the default.
+        var detailHeader = new Label { X = 1, Y = 9, Text = "─ Detail view ─" };
+
+        var defaultTab = detailView.DefaultTab;
+        var defaultTabButton = new Button { X = 1, Y = 10, Text = DefaultTabText(defaultTab) };
+        defaultTabButton.Accepting += (_, _) =>
+        {
+            defaultTab = defaultTab.Next();
+            defaultTabButton.Text = DefaultTabText(defaultTab);
+        };
+
+        var streamSort = detailView.StreamSort;
+        var streamSortButton = new Button { X = 1, Y = 11, Text = StreamSortText(streamSort) };
+        streamSortButton.Accepting += (_, _) =>
+        {
+            streamSort = streamSort.Next();
+            streamSortButton.Text = StreamSortText(streamSort);
+        };
+
+        var autoScroll = detailView.AutoScroll;
+        var autoScrollButton = new Button { X = 1, Y = 12, Text = AutoScrollText(autoScroll) };
+        autoScrollButton.Accepting += (_, _) =>
+        {
+            autoScroll = autoScroll.Next();
+            autoScrollButton.Text = AutoScrollText(autoScroll);
         };
 
         // ── Right column: Dispatch (#27, consolidated in #101) ──────────────────
@@ -170,6 +199,12 @@ public sealed class SettingsScreen : Screen
                     DefaultSessionMode = sessionMode,
                     DefaultPostResultsToComments = postToComments,
                     PromptTemplate = _promptTemplate,
+                },
+                new DetailViewSettings
+                {
+                    DefaultTab = defaultTab,
+                    StreamSort = streamSort,
+                    AutoScroll = autoScroll,
                 });
             Close();
         };
@@ -194,6 +229,7 @@ public sealed class SettingsScreen : Screen
         Add([
             refreshLabel, _refreshField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
+            detailHeader, defaultTabButton, streamSortButton, autoScrollButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, templateButton,
             sessionModeButton, postToCommentsButton,
@@ -228,4 +264,24 @@ public sealed class SettingsScreen : Screen
     };
 
     private static string PostToCommentsText(bool on) => "Default post to Comments: " + (on ? "On" : "Off");
+
+    private static string DefaultTabText(DetailTab t) => "Default tab: " + t switch
+    {
+        DetailTab.Description => "Description",
+        DetailTab.Comments => "Comments",
+        DetailTab.Other => "Other",
+        _ => "Stream",
+    };
+
+    private static string StreamSortText(StreamSort s) => "Stream sort: " + s switch
+    {
+        StreamSort.Descending => "Newest first",
+        _ => "Oldest first",
+    };
+
+    private static string AutoScrollText(StreamAutoScroll s) => "Auto-scroll: " + s switch
+    {
+        StreamAutoScroll.Oldest => "Oldest",
+        _ => "Newest",
+    };
 }

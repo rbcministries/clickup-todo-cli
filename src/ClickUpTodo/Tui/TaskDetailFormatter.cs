@@ -2,22 +2,9 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using ClickUpTodo.ClickUp;
+using ClickUpTodo.Configuration;
 
 namespace ClickUpTodo.Tui;
-
-/// <summary>
-/// Sort direction for the detail view's Stream tab (#106): <see cref="Ascending"/> is oldest-first
-/// (Description, then comments by date ascending); <see cref="Descending"/> is newest-first (comments
-/// by date descending, then Description last).
-/// </summary>
-public enum StreamSort
-{
-    /// <summary>Oldest-first: Description block, then comments by date ascending.</summary>
-    Ascending,
-
-    /// <summary>Newest-first: comments by date descending, then the Description block last.</summary>
-    Descending,
-}
 
 /// <summary>
 /// Pure text formatting for the task detail view (issue #17). Builds the header line and the body of

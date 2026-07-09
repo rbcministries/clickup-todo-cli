@@ -64,6 +64,13 @@ public sealed class AppConfig
     /// <summary>The active filter/sort/group view (F3), persisted so it survives restarts.</summary>
     public ViewSettings View { get; set; } = new();
 
+    /// <summary>
+    /// Task detail-view preferences (#108): default tab, Stream sort order, and auto-scroll position.
+    /// Kept separate from <see cref="View"/> (like <see cref="BadgeDisplay"/>) so it's independent of
+    /// the F3 view and its <see cref="ViewSettings.IsDefault"/>. An absent key loads all defaults.
+    /// </summary>
+    public DetailViewSettings DetailView { get; set; } = new();
+
     /// <summary>Configuration for dispatching an interactive <c>claude</c> session (#23); all optional.</summary>
     public AgentDispatchSettings AgentDispatch { get; set; } = new();
 
