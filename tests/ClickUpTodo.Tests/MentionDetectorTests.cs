@@ -60,6 +60,16 @@ public sealed class MentionDetectorTests
     }
 
     [Fact]
+    public void Mentions_HandleEmbeddedInEmailAddress_IsNotMention()
+    {
+        // The "@ben" inside an email address must NOT match the auto-derived local-part handle "ben":
+        // the char before the "@" is a word char, so it isn't a standalone @-mention.
+        var spec = Spec("ben@odb.org");
+        Assert.False(MentionDetector.Mentions("email alice@ben.dev for access", spec));
+        Assert.False(MentionDetector.Mentions("cc bob@bencorp.com", spec));
+    }
+
+    [Fact]
     public void Mentions_DifferentHandle_IsNotMention()
     {
         Assert.False(MentionDetector.Mentions("@Alice Jones take a look", Spec("Ben Seymour")));

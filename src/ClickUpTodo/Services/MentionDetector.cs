@@ -40,9 +40,12 @@ public static class MentionDetector
     /// <summary>Convenience overload over <see cref="CommentItem.Text"/>.</summary>
     public static bool Mentions(CommentItem comment, MentionSpec spec) => Mentions(comment.Text, spec);
 
-    // Finds "@{handle}" case-insensitively, requiring the character immediately after the handle to be a
-    // non-word char (or end-of-string) so "@Benny" doesn't match handle "ben". The handle itself may
-    // contain spaces (a display name like "Ben Seymour" renders as "@Ben Seymour").
+    // Finds "@{handle}" case-insensitively as a standalone @-mention, requiring a non-word boundary on
+    // BOTH sides: the char before the "@" must be non-word (or start-of-string) so an email address like
+    // "alice@ben.dev" doesn't match the local-part handle "ben", and the char after the handle must be
+    // non-word (or end-of-string) so "@Benny" doesn't match handle "ben". The handle itself may contain
+    // spaces (a display name like "Ben Seymour" renders as "@Ben Seymour") and, for an email identity,
+    // an "@" (the full "@ben@odb.org" handle is still preceded by a boundary, so it matches).
     private static bool ContainsHandleMention(string text, string handle)
     {
         var needle = "@" + handle;
@@ -53,8 +56,10 @@ public static class MentionDetector
             if (at < 0)
                 return false;
 
+            var beforeIsBoundary = at == 0 || !IsWordChar(text[at - 1]);
             var afterIndex = at + needle.Length;
-            if (afterIndex >= text.Length || !IsWordChar(text[afterIndex]))
+            var afterIsBoundary = afterIndex >= text.Length || !IsWordChar(text[afterIndex]);
+            if (beforeIsBoundary && afterIsBoundary)
                 return true;
 
             from = at + 1; // overlapping matches are fine; advance past this "@" and keep looking
