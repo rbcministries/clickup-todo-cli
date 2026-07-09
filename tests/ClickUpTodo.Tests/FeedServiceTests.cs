@@ -190,4 +190,61 @@ public sealed class FeedServiceTests
         var feed = await run;
         Assert.Equal(10, feed.Count);
     }
+
+    // ── StampMentions (#113) ──────────────────────────────────────────────────
+
+    private static readonly MentionSpec BenSpec = MentionSpec.ForUser(new ClickUpUser(7, "Ben"));
+
+    private static CommentItem Msg(string id, string text)
+        => new(id, "author", 100, text, false, "task1");
+
+    [Fact]
+    public void StampMentions_SetsMentionsMePerEntry()
+    {
+        var feed = new[]
+        {
+            Msg("a", "cc @Ben please look"),
+            Msg("b", "unrelated comment"),
+        };
+
+        var stamped = FeedService.StampMentions(feed, BenSpec, mentionsOnly: false);
+
+        Assert.Equal(new[] { "a", "b" }, stamped.Select(c => c.Id));
+        Assert.True(stamped.Single(c => c.Id == "a").MentionsMe);
+        Assert.False(stamped.Single(c => c.Id == "b").MentionsMe);
+    }
+
+    [Fact]
+    public void StampMentions_MentionsOnly_FiltersToMentionsPreservingOrder()
+    {
+        var feed = new[]
+        {
+            Msg("a", "@Ben first"),
+            Msg("b", "no mention here"),
+            Msg("c", "and @Ben again"),
+        };
+
+        var stamped = FeedService.StampMentions(feed, BenSpec, mentionsOnly: true);
+
+        Assert.Equal(new[] { "a", "c" }, stamped.Select(c => c.Id));
+        Assert.All(stamped, c => Assert.True(c.MentionsMe));
+    }
+
+    [Fact]
+    public void StampMentions_EmptyFeed_YieldsEmpty()
+    {
+        Assert.Empty(FeedService.StampMentions(Array.Empty<CommentItem>(), BenSpec, mentionsOnly: true));
+        Assert.Empty(FeedService.StampMentions(Array.Empty<CommentItem>(), BenSpec, mentionsOnly: false));
+    }
+
+    [Fact]
+    public void StampMentions_EmptySpec_MarksNothingAndMentionsOnlyIsEmpty()
+    {
+        var feed = new[] { Msg("a", "@Ben here"), Msg("b", "plain") };
+
+        var all = FeedService.StampMentions(feed, MentionSpec.None, mentionsOnly: false);
+        Assert.All(all, c => Assert.False(c.MentionsMe));
+
+        Assert.Empty(FeedService.StampMentions(feed, MentionSpec.None, mentionsOnly: true));
+    }
 }

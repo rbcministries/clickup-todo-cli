@@ -65,4 +65,13 @@ public sealed class DispatchPaneModelTests
     [Fact]
     public void ClampHeight_DoesNotGrowBeyondPreferred_WhenPreferredIsSmall()
         => Assert.Equal(3, DispatchPaneModel.ClampHeight(preferred: 3, availableHeight: 40, minTabRows: 3));
+
+    [Theory]
+    [InlineData(4, 5, 1, 12)] // the #95 layout: 4 rows above + 5 browser rows + 1 below + 2 border
+    [InlineData(0, 1, 0, 3)]  // minimum: a single browser row + border
+    [InlineData(2, 0, 1, 6)]  // browser rows floored to 1 even when asked for 0: 2+1+1+2
+    [InlineData(-1, -1, -1, 3)] // negatives floored (0 above, 1 browser, 0 below, +2 border)
+    public void PreferredHeightWithBrowser_SumsRowsPlusBorder(
+        int above, int browser, int below, int expected)
+        => Assert.Equal(expected, DispatchPaneModel.PreferredHeightWithBrowser(above, browser, below));
 }

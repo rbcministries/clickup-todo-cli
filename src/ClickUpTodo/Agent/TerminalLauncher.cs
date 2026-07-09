@@ -35,12 +35,12 @@ public sealed class TerminalLauncher : ITerminalLauncher
     }
 
     public Task<LaunchResult> LaunchAsync(
-        string promptFilePath, string? workingDir, TerminalLauncherOptions options, CancellationToken ct = default)
+        string promptFilePath, string? workingDir, TerminalLauncherOptions options, bool oneOff = false, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(promptFilePath) || !_fileExists(promptFilePath))
             return Task.FromResult(LaunchResult.Fail($"Prompt file not found: {promptFilePath}"));
 
-        var candidates = TerminalCommandPlanner.Plan(_os, _exists, _getEnv, promptFilePath, workingDir, options);
+        var candidates = TerminalCommandPlanner.Plan(_os, _exists, _getEnv, promptFilePath, workingDir, options, oneOff);
         if (candidates.Count == 0)
             return Task.FromResult(LaunchResult.Fail("No terminal emulator found to launch Claude."));
 

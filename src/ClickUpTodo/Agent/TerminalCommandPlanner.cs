@@ -11,6 +11,12 @@ namespace ClickUpTodo.Agent;
 /// The <c>claude</c> invocation always reads the prompt <b>from the file</b>
 /// (<c>Get-Content -Raw</c> on Windows, <c>$(cat …)</c> on POSIX); only the file <b>path</b> ever
 /// enters a command string, never the prompt content. Argument vectors are built as arrays.
+///
+/// <paramref name="oneOff"/> selects the session mode (#94): interactive (default,
+/// <c>claude "…"</c>) or a one-off <c>claude -p "…"</c> run that executes and exits. One-off adds the
+/// <c>-p</c> flag and, on POSIX/macOS, a keep-alive so the terminal doesn't vanish before the user
+/// reads the output (Windows hosts already launch with <c>-NoExit</c>). The full background-run
+/// experience is #99; this is the interim terminal path.
 /// </summary>
 public static class TerminalCommandPlanner
 {
@@ -20,11 +26,12 @@ public static class TerminalCommandPlanner
         Func<string, string?> getEnv,
         string promptFilePath,
         string? workingDir,
-        TerminalLauncherOptions options) => os switch
+        TerminalLauncherOptions options,
+        bool oneOff = false) => os switch
         {
-            OSPlatformKind.Windows => PlanWindows(exists, promptFilePath, workingDir, options),
-            OSPlatformKind.MacOS => PlanMacOS(exists, promptFilePath, workingDir, options),
-            OSPlatformKind.Linux => PlanLinux(exists, getEnv, promptFilePath, workingDir, options),
+            OSPlatformKind.Windows => PlanWindows(exists, promptFilePath, workingDir, options, oneOff),
+            OSPlatformKind.MacOS => PlanMacOS(exists, promptFilePath, workingDir, options, oneOff),
+            OSPlatformKind.Linux => PlanLinux(exists, getEnv, promptFilePath, workingDir, options, oneOff),
             _ => [],
         };
 
@@ -39,9 +46,9 @@ public static class TerminalCommandPlanner
     // last and is reached only if the direct launches fail to start, or when it's explicitly preferred.
 
     private static IReadOnlyList<LaunchSpec> PlanWindows(
-        Func<string, bool> exists, string file, string? cwd, TerminalLauncherOptions options)
+        Func<string, bool> exists, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
-        var command = PwshCommand(file, options); // `& 'claude' … (Get-Content -Raw '<file>')`
+        var command = PwshCommand(file, options, oneOff); // `& 'claude' [-p] … (Get-Content -Raw '<file>')`
 
         // Candidate builders keyed by the terminal they represent, in default fallback order.
         var order = new[]
@@ -88,12 +95,12 @@ public static class TerminalCommandPlanner
     // ── macOS: osascript drives Terminal to run the bash command ──
 
     private static IReadOnlyList<LaunchSpec> PlanMacOS(
-        Func<string, bool> exists, string file, string? cwd, TerminalLauncherOptions options)
+        Func<string, bool> exists, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
         if (!exists("osascript"))
             return [];
 
-        var inner = PosixCommand(file, options); // `'claude' … "$(cat '<file>')"`
+        var inner = PosixCommand(file, options, oneOff); // `'claude' [-p] … "$(cat '<file>')"`
         var script = $"tell application \"Terminal\" to do script \"{AppleScriptEscape(inner)}\"";
         return [new LaunchSpec("osascript", ["-e", script], cwd, "Terminal (osascript)")];
     }
@@ -101,9 +108,9 @@ public static class TerminalCommandPlanner
     // ── Linux: honor $TERMINAL, else probe common emulators ──
 
     private static IReadOnlyList<LaunchSpec> PlanLinux(
-        Func<string, bool> exists, Func<string, string?> getEnv, string file, string? cwd, TerminalLauncherOptions options)
+        Func<string, bool> exists, Func<string, string?> getEnv, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
-        var inner = PosixCommand(file, options);
+        var inner = PosixCommand(file, options, oneOff);
         var specs = new List<LaunchSpec>();
 
         var configured = getEnv("TERMINAL");
@@ -131,23 +138,45 @@ public static class TerminalCommandPlanner
 
     // ── Command construction (file-indirected; prompt content never inlined) ──
 
-    /// <summary>PowerShell command that runs claude with the prompt read from the file via Get-Content -Raw.</summary>
-    private static string PwshCommand(string file, TerminalLauncherOptions options)
+    /// <summary>
+    /// PowerShell command that runs claude with the prompt read from the file via Get-Content -Raw.
+    /// One-off (#94) inserts <c>-p</c> right after the executable; the PowerShell hosts already launch
+    /// with <c>-NoExit</c>, so the window stays open after a one-off run finishes.
+    /// </summary>
+    private static string PwshCommand(string file, TerminalLauncherOptions options, bool oneOff)
     {
         var parts = new List<string> { "&", PwshQuote(options.ClaudeExecutable) };
+        if (oneOff)
+            parts.Add(PwshQuote("-p"));
         parts.AddRange(options.ExtraArgs.Select(PwshQuote));
         parts.Add($"(Get-Content -Raw {PwshQuote(file)})");
         return string.Join(" ", parts);
     }
 
-    /// <summary>POSIX shell command that runs claude with the prompt read from the file via $(cat …).</summary>
-    private static string PosixCommand(string file, TerminalLauncherOptions options)
+    /// <summary>
+    /// POSIX shell command that runs claude with the prompt read from the file via $(cat …). One-off
+    /// (#94) inserts <c>-p</c> right after the executable and appends a keep-alive so the terminal
+    /// (Linux <c>bash -lc</c> / macOS <c>do script</c>) doesn't close before the user reads the
+    /// output — the interim terminal path until the background-run experience (#99) lands.
+    /// </summary>
+    private static string PosixCommand(string file, TerminalLauncherOptions options, bool oneOff)
     {
         var parts = new List<string> { PosixQuote(options.ClaudeExecutable) };
+        if (oneOff)
+            parts.Add("-p");
         parts.AddRange(options.ExtraArgs.Select(PosixQuote));
         parts.Add($"\"$(cat {PosixQuote(file)})\"");
-        return string.Join(" ", parts);
+        var command = string.Join(" ", parts);
+        return oneOff ? command + PosixKeepAlive : command;
     }
+
+    /// <summary>
+    /// Appended after a one-off POSIX/macOS <c>claude -p</c> run so the terminal stays open until the
+    /// user dismisses it (otherwise the shell exits and the window vanishes with the output). No prompt
+    /// content enters here — it stays file-indirected.
+    /// </summary>
+    private const string PosixKeepAlive =
+        "; printf '\\n[claude -p finished - press Enter to close] '; read -r _";
 
     // ── Escaping helpers ──
 
