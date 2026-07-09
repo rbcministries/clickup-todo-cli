@@ -21,6 +21,11 @@ public static class ConfigMigrations
         // the F2 dialog — coalesce it back to defaults so a bad key degrades to zero-config, not a crash.
         config.AgentDispatch ??= new AgentDispatchSettings();
 
+        // Same guard for the per-task working-dir cache (#96): a hand-edited
+        // "taskWorkingDirectories": null would defeat the `= []` default and NRE the pre-fill/update
+        // call sites, so coalesce it back to an empty map.
+        config.TaskWorkingDirectories ??= [];
+
         // v1 (#68): assignee became a first-class filter field. Seed the default "Assignee IS me" rule
         // so an existing/blank view keeps reproducing the original "my tasks" fetch. Version-gated (not
         // "seed whenever absent") so a user who deliberately clears the assignee rule to see everyone

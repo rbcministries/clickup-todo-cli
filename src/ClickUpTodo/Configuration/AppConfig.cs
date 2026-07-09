@@ -86,6 +86,20 @@ public sealed class AppConfig
     /// </summary>
     public string DefaultWorkingDirectory { get; set; } = "";
 
+    /// <summary>
+    /// Per-task remembered Dispatch working directories (#96), keyed by task id
+    /// (<see cref="ClickUp.TaskDetail.Id"/> — always present, unlike <c>custom_id</c>). When the user
+    /// picks an explicit, non-default working directory in the Dispatch pane (#95), it's stored here
+    /// so the next dispatch from that same task pre-fills the field — including across relaunches.
+    /// Only explicit non-default picks are stored; reverting to the default (a blank field, or a pick
+    /// equal to the resolved default dir) clears the entry (see
+    /// <see cref="DispatchWorkingDirectoryCache"/>). Absent key ⇒ empty map, so old configs load
+    /// unchanged. Saved via <see cref="ConfigStore"/> to <c>config.json</c> (camelCase
+    /// <c>taskWorkingDirectories</c>), the same persistence path as <see cref="PinnedTaskIds"/> and
+    /// <see cref="View"/>.
+    /// </summary>
+    public Dictionary<string, string> TaskWorkingDirectories { get; set; } = [];
+
     /// <summary>True once the setup wizard has completed at least once.</summary>
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(WorkspaceId) && !string.IsNullOrWhiteSpace(PersonalTasksListId);
