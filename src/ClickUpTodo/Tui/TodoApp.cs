@@ -905,8 +905,9 @@ public sealed class TodoApp
                         settings: _config.DetailView,
                         defaultSessionMode: _config.AgentDispatch.DefaultSessionMode,
                         // Pre-fill the Dispatch working-dir field from the per-task cache (#96) — the
-                        // last explicit dir dispatched from this task, or blank if none.
-                        cachedWorkingDirectory: DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, detail.Id));
+                        // last explicit dir dispatched from this task, or blank if none. Read live on
+                        // each pane open so a dispatch within this same open screen is reflected on reopen.
+                        workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, detail.Id));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), and the working dir (#95) are consumed;
@@ -982,8 +983,11 @@ public sealed class TodoApp
         // Remember an explicit non-default pick for this task (#96) so the next dispatch pre-fills it,
         // across relaunches; reverting to the default (blank field / pick == the configured mode dir)
         // clears the entry. Done on the UI thread before the hand-off, and only persisted when the
-        // cache actually changed. resolvedDefault is what the mode would pick with no explicit dir.
-        var resolvedDefault = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: home);
+        // cache actually changed. resolvedDefault is what the mode would pick with no explicit dir,
+        // ~-expanded (as chosenDir is) so a Fixed dir stored as "~/foo" still matches an explicit pick
+        // of the same resolved path and clears the entry rather than persisting a redundant one.
+        var resolvedDefaultRaw = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: home);
+        var resolvedDefault = resolvedDefaultRaw is null ? null : SettingsForm.ExpandHomePath(resolvedDefaultRaw, home);
         if (DispatchWorkingDirectoryCache.Update(_config.TaskWorkingDirectories, detail.Id, chosenDir, resolvedDefault))
             _configStore.Save(_config);
 
