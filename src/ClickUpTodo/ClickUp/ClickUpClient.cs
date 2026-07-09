@@ -177,6 +177,64 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             return updated?.Status?.StatusProp;
         });
 
+    /// <summary>
+    /// Set (or clear) a task's priority. <paramref name="priorityLevel"/> is ClickUp's importance level
+    /// — 1=Urgent … 4=Low, lower = more urgent (see <see cref="ClickUpPriority"/>) — or <c>null</c> to
+    /// clear the priority. Returns the <b>server-confirmed</b> effective level from the
+    /// <c>PUT /task/{id}</c> response (null when cleared/unset), mirroring
+    /// <see cref="SetTaskStatusAsync"/>'s return-the-truth shape.
+    /// </summary>
+    public Task<int?> SetTaskPriorityAsync(string taskId, int? priorityLevel, CancellationToken ct = default)
+        => Guard("UpdateTask", async () =>
+        {
+            var request = new UpdateTaskRequest();
+            if (priorityLevel is { } level)
+                request.Priority = level;
+            else
+                // Kiota omits a null typed property, so a plain `Priority = null` would send an empty
+                // body and leave the priority untouched. Force an explicit `"priority": null` (which
+                // ClickUp reads as "clear") via the additional-data bag instead.
+                request.AdditionalData["priority"] = null!;
+
+            var updated = await _client.V2.Task[taskId].PutAsync(request, cancellationToken: ct);
+            return ClickUpPriority.Level(updated?.Priority?.Id, updated?.Priority?.PriorityProp);
+        });
+
+    /// <summary>
+    /// Add a user to a task's assignees. ClickUp's <c>PUT /task/{id}</c> takes
+    /// <c>assignees: { add: [...] }</c>. Returns the task's <b>reconciled</b> assignee set from the
+    /// response so a caller can update the row without a read-after-write.
+    /// </summary>
+    public Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default)
+        => UpdateAssigneesAsync(taskId, add: userId, remove: null, ct);
+
+    /// <summary>
+    /// Remove a user from a task's assignees (ClickUp <c>assignees: { rem: [...] }</c>). Returns the
+    /// task's reconciled assignee set from the response.
+    /// </summary>
+    public Task<IReadOnlyList<TaskAssignee>> RemoveTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default)
+        => UpdateAssigneesAsync(taskId, add: null, remove: userId, ct);
+
+    /// <summary>
+    /// Shared body for the assignee add/remove writes: sends only the relevant side (Kiota omits the
+    /// null collection, so <c>add</c>-only sends no <c>rem</c> and vice-versa) and maps the updated
+    /// task's assignees back to the stable <see cref="TaskAssignee"/> shape.
+    /// </summary>
+    private Task<IReadOnlyList<TaskAssignee>> UpdateAssigneesAsync(string taskId, long? add, long? remove, CancellationToken ct)
+        => Guard("UpdateTask", async () =>
+        {
+            var request = new UpdateTaskRequest
+            {
+                Assignees = new AssigneeUpdate
+                {
+                    Add = add is { } a ? [a] : null,
+                    Rem = remove is { } r ? [r] : null,
+                },
+            };
+            var updated = await _client.V2.Task[taskId].PutAsync(request, cancellationToken: ct);
+            return MapAssignees(updated?.Assignees);
+        });
+
     /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => Guard("GetTask", async () =>
