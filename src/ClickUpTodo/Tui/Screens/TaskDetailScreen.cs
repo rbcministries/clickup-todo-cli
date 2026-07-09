@@ -1,4 +1,5 @@
 using ClickUpTodo.ClickUp;
+using ClickUpTodo.Configuration;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
@@ -19,8 +20,9 @@ namespace ClickUpTodo.Tui.Screens;
 /// <see cref="OpenBrowserRequested"/> in its close handler and owns the launch). Tab cycles tabs;
 /// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. The Stream tab (#106) is the default;
 /// Ctrl+PgUp/Ctrl+PgDn sort it oldest-first / newest-first and re-render it in place, and it opens
-/// auto-scrolled to the newest (or oldest) entry per the <see cref="Configuration.StreamAutoScroll"/> preference
-/// (#107). Tab bodies come
+/// auto-scrolled to the newest (or oldest) entry per the <see cref="StreamAutoScroll"/> preference
+/// (#107). The initial tab, default sort, and auto-scroll position come from the persisted
+/// <see cref="DetailViewSettings"/> (#108). Tab bodies come
 /// from the unit-tested
 /// <see cref="TaskDetailFormatter"/>, so this class is only the (CI-untestable) Terminal.Gui glue.
 /// </para>
@@ -55,18 +57,17 @@ public sealed class TaskDetailScreen : Screen
     private readonly TextField _workingDirField;
     private readonly CheckBox _postToCommentsToggle;
 
-    // The Stream tab (#106) and the data it re-renders from on a sort toggle. Default oldest-first
-    // (Description then comments ascending) — the issue's "Description followed by the comments in
-    // order" reading; #S3 (#108) makes the default configurable.
+    // The Stream tab (#106) and the data it re-renders from on a sort toggle. The initial direction is
+    // the persisted default (#108); the on-screen Ctrl+PgUp/PgDn toggle overrides it for this view only.
     private readonly TextView _streamPane;
     private readonly TaskDetail _task;
     private readonly IReadOnlyList<CommentItem> _comments;
-    private StreamSort _streamSort = StreamSort.Ascending;
+    private StreamSort _streamSort;
 
-    // Where the Stream tab is scrolled to on open (#107). Content-relative (newest/oldest) so it stays
-    // correct across both sort directions; the concrete edge is resolved by DetailScrollModel. #108
-    // (S3) will feed the persisted preference through this seam; until then it defaults to Newest.
-    private readonly Configuration.StreamAutoScroll _streamAutoScroll;
+    // Where the Stream tab is scrolled to on open (#107), from the persisted detail-view settings (#108).
+    // Content-relative (newest/oldest) so it stays correct across both sort directions; the concrete edge
+    // is resolved by DetailScrollModel.
+    private readonly StreamAutoScroll _streamAutoScroll;
 
     /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>
     public bool OpenBrowserRequested { get; private set; }
@@ -82,11 +83,13 @@ public sealed class TaskDetailScreen : Screen
     public TaskDetailScreen(
         TaskDetail task,
         IReadOnlyList<CommentItem> comments,
-        Configuration.StreamAutoScroll streamAutoScroll = Configuration.StreamAutoScroll.Newest)
+        DetailViewSettings? settings = null)
     {
+        var prefs = settings ?? new DetailViewSettings();
         _task = task;
         _comments = comments;
-        _streamAutoScroll = streamAutoScroll;
+        _streamSort = prefs.StreamSort;
+        _streamAutoScroll = prefs.AutoScroll;
         Title = task.Name.Length > 60 ? task.Name[..59] + "…" : task.Name;
 
         var headerText = TaskDetailFormatter.Header(task);
@@ -126,7 +129,8 @@ public sealed class TaskDetailScreen : Screen
 
         for (var i = 0; i < _tabContents.Length; i++)
             _tabs.InsertTab(i, _tabContents[i]);
-        _tabs.Value = _streamPane;
+        // Open on the configured default tab (#108); Stream unless the user changed it in F2.
+        _tabs.Value = _tabContents[prefs.DefaultTab.ToTabIndex()];
 
         // The Dispatch pane (#93, D1 of the #90 epic; superseding the single-line #26 prompt): a
         // bottom-anchored FrameView hosting the prompt plus placeholder controls for the one-off/
@@ -178,7 +182,8 @@ public sealed class TaskDetailScreen : Screen
 
     public override void OnShown()
     {
-        _scrollTargets[0].SetFocus();
+        // Focus the configured default tab's scroll target (#108) so ↑/↓ scroll it immediately.
+        FocusCurrentPane();
         // Land on the newest (or oldest) Stream entry per the preference (#107). Done after the screen
         // is shown so the pane has a laid-out viewport for MoveEnd/MoveHome to scroll within.
         ApplyStreamAutoScroll();

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ClickUpTodo.ClickUp;
+using ClickUpTodo.Configuration;
 using ClickUpTodo.Tui;
 
 namespace ClickUpTodo.Tests;

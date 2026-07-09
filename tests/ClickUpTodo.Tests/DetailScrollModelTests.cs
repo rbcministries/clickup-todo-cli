@@ -1,5 +1,4 @@
 using ClickUpTodo.Configuration;
-using ClickUpTodo.Tui;
 using ClickUpTodo.Tui.Screens;
 
 namespace ClickUpTodo.Tests;
