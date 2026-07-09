@@ -9,45 +9,43 @@ namespace ClickUpTodo.ClickUp.Generated.Models
 {
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     #pragma warning disable CS1591
-    public partial class UpdateTaskRequest : IAdditionalDataHolder, IParsable
+    public partial class AssigneeUpdate : IAdditionalDataHolder, IParsable
     #pragma warning restore CS1591
     {
+        /// <summary>The add property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public List<long?>? Add { get; set; }
+#nullable restore
+#else
+        public List<long?> Add { get; set; }
+#endif
         /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
         public IDictionary<string, object> AdditionalData { get; set; }
-        /// <summary>The assignees property</summary>
+        /// <summary>The rem property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
-        public global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate? Assignees { get; set; }
+        public List<long?>? Rem { get; set; }
 #nullable restore
 #else
-        public global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate Assignees { get; set; }
-#endif
-        /// <summary>The priority property</summary>
-        public int? Priority { get; set; }
-        /// <summary>The status property</summary>
-#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
-#nullable enable
-        public string? Status { get; set; }
-#nullable restore
-#else
-        public string Status { get; set; }
+        public List<long?> Rem { get; set; }
 #endif
         /// <summary>
-        /// Instantiates a new <see cref="global::ClickUpTodo.ClickUp.Generated.Models.UpdateTaskRequest"/> and sets the default values.
+        /// Instantiates a new <see cref="global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate"/> and sets the default values.
         /// </summary>
-        public UpdateTaskRequest()
+        public AssigneeUpdate()
         {
             AdditionalData = new Dictionary<string, object>();
         }
         /// <summary>
         /// Creates a new instance of the appropriate class based on discriminator value
         /// </summary>
-        /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.UpdateTaskRequest"/></returns>
+        /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate"/></returns>
         /// <param name="parseNode">The parse node to use to read the discriminator value and create the object</param>
-        public static global::ClickUpTodo.ClickUp.Generated.Models.UpdateTaskRequest CreateFromDiscriminatorValue(IParseNode parseNode)
+        public static global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate CreateFromDiscriminatorValue(IParseNode parseNode)
         {
             if(ReferenceEquals(parseNode, null)) throw new ArgumentNullException(nameof(parseNode));
-            return new global::ClickUpTodo.ClickUp.Generated.Models.UpdateTaskRequest();
+            return new global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate();
         }
         /// <summary>
         /// The deserialization information for the current model
@@ -57,9 +55,8 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         {
             return new Dictionary<string, Action<IParseNode>>
             {
-                { "assignees", n => { Assignees = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate>(global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate.CreateFromDiscriminatorValue); } },
-                { "priority", n => { Priority = n.GetIntValue(); } },
-                { "status", n => { Status = n.GetStringValue(); } },
+                { "add", n => { Add = n.GetCollectionOfPrimitiveValues<long?>()?.AsList(); } },
+                { "rem", n => { Rem = n.GetCollectionOfPrimitiveValues<long?>()?.AsList(); } },
             };
         }
         /// <summary>
@@ -69,9 +66,8 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         public virtual void Serialize(ISerializationWriter writer)
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
-            writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate>("assignees", Assignees);
-            writer.WriteIntValue("priority", Priority);
-            writer.WriteStringValue("status", Status);
+            writer.WriteCollectionOfPrimitiveValues<long?>("add", Add);
+            writer.WriteCollectionOfPrimitiveValues<long?>("rem", Rem);
             writer.WriteAdditionalData(AdditionalData);
         }
     }

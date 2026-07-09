@@ -110,6 +110,53 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task SetTaskPriority_RoundTripsThroughWriteResponse()
+    {
+        Skip.If(
+            string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(ListId) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN, CLICKUP_LIST_ID and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var original = (await client.GetListTasksAsync(ListId!)).FirstOrDefault(t => t.Id == TaskId);
+        Skip.If(original is null, "CLICKUP_TASK_ID is not an open task on CLICKUP_LIST_ID.");
+
+        // Pick a target level different from the current one; the write response reports the truth.
+        var target = original!.PriorityLevel == 2 ? 3 : 2;
+        try
+        {
+            var confirmed = await client.SetTaskPriorityAsync(TaskId!, target);
+            Assert.Equal(target, confirmed);
+        }
+        finally
+        {
+            // Restore the original priority (clearing it when the task had none) for idempotency.
+            await client.SetTaskPriorityAsync(TaskId!, original.PriorityLevel);
+        }
+    }
+
+    [SkippableFact]
+    public async Task AddAndRemoveTaskAssignee_ReconcileFromWriteResponse()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+        var me = await client.GetMeAsync();
+
+        var before = await client.GetTaskDetailAsync(TaskId!);
+        var wasAssigned = before.Assignees.Contains(me.DisplayName);
+
+        var afterAdd = await client.AddTaskAssigneeAsync(TaskId!, me.Id);
+        Assert.Contains(afterAdd, a => a.Id == me.Id);
+
+        // Only undo what this test added, so a task the user was already on is left unchanged.
+        if (!wasAssigned)
+        {
+            var afterRemove = await client.RemoveTaskAssigneeAsync(TaskId!, me.Id);
+            Assert.DoesNotContain(afterRemove, a => a.Id == me.Id);
+        }
+    }
+
+    [SkippableFact]
     public async Task GetTaskDetail_ReturnsRichTask()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),

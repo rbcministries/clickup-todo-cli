@@ -22,6 +22,9 @@ public interface IClickUpClient
     Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, CancellationToken ct = default);
     Task<List<TaskItem>> GetListTasksAsync(string listId, bool includeClosed = false, CancellationToken ct = default);
     Task<string?> SetTaskStatusAsync(string taskId, string statusName, CancellationToken ct = default);
+    Task<int?> SetTaskPriorityAsync(string taskId, int? priorityLevel, CancellationToken ct = default);
+    Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
+    Task<IReadOnlyList<TaskAssignee>> RemoveTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default);
