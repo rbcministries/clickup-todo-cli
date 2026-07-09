@@ -893,11 +893,11 @@ public sealed class TodoApp
                 {
                     if (ActiveScreen is not null)
                         return;
-                    var screen = new TaskDetailScreen(detail, comments);
-                    // Ctrl+A (in the detail view) → compose + launch an interactive claude session
-                    // (#26/#93). The detail view stays open; dispatch runs off the UI thread so the TUI
-                    // stays live. Only the prompt is consumed today; #94/#95/#97 add the pane's options.
-                    screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request.Prompt);
+                    var screen = new TaskDetailScreen(detail, comments, defaultSessionMode: _config.AgentDispatch.DefaultSessionMode);
+                    // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
+                    // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
+                    // prompt and the one-off/interactive mode (#94) are consumed; #95/#97 add the rest.
+                    screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request.Prompt, request.SessionMode);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -915,17 +915,20 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// Composes the seed prompt for <paramref name="detail"/> and launches an interactive
-    /// <c>claude</c> session in a new terminal (#26). Runs off the UI thread (file write + process
-    /// launch), then reports the outcome on the status line; the detail view and background refresh
-    /// keep running. The working directory and prompt preamble are resolved from the AgentDispatch
-    /// settings on the UI thread and threaded into the dispatch (#91). In the default
-    /// <see cref="AgentWorkingDirectory.TaskDerived"/> mode the launch starts in the saved base
+    /// Composes the seed prompt for <paramref name="detail"/> and launches a <c>claude</c> session in
+    /// a new terminal (#26) — an interactive session or, when <paramref name="sessionMode"/> is
+    /// <see cref="AgentSessionMode.OneOff"/>, a one-off <c>claude -p</c> run (#94). Runs off the UI
+    /// thread (file write + process launch), then reports the outcome on the status line; the detail
+    /// view and background refresh keep running. The working directory and prompt preamble are resolved
+    /// from the AgentDispatch settings on the UI thread and threaded into the dispatch (#91). In the
+    /// default <see cref="AgentWorkingDirectory.TaskDerived"/> mode the launch starts in the saved base
     /// working directory (#92, created on first use) and the prompt instructs the agent to write
     /// outputs to a per-task <c>./{custom-id}</c> subdir (#98); Home/Fixed modes resolve to their
     /// own dir with no subdir instruction.
     /// </summary>
-    private void DispatchAgent(TaskDetail detail, IReadOnlyList<CommentItem> comments, string prompt)
+    private void DispatchAgent(
+        TaskDetail detail, IReadOnlyList<CommentItem> comments, string prompt,
+        AgentSessionMode sessionMode = AgentSessionMode.Interactive)
     {
         // Re-entrancy guard: a second Enter before the first launch finishes would spawn a duplicate
         // claude session. This runs on the UI thread (invoked from the screen's key handler) and is
@@ -936,6 +939,7 @@ public sealed class TodoApp
             return;
         }
         _dispatching = true;
+        var oneOff = sessionMode == AgentSessionMode.OneOff;
 
         // Resolve the dispatch settings on the UI thread before the background hand-off (#91).
         // Capture _agent locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap
@@ -965,7 +969,7 @@ public sealed class TodoApp
                 if (isTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
                     Directory.CreateDirectory(workingDir);
 
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir);
+                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff);
                 Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)

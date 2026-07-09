@@ -13,6 +13,10 @@ public interface ITerminalLauncher
     /// <param name="promptFilePath">Path to the temp file holding the composed prompt.</param>
     /// <param name="workingDir">Directory to start the session in, or null to inherit.</param>
     /// <param name="options">Launcher configuration (zero-config defaults are valid).</param>
+    /// <param name="oneOff">
+    /// When true, launch a one-off <c>claude -p "…"</c> run (that executes and exits) instead of an
+    /// interactive session (#94). Default false preserves the interactive behaviour.
+    /// </param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>
     /// A <see cref="LaunchResult"/> reporting success (and which terminal was used) or a failure
@@ -22,5 +26,6 @@ public interface ITerminalLauncher
         string promptFilePath,
         string? workingDir,
         TerminalLauncherOptions options,
+        bool oneOff = false,
         CancellationToken ct = default);
 }

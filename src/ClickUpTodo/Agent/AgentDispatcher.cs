@@ -37,7 +37,8 @@ public sealed class AgentDispatcher
     /// <see cref="AgentPromptComposer.DefaultTemplate"/>) are the dispatch-time settings threaded in by
     /// the caller (#91, #100). <paramref name="outputSubdirectory"/> (blank unless the task-derived
     /// working-dir mode is active, #98) fills the template's <c>{outputDirInstruction}</c> with a
-    /// "write outputs to <c>./{subdir}</c>" instruction.
+    /// "write outputs to <c>./{subdir}</c>" instruction. <paramref name="oneOff"/> selects a one-off
+    /// <c>claude -p</c> run over the default interactive session (#94).
     /// </summary>
     public async Task<AgentDispatchResult> DispatchAsync(
         TaskDetail task,
@@ -46,12 +47,13 @@ public sealed class AgentDispatcher
         string? workingDir = null,
         string? template = null,
         string? outputSubdirectory = null,
+        bool oneOff = false,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
 
         var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, outputSubdirectory);
-        var result = await _launcher.LaunchAsync(promptFile, workingDir, _options, ct).ConfigureAwait(false);
+        var result = await _launcher.LaunchAsync(promptFile, workingDir, _options, oneOff, ct).ConfigureAwait(false);
         return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile);
     }
 

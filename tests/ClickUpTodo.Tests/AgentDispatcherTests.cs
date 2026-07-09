@@ -29,14 +29,16 @@ public sealed class AgentDispatcherTests : IDisposable
         public string? PromptFilePath { get; private set; }
         public string? WorkingDir { get; private set; }
         public TerminalLauncherOptions? Options { get; private set; }
+        public bool OneOff { get; private set; }
         public LaunchResult Result { get; init; } = LaunchResult.Ok("Windows Terminal");
 
         public Task<LaunchResult> LaunchAsync(
-            string promptFilePath, string? workingDir, TerminalLauncherOptions options, CancellationToken ct = default)
+            string promptFilePath, string? workingDir, TerminalLauncherOptions options, bool oneOff = false, CancellationToken ct = default)
         {
             PromptFilePath = promptFilePath;
             WorkingDir = workingDir;
             Options = options;
+            OneOff = oneOff;
             return Task.FromResult(Result);
         }
     }
@@ -216,6 +218,30 @@ public sealed class AgentDispatcherTests : IDisposable
         Assert.Equal(
             AgentPromptComposer.Compose(task, comments, "go", outputSubdirectory: "abc123"),
             File.ReadAllText(result.PromptFilePath));
+    }
+
+    // ── session mode (one-off vs interactive, #94) ──────────────────────────────────
+
+    [Fact]
+    public async Task DispatchAsync_DefaultsToInteractive_NotOneOff()
+    {
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
+
+        await dispatcher.DispatchAsync(Detail(), Comments(), "go");
+
+        Assert.False(launcher.OneOff); // omitting the flag preserves the interactive session
+    }
+
+    [Fact]
+    public async Task DispatchAsync_ThreadsOneOff_ToLauncher()
+    {
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
+
+        await dispatcher.DispatchAsync(Detail(), Comments(), "go", oneOff: true);
+
+        Assert.True(launcher.OneOff);
     }
 
     // ── Settings → dispatcher wiring (#91, #100) ─────────────────────────────────────
