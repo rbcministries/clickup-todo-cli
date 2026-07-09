@@ -40,6 +40,23 @@ public sealed class ClickUpClientMapTests
     }
 
     [Fact]
+    public void Map_CarriesCustomId_WhenSet()
+    {
+        // The list row shows the Space custom id beside the badges, so Map must carry it through.
+        var mapped = ClickUpClient.Map(new TaskObject { Id = "abc", CustomId = "ABC-123", Name = "A task" });
+
+        Assert.Equal("ABC-123", mapped.CustomId);
+    }
+
+    [Fact]
+    public void Map_NullCustomId_LeavesItNull_SoTheRowFallsBackToTaskId()
+    {
+        var mapped = ClickUpClient.Map(new TaskObject { Id = "abc", Name = "A task" });
+
+        Assert.Null(mapped.CustomId);
+    }
+
+    [Fact]
     public void MapDetail_CarriesStatusAndPriorityColors()
     {
         // The detail Other tab colours the Status/Priority values (#66), so MapDetail must carry both
