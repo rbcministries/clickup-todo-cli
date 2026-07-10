@@ -1129,6 +1129,15 @@ public sealed class TodoApp
         if (DispatchWorkingDirectoryCache.Update(_config.TaskWorkingDirectories, detail.Id, chosenDir, resolvedDefault))
             _configStore.Save(_config);
 
+        // One-off mode (#94) runs claude -p as a background child of the app — no terminal window — with
+        // a "thinking" spinner and the captured output rendered in a screen (#99). Interactive mode keeps
+        // opening a real terminal below (an interactive session needs a live TTY).
+        if (oneOff)
+        {
+            RunBackgroundDispatch(detail, comments, agent, prompt, workingDir, template, outputSubdir, useTaskDerived, postToComments);
+            return;
+        }
+
         Flash($"Launching Claude for '{detail.Name}'…");
         _ = Task.Run(async () =>
         {
@@ -1151,6 +1160,52 @@ public sealed class TodoApp
             }
         });
     }
+
+    /// <summary>
+    /// Runs a one-off <c>claude -p</c> dispatch (#99) as a background child process: mounts an
+    /// <see cref="AgentRunScreen"/> over the detail view (through the shared screen seam), runs the
+    /// dispatch off the UI thread with a cancellation token wired to the screen's Esc, and marshals the
+    /// captured output — or a cancellation / failure — back to the screen via <see cref="Application.Invoke"/>.
+    /// The working-dir/subdir/template/post-to-Comments inputs were already resolved by the caller so a
+    /// one-off run's prompt matches what the interactive path would compose. Must run on the UI thread.
+    /// </summary>
+    private void RunBackgroundDispatch(
+        TaskDetail detail, IReadOnlyList<CommentItem> comments, AgentDispatcher agent, string prompt,
+        string? workingDir, string? template, string? outputSubdir, bool useTaskDerived, bool postToComments)
+    {
+        var cts = new CancellationTokenSource();
+        var screen = new AgentRunScreen(detail.Name);
+        screen.CancelRequested += (_, _) => cts.Cancel();
+        // Closing the screen (Esc after it finished) cancels any straggler and releases the token source.
+        ShowScreen(screen, () =>
+        {
+            cts.Cancel();
+            cts.Dispose();
+        });
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // A task-derived launch starts in the base dir; create it on first use (#98), same as the
+                // interactive path, so the child process doesn't fail on a not-yet-existing path.
+                if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
+                    Directory.CreateDirectory(workingDir);
+
+                var run = await agent.DispatchBackgroundAsync(detail, comments, prompt, workingDir, template, outputSubdir, postToComments, cts.Token);
+                Application.Invoke(() => { _dispatching = false; screen.ShowResult(AgentRunModel.FormatOutput(run), run.Success); });
+            }
+            catch (OperationCanceledException)
+            {
+                Application.Invoke(() => { _dispatching = false; screen.ShowCancelled("Run cancelled — the Claude process was stopped."); });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => { _dispatching = false; screen.ShowResult($"Could not run Claude: {Short(ex)}", success: false); });
+            }
+        });
+    }
+
 
     private void OpenStatusPicker()
     {

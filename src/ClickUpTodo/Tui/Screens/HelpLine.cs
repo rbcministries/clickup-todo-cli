@@ -170,6 +170,15 @@ public static class HelpItemSets
         new("Esc", "back"),
     ];
 
+    /// <summary>The background one-off run screen (#99): Esc cancels the in-flight run, then closes
+    /// once it has finished.</summary>
+    public static readonly IReadOnlyList<HelpItem> AgentRun =
+    [
+        new("↑/↓ PgUp/PgDn", "scroll"),
+        new("F1", "help"),
+        new("Esc", "cancel/back"),
+    ];
+
     /// <summary>The help screen itself (no F1 — it is the help).</summary>
     public static readonly IReadOnlyList<HelpItem> Help =
     [
