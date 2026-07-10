@@ -465,6 +465,21 @@ public sealed class AgentPromptComposerTests
         => Assert.Equal($"{PostComment("abc123")}\n\n",
             AgentPromptComposer.PostCommentInstruction(enabled: true, "abc123"));
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void PostCommentInstruction_On_BlankId_FallsBackToGenericTarget(string? id)
+    {
+        // Degenerate case (a real TaskDetail always has an id): no stray double space / dangling id.
+        var instruction = AgentPromptComposer.PostCommentInstruction(enabled: true, id);
+        Assert.Equal(
+            "When you have finished, post a brief summary comment on the ClickUp task " +
+            "describing what you did (requires ClickUp MCP tools with access to this workspace).\n\n",
+            instruction);
+        Assert.DoesNotContain("  ", instruction); // no double space
+    }
+
     [Fact]
     public void WritePromptFile_HonorsPostToComments()
     {

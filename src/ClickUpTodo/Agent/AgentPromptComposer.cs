@@ -202,8 +202,11 @@ public static class AgentPromptComposer
         if (!enabled)
             return string.Empty;
         var id = (taskId ?? string.Empty).Trim();
-        return "When you have finished, post a brief summary comment on ClickUp task " +
-            $"{id} describing what you did (requires ClickUp MCP tools with access to this workspace).\n\n";
+        // A TaskDetail from the API always has an id; guard the degenerate blank-id case so the
+        // sentence never reads "…on ClickUp task  describing…" (double space, no id).
+        var target = id.Length == 0 ? "the ClickUp task" : $"ClickUp task {id}";
+        return $"When you have finished, post a brief summary comment on {target} " +
+            "describing what you did (requires ClickUp MCP tools with access to this workspace).\n\n";
     }
 
     /// <summary>
