@@ -164,6 +164,7 @@ public static class HelpItemSets
     [
         new("↑/↓", "move"),
         new("F3", "mentions only"),
+        new("F5", "↻"),
         new("Ctrl+E", "list"),
         new("F1", "help"),
         new("Esc", "back"),

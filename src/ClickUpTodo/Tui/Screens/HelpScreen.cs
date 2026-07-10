@@ -33,7 +33,7 @@ public sealed class HelpScreen : Screen
                 + "  F2          Settings (refresh rate, excluded statuses)\n"
                 + "  F3          Filter / sort / group the list\n"
                 + "  F4          Show / hide subtasks (shown nested under their parent)\n"
-                + "  F5          Refresh now (also Ctrl+R; the detail view auto-refreshes every 30s)\n"
+                + "  F5          Refresh now (also Ctrl+R; the detail & feed views also auto-refresh)\n"
                 + "  F6          Cycle status/priority badges (icons ○ ⚑, text, hidden)\n"
                 + "  → / ←       Expand / collapse the selected parent's subtasks (▶ collapsed, ▼ expanded)\n"
                 + "  Ctrl+→ / ←  Expand / collapse all parents at once\n"

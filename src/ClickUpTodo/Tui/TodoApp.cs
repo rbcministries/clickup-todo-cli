@@ -408,12 +408,47 @@ public sealed class TodoApp
                 {
                     if (ActiveScreen is not null)
                         return;
-                    ShowScreen(new NotificationsFeedScreen(feed), static () => { });
+                    // The feed auto-refreshes on the same cadence as the dashboard list (#114 follow-up);
+                    // F5 / Ctrl+R force one. RefreshFeed re-fetches and feeds the result back in place.
+                    var screen = new NotificationsFeedScreen(feed, _config.RefreshSeconds);
+                    screen.RefreshRequested += (_, _) => RefreshFeed(screen);
+                    ShowScreen(screen, static () => { });
                 });
             }
             catch (Exception ex)
             {
                 Application.Invoke(() => Flash($"Could not load feed: {Short(ex)}"));
+            }
+        });
+    }
+
+    /// <summary>
+    /// Re-fetches the feed for an open <see cref="NotificationsFeedScreen"/> (its F5 / Ctrl+R or
+    /// auto-refresh tick) and feeds it back on the UI thread. Mirrors <see cref="OpenNotificationsFeed"/>'s
+    /// off-thread fetch; skips while the feed isn't front-most, and drops the result if the screen has
+    /// since been torn down. A fetch error flashes without disturbing the view.
+    /// </summary>
+    private void RefreshFeed(NotificationsFeedScreen screen)
+    {
+        // Runs on the UI thread (from the screen's key handler or its timer tick), so ActiveScreen is a
+        // valid read: no point fetching to update a feed that isn't showing.
+        if (!ReferenceEquals(ActiveScreen, screen))
+            return;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var feed = await _feed.LoadFeedAsync(mentionsOnly: false);
+                Application.Invoke(() =>
+                {
+                    if (_screens.Contains(screen))
+                        screen.UpdateFeed(feed);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not refresh feed: {Short(ex)}"));
             }
         });
     }
