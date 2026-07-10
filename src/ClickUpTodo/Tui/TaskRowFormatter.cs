@@ -4,27 +4,30 @@ using ClickUpTodo.Configuration;
 namespace ClickUpTodo.Tui;
 
 /// <summary>
-/// Builds the one-line display text for a task row and reports where the Status and Priority badges
-/// sit within it, so the list renderer can color exactly those spans. A single Status badge and a
-/// single Priority badge lead every row (Status first), rendered per the active
-/// <see cref="BadgeDisplay"/>: compact <c>○</c>/<c>⚑</c> icon chips, <c>{icon} {name}</c> text badges
-/// (<c>○ In Progress</c>/<c>⚑ Urgent</c>, sharing <see cref="StatusPriorityBadge"/> with the detail
-/// title line), or nothing. Pure (no Terminal.Gui), so the layout and the badge spans are unit-testable.
+/// sit within it, so the list renderer can color exactly those spans. When badges show (icon or text),
+/// a task-identifier chip — the Space's custom id, or the plain task id as a fallback — leads the row
+/// as the first badge (#171 follow-up), followed by a single Status badge and a single Priority badge
+/// (Status first), rendered per the active <see cref="BadgeDisplay"/>: compact <c>○</c>/<c>⚑</c> icon
+/// chips, <c>{icon} {name}</c> text badges (<c>○ In Progress</c>/<c>⚑ Urgent</c>, sharing
+/// <see cref="StatusPriorityBadge"/> with the detail title line), or nothing. Pure (no Terminal.Gui),
+/// so the layout and the badge spans are unit-testable.
 /// </summary>
 public static class TaskRowFormatter
 {
     /// <summary>
-    /// The display line plus the character spans of the leading Status and Priority badges and the
-    /// trailing Assignees badge (#161). The Status/Priority badges lead the row (Status first), ahead
-    /// of the title — so <paramref name="Text"/> no longer starts with the title; the ListView's
-    /// type-ahead searches the decoupled title-only keys instead (#76). The Assignees badge trails the
-    /// title/metadata. When a badge is absent (unset, grouped away, or hidden) its <c>*Length</c> is 0
-    /// and its <c>*Start</c> is -1.
+    /// The display line plus the character spans of the leading custom-id (or fallback task-id) chip, the
+    /// Status and Priority badges, and the trailing Assignees badge (#161). The id chip leads the row as
+    /// the first badge (#171 follow-up), then the Status/Priority badges (Status first), ahead of the
+    /// title — so <paramref name="Text"/> no longer starts with the title; the ListView's type-ahead
+    /// searches the decoupled title-only keys instead (#76). The Assignees badge trails the title/metadata.
+    /// When a badge is absent (unset, grouped away, or hidden) its <c>*Length</c> is 0 and its
+    /// <c>*Start</c> is -1.
     /// </summary>
     public readonly record struct Row(
         string Text,
         int StatusStart, int StatusLength,
         int PriorityStart, int PriorityLength,
+        int CustomIdStart, int CustomIdLength,
         int AssigneesStart, int AssigneesLength);
 
     /// <summary>Two spaces of indent per nesting level in the F4 subtasks view (#46).</summary>
@@ -126,15 +129,23 @@ public static class TaskRowFormatter
         var text = "";
         var (statusStart, statusLength) = (-1, 0);
         var (priorityStart, priorityLength) = (-1, 0);
+        var (customIdStart, customIdLength) = (-1, 0);
         var (assigneesStart, assigneesLength) = (-1, 0);
+
+        // The task-identifier chip leads the badges (skipped in Hidden mode, which is a decoration-free
+        // view): the Space's custom id, or the plain task id when the Space has no custom ids. As the
+        // first badge (#171 follow-up) it precedes the Status/Priority gutter and the indent/marker/title.
+        if (badges != BadgeDisplay.Hidden)
+            (customIdStart, customIdLength) = AppendCustomId(ref text, CustomIdOf(task));
 
         switch (badges)
         {
             case BadgeDisplay.Icons:
-                // Fixed-width chips form a grid-like left gutter (Status first, then Priority). A present
-                // badge is a coloured glyph chip; an absent-but-not-grouped badge is a blank chip so titles
-                // still line up; a grouped-away badge is dropped entirely (every row drops it uniformly, so
-                // the columns still align).
+                // Fixed-width chips (Status first, then Priority) following the id chip. A present badge is
+                // a coloured glyph chip; an absent-but-not-grouped badge is a blank chip so titles still
+                // line up; a grouped-away badge is dropped entirely (every row drops it uniformly). The
+                // chips align relative to the id chip that precedes them, so their grid holds across rows
+                // whose leading ids are the same width (the common case within a Space).
                 (statusStart, statusLength) = AppendIconChip(ref text, showStatus, hasStatus, StatusIcon);
                 (priorityStart, priorityLength) = AppendIconChip(ref text, showPriority, hasPriority, PriorityIcon);
                 break;
@@ -167,8 +178,14 @@ public static class TaskRowFormatter
             text += ForeignSubtaskMarker;
 
         return new Row(
-            text, statusStart, statusLength, priorityStart, priorityLength, assigneesStart, assigneesLength);
+            text, statusStart, statusLength, priorityStart, priorityLength,
+            customIdStart, customIdLength, assigneesStart, assigneesLength);
     }
+
+    /// <summary>The identifier shown on the row: the task's Space-defined custom id when set, else its
+    /// plain ClickUp id (#161-style fallback shared with the agent prompt composer and detail header).</summary>
+    private static string CustomIdOf(TaskItem task)
+        => string.IsNullOrWhiteSpace(task.CustomId) ? task.Id : task.CustomId!;
 
     /// <summary>
     /// Appends a fixed-width icon chip to <paramref name="text"/>, returning the coloured span of the
@@ -205,6 +222,24 @@ public static class TaskRowFormatter
         var badge = $"{glyph} {label}";
         text += badge + " ";
         return (start, badge.Length);
+    }
+
+    /// <summary>
+    /// Appends the task-identifier chip — the custom id, or the plain task id as a fallback — as the
+    /// leading badge, ahead of the Status/Priority gutter and the title, returning the char span of the id
+    /// (the trailing separator space excluded, like <see cref="AppendTextBadge"/>). Like the text status
+    /// badge, it's inherently ragged: custom-id formats vary by Space, so their widths are nonstandard
+    /// and no gutter tries to align the title across rows — the same raggedness variable-length status
+    /// names already have in text mode. Returns the <c>(-1, 0)</c> "no id" sentinel when there's nothing
+    /// to show (a task with neither id).
+    /// </summary>
+    private static (int Start, int Length) AppendCustomId(ref string text, string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return (-1, 0);
+        var start = text.Length;
+        text += id + " ";
+        return (start, id.Length);
     }
 
     /// <summary>

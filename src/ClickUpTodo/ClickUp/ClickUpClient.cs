@@ -299,6 +299,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         return new()
         {
             Id = t.Id ?? "",
+            CustomId = t.CustomId,
             Name = t.Name ?? "(untitled)",
             Url = t.Url,
             ParentId = string.IsNullOrWhiteSpace(t.Parent) ? null : t.Parent,

@@ -137,7 +137,11 @@ public static class SetupWizard
         client.Dispose();
 
         Console.WriteLine();
-        Console.WriteLine($"  Setup complete. Settings saved to {configStore.ConfigPath}");
+        // ConfigPath is empty for a non-file backend (e.g. a future LiteDB store), so word the
+        // confirmation to degrade cleanly instead of trailing a blank path.
+        Console.WriteLine(string.IsNullOrEmpty(configStore.ConfigPath)
+            ? "  Setup complete. Settings saved."
+            : $"  Setup complete. Settings saved to {configStore.ConfigPath}");
         Console.WriteLine("  Starting…");
         await Task.Delay(600, ct);
         return true;

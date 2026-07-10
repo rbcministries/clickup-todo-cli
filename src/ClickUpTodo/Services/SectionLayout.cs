@@ -29,9 +29,11 @@ public readonly record struct LayoutRow(string? HeaderText, TaskItem? Task, int 
 /// <para>
 /// Grouping and nesting <b>compose</b> (#57): when <paramref name="nest"/> is on, each group is
 /// arranged independently via <see cref="SubtaskArranger.Arrange"/>, so a subtask nests under its
-/// parent when both fall in the same group; a subtask whose parent lands in a different group renders
-/// flat within its own group; and a not-assigned context parent is injected as a header wherever its
-/// children appear (it has no group value of its own, so it rides along with them).
+/// parent when both fall in the same group; an in-snapshot subtask whose parent lands in a different
+/// group renders flat within its own group (a pulled-in foreign subtask in that position is instead
+/// suppressed — see <paramref name="suppressTopLevel"/>, #172); and a not-assigned context parent is
+/// injected as a header wherever its children appear (it has no group value of its own, so it rides
+/// along with them).
 /// </para>
 /// </summary>
 public static class SectionLayout
@@ -52,6 +54,11 @@ public static class SectionLayout
     /// The ids of expanded parents for per-parent folding (#76), forwarded to <see cref="SubtaskArranger"/>.
     /// <c>null</c> ⇒ every parent expanded (pre-#76 behaviour).
     /// </param>
+    /// <param name="suppressTopLevel">
+    /// Ids that must never surface as a flat top-level row, forwarded to <see cref="SubtaskArranger"/> — the
+    /// teammate-owned subtasks pulled in by #70, so one whose parent is filtered out of its group stays
+    /// hidden rather than leaking un-indented as "(not assigned to you)" (#172). <c>null</c> ⇒ no suppression.
+    /// </param>
     public static IReadOnlyList<LayoutRow> BuildTodoSection(
         IReadOnlyList<TaskGroup> groups,
         IReadOnlyDictionary<string, TaskItem> contextParents,
@@ -59,7 +66,8 @@ public static class SectionLayout
         bool nest,
         string? ungroupedTasksHeader,
         IReadOnlyList<string?>? headerColors = null,
-        IReadOnlySet<string>? expanded = null)
+        IReadOnlySet<string>? expanded = null,
+        IReadOnlySet<string>? suppressTopLevel = null)
     {
         var rows = new List<LayoutRow>();
         for (var gi = 0; gi < groups.Count; gi++)
@@ -77,7 +85,7 @@ public static class SectionLayout
                 rows.Add(new LayoutRow(ungroupedTasksHeader, null, 0, false));
 
             if (nest)
-                foreach (var row in SubtaskArranger.Arrange(group.Tasks, contextParents, expanded))
+                foreach (var row in SubtaskArranger.Arrange(group.Tasks, contextParents, expanded, suppressTopLevel))
                     rows.Add(new LayoutRow(null, row.Task, row.Depth, row.IsContextParent) { Fold = row.Fold });
             else
                 foreach (var t in group.Tasks)

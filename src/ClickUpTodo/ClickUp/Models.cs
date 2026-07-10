@@ -84,6 +84,15 @@ public sealed record TaskAssignee(long Id, string Name);
 public sealed record TaskItem
 {
     public required string Id { get; init; }
+
+    /// <summary>
+    /// The Space-defined custom id (ClickUp <c>custom_id</c>, e.g. <c>ABC-123</c>) when the task's Space
+    /// has custom ids enabled, else null. Surfaced on the row as a leading identifier chip beside the
+    /// Status/Priority badges, falling back to <see cref="Id"/> when unset. Custom-id formats vary by
+    /// Space, so its display width is nonstandard.
+    /// </summary>
+    public string? CustomId { get; init; }
+
     public required string Name { get; init; }
     public string? Url { get; init; }
     public string? StatusName { get; init; }

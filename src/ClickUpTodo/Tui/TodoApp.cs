@@ -42,6 +42,7 @@ public sealed class TodoApp
     private static readonly string TasksHeaderPrefix = $"─ {AppBranding.TasksSectionLabel}";
 
     private readonly TaskService _tasks;
+    private readonly FeedService _feed;
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
@@ -122,9 +123,10 @@ public sealed class TodoApp
     private string _status = "Loading…";
     private string _signature = "";
 
-    public TodoApp(TaskService tasks, AppConfig config, ConfigStore configStore, IFocusStore focus)
+    public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore, IFocusStore focus)
     {
         _tasks = tasks;
+        _feed = feed;
         _config = config;
         _configStore = configStore;
         _focus = focus;
@@ -369,17 +371,37 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// F5 — opens the mentions &amp; comments feed screen (#110, epic #109). Currently a walking-skeleton
-    /// scaffold rendering an empty-state placeholder; the data layers land in #112–#116. Opens through
-    /// the shared screen seam (guarded on <see cref="ActiveScreen"/> like the other list-initiated opens)
-    /// with no result to read back.
+    /// F5 — opens the mentions &amp; comments feed screen (#114, epic #109). Fetches the feed off the UI
+    /// thread (like <see cref="OpenDetail"/>: flash → <c>Task.Run</c> → <c>Application.Invoke</c>) and
+    /// swaps in the data-bearing screen back on it; the background dashboard refresh keeps running.
+    /// Opens through the shared screen seam, guarded on <see cref="ActiveScreen"/> like the other
+    /// list-initiated opens. The full feed is loaded once (every entry mention-stamped), so the
+    /// screen's F3 mentions-only toggle filters locally with no re-fetch. Loading and error states show
+    /// on the status line — the screen is only constructed on success.
     /// </summary>
     private void OpenNotificationsFeed()
     {
         if (ActiveScreen is not null)
             return;
 
-        ShowScreen(new NotificationsFeedScreen(), static () => { });
+        Flash("Loading feed…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var feed = await _feed.LoadFeedAsync(mentionsOnly: false);
+                Application.Invoke(() =>
+                {
+                    if (ActiveScreen is not null)
+                        return;
+                    ShowScreen(new NotificationsFeedScreen(feed), static () => { });
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not load feed: {Short(ex)}"));
+            }
+        });
     }
 
     /// <summary>Toggles the subtasks view (F4, #46) — hidden vs. shown nested — and persists it.</summary>
@@ -903,7 +925,11 @@ public sealed class TodoApp
                     var screen = new TaskDetailScreen(
                         detail, comments, browserRoot,
                         settings: _config.DetailView,
-                        defaultSessionMode: _config.AgentDispatch.DefaultSessionMode);
+                        defaultSessionMode: _config.AgentDispatch.DefaultSessionMode,
+                        // Pre-fill the Dispatch working-dir field from the per-task cache (#96) — the
+                        // last explicit dir dispatched from this task, or blank if none. Read live on
+                        // each pane open so a dispatch within this same open screen is reflected on reopen.
+                        workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, detail.Id));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), and the working dir (#95) are consumed;
@@ -975,6 +1001,17 @@ public sealed class TodoApp
         var useTaskDerived = settings.UsesTaskDerivedOutput(chosenDir);
         var outputSubdir = useTaskDerived ? AgentPromptComposer.OutputSubdirectoryToken(detail) : null;
         var template = settings.PromptTemplate;
+
+        // Remember an explicit non-default pick for this task (#96) so the next dispatch pre-fills it,
+        // across relaunches; reverting to the default (blank field / pick == the configured mode dir)
+        // clears the entry. Done on the UI thread before the hand-off, and only persisted when the
+        // cache actually changed. resolvedDefault is what the mode would pick with no explicit dir,
+        // ~-expanded (as chosenDir is) so a Fixed dir stored as "~/foo" still matches an explicit pick
+        // of the same resolved path and clears the entry rather than persisting a redundant one.
+        var resolvedDefaultRaw = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: home);
+        var resolvedDefault = resolvedDefaultRaw is null ? null : SettingsForm.ExpandHomePath(resolvedDefaultRaw, home);
+        if (DispatchWorkingDirectoryCache.Update(_config.TaskWorkingDirectories, detail.Id, chosenDir, resolvedDefault))
+            _configStore.Save(_config);
 
         Flash($"Launching Claude for '{detail.Name}'…");
         _ = Task.Run(async () =>
@@ -1254,9 +1291,11 @@ public sealed class TodoApp
         var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
         var grouped = view.GroupField is not null;
-        // Grouping and nesting compose: within each F3 group, subtasks nest under their parent when
-        // both fall in the same group; a subtask whose parent lands in a different group renders flat
-        // within its own group (SubtaskArranger, run per-group, yields exactly this). (#46, #57)
+        // Grouping and nesting compose: within each F3 group, subtasks nest under their parent when both
+        // fall in the same group. An in-snapshot (assigned) subtask whose parent lands in a different
+        // group renders flat within its own group; a pulled-in teammate-owned subtask (#70) in that same
+        // position is instead suppressed, since a "(not assigned to you)" row only belongs nested under a
+        // visible parent, never un-indented (#172). (#46, #57)
 
         _rows.Clear();
         _kinds.Clear();
@@ -1284,7 +1323,14 @@ public sealed class TodoApp
         // The single tasks-section header only appears (when ungrouped) to separate the to-do rows
         // from a pinned section above them.
         var ungroupedTasksHeader = pinnedIds.Count > 0 ? $"{TasksHeaderPrefix} ({todoCount}) ─" : null;
-        foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors, _expanded))
+        // A teammate-owned subtask (#70) must never surface un-indented at top level: when its parent is
+        // filtered out of the to-do set (e.g. a completed parent dropped by a Status IS NOT rule), it has
+        // no visible parent to nest under, so the arranger suppresses it rather than leaking it flat as
+        // "(not assigned to you)" (#172). Only relevant while nesting and while foreign subtasks exist.
+        var suppressTopLevel = nest && _foreignSubtasks.Count > 0
+            ? new HashSet<string>(_foreignSubtasks.Keys, StringComparer.Ordinal)
+            : null;
+        foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors, _expanded, suppressTopLevel))
         {
             if (row.IsHeader)
                 AddHeader(row.HeaderText!, row.HeaderColor);
@@ -1376,8 +1422,15 @@ public sealed class TodoApp
     /// <see cref="StatusBadgeColor.PreferDarkText"/> (black on white).</summary>
     private const string AssigneesBadgeColor = "ffffff";
 
+    /// <summary>Fixed muted-gray background for the leading custom-id (or fallback task-id) chip — a
+    /// neutral identifier tint, deliberately not a ClickUp field colour, so the id reads as metadata
+    /// beside the Status/Priority badges rather than as another status. The light foreground follows
+    /// from <see cref="StatusBadgeColor.PreferDarkText"/> (white on dark gray).</summary>
+    private const string CustomIdBadgeColor = "5a5a5a";
+
     /// <summary>The display text and the row's color badge overlays (status, then priority when set,
-    /// then the trailing assignees badge, #161). <paramref name="groupedBy"/> omits the grouped field's
+    /// the leading custom-id/task-id chip, then the trailing assignees badge, #161).
+    /// <paramref name="groupedBy"/> omits the grouped field's
     /// segment (its header already conveys it, #67). <paramref name="marker"/> is the leading ▶/▼ fold
     /// marker or gutter (#76). <paramref name="badges"/> selects how the badges render (F6).
     /// <paramref name="currentUserId"/> decides the trailing assignees badge (shown when a non-current
@@ -1386,13 +1439,17 @@ public sealed class TodoApp
         TaskItem task, BadgeDisplay badgeDisplay, long currentUserId, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
     {
         var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask, badgeDisplay, currentUserId);
-        var badges = new List<StatusBadgeListSource.Badge>(3);
+        var badges = new List<StatusBadgeListSource.Badge>(4);
         // The Status/Priority badges (icon chip or bracketed text) are tinted with their field colours;
         // an absent/hidden badge carries no span, so TryCreate returns null and nothing is shaded.
         if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
             badges.Add(status);
         if (StatusBadgeListSource.TryCreate(row.PriorityStart, row.PriorityLength, task.PriorityColor) is { } priority)
             badges.Add(priority);
+        // The leading custom-id (or fallback task-id) chip is muted-gray, not field-tinted; a hidden-mode
+        // row carries no span, so TryCreate returns null and nothing is shaded.
+        if (StatusBadgeListSource.TryCreate(row.CustomIdStart, row.CustomIdLength, CustomIdBadgeColor) is { } customId)
+            badges.Add(customId);
         // The trailing assignees badge (#161) is white-backed, not field-tinted; the same absent/hidden
         // span sentinel makes TryCreate return null so nothing is shaded when it's not shown.
         if (StatusBadgeListSource.TryCreate(row.AssigneesStart, row.AssigneesLength, AssigneesBadgeColor) is { } assignees)
