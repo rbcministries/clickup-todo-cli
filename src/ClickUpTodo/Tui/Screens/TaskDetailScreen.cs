@@ -62,8 +62,7 @@ public sealed class TaskDetailScreen : Screen
     private readonly FrameView _promptBox;
     private readonly TextField _promptField;
     // The Dispatch pane's controls, in focus (Tab) order. The prompt, the one-off/interactive toggle
-    // (#94), and the working-dir control (#95) feed a dispatch; the post-to-Comments (#97) toggle is
-    // still a stub that establishes the pane's layout + focus order until that feature lands.
+    // (#94), the working-dir control (#95), and the post-to-Comments toggle (#97) all feed a dispatch.
     private readonly View[] _dispatchControls;
     private readonly CheckBox _oneOffToggle;
     private readonly TextField _workingDirField;
@@ -115,12 +114,17 @@ public sealed class TaskDetailScreen : Screen
     /// Seeds the pane's one-off/interactive toggle (#94) from the persisted default (#101); the user
     /// can flip it per dispatch. Defaults to <see cref="AgentSessionMode.Interactive"/>.
     /// </param>
+    /// <param name="defaultPostToComments">
+    /// Seeds the pane's post-results-to-Comments toggle (#97) from the persisted default; the user can
+    /// flip it per dispatch. Defaults to off.
+    /// </param>
     public TaskDetailScreen(
         TaskDetail task,
         IReadOnlyList<CommentItem> comments,
         string baseWorkingDirectory,
         DetailViewSettings? settings = null,
-        AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive)
+        AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive,
+        bool defaultPostToComments = false)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
@@ -173,8 +177,8 @@ public sealed class TaskDetailScreen : Screen
         _tabs.Value = _tabContents[_defaultTabIndex];
 
         // The Dispatch pane (#93, D1 of the #90 epic; superseding the single-line #26 prompt): a
-        // bottom-anchored FrameView hosting the prompt plus placeholder controls for the one-off/
-        // interactive (#94), working-dir (#95) and post-to-Comments (#97) options. Hidden until Ctrl+A.
+        // bottom-anchored FrameView hosting the prompt plus the one-off/interactive (#94), working-dir
+        // (#95) and post-to-Comments (#97) option controls. Hidden until Ctrl+A.
         // A transient child view within the single already-open screen — not a nested run-loop or a
         // second toplevel (the #26 design note) — so the dashboard's single-ListView model (#3) is
         // untouched. Its height is computed on show (ShowPrompt) so it degrades gracefully on short
@@ -184,8 +188,8 @@ public sealed class TaskDetailScreen : Screen
         _promptField = new TextField { X = 9, Y = 0, Width = Dim.Fill(1) };
         // The one-off/interactive toggle (#94) is live: seeded from the persisted default (#101) and
         // read into the DispatchRequest on submit. The working-dir control (#95) below is also live —
-        // an editable field plus a file-tree browser; blank ⇒ default working dir. Only the
-        // post-to-Comments (#97) toggle remains an inert stub (no comment post).
+        // an editable field plus a file-tree browser; blank ⇒ default working dir. The post-to-Comments
+        // (#97) toggle is likewise live: seeded from its persisted default and read on submit.
         _oneOffToggle = new CheckBox
         {
             X = 1,
@@ -210,11 +214,16 @@ public sealed class TaskDetailScreen : Screen
         };
         _dirBrowser.SetSource(new ObservableCollection<string>(_browser.Entries));
         _dirBrowser.SelectedItem = 0;
+        // Live (#97): seeded from the persisted default; when on, the composed prompt instructs the
+        // dispatched agent to post a summary comment to the task. The app never posts it itself — the
+        // agent does — so the label notes it needs ClickUp MCP access (kept inline, like the one-off
+        // toggle's explanatory text, so the pane keeps one focusable control per row).
         _postToCommentsToggle = new CheckBox
         {
             X = 1,
             Y = DispatchRowsAboveBrowser + DispatchBrowserRows,
-            Text = "Post results to Comments (coming soon)",
+            Text = "Post results to Comments (agent needs ClickUp MCP access)",
+            Value = defaultPostToComments ? CheckState.Checked : CheckState.UnChecked,
         };
 
         _dispatchControls = [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle];
@@ -452,8 +461,8 @@ public sealed class TaskDetailScreen : Screen
     }
 
     /// <summary>Submits the pane: hides it, then (only for non-empty text) raises the dispatch event
-    /// carrying the prompt, the one-off/interactive session mode (#94), and the chosen working
-    /// directory (#95; blank ⇒ null ⇒ default dir).</summary>
+    /// carrying the prompt, the one-off/interactive session mode (#94), the chosen working directory
+    /// (#95; blank ⇒ null ⇒ default dir), and the post-to-Comments flag (#97).</summary>
     private void SubmitDispatch()
     {
         var text = _promptField.Text?.ToString() ?? string.Empty;
@@ -461,10 +470,11 @@ public sealed class TaskDetailScreen : Screen
             ? AgentSessionMode.OneOff
             : AgentSessionMode.Interactive;
         var dir = _workingDirField.Text?.ToString();
+        var postToComments = _postToCommentsToggle.Value == CheckState.Checked;
         HidePrompt();
         // A stray Enter shouldn't launch a session — only dispatch when something was typed.
         if (!string.IsNullOrWhiteSpace(text))
-            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, sessionMode, dir));
+            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, sessionMode, dir, postToComments));
     }
 
     /// <summary>Moves focus to the next/previous dispatch control, wrapping at both ends.</summary>
