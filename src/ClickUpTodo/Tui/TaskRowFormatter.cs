@@ -4,13 +4,13 @@ using ClickUpTodo.Configuration;
 namespace ClickUpTodo.Tui;
 
 /// <summary>
-/// Builds the one-line display text for a task row and reports where the Status and Priority badges
 /// sit within it, so the list renderer can color exactly those spans. When badges show (icon or text),
 /// a task-identifier chip — the Space's custom id, or the plain task id as a fallback — leads the row
 /// as the first badge (#171 follow-up), followed by a single Status badge and a single Priority badge
 /// (Status first), rendered per the active <see cref="BadgeDisplay"/>: compact <c>○</c>/<c>⚑</c> icon
-/// chips, bracketed <c>[status]</c>/<c>[priority]</c> text, or nothing. Pure (no Terminal.Gui), so the
-/// layout and the badge spans are unit-testable.
+/// chips, <c>{icon} {name}</c> text badges (<c>○ In Progress</c>/<c>⚑ Urgent</c>, sharing
+/// <see cref="StatusPriorityBadge"/> with the detail title line), or nothing. Pure (no Terminal.Gui),
+/// so the layout and the badge spans are unit-testable.
 /// </summary>
 public static class TaskRowFormatter
 {
@@ -34,15 +34,17 @@ public static class TaskRowFormatter
     private const string IndentUnit = "  ";
 
     /// <summary>
-    /// The Status icon chip: a <c>○</c> glyph flanked by a space on each side (coloured with the
-    /// status's background by the renderer). The glyph is intentionally a single display column so the
-    /// chip and <see cref="BlankGutter"/> occupy the same three columns, giving a grid-like left gutter.
+    /// The Status icon chip: the <see cref="StatusPriorityBadge.StatusGlyph"/> flanked by a space on
+    /// each side (coloured with the status's background by the renderer). The glyph is intentionally a
+    /// single display column so the chip and <see cref="BlankGutter"/> occupy the same three columns,
+    /// giving a grid-like left gutter.
     /// </summary>
-    public const string StatusIcon = " ○ ";
+    public const string StatusIcon = $" {StatusPriorityBadge.StatusGlyph} ";
 
-    /// <summary>The Priority icon chip: a <c>⚑</c> glyph flanked by a space on each side (coloured with
-    /// the priority's background). Same fixed three-column width as <see cref="StatusIcon"/>.</summary>
-    public const string PriorityIcon = " ⚑ ";
+    /// <summary>The Priority icon chip: the <see cref="StatusPriorityBadge.PriorityGlyph"/> flanked by a
+    /// space on each side (coloured with the priority's background). Same fixed three-column width as
+    /// <see cref="StatusIcon"/>.</summary>
+    public const string PriorityIcon = $" {StatusPriorityBadge.PriorityGlyph} ";
 
     /// <summary>The blank gutter used, in icon mode, when a badge is absent — same width as an icon chip
     /// so titles still line up across rows.</summary>
@@ -148,10 +150,11 @@ public static class TaskRowFormatter
                 (priorityStart, priorityLength) = AppendIconChip(ref text, showPriority, hasPriority, PriorityIcon);
                 break;
             case BadgeDisplay.Text:
-                // Bracketed text badges (Status first), each followed by a space. Absent badges are simply
-                // omitted — text mode is inherently ragged, so there's no alignment gutter.
-                (statusStart, statusLength) = AppendTextBadge(ref text, hasStatus, task.StatusName);
-                (priorityStart, priorityLength) = AppendTextBadge(ref text, hasPriority, task.PriorityName);
+                // "{icon} {name}" text badges (Status first), each followed by a space (#162). Absent
+                // badges are simply omitted — text mode is inherently ragged, so there's no alignment
+                // gutter. The same shared badge label backs the detail title line.
+                (statusStart, statusLength) = AppendTextBadge(ref text, hasStatus, task.StatusName, StatusPriorityBadge.StatusGlyph);
+                (priorityStart, priorityLength) = AppendTextBadge(ref text, hasPriority, task.PriorityName, StatusPriorityBadge.PriorityGlyph);
                 break;
             case BadgeDisplay.Hidden:
                 // No badges — the row leads straight into the indent/marker/title.
@@ -205,17 +208,18 @@ public static class TaskRowFormatter
     }
 
     /// <summary>
-    /// Appends <c>"[label] "</c> to <paramref name="text"/> when the badge is present, returning the
-    /// char span (start, length) of the <c>[label]</c> bracket (the trailing separator space is excluded
-    /// from the coloured span). Returns <c>(-1, 0)</c> — the "no badge" sentinel — otherwise, leaving
-    /// <paramref name="text"/> untouched.
+    /// Appends <c>"{glyph} {label} "</c> to <paramref name="text"/> when the badge is present (#162),
+    /// returning the char span (start, length) of the <c>{glyph} {label}</c> token (the trailing
+    /// separator space is excluded from the coloured span). Returns <c>(-1, 0)</c> — the "no badge"
+    /// sentinel — otherwise, leaving <paramref name="text"/> untouched. The badge text is the shared
+    /// <see cref="StatusPriorityBadge"/> label, so it reads identically to the detail title line.
     /// </summary>
-    private static (int Start, int Length) AppendTextBadge(ref string text, bool has, string? label)
+    private static (int Start, int Length) AppendTextBadge(ref string text, bool has, string? label, string glyph)
     {
         if (!has)
             return (-1, 0);
         var start = text.Length;
-        var badge = $"[{label}]";
+        var badge = $"{glyph} {label}";
         text += badge + " ";
         return (start, badge.Length);
     }

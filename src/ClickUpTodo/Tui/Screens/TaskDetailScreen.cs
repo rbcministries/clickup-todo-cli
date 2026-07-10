@@ -67,8 +67,7 @@ public sealed class TaskDetailScreen : Screen
     private readonly FrameView _promptBox;
     private readonly TextField _promptField;
     // The Dispatch pane's controls, in focus (Tab) order. The prompt, the one-off/interactive toggle
-    // (#94), and the working-dir control (#95) feed a dispatch; the post-to-Comments (#97) toggle is
-    // still a stub that establishes the pane's layout + focus order until that feature lands.
+    // (#94), the working-dir control (#95), and the post-to-Comments toggle (#97) all feed a dispatch.
     private readonly View[] _dispatchControls;
     private readonly CheckBox _oneOffToggle;
     private readonly TextField _workingDirField;
@@ -87,20 +86,28 @@ public sealed class TaskDetailScreen : Screen
     private const int DispatchBrowserRows = 5;
     private const int DispatchRowsBelowBrowser = 1;
 
-    // The task header (title/tags/assignees) and the three text-based tab bodies, kept as fields so a
-    // refresh (#114 follow-up) can re-render each in place — only when its content actually changed, so
-    // a 30s poll that finds nothing new never disturbs the cursor or scroll.
-    private readonly Label _headerLabel;
-    private readonly TextView _descriptionPane;
-    private readonly TextView _commentsPane;
+    // The coloured title header (#162) and the three text-based tab bodies, kept as fields so a refresh
+    // (#114 follow-up) can re-render each in place — only when its content actually changed, so a poll
+    // that finds nothing new never disturbs the cursor or scroll.
+    private readonly DetailAttributesView _headerView;
+    private readonly DetailPaneView _descriptionPane;
+    private readonly DetailPaneView _commentsPane;
     private readonly DetailOtherTabView _otherTab;
-    // The last-rendered content signature of the Other tab (header attribute lines + custom-fields
-    // body), so a refresh only rebuilds that (heavier) tab when its content moved.
+    // Last-rendered content fingerprints, so a refresh re-renders a pane only when its content moved.
+    // The header + Other tab use structured lines (fingerprinted via OtherTabSignature); the text panes
+    // track their last body string directly (a DetailPaneView loads cells, so its Text getter isn't a
+    // reliable round-trip to compare against).
+    private string _headerSignature;
     private string _otherSignature;
+    private string _streamText;
+    private string _descriptionText;
+    private string _commentsText;
 
     // The Stream tab (#106) and the data it re-renders from on a sort toggle. The initial direction is
     // the persisted default (#108); the on-screen Ctrl+PgUp/PgDn toggle overrides it for this view only.
-    private readonly TextView _streamPane;
+    // DetailPaneView (main #184) draws the inter-block separators on the terminal-default background;
+    // task/comments are mutable so a refresh (#114 follow-up) can re-render from fresh data.
+    private readonly DetailPaneView _streamPane;
     private TaskDetail _task;
     private IReadOnlyList<CommentItem> _comments;
     private StreamSort _streamSort;
@@ -146,6 +153,10 @@ public sealed class TaskDetailScreen : Screen
     /// Seeds the pane's one-off/interactive toggle (#94) from the persisted default (#101); the user
     /// can flip it per dispatch. Defaults to <see cref="AgentSessionMode.Interactive"/>.
     /// </param>
+    /// <param name="defaultPostToComments">
+    /// Seeds the pane's post-results-to-Comments toggle (#97) from the persisted default; the user can
+    /// flip it per dispatch. Defaults to off.
+    /// </param>
     /// <param name="workingDirectoryPreFill">
     /// Supplies the per-task cached working directory (#96) to pre-fill the pane's working-dir field
     /// with. Invoked <b>each time the pane opens</b> (not captured once), so a dispatch that updates the
@@ -159,6 +170,7 @@ public sealed class TaskDetailScreen : Screen
         string baseWorkingDirectory,
         DetailViewSettings? settings = null,
         AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive,
+        bool defaultPostToComments = false,
         Func<string>? workingDirectoryPreFill = null)
     {
         var prefs = settings ?? new DetailViewSettings();
@@ -170,15 +182,20 @@ public sealed class TaskDetailScreen : Screen
         _streamAutoScroll = prefs.AutoScroll;
         Title = task.Name.Length > 60 ? task.Name[..59] + "…" : task.Name;
 
-        var headerText = TaskDetailFormatter.Header(task);
-        var headerHeight = headerText.Split('\n').Length;
-        _headerLabel = new Label
+        // The title line carries trailing coloured Status/Priority badges (#162), which a plain Label
+        // can't draw — render the header through the same per-run-coloured view the Other tab uses
+        // (DetailAttributesView), fed by the structured HeaderLines. Non-focusable, like the Label it
+        // replaces, so the screen's focus/latency model is unchanged. Kept as a field + signature so a
+        // refresh (#114 follow-up) re-renders it in place only when its content moved.
+        var headerLinesForTitle = TaskDetailFormatter.HeaderLines(task);
+        var headerHeight = headerLinesForTitle.Count;
+        _headerSignature = OtherTabSignature(headerLinesForTitle, "");
+        _headerView = new DetailAttributesView(headerLinesForTitle)
         {
             X = 1,
             Y = 0,
             Width = Dim.Fill(1),
             Height = headerHeight,
-            Text = headerText,
         };
 
         _tabs = new Tabs
@@ -190,10 +207,14 @@ public sealed class TaskDetailScreen : Screen
         };
 
         // The Stream tab (#106): Description + comments as one timeline, sortable in place. Built first
-        // so it's the default selected tab below.
-        _streamPane = NewPane("Stream", TaskDetailFormatter.Stream(task, comments, _streamSort));
-        _descriptionPane = NewPane("Description", TaskDetailFormatter.Description(task));
-        _commentsPane = NewPane($"Comments ({comments.Count})", TaskDetailFormatter.Comments(comments));
+        // so it's the default selected tab below. Each body is captured so a refresh only re-renders the
+        // pane when its content actually moved.
+        _streamText = TaskDetailFormatter.Stream(task, comments, _streamSort);
+        _streamPane = NewPane("Stream", _streamText);
+        _descriptionText = TaskDetailFormatter.Description(task);
+        _descriptionPane = NewPane("Description", _descriptionText);
+        _commentsText = TaskDetailFormatter.Comments(comments);
+        _commentsPane = NewPane($"Comments ({comments.Count})", _commentsText);
 
         // The Other tab colours its Priority/Status values (#66), which a plain TextView can't do. Its
         // content is a container (a coloured, fixed-height header view on top of the scrollable,
@@ -215,8 +236,8 @@ public sealed class TaskDetailScreen : Screen
         _tabs.Value = _tabContents[_defaultTabIndex];
 
         // The Dispatch pane (#93, D1 of the #90 epic; superseding the single-line #26 prompt): a
-        // bottom-anchored FrameView hosting the prompt plus placeholder controls for the one-off/
-        // interactive (#94), working-dir (#95) and post-to-Comments (#97) options. Hidden until Ctrl+A.
+        // bottom-anchored FrameView hosting the prompt plus the one-off/interactive (#94), working-dir
+        // (#95) and post-to-Comments (#97) option controls. Hidden until Ctrl+A.
         // A transient child view within the single already-open screen — not a nested run-loop or a
         // second toplevel (the #26 design note) — so the dashboard's single-ListView model (#3) is
         // untouched. Its height is computed on show (ShowPrompt) so it degrades gracefully on short
@@ -226,8 +247,8 @@ public sealed class TaskDetailScreen : Screen
         _promptField = new TextField { X = 9, Y = 0, Width = Dim.Fill(1) };
         // The one-off/interactive toggle (#94) is live: seeded from the persisted default (#101) and
         // read into the DispatchRequest on submit. The working-dir control (#95) below is also live —
-        // an editable field plus a file-tree browser; blank ⇒ default working dir. Only the
-        // post-to-Comments (#97) toggle remains an inert stub (no comment post).
+        // an editable field plus a file-tree browser; blank ⇒ default working dir. The post-to-Comments
+        // (#97) toggle is likewise live: seeded from its persisted default and read on submit.
         _oneOffToggle = new CheckBox
         {
             X = 1,
@@ -252,11 +273,16 @@ public sealed class TaskDetailScreen : Screen
         };
         _dirBrowser.SetSource(new ObservableCollection<string>(_browser.Entries));
         _dirBrowser.SelectedItem = 0;
+        // Live (#97): seeded from the persisted default; when on, the composed prompt instructs the
+        // dispatched agent to post a summary comment to the task. The app never posts it itself — the
+        // agent does — so the label notes it needs ClickUp MCP access (kept inline, like the one-off
+        // toggle's explanatory text, so the pane keeps one focusable control per row).
         _postToCommentsToggle = new CheckBox
         {
             X = 1,
             Y = DispatchRowsAboveBrowser + DispatchBrowserRows,
-            Text = "Post results to Comments (coming soon)",
+            Text = "Post results to Comments (agent needs ClickUp MCP access)",
+            Value = defaultPostToComments ? CheckState.Checked : CheckState.UnChecked,
         };
 
         _dispatchControls = [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle];
@@ -290,7 +316,7 @@ public sealed class TaskDetailScreen : Screen
             target.KeyDown += OnKey;
         KeyDown += OnKey;
 
-        Add([_headerLabel, _tabs, _promptBox]);
+        Add([_headerView, _tabs, _promptBox]);
     }
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Detail;
@@ -333,21 +359,35 @@ public sealed class TaskDetailScreen : Screen
         _task = task;
         _comments = comments;
 
-        var headerText = TaskDetailFormatter.Header(task);
-        if (!string.Equals(_headerLabel.Text, headerText, StringComparison.Ordinal))
-            _headerLabel.Text = headerText;
+        // Title header (#162): coloured attribute lines; re-render in place only when they moved.
+        var titleHeaderLines = TaskDetailFormatter.HeaderLines(task);
+        var headerSignature = OtherTabSignature(titleHeaderLines, "");
+        if (!string.Equals(_headerSignature, headerSignature, StringComparison.Ordinal))
+        {
+            _headerSignature = headerSignature;
+            _headerView.Update(titleHeaderLines);
+        }
 
         var streamText = TaskDetailFormatter.Stream(task, comments, _streamSort);
-        if (!string.Equals(_streamPane.Text, streamText, StringComparison.Ordinal))
+        if (!string.Equals(_streamText, streamText, StringComparison.Ordinal))
+        {
+            _streamText = streamText;
             RefreshStreamPane(streamText);
+        }
 
         var descriptionText = TaskDetailFormatter.Description(task);
-        if (!string.Equals(_descriptionPane.Text, descriptionText, StringComparison.Ordinal))
-            SetTextKeepingScroll(_descriptionPane, descriptionText);
+        if (!string.Equals(_descriptionText, descriptionText, StringComparison.Ordinal))
+        {
+            _descriptionText = descriptionText;
+            SetBodyKeepingScroll(_descriptionPane, descriptionText);
+        }
 
         var commentsText = TaskDetailFormatter.Comments(comments);
-        if (!string.Equals(_commentsPane.Text, commentsText, StringComparison.Ordinal))
-            SetTextKeepingScroll(_commentsPane, commentsText);
+        if (!string.Equals(_commentsText, commentsText, StringComparison.Ordinal))
+        {
+            _commentsText = commentsText;
+            SetBodyKeepingScroll(_commentsPane, commentsText);
+        }
         var commentsTitle = $"Comments ({comments.Count})";
         if (!string.Equals(_commentsPane.Title, commentsTitle, StringComparison.Ordinal))
             _commentsPane.Title = commentsTitle;
@@ -376,13 +416,15 @@ public sealed class TaskDetailScreen : Screen
         };
         if (followingEdge)
         {
-            _streamPane.Text = streamText;   // reset scroll, then re-anchor to the (new) edge
+            // Reset scroll, then re-anchor to the (new) edge. SetBody (not .Text) keeps the separators
+            // drawn on the terminal-default background (#184).
+            _streamPane.SetBody(streamText, TaskDetailFormatter.CommentSeparator);
             _streamAutoScrollPending = true;
             FlushStreamAutoScrollIfActive();
         }
         else
         {
-            SetTextKeepingScroll(_streamPane, streamText);
+            SetBodyKeepingScroll(_streamPane, streamText);
         }
     }
 
@@ -392,14 +434,15 @@ public sealed class TaskDetailScreen : Screen
     /// <summary>The largest valid top row for the pane's current content and viewport height.</summary>
     private static int MaxTopRow(TextView pane) => Math.Max(0, pane.Lines - Math.Max(1, pane.Viewport.Height));
 
-    /// <summary>Sets a pane's text but restores the prior top scroll row (clamped to the new content),
-    /// so an in-place refresh (#114 follow-up) doesn't reset a reader to the top. On the front-most
-    /// (laid-out) pane the viewport height is real; on a background tab the clamp keeps it in range and
-    /// the offset re-applies when the user tabs to it.</summary>
-    private static void SetTextKeepingScroll(TextView pane, string text)
+    /// <summary>Loads a pane's body (via <see cref="DetailPaneView.SetBody"/>, so separator styling
+    /// #184 is preserved) but restores the prior top scroll row (clamped to the new content), so an
+    /// in-place refresh (#114 follow-up) doesn't reset a reader to the top. On the front-most (laid-out)
+    /// pane the viewport height is real; on a background tab the clamp keeps it in range and the offset
+    /// re-applies when the user tabs to it.</summary>
+    private static void SetBodyKeepingScroll(DetailPaneView pane, string text)
     {
         var top = TopRow(pane);
-        pane.Text = text;
+        pane.SetBody(text, TaskDetailFormatter.CommentSeparator);
         var restored = Math.Min(top, MaxTopRow(pane));
         if (restored > 0)
         {
@@ -618,8 +661,8 @@ public sealed class TaskDetailScreen : Screen
     }
 
     /// <summary>Submits the pane: hides it, then (only for non-empty text) raises the dispatch event
-    /// carrying the prompt, the one-off/interactive session mode (#94), and the chosen working
-    /// directory (#95; blank ⇒ null ⇒ default dir).</summary>
+    /// carrying the prompt, the one-off/interactive session mode (#94), the chosen working directory
+    /// (#95; blank ⇒ null ⇒ default dir), and the post-to-Comments flag (#97).</summary>
     private void SubmitDispatch()
     {
         var text = _promptField.Text?.ToString() ?? string.Empty;
@@ -627,10 +670,11 @@ public sealed class TaskDetailScreen : Screen
             ? AgentSessionMode.OneOff
             : AgentSessionMode.Interactive;
         var dir = _workingDirField.Text?.ToString();
+        var postToComments = _postToCommentsToggle.Value == CheckState.Checked;
         HidePrompt();
         // A stray Enter shouldn't launch a session — only dispatch when something was typed.
         if (!string.IsNullOrWhiteSpace(text))
-            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, sessionMode, dir));
+            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, sessionMode, dir, postToComments));
     }
 
     /// <summary>Moves focus to the next/previous dispatch control, wrapping at both ends.</summary>
@@ -703,7 +747,9 @@ public sealed class TaskDetailScreen : Screen
         if (_streamSort == sort)
             return;
         _streamSort = sort;
-        _streamPane.Text = TaskDetailFormatter.Stream(_task, _comments, _streamSort);
+        // Keep _streamText in sync so a later refresh's change-detection doesn't re-render redundantly.
+        _streamText = TaskDetailFormatter.Stream(_task, _comments, _streamSort);
+        _streamPane.SetBody(_streamText, TaskDetailFormatter.CommentSeparator);
         _streamAutoScrollPending = true;
         FlushStreamAutoScrollIfActive();
     }
@@ -748,15 +794,20 @@ public sealed class TaskDetailScreen : Screen
         FlushStreamAutoScrollIfActive();
     }
 
-    private static TextView NewPane(string title, string text) => new()
+    // A read-only, word-wrapped pane. DetailPaneView draws the inter-block separator rules
+    // (TaskDetailFormatter.CommentSeparator) on the terminal-default background so they read as clear
+    // breaks (Description has none, so it renders exactly as a stock TextView would).
+    private static DetailPaneView NewPane(string title, string text)
     {
-        Title = title,
-        Text = text,
-        ReadOnly = true,
-        WordWrap = true,
-        Width = Dim.Fill(),
-        Height = Dim.Fill(),
-    };
+        var pane = new DetailPaneView
+        {
+            Title = title,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+        };
+        pane.SetBody(text, TaskDetailFormatter.CommentSeparator);
+        return pane;
+    }
 
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)

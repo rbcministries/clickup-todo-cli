@@ -975,14 +975,16 @@ public sealed class TodoApp
                         detail, comments, browserRoot,
                         settings: _config.DetailView,
                         defaultSessionMode: _config.AgentDispatch.DefaultSessionMode,
+                        defaultPostToComments: _config.AgentDispatch.DefaultPostResultsToComments,
                         // Pre-fill the Dispatch working-dir field from the per-task cache (#96) — the
                         // last explicit dir dispatched from this task, or blank if none. Read live on
                         // each pane open so a dispatch within this same open screen is reflected on reopen.
                         workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, detail.Id));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
-                    // prompt, the one-off/interactive mode (#94), and the working dir (#95) are consumed;
-                    // #97 adds the rest. The detail view opens on the configured tab/sort/scroll (#108).
+                    // prompt, the one-off/interactive mode (#94), the working dir (#95), and the
+                    // post-to-Comments flag (#97) are consumed. The detail view opens on the configured
+                    // tab/sort/scroll (#108).
                     screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request);
                     // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data; re-fetch off the UI
                     // thread and feed it back into the still-open screen (its tab/scroll stay put).
@@ -1062,6 +1064,7 @@ public sealed class TodoApp
         }
         _dispatching = true;
         var oneOff = request.SessionMode == AgentSessionMode.OneOff;
+        var postToComments = request.PostToComments;
 
         // Resolve the dispatch settings on the UI thread before the background hand-off (#91).
         // Capture _agent locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap
@@ -1113,7 +1116,7 @@ public sealed class TodoApp
                 if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
                     Directory.CreateDirectory(workingDir);
 
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff);
+                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff, postToComments);
                 Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)
