@@ -22,10 +22,11 @@ namespace ClickUpTodo.Tui.Screens;
 /// Esc returns to the list; Ctrl+B requests opening the task in the browser (the host reads
 /// <see cref="OpenBrowserRequested"/> in its close handler and owns the launch). Tab cycles tabs;
 /// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. The Stream tab (#106) is the out-of-the-box
-/// default (the opening tab is configurable via #108);
-/// Ctrl+PgUp/Ctrl+PgDn sort it oldest-first / newest-first and re-render it in place, and it opens
+/// default (the opening tab is configurable via #108); it opens
 /// auto-scrolled to the newest (or oldest) entry per the <see cref="StreamAutoScroll"/> preference
-/// (#107). The initial tab, default sort, and auto-scroll position come from the persisted
+/// (#107). Ctrl+PgUp/Ctrl+PgDn set a single activity order — oldest-first / newest-first — that governs
+/// both the Stream and Comments tabs, re-rendering both in place so the order is consistent regardless
+/// of which tab is currently shown. The initial tab, default sort, and auto-scroll position come from the persisted
 /// <see cref="DetailViewSettings"/> (#108). Tab bodies come
 /// from the unit-tested
 /// <see cref="TaskDetailFormatter"/>, so this class is only the (CI-untestable) Terminal.Gui glue.
@@ -103,10 +104,12 @@ public sealed class TaskDetailScreen : Screen
     private string _descriptionText;
     private string _commentsText;
 
-    // The Stream tab (#106) and the data it re-renders from on a sort toggle. The initial direction is
-    // the persisted default (#108); the on-screen Ctrl+PgUp/PgDn toggle overrides it for this view only.
-    // DetailPaneView (main #184) draws the inter-block separators on the terminal-default background;
-    // task/comments are mutable so a refresh (#114 follow-up) can re-render from fresh data.
+    // The Stream tab (#106) and the data it re-renders from on an activity-order toggle. The order is one
+    // shared setting that governs both the Stream and Comments tabs (Ctrl+PgUp/PgDn re-renders both),
+    // regardless of which is showing; the initial direction is the persisted default (#108) and the
+    // on-screen toggle overrides it for this view only. DetailPaneView (main #184) draws the inter-block
+    // separators on the terminal-default background; task/comments are mutable so a refresh (#114
+    // follow-up) can re-render from fresh data.
     private readonly DetailPaneView _streamPane;
     private TaskDetail _task;
     private IReadOnlyList<CommentItem> _comments;
@@ -213,7 +216,7 @@ public sealed class TaskDetailScreen : Screen
         _streamPane = NewPane("Stream", _streamText);
         _descriptionText = TaskDetailFormatter.Description(task);
         _descriptionPane = NewPane("Description", _descriptionText);
-        _commentsText = TaskDetailFormatter.Comments(comments);
+        _commentsText = TaskDetailFormatter.Comments(comments, _streamSort);
         _commentsPane = NewPane($"Comments ({comments.Count})", _commentsText);
 
         // The Other tab colours its Priority/Status values (#66), which a plain TextView can't do. Its
@@ -386,7 +389,7 @@ public sealed class TaskDetailScreen : Screen
             SetBodyKeepingScroll(_descriptionPane, descriptionText);
         }
 
-        var commentsText = TaskDetailFormatter.Comments(comments);
+        var commentsText = TaskDetailFormatter.Comments(comments, _streamSort);
         if (!string.Equals(_commentsText, commentsText, StringComparison.Ordinal))
         {
             _commentsText = commentsText;
@@ -741,19 +744,24 @@ public sealed class TaskDetailScreen : Screen
         _scrollTargets[current].SetFocus();
     }
 
-    /// <summary>Sets the Stream sort direction and re-renders the Stream body in place (#106). No-op if
-    /// unchanged. Works regardless of the active tab — the new order is visible when the Stream tab is
-    /// shown. Re-arms the auto-scroll edge (#107) so, e.g., "scroll to newest" keeps landing on the
-    /// newest entry after the sort flips which end of the body that is (applied now if Stream is
-    /// front-most, else deferred to the next time it's shown).</summary>
+    /// <summary>Sets the activity sort direction and re-renders <em>both</em> the Stream and Comments
+    /// bodies in place (#106), so the one order applies to both tabs regardless of which is currently
+    /// shown. No-op if unchanged. Re-arms the Stream auto-scroll edge (#107) so, e.g., "scroll to newest"
+    /// keeps landing on the newest entry after the sort flips which end of the body that is (applied now
+    /// if Stream is front-most, else deferred to the next time it's shown). The Comments pane re-renders
+    /// from its top (<see cref="DetailPaneView.SetBody"/> homes the caret) — which also makes re-rendering
+    /// a non-front-most pane safe, since a stale caret would otherwise index past the reordered content.</summary>
     private void SetStreamSort(StreamSort sort)
     {
         if (_streamSort == sort)
             return;
         _streamSort = sort;
-        // Keep _streamText in sync so a later refresh's change-detection doesn't re-render redundantly.
+        // Keep _streamText/_commentsText in sync so a later refresh's change-detection doesn't re-render
+        // redundantly. Both panes reflect the one order; the Comments tab re-renders from its top.
         _streamText = TaskDetailFormatter.Stream(_task, _comments, _streamSort);
         _streamPane.SetBody(_streamText, TaskDetailFormatter.CommentSeparator);
+        _commentsText = TaskDetailFormatter.Comments(_comments, _streamSort);
+        _commentsPane.SetBody(_commentsText, TaskDetailFormatter.CommentSeparator);
         _streamAutoScrollPending = true;
         FlushStreamAutoScrollIfActive();
     }

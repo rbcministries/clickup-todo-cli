@@ -99,9 +99,10 @@ public sealed class SettingsScreen : Screen
             Text = "Blank = ~/ClickUp-Tasks (≠ Fixed dir).",
         };
 
-        // ── Detail view (#108): default tab, Stream sort, auto-scroll ───────────
-        // Cycle buttons mirror the Dispatch section's terminal/working-dir buttons. The Stream sort is
-        // also toggleable on the detail screen (Ctrl+PgUp/PgDn, #106); here it sets the default.
+        // ── Detail view (#108): default tab, activity order, auto-scroll ────────
+        // Cycle buttons mirror the Dispatch section's terminal/working-dir buttons. The activity order is
+        // also toggleable on the detail screen (Ctrl+PgUp/PgDn, #106) where it governs both the Stream and
+        // Comments tabs; here it sets the default.
         var detailHeader = new Label { X = 1, Y = 9, Text = "─ Detail view ─" };
 
         var defaultTab = detailView.DefaultTab;
@@ -273,7 +274,7 @@ public sealed class SettingsScreen : Screen
         _ => "Stream",
     };
 
-    private static string StreamSortText(StreamSort s) => "Stream sort: " + s switch
+    private static string StreamSortText(StreamSort s) => "Activity order: " + s switch
     {
         StreamSort.Descending => "Newest first",
         _ => "Oldest first",
