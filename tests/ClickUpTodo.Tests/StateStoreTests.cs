@@ -60,6 +60,21 @@ public sealed class StateStoreTests : IDisposable
     }
 
     [Fact]
+    public void Load_WhenFileHoldsLiteralNull_ReturnsNull()
+    {
+        // Locks in the behaviour the old ConfigStore relied on (Deserialize -> null, coalesced to a
+        // fresh AppConfig by ConfigStore.Load): a file whose content is the literal JSON `null`
+        // deserializes to null rather than throwing.
+        var store = new JsonFileStateStore(_dir);
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(store.PathFor(StateKeys.Config), "null");
+
+        Assert.Null(store.Load<AppConfig>(StateKeys.Config));
+        // And the config layer coalesces that null to an unconfigured default (no throw).
+        Assert.False(new ConfigStore(store).Load().IsConfigured);
+    }
+
+    [Fact]
     public void ConfigKey_MapsToConfigJson()
     {
         var store = new JsonFileStateStore(_dir);
@@ -176,7 +191,7 @@ public sealed class StateStoreTests : IDisposable
         public bool Exists(string key) => _values.ContainsKey(key);
 
         public T? Load<T>(string key) where T : class
-            => _values.TryGetValue(key, out var v) ? (T)v : null;
+            => _values.TryGetValue(key, out var v) ? v as T : null;
 
         public void Save<T>(string key, T value) where T : class => _values[key] = value;
 
