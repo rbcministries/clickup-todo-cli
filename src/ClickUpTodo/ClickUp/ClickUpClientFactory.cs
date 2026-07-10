@@ -1,5 +1,6 @@
 using ClickUpTodo.Configuration;
 using Microsoft.Kiota.Abstractions.Authentication;
+using Microsoft.Kiota.Http.HttpClientLibrary;
 
 namespace ClickUpTodo.ClickUp;
 
@@ -20,10 +21,25 @@ public static class ClickUpClientFactory
         _ => new ClickUpTokenAuthProvider(token),
     };
 
-    /// <summary>Constructs a client for the token using the provider implied by <paramref name="config"/>.</summary>
+    /// <summary>Constructs a client for the token using the provider implied by <paramref name="config"/>.
+    /// Unless the caller supplies its own <paramref name="httpClient"/>, the client is built by
+    /// <see cref="CreateHttpClient"/> so all app traffic flows through the rate-limit governor (#193).</summary>
     public static ClickUpClient Create(AppConfig config, string token, HttpClient? httpClient = null)
     {
         ArgumentNullException.ThrowIfNull(config);
-        return new ClickUpClient(AuthProviderFor(config.AuthMode, token), httpClient);
+        return new ClickUpClient(AuthProviderFor(config.AuthMode, token), httpClient ?? CreateHttpClient());
+    }
+
+    /// <summary>
+    /// The app's standard <see cref="HttpClient"/> for ClickUp traffic: Kiota's default middleware
+    /// (retry/redirect/decoding/…, the same stack the adapter would build on its own) with
+    /// <see cref="ClickUpRateLimitHandler"/> appended innermost, so the shared in-flight gate and
+    /// 429/throttle handling see every physical request — including Kiota-middleware retries.
+    /// </summary>
+    public static HttpClient CreateHttpClient()
+    {
+        var handlers = KiotaClientFactory.CreateDefaultHandlers();
+        handlers.Add(new ClickUpRateLimitHandler());
+        return KiotaClientFactory.Create(handlers);
     }
 }

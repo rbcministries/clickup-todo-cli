@@ -67,6 +67,16 @@ public sealed class ClickUpClientFactoryTests
         Assert.Throws<ArgumentNullException>(() => ClickUpClientFactory.Create(null!, "tok"));
     }
 
+    [Fact]
+    public void CreateHttpClient_BuildsTheGovernedPipeline()
+    {
+        // The default (no caller-supplied HttpClient) path must assemble Kiota's middleware with the
+        // rate-limit governor appended — a construction smoke test so a Kiota API change here fails
+        // loudly rather than at first refresh.
+        using var httpClient = ClickUpClientFactory.CreateHttpClient();
+        Assert.NotNull(httpClient);
+    }
+
     private sealed class CapturingHandler(string body) : HttpMessageHandler
     {
         public string? CapturedAuthorization { get; private set; }
