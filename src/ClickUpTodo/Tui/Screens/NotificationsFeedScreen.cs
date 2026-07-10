@@ -48,7 +48,6 @@ public sealed class NotificationsFeedScreen : Screen
     private readonly ListView _list;
     private readonly Label _emptyLabel;
     private bool _mentionsOnly;
-    private ObservableCollection<string> _display = [];
 
     /// <param name="feed">The already-fetched, mention-stamped feed (newest first).</param>
     /// <param name="mentionsOnly">Whether the mentions-only filter starts on.</param>
@@ -102,8 +101,7 @@ public sealed class NotificationsFeedScreen : Screen
         Title = _mentionsOnly ? "Feed — mentions only" : "Feed — mentions & comments";
 
         var (text, badges, keys) = BuildRows(rows);
-        _display = text;
-        _list.Source = new StatusBadgeListSource(_display, badges, headerAttrs: null, searchKeys: keys);
+        _list.Source = new StatusBadgeListSource(text, badges, headerAttrs: null, searchKeys: keys);
 
         var empty = rows.Count == 0;
         _emptyLabel.Visible = empty;

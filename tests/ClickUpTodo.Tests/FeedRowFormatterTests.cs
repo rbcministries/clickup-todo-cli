@@ -124,6 +124,27 @@ public sealed class FeedRowFormatterTests
         Assert.DoesNotContain("…", row.Text);
     }
 
+    [Fact]
+    public void Preview_TruncationDoesNotSplitASurrogatePair()
+    {
+        // (Max-1) ASCII chars then an astral emoji (a surrogate pair): a naïve cut at Max would land
+        // between the two surrogates, leaving a lone high surrogate before the ellipsis.
+        const string emoji = "\U0001F6E0"; // 🛠 — two UTF-16 chars
+        var text = new string('a', FeedRowFormatter.MaxPreviewLength - 1) + emoji + "tail";
+
+        var row = FeedRowFormatter.Format(Comment(text: text));
+
+        // No unpaired surrogate anywhere in the rendered row (a split pair would leave one).
+        for (var i = 0; i < row.Text.Length; i++)
+        {
+            if (char.IsHighSurrogate(row.Text[i]))
+                Assert.True(i + 1 < row.Text.Length && char.IsLowSurrogate(row.Text[i + 1]));
+            if (char.IsLowSurrogate(row.Text[i]))
+                Assert.True(i > 0 && char.IsHighSurrogate(row.Text[i - 1]));
+        }
+        Assert.EndsWith("…", row.Text);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   \n  ")]

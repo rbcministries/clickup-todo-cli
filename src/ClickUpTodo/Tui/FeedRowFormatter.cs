@@ -91,7 +91,15 @@ public static class FeedRowFormatter
             return EmptyComment;
 
         var flattened = string.Join(' ', raw.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return flattened.Length <= MaxPreviewLength ? flattened : flattened[..MaxPreviewLength] + "…";
+        if (flattened.Length <= MaxPreviewLength)
+            return flattened;
+
+        // Truncate by UTF-16 length, but never mid-surrogate-pair — a lone high surrogate before the
+        // ellipsis would render as a replacement glyph (comment text often carries emoji).
+        var cut = MaxPreviewLength;
+        if (char.IsHighSurrogate(flattened[cut - 1]))
+            cut--;
+        return flattened[..cut] + "…";
     }
 
     private static string FormatDate(long ms)
