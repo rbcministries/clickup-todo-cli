@@ -190,15 +190,19 @@ public sealed class TaskServiceParallelFetchTests
     [Fact]
     public async Task ResolveListColors_RespectsCap()
     {
+        // The rendezvous holds the first MaxFanOutConcurrency calls in flight together, so an
+        // unbounded implementation (the pre-#192 WhenAll) drives the peak to 12 and fails; a
+        // Task.Yield alone would let calls drain too fast to ever observe a violation.
         var listIds = Enumerable.Range(0, 12).Select(i => $"L{i}").ToList();
         var fake = new FakeClient();
+        var rendezvous = new Rendezvous(TaskService.MaxFanOutConcurrency);
         var inFlight = 0;
         var peak = 0;
         fake.OnListColor = async () =>
         {
             var now = Interlocked.Increment(ref inFlight);
             InterlockedMax(ref peak, now);
-            await Task.Yield();
+            await rendezvous.ArriveAsync();
             Interlocked.Decrement(ref inFlight);
         };
 

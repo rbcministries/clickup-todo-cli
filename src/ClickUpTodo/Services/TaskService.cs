@@ -209,7 +209,8 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
     /// <summary>
     /// The distinct parent ids referenced by a subtask in <paramref name="snapshot"/> that aren't
     /// themselves present in it — the parents the nested subtasks view (#46) must pull in as context
-    /// headers. Pure; order follows first appearance so the fetch is deterministic.
+    /// headers. Pure; order follows first appearance so the fetch <em>start</em> order is deterministic
+    /// (completion order — and the resulting dictionary — is not, under the bounded fan-out).
     /// </summary>
     internal static IReadOnlyList<string> MissingParentIds(IReadOnlyList<TaskItem> snapshot)
     {
