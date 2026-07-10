@@ -84,7 +84,7 @@ public sealed class TaskDetailScreen : Screen
 
     // The Stream tab (#106) and the data it re-renders from on a sort toggle. The initial direction is
     // the persisted default (#108); the on-screen Ctrl+PgUp/PgDn toggle overrides it for this view only.
-    private readonly TextView _streamPane;
+    private readonly DetailPaneView _streamPane;
     private readonly TaskDetail _task;
     private readonly IReadOnlyList<CommentItem> _comments;
     private StreamSort _streamSort;
@@ -550,7 +550,7 @@ public sealed class TaskDetailScreen : Screen
         if (_streamSort == sort)
             return;
         _streamSort = sort;
-        _streamPane.Text = TaskDetailFormatter.Stream(_task, _comments, _streamSort);
+        _streamPane.SetBody(TaskDetailFormatter.Stream(_task, _comments, _streamSort), TaskDetailFormatter.CommentSeparator);
         _streamAutoScrollPending = true;
         FlushStreamAutoScrollIfActive();
     }
@@ -595,13 +595,18 @@ public sealed class TaskDetailScreen : Screen
         FlushStreamAutoScrollIfActive();
     }
 
-    private static TextView NewPane(string title, string text) => new()
+    // A read-only, word-wrapped pane. DetailPaneView draws the inter-block separator rules
+    // (TaskDetailFormatter.CommentSeparator) on the terminal-default background so they read as clear
+    // breaks (Description has none, so it renders exactly as a stock TextView would).
+    private static DetailPaneView NewPane(string title, string text)
     {
-        Title = title,
-        Text = text,
-        ReadOnly = true,
-        WordWrap = true,
-        Width = Dim.Fill(),
-        Height = Dim.Fill(),
-    };
+        var pane = new DetailPaneView
+        {
+            Title = title,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+        };
+        pane.SetBody(text, TaskDetailFormatter.CommentSeparator);
+        return pane;
+    }
 }
