@@ -1492,13 +1492,11 @@ public sealed class TodoApp
         // Feed the pulled-in teammate-owned subtasks (#70) into the Focus layout too, so a foreign child of
         // a pinned parent nests under it in Focus rather than vanishing (#85). NestedSubtaskIds then covers
         // both in-snapshot and foreign rows pulled into Focus — the exact set to keep out of the to-do list.
-        // Drop completed (closed-type) foreign subtasks when "Show Completed" is off (#178), so a
-        // completed teammate-owned child doesn't nest under a pinned parent in Focus — matching the
-        // to-do section, where TaskView.Apply gates them. Explicit pins themselves stay visible.
-        var foreignList = nest && _foreignSubtasks.Count > 0
-            ? _foreignSubtasks.Values.Where(t => view.ShowCompleted || !TaskView.IsCompleted(t)).ToList()
-            : null;
-        var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection, _expanded, foreignList);
+        var foreignList = nest && _foreignSubtasks.Count > 0 ? _foreignSubtasks.Values.ToList() : null;
+        // Pass Show Completed (#178) so FocusSectionLayout gates completed descendants (in-snapshot and
+        // foreign alike) in one place — a completed subtask never nests under a pinned ancestor when off,
+        // matching TaskView.Apply's gate on the to-do section; explicit pins stay visible regardless.
+        var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection, _expanded, foreignList, includeCompleted: view.ShowCompleted);
         _focusNestedIds = focus.NestedSubtaskIds;
 
         // The non-pinned set feeds the F3 view. Drop pinned tasks and (when nesting) any subtask pulled

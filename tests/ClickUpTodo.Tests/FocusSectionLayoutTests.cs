@@ -264,4 +264,56 @@ public sealed class FocusSectionLayoutTests
         Assert.Equal([0, 1], Depths(s));
         Assert.Equal(Pins("fp"), s.NestedSubtaskIds);
     }
+
+    // ── Show Completed toggle (F12, #178) ────────────────────────────────────
+
+    private static TaskItem Sub(string id, string parent, string? statusType = null)
+        => new() { Id = id, Name = id, ParentId = parent, StatusType = statusType };
+
+    [Fact]
+    public void ShowCompletedOff_CompletedInSnapshotSubtask_NotNestedUnderPin()
+    {
+        // The leak this guards: a closed-type subtask (kept server-side for chain integrity) that is
+        // in-snapshot and whose parent is pinned must not nest under the pin when Show Completed is off.
+        TaskItem[] all = [Task("p"), Sub("c", parent: "p", statusType: "closed"), Sub("o", parent: "p", statusType: "open")];
+
+        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, includeCompleted: false);
+
+        Assert.Equal(["p", "o"], Ids(s));           // completed "c" dropped; open "o" still nests
+        Assert.Equal(Pins("o"), s.NestedSubtaskIds);
+    }
+
+    [Fact]
+    public void ShowCompletedOn_CompletedInSnapshotSubtask_NestsUnderPin()
+    {
+        TaskItem[] all = [Task("p"), Sub("c", parent: "p", statusType: "closed")];
+
+        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, includeCompleted: true);
+
+        Assert.Equal(["p", "c"], Ids(s));
+        Assert.Equal(Pins("c"), s.NestedSubtaskIds);
+    }
+
+    [Fact]
+    public void ShowCompletedOff_CompletedForeignSubtask_NotNestedUnderPin()
+    {
+        TaskItem[] all = [Task("p")];
+        TaskItem[] foreign = [Sub("fc", parent: "p", statusType: "closed")];
+
+        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, foreignSubtasks: foreign, includeCompleted: false);
+
+        Assert.Equal(["p"], Ids(s));
+        Assert.Empty(s.NestedSubtaskIds);
+    }
+
+    [Fact]
+    public void ShowCompletedOff_PinnedCompletedTask_StillShows()
+    {
+        // Explicit pins don't vanish: a pinned task that is itself completed stays visible even when off.
+        TaskItem[] all = [new() { Id = "p", Name = "p", StatusType = "closed" }];
+
+        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, includeCompleted: false);
+
+        Assert.Equal(["p"], Ids(s));
+    }
 }
