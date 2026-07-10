@@ -50,7 +50,13 @@
           },
           { "name": "page", "in": "query", "description": "Page to fetch (starts at 0).", "schema": { "type": "integer" } },
           { "name": "include_closed", "in": "query", "schema": { "type": "boolean" } },
-          { "name": "subtasks", "in": "query", "schema": { "type": "boolean" } }
+          { "name": "subtasks", "in": "query", "schema": { "type": "boolean" } },
+          {
+            "name": "date_updated_gt",
+            "in": "query",
+            "description": "Only tasks updated after this epoch-milliseconds timestamp (delta refresh, #194).",
+            "schema": { "type": "integer", "format": "int64" }
+          }
         ],
         "responses": {
           "200": {
@@ -148,7 +154,13 @@
           { "name": "page", "in": "query", "description": "Page to fetch (starts at 0).", "schema": { "type": "integer" } },
           { "name": "include_closed", "in": "query", "schema": { "type": "boolean" } },
           { "name": "subtasks", "in": "query", "schema": { "type": "boolean" } },
-          { "name": "archived", "in": "query", "schema": { "type": "boolean" } }
+          { "name": "archived", "in": "query", "schema": { "type": "boolean" } },
+          {
+            "name": "date_updated_gt",
+            "in": "query",
+            "description": "Only tasks updated after this epoch-milliseconds timestamp (delta refresh, #194).",
+            "schema": { "type": "integer", "format": "int64" }
+          }
         ],
         "responses": {
           "200": {

@@ -198,13 +198,40 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// Background fetch for the refresh loop: loads the task snapshot and, when the nested subtasks
-    /// view is on, resolves any parents not in the snapshot so they can be shown as context headers.
-    /// Runs off the UI thread; <see cref="_contextParents"/> is set before the result is marshalled in.
+    /// Every this-many consecutive delta polls, force a full re-fetch (#194). A delta can't see a task
+    /// leaving the fetch's scope without a matching update (e.g. unassigned from me by someone else),
+    /// so the resync bounds that staleness: at the default poll interval, minutes, not forever. Manual
+    /// refresh (r/F5) and fetch-rule changes are always full, so this is only the ceiling.
     /// </summary>
-    private async Task<IReadOnlyList<TaskItem>> FetchAsync(CancellationToken ct)
+    internal const int FullResyncEveryNthPoll = 10;
+
+    // Consecutive delta polls since the last full load; only ever touched by FetchAsync (the refresh
+    // loop runs fetches strictly one at a time).
+    private int _deltaPollsSinceFullLoad;
+
+    /// <summary>
+    /// Background fetch for the refresh loop: loads the task snapshot — incrementally on background
+    /// polls, in full on the initial load, a manual refresh, or the periodic resync (#194) — and, when
+    /// the nested subtasks view is on, resolves any parents not in the snapshot so they can be shown as
+    /// context headers. Runs off the UI thread; <see cref="_contextParents"/> is set before the result
+    /// is marshalled in.
+    /// </summary>
+    private async Task<IReadOnlyList<TaskItem>> FetchAsync(RefreshKind kind, CancellationToken ct)
     {
-        var tasks = await _tasks.LoadAsync(ct);
+        // Load incrementally on background polls, in full otherwise (#194). The resync counter forces a
+        // periodic full fetch so a delta can't hide a task that left scope without a matching update.
+        var preferDelta = kind == RefreshKind.Poll && _deltaPollsSinceFullLoad < FullResyncEveryNthPoll;
+        var snapshot = await _tasks.LoadSnapshotAsync(preferDelta, ct);
+        _deltaPollsSinceFullLoad = snapshot.WasDelta ? _deltaPollsSinceFullLoad + 1 : 0;
+
+        // A provably-empty delta means the world hasn't changed: keep the previous resolver results
+        // (context parents / foreign subtasks / list colors) instead of re-spending their round-trips.
+        // Anything that changes what the resolvers should see (F3/F4/grouping edits) triggers a manual
+        // refresh, which is never a delta.
+        if (snapshot is { WasDelta: true, Changed: false })
+            return snapshot.Tasks;
+
+        var tasks = snapshot.Tasks;
 
         // The three snapshot-dependent resolvers below only depend on `tasks`, never on each other, so
         // they start together and are awaited together (#192): the refresh pays for the slowest stage
