@@ -48,9 +48,17 @@ public sealed class DetailPaneView : TextView
 
     /// <summary>Loads <paramref name="body"/> into the pane, tagging every line equal to
     /// <paramref name="separator"/> so it is drawn on the terminal-default background. Safe to call
-    /// repeatedly (e.g. a Stream sort toggle re-renders in place).</summary>
+    /// repeatedly (e.g. an activity-order toggle re-renders in place).</summary>
     public void SetBody(string body, string separator)
     {
+        // Home the caret before re-loading. Terminal.Gui 2.4.10's TextView.Load raises OnContentsChanged
+        // (via its history-clear) with InheritsPreviousAttribute already turned on but *before* it resets
+        // the caret, so it runs ProcessInheritsPreviousScheme against the stale CurrentRow/CurrentColumn
+        // from the previous body. When the previous body was longer (e.g. the pane had been MoveEnd()-ed
+        // to its bottom for auto-scroll, #107) that caret indexes past the shorter new content and throws
+        // ArgumentOutOfRangeException — the crash a Ctrl+PgUp/PgDn re-render hit on a pane that isn't the
+        // front-most tab. Homing the caret first keeps the (row,col) it reads at (0,0), always in range.
+        MoveHome();
         Load(BuildCells(body, separator));
         // Load() enables attribute inheritance (a null-attribute cell would copy the previous cell's
         // colour). We tag whole separator lines explicitly and want every other cell to fall back to

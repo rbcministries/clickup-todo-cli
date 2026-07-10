@@ -173,8 +173,27 @@ public sealed class TodoApp
         finally
         {
             _refresh?.Dispose();
-            _window?.Dispose();
-            Application.Shutdown();
+            // Application.Shutdown restores the terminal (cooked mode, alt-screen off), so it must run no
+            // matter how _window.Dispose fares — hence the nested try/finally. Terminal.Gui 2.4.10 can
+            // throw ArgumentOutOfRange from View/Tabs.Dispose while tearing down a tabbed view's subviews
+            // (the same bug CloseScreen guards); any screen open at quit is still mounted here, so swallow
+            // that known teardown bug (at worst a leak of views the process is about to drop anyway). An
+            // unexpected exception still propagates — but only after Shutdown has restored the terminal.
+            try
+            {
+                try
+                {
+                    _window?.Dispose();
+                }
+                catch (Exception ex) when (ex is ArgumentOutOfRangeException or IndexOutOfRangeException)
+                {
+                    Debug.WriteLine($"Window dispose threw (Terminal.Gui teardown bug), ignoring: {ex}");
+                }
+            }
+            finally
+            {
+                Application.Shutdown();
+            }
         }
     }
 

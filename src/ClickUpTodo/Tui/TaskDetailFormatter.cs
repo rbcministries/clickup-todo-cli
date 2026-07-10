@@ -71,10 +71,13 @@ public static class TaskDetailFormatter
     /// </summary>
     public const string CommentSeparator = "────────────────────────────────────────";
 
-    /// <summary>The Comments tab body: one block per comment, in the order ClickUp returns them,
-    /// separated by <see cref="CommentSeparator"/> (only between comments — never leading/trailing).</summary>
-    public static string Comments(IReadOnlyList<CommentItem> comments)
-        => comments.Count == 0 ? "(no comments)" : JoinBlocks(comments.Select(CommentBlock));
+    /// <summary>The Comments tab body: one block per comment, separated by <see cref="CommentSeparator"/>
+    /// (only between comments — never leading/trailing). Ordered by <paramref name="sort"/> the same way
+    /// the Stream tab orders its comments (#106) — <see cref="StreamSort.Ascending"/> oldest-first,
+    /// <see cref="StreamSort.Descending"/> newest-first — so the single activity-order preference governs
+    /// both tabs. Undated comments cluster at the oldest end (see <see cref="OrderComments"/>).</summary>
+    public static string Comments(IReadOnlyList<CommentItem> comments, StreamSort sort = StreamSort.Ascending)
+        => comments.Count == 0 ? "(no comments)" : JoinBlocks(OrderComments(comments, sort).Select(CommentBlock));
 
     /// <summary>
     /// The Stream tab body (#106): the Description and the comments as a single timeline of blocks,
@@ -99,18 +102,25 @@ public static class TaskDetailFormatter
     /// </summary>
     public static string Stream(TaskDetail task, IReadOnlyList<CommentItem> comments, StreamSort sort)
     {
-        var ascending = comments
-            .OrderBy(c => c.DateMs ?? long.MinValue)
-            .ThenBy(c => c.Id, StringComparer.Ordinal)
-            .ToList();
-        var ordered = sort == StreamSort.Ascending ? ascending : Enumerable.Reverse(ascending);
-
         var description = DescriptionBlock(task);
-        var commentBlocks = ordered.Select(CommentBlock);
+        var commentBlocks = OrderComments(comments, sort).Select(CommentBlock);
         var blocks = sort == StreamSort.Ascending
             ? new[] { description }.Concat(commentBlocks)
             : commentBlocks.Append(description);
         return JoinBlocks(blocks);
+    }
+
+    /// <summary>Comments in activity order — oldest-first for <see cref="StreamSort.Ascending"/>, newest-
+    /// first for <see cref="StreamSort.Descending"/> — the single ordering both the Stream (#106) and
+    /// Comments tabs share. Undated comments sort as the <em>oldest</em> (key <c>DateMs ?? long.MinValue</c>),
+    /// with an ordinal <c>Id</c> tiebreak for determinism; descending is the exact reverse of ascending.</summary>
+    private static IEnumerable<CommentItem> OrderComments(IReadOnlyList<CommentItem> comments, StreamSort sort)
+    {
+        var ascending = comments
+            .OrderBy(c => c.DateMs ?? long.MinValue)
+            .ThenBy(c => c.Id, StringComparer.Ordinal)
+            .ToList();
+        return sort == StreamSort.Ascending ? ascending : Enumerable.Reverse(ascending);
     }
 
     /// <summary>One comment as a Stream/Comments block: an <c>author · date · [resolved]</c> header

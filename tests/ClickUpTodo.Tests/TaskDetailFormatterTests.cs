@@ -223,6 +223,38 @@ public sealed class TaskDetailFormatterTests
         Assert.Equal(2, count);
     }
 
+    [Fact]
+    public void Comments_Ascending_OrdersCommentsOldestToNewest()
+    {
+        // The activity order (#106) governs the Comments tab too: ascending is oldest-first.
+        var text = TaskDetailFormatter.Comments(ScrambledDatedComments(), StreamSort.Ascending);
+
+        Assert.True(text.IndexOf("AAA", StringComparison.Ordinal) < text.IndexOf("BBB", StringComparison.Ordinal));
+        Assert.True(text.IndexOf("BBB", StringComparison.Ordinal) < text.IndexOf("CCC", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Comments_Descending_OrdersCommentsNewestToOldest()
+    {
+        // Descending is the exact reverse — newest-first — matching the Stream tab's ordering.
+        var text = TaskDetailFormatter.Comments(ScrambledDatedComments(), StreamSort.Descending);
+
+        Assert.True(text.IndexOf("CCC", StringComparison.Ordinal) < text.IndexOf("BBB", StringComparison.Ordinal));
+        Assert.True(text.IndexOf("BBB", StringComparison.Ordinal) < text.IndexOf("AAA", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Comments_MatchStreamCommentOrdering()
+    {
+        // Both tabs share the one ordering, so the Comments body's comment sequence is byte-for-byte the
+        // comment portion of the Stream body (which, descending, leads with the comments before the
+        // Description block).
+        var comments = ScrambledDatedComments();
+        var commentsBody = TaskDetailFormatter.Comments(comments, StreamSort.Descending);
+        var stream = TaskDetailFormatter.Stream(Sample(description: "DESCBODY"), comments, StreamSort.Descending);
+        Assert.StartsWith(commentsBody, stream);
+    }
+
     // ---- Stream tab (#106) --------------------------------------------------
 
     // Comments deliberately supplied out of date order to prove the formatter sorts them.

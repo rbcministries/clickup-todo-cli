@@ -99,9 +99,10 @@ public sealed class SettingsScreen : Screen
             Text = "Blank = ~/ClickUp-Tasks (≠ Fixed dir).",
         };
 
-        // ── Detail view (#108): default tab, Stream sort, auto-scroll ───────────
-        // Cycle buttons mirror the Dispatch section's terminal/working-dir buttons. The Stream sort is
-        // also toggleable on the detail screen (Ctrl+PgUp/PgDn, #106); here it sets the default.
+        // ── Detail view (#108): default tab, activity order, auto-scroll ────────
+        // Cycle buttons mirror the Dispatch section's terminal/working-dir buttons. The activity order is
+        // also toggleable on the detail screen (Ctrl+PgUp/PgDn, #106) where it governs both the Stream and
+        // Comments tabs; here it sets the default.
         var detailHeader = new Label { X = 1, Y = 9, Text = "─ Detail view ─" };
 
         var defaultTab = detailView.DefaultTab;
@@ -112,12 +113,12 @@ public sealed class SettingsScreen : Screen
             defaultTabButton.Text = DefaultTabText(defaultTab);
         };
 
-        var streamSort = detailView.StreamSort;
-        var streamSortButton = new Button { X = 1, Y = 11, Text = StreamSortText(streamSort) };
-        streamSortButton.Accepting += (_, _) =>
+        var activityOrder = detailView.StreamSort;
+        var activityOrderButton = new Button { X = 1, Y = 11, Text = ActivityOrderText(activityOrder) };
+        activityOrderButton.Accepting += (_, _) =>
         {
-            streamSort = streamSort.Next();
-            streamSortButton.Text = StreamSortText(streamSort);
+            activityOrder = activityOrder.Next();
+            activityOrderButton.Text = ActivityOrderText(activityOrder);
         };
 
         var autoScroll = detailView.AutoScroll;
@@ -203,7 +204,7 @@ public sealed class SettingsScreen : Screen
                 new DetailViewSettings
                 {
                     DefaultTab = defaultTab,
-                    StreamSort = streamSort,
+                    StreamSort = activityOrder,
                     AutoScroll = autoScroll,
                 });
             Close();
@@ -229,7 +230,7 @@ public sealed class SettingsScreen : Screen
         Add([
             refreshLabel, _refreshField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
-            detailHeader, defaultTabButton, streamSortButton, autoScrollButton,
+            detailHeader, defaultTabButton, activityOrderButton, autoScrollButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, templateButton,
             sessionModeButton, postToCommentsButton,
@@ -273,7 +274,7 @@ public sealed class SettingsScreen : Screen
         _ => "Stream",
     };
 
-    private static string StreamSortText(StreamSort s) => "Stream sort: " + s switch
+    private static string ActivityOrderText(StreamSort s) => "Activity order: " + s switch
     {
         StreamSort.Descending => "Newest first",
         _ => "Oldest first",
