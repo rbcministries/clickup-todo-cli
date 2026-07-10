@@ -66,4 +66,44 @@ public sealed class DetailPaneViewTests
         var cells = DetailPaneView.BuildCells(Sep + " trailing", Sep);
         Assert.DoesNotContain(cells, IsSeparatorTagged);
     }
+
+    // Exercises the real SetBody → TextView.Load path (no driver needed to load the model) and inspects
+    // the loaded cells. This is the reviewer's concern (PR #184): the terminal-default (Color.None)
+    // background must stay on the separator line only, and must not carry forward to the comment/
+    // description text that follows it. Two safeguards are asserted: every non-separator cell keeps a
+    // non-None (or null → normal read-only) background, and attribute inheritance is off so a
+    // null-attribute cell can't copy the previous cell's None background.
+    [Fact]
+    public void SetBody_ConfinesTerminalDefaultBackgroundToSeparatorLines()
+    {
+        // Three blocks (e.g. a description + two comments) → two separator rules between them.
+        var body = string.Join("\n\n" + Sep + "\n\n", "First comment body.", "Second comment body.", "Third comment body.");
+        var pane = new DetailPaneView();
+        // Inspect the logical model, not wrapped display lines: word-wrap only splits a line into more
+        // display rows (each preserving its cells' attributes), so it doesn't affect this confinement.
+        pane.WordWrap = false;
+        pane.SetBody(body, Sep);
+
+        Assert.False(pane.InheritsPreviousAttribute);
+
+        var lines = pane.GetAllLines();
+        var separatorLines = 0;
+        foreach (var line in lines)
+        {
+            if (Cell.ToString(line) == Sep)
+            {
+                separatorLines++;
+                // The whole rule renders on the terminal's own default/transparent background.
+                Assert.All(line, c => Assert.Equal(0, c.Attribute!.Value.Background.A));
+            }
+            else
+            {
+                // Everything else keeps an opaque background (or none), so it renders in the pane's
+                // normal read-only colour — the reset never bleeds past the rule.
+                Assert.All(line, c => Assert.NotEqual(0, (c.Attribute?.Background.A) ?? 255));
+            }
+        }
+
+        Assert.Equal(2, separatorLines);
+    }
 }
