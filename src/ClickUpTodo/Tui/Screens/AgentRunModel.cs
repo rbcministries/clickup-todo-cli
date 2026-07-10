@@ -1,3 +1,5 @@
+using ClickUpTodo.Agent;
+
 namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>The lifecycle phase of a background one-off run (#99), driving the header the run screen shows.</summary>
@@ -38,6 +40,27 @@ public sealed class AgentRunModel
 
     public AgentRunModel(string taskName) =>
         _taskName = string.IsNullOrWhiteSpace(taskName) ? "task" : taskName.Trim();
+
+    /// <summary>
+    /// The body text to render for a finished background run (#99): stdout on success; stdout plus the
+    /// stderr/error and the non-zero exit code on failure; the start-failure message when the process
+    /// never ran. Pure, so the branch selection is unit-tested without a real process.
+    /// </summary>
+    public static string FormatOutput(BackgroundRunResult run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        if (!run.Started)
+            return run.Error ?? "Claude could not be started.";
+
+        var text = run.Output ?? string.Empty;
+        if (!run.Success)
+        {
+            if (!string.IsNullOrWhiteSpace(run.Error))
+                text += (text.Length > 0 ? "\n\n" : string.Empty) + run.Error;
+            text += (text.Length > 0 ? "\n\n" : string.Empty) + $"[claude -p exited with code {run.ExitCode}]";
+        }
+        return text;
+    }
 
     /// <summary>The current lifecycle phase; starts <see cref="AgentRunPhase.Running"/>.</summary>
     public AgentRunPhase Phase { get; private set; } = AgentRunPhase.Running;

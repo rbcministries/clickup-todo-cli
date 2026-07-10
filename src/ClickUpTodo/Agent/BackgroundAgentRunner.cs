@@ -54,28 +54,34 @@ public sealed class BackgroundAgentRunner : IBackgroundAgentRunner
                 $"Could not start '{options.ClaudeExecutable}': {ex.Message} (is it installed and on PATH?)");
         }
 
-        // Feed the prompt in and close stdin so `claude -p` reads it to completion, then read both
-        // streams concurrently (draining them avoids a deadlock if the child fills a pipe buffer).
+        // Read both streams concurrently (draining them avoids a deadlock if the child fills a pipe
+        // buffer), then feed the prompt in and close stdin so `claude -p` reads it to completion.
         var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
         try
         {
-            await process.StandardInput.WriteAsync(prompt.AsMemory(), ct).ConfigureAwait(false);
-            process.StandardInput.Close();
-        }
-        catch (IOException)
-        {
-            // The child may have exited before reading all of stdin (broken pipe); the output/exit code
-            // below still reflect what it did, so this is not itself a failure.
-        }
+            // Both the stdin write and the exit wait honour `ct`, so a cancel at *any* point lands in the
+            // single catch below and kills the child — an OperationCanceledException from WriteAsync must
+            // not slip past (it isn't an IOException) and orphan the process.
+            try
+            {
+                await process.StandardInput.WriteAsync(prompt.AsMemory(), ct).ConfigureAwait(false);
+                process.StandardInput.Close();
+            }
+            catch (IOException)
+            {
+                // The child may have exited before reading all of stdin (broken pipe); the output/exit
+                // code below still reflect what it did, so this is not itself a failure.
+            }
 
-        try
-        {
             await process.WaitForExitAsync(ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
             KillTree(process);
+            // Observe the in-flight read tasks so their cancellation/pipe faults aren't left unobserved.
+            await ObserveAsync(stdoutTask).ConfigureAwait(false);
+            await ObserveAsync(stderrTask).ConfigureAwait(false);
             throw;
         }
 
@@ -95,6 +101,20 @@ public sealed class BackgroundAgentRunner : IBackgroundAgentRunner
         var args = new List<string> { "-p" };
         args.AddRange(options.ExtraArgs.Where(a => !string.IsNullOrWhiteSpace(a)));
         return args;
+    }
+
+    /// <summary>Awaits a stream-read task purely to observe it (so a cancellation/pipe fault on the
+    /// cancel path isn't left unobserved); the partial output is discarded because the run was killed.</summary>
+    private static async Task ObserveAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or IOException)
+        {
+            // The read was cancelled or the pipe closed when the child was killed — nothing to keep.
+        }
     }
 
     /// <summary>Best-effort kill of the child (and its descendants); ignores races where it already exited.</summary>

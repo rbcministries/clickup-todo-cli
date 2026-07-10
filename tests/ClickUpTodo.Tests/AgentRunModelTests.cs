@@ -1,3 +1,4 @@
+using ClickUpTodo.Agent;
 using ClickUpTodo.Tui.Screens;
 
 namespace ClickUpTodo.Tests;
@@ -105,5 +106,42 @@ public sealed class AgentRunModelTests
     {
         var model = new AgentRunModel(name!);
         Assert.Contains("task", model.Header, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ── FormatOutput (the finished-run body text) ────────────────────────────────────
+
+    [Fact]
+    public void FormatOutput_Success_IsJustTheStdout()
+    {
+        var run = BackgroundRunResult.Exited(0, "the summary", null);
+        Assert.Equal("the summary", AgentRunModel.FormatOutput(run));
+    }
+
+    [Fact]
+    public void FormatOutput_NonZeroExit_AppendsStderrAndExitCode()
+    {
+        var run = BackgroundRunResult.Exited(2, "partial output", "boom");
+        var text = AgentRunModel.FormatOutput(run);
+
+        Assert.Contains("partial output", text);
+        Assert.Contains("boom", text);
+        Assert.Contains("exited with code 2", text);
+    }
+
+    [Fact]
+    public void FormatOutput_NonZeroExit_NoStdout_StillShowsExitCode()
+    {
+        var run = BackgroundRunResult.Exited(1, "", null);
+        var text = AgentRunModel.FormatOutput(run);
+
+        Assert.Contains("exited with code 1", text);
+        Assert.DoesNotContain("\n\n", text); // no leading blank block when there was no stdout/stderr
+    }
+
+    [Fact]
+    public void FormatOutput_NeverStarted_ShowsTheStartFailureMessage()
+    {
+        var run = BackgroundRunResult.NotStarted("Could not start 'claude': not found");
+        Assert.Equal("Could not start 'claude': not found", AgentRunModel.FormatOutput(run));
     }
 }

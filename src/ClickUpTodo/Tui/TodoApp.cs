@@ -1080,7 +1080,7 @@ public sealed class TodoApp
                     Directory.CreateDirectory(workingDir);
 
                 var run = await agent.DispatchBackgroundAsync(detail, comments, prompt, workingDir, template, outputSubdir, postToComments, cts.Token);
-                Application.Invoke(() => { _dispatching = false; screen.ShowResult(FormatBackgroundRunOutput(run), run.Success); });
+                Application.Invoke(() => { _dispatching = false; screen.ShowResult(AgentRunModel.FormatOutput(run), run.Success); });
             }
             catch (OperationCanceledException)
             {
@@ -1093,22 +1093,6 @@ public sealed class TodoApp
         });
     }
 
-    /// <summary>The text to render for a finished background run: stdout on success; stdout plus the
-    /// stderr/error and the non-zero exit code on failure; the start-failure message when it never ran.</summary>
-    private static string FormatBackgroundRunOutput(BackgroundRunResult run)
-    {
-        if (!run.Started)
-            return run.Error ?? "Claude could not be started.";
-
-        var text = run.Output ?? string.Empty;
-        if (!run.Success)
-        {
-            if (!string.IsNullOrWhiteSpace(run.Error))
-                text += (text.Length > 0 ? "\n\n" : string.Empty) + run.Error;
-            text += (text.Length > 0 ? "\n\n" : string.Empty) + $"[claude -p exited with code {run.ExitCode}]";
-        }
-        return text;
-    }
 
     private void OpenStatusPicker()
     {

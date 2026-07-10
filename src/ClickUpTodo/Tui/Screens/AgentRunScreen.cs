@@ -68,8 +68,9 @@ public sealed class AgentRunScreen : Screen
             Text = RunningHint,
         };
 
+        // Bind only the single focusable pane's key handler (like NotificationsFeedScreen) — the output
+        // TextView always holds focus, so a screen-level handler would only ever double-fire.
         _output.KeyDown += OnKey;
-        KeyDown += OnKey;
 
         Add(_header, _output);
     }
