@@ -29,9 +29,11 @@ public readonly record struct LayoutRow(string? HeaderText, TaskItem? Task, int 
 /// <para>
 /// Grouping and nesting <b>compose</b> (#57): when <paramref name="nest"/> is on, each group is
 /// arranged independently via <see cref="SubtaskArranger.Arrange"/>, so a subtask nests under its
-/// parent when both fall in the same group; a subtask whose parent lands in a different group renders
-/// flat within its own group; and a not-assigned context parent is injected as a header wherever its
-/// children appear (it has no group value of its own, so it rides along with them).
+/// parent when both fall in the same group; an in-snapshot subtask whose parent lands in a different
+/// group renders flat within its own group (a pulled-in foreign subtask in that position is instead
+/// suppressed — see <paramref name="suppressTopLevel"/>, #172); and a not-assigned context parent is
+/// injected as a header wherever its children appear (it has no group value of its own, so it rides
+/// along with them).
 /// </para>
 /// </summary>
 public static class SectionLayout

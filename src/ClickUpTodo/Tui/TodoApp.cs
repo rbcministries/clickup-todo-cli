@@ -1254,9 +1254,11 @@ public sealed class TodoApp
         var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
         var grouped = view.GroupField is not null;
-        // Grouping and nesting compose: within each F3 group, subtasks nest under their parent when
-        // both fall in the same group; a subtask whose parent lands in a different group renders flat
-        // within its own group (SubtaskArranger, run per-group, yields exactly this). (#46, #57)
+        // Grouping and nesting compose: within each F3 group, subtasks nest under their parent when both
+        // fall in the same group. An in-snapshot (assigned) subtask whose parent lands in a different
+        // group renders flat within its own group; a pulled-in teammate-owned subtask (#70) in that same
+        // position is instead suppressed, since a "(not assigned to you)" row only belongs nested under a
+        // visible parent, never un-indented (#172). (#46, #57)
 
         _rows.Clear();
         _kinds.Clear();

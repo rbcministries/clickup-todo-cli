@@ -223,16 +223,60 @@ public sealed class SubtaskArrangerTests
     }
 
     [Fact]
-    public void Arrange_SuppressedOrphan_HidesItsWholeSubtree()
+    public void Arrange_SuppressedOrphan_KeepsNonForeignDescendant_ReAnchoredFlat()
     {
-        // 'c' (suppressed, parent filtered out) has its own child 'g'. Suppressing c must also hide g so
-        // a grandchild doesn't leak flat once its own parent is gone.
+        // 'c' (foreign, parent 'p' filtered out) has a NON-foreign child 'g' — e.g. the user's own
+        // assigned subtask nested under a teammate's task. Skipping c must not hide g: g has no visible
+        // anchor, so it re-anchors flat rather than vanishing with the foreign chain (#172 review).
         TaskItem[] tasks = [Task("top"), Task("c", parent: "p"), Task("g", parent: "c")];
 
         var rows = SubtaskArranger.Arrange(tasks, NoContext, expanded: null, suppressTopLevel: Expanded("c"));
 
+        // 'c' is gone; 'g' survives, re-anchored at 'c's former position; 'top' unaffected.
+        Assert.Equal(["top", "g"], rows.Select(r => r.Task.Id));
+        Assert.All(rows, r => Assert.Equal(0, r.Depth));
+        Assert.DoesNotContain(rows, r => r.Task.Id == "c");
+    }
+
+    [Fact]
+    public void Arrange_SuppressedOrphan_HidesEntirelyForeignSubtree()
+    {
+        // When c AND its child g are both foreign (both pulled in under filtered-out parent 'p'), neither
+        // has a visible anchor, so the whole foreign chain is hidden — nothing leaks flat.
+        TaskItem[] tasks = [Task("top"), Task("c", parent: "p"), Task("g", parent: "c")];
+
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, expanded: null, suppressTopLevel: Expanded("c", "g"));
+
         var only = Assert.Single(rows);
         Assert.Equal("top", only.Task.Id);
+    }
+
+    [Fact]
+    public void Arrange_SuppressedOrphan_ForeignGrandchildOfKeptDescendant_NestsUnderIt()
+    {
+        // c (foreign, parent filtered) → g (non-foreign, re-anchored flat) → gg (foreign). gg has a
+        // visible anchor now (g), so it nests under g with its marker rather than being suppressed.
+        TaskItem[] tasks = [Task("c", parent: "p"), Task("g", parent: "c"), Task("gg", parent: "g")];
+
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, expanded: null, suppressTopLevel: Expanded("c", "gg"));
+
+        Assert.Equal(["g", "gg"], rows.Select(r => r.Task.Id));
+        Assert.Equal([0, 1], rows.Select(r => r.Depth));
+    }
+
+    [Fact]
+    public void Arrange_SuppressAndCollapse_Compose()
+    {
+        // A present parent 'p' is collapsed (not in expanded set) and a separate foreign orphan 'f'
+        // (parent filtered out) is suppressed. Collapse hides p's child; suppression drops f. Both
+        // mechanisms apply together without interfering.
+        TaskItem[] tasks = [Task("p"), Task("c", parent: "p"), Task("f", parent: "gone")];
+
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, expanded: Expanded(/* p collapsed */), suppressTopLevel: Expanded("f"));
+
+        var only = Assert.Single(rows);
+        Assert.Equal("p", only.Task.Id);
+        Assert.Equal(FoldState.Collapsed, only.Fold);
     }
 
     [Fact]
