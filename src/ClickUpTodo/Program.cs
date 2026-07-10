@@ -6,15 +6,17 @@ using ClickUpTodo.Services;
 using ClickUpTodo.Setup;
 using ClickUpTodo.Tui;
 
-var configStore = new ConfigStore();
+// The persistence backend is chosen here, once — the single drop-in point for a future backend
+// (the #119 verdict is LiteDB) without touching any call site. Today it's file-backed JSON.
+IStateStore stateStore = new JsonFileStateStore();
+var configStore = new ConfigStore(stateStore);
 var tokenStore = new TokenStore();
 
 // `clickup-todo --reset` / `--logout`: forget the saved token and settings, then exit.
 if (args.Any(a => a is "--reset" or "--logout"))
 {
     tokenStore.Delete();
-    if (File.Exists(configStore.ConfigPath))
-        File.Delete(configStore.ConfigPath);
+    configStore.Delete();
     Console.WriteLine("Cleared saved ClickUp token and settings. Run `clickup-todo` to sign in again.");
     return 0;
 }
@@ -78,8 +80,9 @@ catch (Exception ex)
 }
 
 var taskService = new TaskService(client, config, userId);
+var feedService = new FeedService(client, taskService, config);
 var focusStore = new LocalFocusStore(config, configStore);
-new TodoApp(taskService, config, configStore, focusStore).Run(driverName);
+new TodoApp(taskService, feedService, config, configStore, focusStore).Run(driverName);
 return 0;
 
 // Reads "--opt value" or "--opt=value" from args.

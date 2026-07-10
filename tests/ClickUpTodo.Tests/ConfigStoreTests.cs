@@ -184,6 +184,48 @@ public sealed class ConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public void SaveThenLoad_RoundTripsTaskWorkingDirectories()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig
+        {
+            WorkspaceId = "1",
+            PersonalTasksListId = "2",
+            TaskWorkingDirectories = { ["task-a"] = "/work/a", ["task-b"] = "/work/b" },
+        });
+
+        var loaded = store.Load();
+
+        Assert.Equal("/work/a", loaded.TaskWorkingDirectories["task-a"]);
+        Assert.Equal("/work/b", loaded.TaskWorkingDirectories["task-b"]);
+    }
+
+    [Fact]
+    public void Save_PersistsTaskWorkingDirectoriesAsCamelCase()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig { TaskWorkingDirectories = { ["task-a"] = "/work/a" } });
+
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.Contains("\"taskWorkingDirectories\"", json);
+        Assert.Contains("\"task-a\": \"/work/a\"", json);
+    }
+
+    [Fact]
+    public void Load_WhenFileMissingTaskWorkingDirectoriesKey_DefaultsToEmptyMap()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig { WorkspaceId = "1", PersonalTasksListId = "2" });
+        // Rewrite without a taskWorkingDirectories key (simulates a pre-#96 config.json).
+        File.WriteAllText(store.ConfigPath, "{\"workspaceId\":\"1\",\"personalTasksListId\":\"2\"}");
+
+        var loaded = store.Load();
+
+        Assert.NotNull(loaded.TaskWorkingDirectories);
+        Assert.Empty(loaded.TaskWorkingDirectories);
+    }
+
+    [Fact]
     public void IsConfigured_RequiresWorkspaceAndList()
     {
         Assert.False(new AppConfig { WorkspaceId = "1" }.IsConfigured);

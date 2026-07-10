@@ -28,8 +28,8 @@ public sealed class TaskRowFormatterTests
 
         var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons);
 
-        // Status chip, then priority chip, then the title.
-        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.PriorityIcon + "Ship it", row.Text);
+        // Status chip, then priority chip, then the id chip (fallback task id "1"), then the title.
+        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.PriorityIcon + "1 Ship it", row.Text);
         // Both spans land exactly on their chips, status before priority.
         Assert.Equal(0, row.StatusStart);
         Assert.Equal(TaskRowFormatter.StatusIcon, row.Text.Substring(row.StatusStart, row.StatusLength));
@@ -49,8 +49,9 @@ public sealed class TaskRowFormatterTests
         // No priority ⇒ no coloured span, but a blank gutter keeps the title aligned with priced rows.
         Assert.Equal(-1, b.PriorityStart);
         Assert.Equal(0, b.PriorityLength);
-        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.BlankGutter + "Ship it", b.Text);
-        // The title starts at the same column whether or not a priority chip is present.
+        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.BlankGutter + "2 Ship it", b.Text);
+        // The title starts at the same column whether or not a priority chip is present (both ids are
+        // single-char here, so the id chip doesn't shift the title between the two rows).
         Assert.Equal(a.Text.IndexOf("Ship it", StringComparison.Ordinal), b.Text.IndexOf("Ship it", StringComparison.Ordinal));
     }
 
@@ -63,8 +64,8 @@ public sealed class TaskRowFormatterTests
 
         Assert.Equal(-1, row.StatusStart);
         Assert.Equal(0, row.StatusLength);
-        // Blank status gutter, then the priority chip at the second gutter slot.
-        Assert.StartsWith(TaskRowFormatter.BlankGutter + TaskRowFormatter.PriorityIcon + "Ship it", row.Text);
+        // Blank status gutter, then the priority chip at the second gutter slot, then the id chip.
+        Assert.StartsWith(TaskRowFormatter.BlankGutter + TaskRowFormatter.PriorityIcon + "1 Ship it", row.Text);
         Assert.Equal(TaskRowFormatter.BlankGutter.Length, row.PriorityStart);
         Assert.Equal(TaskRowFormatter.PriorityIcon, row.Text.Substring(row.PriorityStart, row.PriorityLength));
     }
@@ -85,10 +86,11 @@ public sealed class TaskRowFormatterTests
         var flat = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons);
         var nested = TaskRowFormatter.Format(task, depth: 2, badges: BadgeDisplay.Icons);
 
-        // Chips stay the leftmost gutter regardless of depth — the indent shifts only the title.
+        // Chips (and the id chip) stay the leftmost gutter regardless of depth — the indent shifts only
+        // the title, which follows the id ("1 " + four-space indent = "1     Subtask").
         Assert.Equal(0, nested.StatusStart);
         Assert.Equal(TaskRowFormatter.StatusIcon.Length, nested.PriorityStart);
-        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.PriorityIcon + "    Subtask", nested.Text);
+        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.PriorityIcon + "1     Subtask", nested.Text);
         Assert.Equal(flat.StatusStart, nested.StatusStart);
     }
 
@@ -99,8 +101,9 @@ public sealed class TaskRowFormatterTests
 
         var row = TaskRowFormatter.Format(task, depth: 1, marker: "▶ ", badges: BadgeDisplay.Icons);
 
-        // Chips, then indent (2 per depth), then the marker, then the title.
-        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.BlankGutter + "  ▶ Roll up sprint", row.Text);
+        // Chips, then the id chip, then indent (2 per depth), then the marker, then the title
+        // ("1 " + two-space indent = "1   ▶ …").
+        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.BlankGutter + "1   ▶ Roll up sprint", row.Text);
         Assert.Equal(TaskRowFormatter.StatusIcon, row.Text.Substring(row.StatusStart, row.StatusLength));
     }
 
@@ -113,7 +116,8 @@ public sealed class TaskRowFormatterTests
 
         var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Text);
 
-        Assert.StartsWith("[to do] [High] Ship it", row.Text);
+        // Status badge, priority badge, then the id chip (fallback task id "1"), then the title.
+        Assert.StartsWith("[to do] [High] 1 Ship it", row.Text);
         Assert.Equal("[to do]", row.Text.Substring(row.StatusStart, row.StatusLength));
         Assert.Equal("[High]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
         // Status precedes priority, and neither coloured span includes the separator space.
@@ -144,7 +148,7 @@ public sealed class TaskRowFormatterTests
         Assert.Equal(0, row.StatusLength);
         // Text mode is ragged — an absent status leaves no gutter, so the priority badge is at column 0.
         Assert.Equal(0, row.PriorityStart);
-        Assert.StartsWith("[Urgent] Work", row.Text);
+        Assert.StartsWith("[Urgent] 1 Work", row.Text);
     }
 
     [Fact]
@@ -154,7 +158,8 @@ public sealed class TaskRowFormatterTests
 
         var row = TaskRowFormatter.Format(task, depth: 2, badges: BadgeDisplay.Text);
 
-        Assert.StartsWith("[to do] [Low]     Subtask", row.Text); // two indent units = 4 spaces after the badges
+        // Badges, the id chip ("1 "), then two indent units (4 spaces) before the title.
+        Assert.StartsWith("[to do] [Low] 1     Subtask", row.Text);
         Assert.Equal("[to do]", row.Text.Substring(row.StatusStart, row.StatusLength));
         Assert.Equal("[Low]", row.Text.Substring(row.PriorityStart, row.PriorityLength));
     }
@@ -207,8 +212,8 @@ public sealed class TaskRowFormatterTests
 
         var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Text);
 
-        // Both badges absent ⇒ fully ragged, so the title leads with no gutter.
-        Assert.StartsWith("Bare task", row.Text);
+        // Both badges absent ⇒ fully ragged, so the id chip (fallback task id "1") leads, then the title.
+        Assert.StartsWith("1 Bare task", row.Text);
         Assert.Equal(-1, row.StatusStart);
         Assert.Equal(-1, row.PriorityStart);
     }
@@ -224,7 +229,7 @@ public sealed class TaskRowFormatterTests
 
         // No status chip and no gutter for it — every grouped row drops it uniformly, so alignment holds.
         Assert.Equal(-1, row.StatusStart);
-        Assert.StartsWith(TaskRowFormatter.PriorityIcon + "Ship it", row.Text);
+        Assert.StartsWith(TaskRowFormatter.PriorityIcon + "1 Ship it", row.Text);
         Assert.Equal(0, row.PriorityStart);
         Assert.Equal(TaskRowFormatter.PriorityIcon, row.Text.Substring(row.PriorityStart, row.PriorityLength));
     }
@@ -238,7 +243,7 @@ public sealed class TaskRowFormatterTests
 
         Assert.Equal(-1, row.PriorityStart);
         Assert.DoesNotContain('⚑', row.Text);
-        Assert.StartsWith(TaskRowFormatter.StatusIcon + "Ship it", row.Text);
+        Assert.StartsWith(TaskRowFormatter.StatusIcon + "1 Ship it", row.Text);
         Assert.Equal(0, row.StatusStart);
     }
 
@@ -249,7 +254,7 @@ public sealed class TaskRowFormatterTests
 
         Assert.Equal(-1, row.StatusStart);
         Assert.DoesNotContain("[in progress]", row.Text);
-        Assert.StartsWith("[High] Ship the report", row.Text);
+        Assert.StartsWith("[High] 1 Ship the report", row.Text);
     }
 
     [Fact]
@@ -259,7 +264,7 @@ public sealed class TaskRowFormatterTests
 
         Assert.Equal(-1, row.PriorityStart);
         Assert.DoesNotContain("[High]", row.Text);
-        Assert.StartsWith("[in progress] Ship the report", row.Text);
+        Assert.StartsWith("[in progress] 1 Ship the report", row.Text);
     }
 
     // ── Metadata omission (#67) is mode-independent ──────────────────────────
@@ -498,5 +503,110 @@ public sealed class TaskRowFormatterTests
         Assert.Equal(noBadge.StatusStart, withBadge.StatusStart);
         Assert.Equal(noBadge.PriorityStart, withBadge.PriorityStart);
         Assert.Equal(-1, noBadge.AssigneesStart); // Teammate is "me" here, so their own solo assignment shows no badge
+    }
+
+    // ── Custom-id / task-id chip ─────────────────────────────────────────────
+
+    [Fact]
+    public void IconMode_CustomId_FollowsBadges_PrecedesTitle_SpanExact()
+    {
+        var task = new TaskItem
+        {
+            Id = "86xyz", CustomId = "ABC-123", Name = "Ship it", StatusName = "to do", PriorityName = "High",
+        };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons);
+
+        // The custom id chip rides between the priority chip and the title, and its reported span lands
+        // exactly on the id text (the trailing separator space excluded).
+        Assert.StartsWith(TaskRowFormatter.StatusIcon + TaskRowFormatter.PriorityIcon + "ABC-123 Ship it", row.Text);
+        Assert.Equal("ABC-123", row.Text.Substring(row.CustomIdStart, row.CustomIdLength));
+        Assert.Equal(TaskRowFormatter.StatusIcon.Length + TaskRowFormatter.PriorityIcon.Length, row.CustomIdStart);
+    }
+
+    [Fact]
+    public void CustomId_FallsBackToTaskId_WhenUnset()
+    {
+        var task = new TaskItem { Id = "86xyz", CustomId = null, Name = "Ship it", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons);
+
+        // No Space custom id ⇒ the plain task id stands in.
+        Assert.Equal("86xyz", row.Text.Substring(row.CustomIdStart, row.CustomIdLength));
+        Assert.Contains("86xyz Ship it", row.Text);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void CustomId_BlankCustomId_FallsBackToTaskId(string? customId)
+    {
+        var task = new TaskItem { Id = "86xyz", CustomId = customId, Name = "Ship it" };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Text);
+
+        Assert.Equal("86xyz", row.Text.Substring(row.CustomIdStart, row.CustomIdLength));
+    }
+
+    [Fact]
+    public void TextMode_CustomId_SitsBetweenBadgesAndTitle()
+    {
+        var task = new TaskItem
+        {
+            Id = "1", CustomId = "DEV-42", Name = "Ship it", StatusName = "to do", PriorityName = "High",
+        };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Text);
+
+        Assert.StartsWith("[to do] [High] DEV-42 Ship it", row.Text);
+        Assert.Equal("DEV-42", row.Text.Substring(row.CustomIdStart, row.CustomIdLength));
+    }
+
+    [Fact]
+    public void HiddenMode_OmitsCustomId()
+    {
+        // Hidden is the decoration-free view — the id rides with the badges, so it's dropped too.
+        var task = new TaskItem { Id = "1", CustomId = "ABC-123", Name = "Ship it", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Hidden);
+
+        Assert.Equal(-1, row.CustomIdStart);
+        Assert.Equal(0, row.CustomIdLength);
+        Assert.StartsWith("Ship it", row.Text);
+        Assert.DoesNotContain("ABC-123", row.Text);
+    }
+
+    [Fact]
+    public void CustomId_IsRaggedLikeTextBadges_NoUniformGutter()
+    {
+        // Custom-id formats vary by Space, so widths are nonstandard. Like variable-length status names
+        // in text mode, the id is left ragged — a longer id pushes the title further right, rather than
+        // being padded to a uniform gutter.
+        var shortId = new TaskItem { Id = "1", CustomId = "A-1", Name = "Ship it", StatusName = "to do" };
+        var longId = new TaskItem { Id = "2", CustomId = "LONGPREFIX-9999", Name = "Ship it", StatusName = "to do" };
+
+        var a = TaskRowFormatter.Format(shortId, badges: BadgeDisplay.Icons);
+        var b = TaskRowFormatter.Format(longId, badges: BadgeDisplay.Icons);
+
+        Assert.NotEqual(
+            a.Text.IndexOf("Ship it", StringComparison.Ordinal),
+            b.Text.IndexOf("Ship it", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CustomId_ShownRegardlessOfGrouping()
+    {
+        // The id isn't a groupable field, so grouping never drops it (unlike Status/Priority badges, #67).
+        var task = new TaskItem
+        {
+            Id = "1", CustomId = "ABC-123", Name = "Ship it", StatusName = "to do", PriorityName = "High",
+        };
+
+        foreach (var field in new[] { TaskField.Status, TaskField.Priority, TaskField.Assignee })
+        {
+            var row = TaskRowFormatter.Format(task, groupedBy: field, badges: BadgeDisplay.Icons);
+            Assert.Equal("ABC-123", row.Text.Substring(row.CustomIdStart, row.CustomIdLength));
+        }
     }
 }
