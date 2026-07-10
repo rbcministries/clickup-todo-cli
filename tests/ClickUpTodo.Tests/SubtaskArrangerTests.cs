@@ -193,6 +193,76 @@ public sealed class SubtaskArrangerTests
         Assert.All(rows, r => Assert.False(r.IsContextParent));
     }
 
+    // ── Suppress foreign subtasks of a filtered-out parent (#172) ────────────
+
+    [Fact]
+    public void Arrange_SuppressedOrphan_WithNoAnchor_IsHidden()
+    {
+        // A teammate-owned subtask 'c' is pulled into the view, but its parent 'p' was filtered out
+        // (e.g. a completed parent dropped by a Status IS NOT rule). It's neither present nor a context
+        // parent, so pre-#172 it leaked flat at top level as "(not assigned to you)". Now it's suppressed.
+        TaskItem[] tasks = [Task("top"), Task("c", parent: "p")];
+
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, expanded: null, suppressTopLevel: Expanded("c"));
+
+        var only = Assert.Single(rows);
+        Assert.Equal("top", only.Task.Id);
+    }
+
+    [Fact]
+    public void Arrange_SuppressedSubtask_StillNestsWhenParentPresent()
+    {
+        // The same id is suppressed-at-top-level, but here its parent IS in the section, so it must nest
+        // normally — suppression only removes the flat top-level fall-through, never legitimate nesting.
+        TaskItem[] tasks = [Task("p"), Task("c", parent: "p")];
+
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, expanded: null, suppressTopLevel: Expanded("c"));
+
+        Assert.Equal(["p", "c"], rows.Select(r => r.Task.Id));
+        Assert.Equal([0, 1], rows.Select(r => r.Depth));
+    }
+
+    [Fact]
+    public void Arrange_SuppressedOrphan_HidesItsWholeSubtree()
+    {
+        // 'c' (suppressed, parent filtered out) has its own child 'g'. Suppressing c must also hide g so
+        // a grandchild doesn't leak flat once its own parent is gone.
+        TaskItem[] tasks = [Task("top"), Task("c", parent: "p"), Task("g", parent: "c")];
+
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, expanded: null, suppressTopLevel: Expanded("c"));
+
+        var only = Assert.Single(rows);
+        Assert.Equal("top", only.Task.Id);
+    }
+
+    [Fact]
+    public void Arrange_SuppressedId_UnderContextParent_StillNests()
+    {
+        // A pulled-in child whose parent is genuinely not-in-snapshot (a context parent) keeps its
+        // context header + nested placement — suppression targets only the anchorless top-level path.
+        TaskItem[] tasks = [Task("c", parent: "P")];
+        var context = new Dictionary<string, TaskItem> { ["P"] = Task("P") };
+
+        var rows = SubtaskArranger.Arrange(tasks, context, expanded: null, suppressTopLevel: Expanded("c"));
+
+        Assert.Equal(["P", "c"], rows.Select(r => r.Task.Id));
+        Assert.True(rows[0].IsContextParent);
+        Assert.Equal(1, rows[1].Depth);
+    }
+
+    [Fact]
+    public void Arrange_SuppressSet_DoesNotAffectGenuineTopLevelTasks()
+    {
+        // A genuine top-level task (no parent) is never suppressed even if its id happens to be listed —
+        // suppression only fires on the orphan/filtered-parent fall-through, which a parentless task
+        // never reaches (it's a legitimate anchor). Defensive: the caller only ever lists foreign ids.
+        TaskItem[] tasks = [Task("a"), Task("b")];
+
+        var rows = SubtaskArranger.Arrange(tasks, NoContext, expanded: null, suppressTopLevel: Expanded("a", "b"));
+
+        Assert.Equal(["a", "b"], rows.Select(r => r.Task.Id));
+    }
+
     // ── Per-parent fold state (#76) ──────────────────────────────────────────
 
     [Fact]

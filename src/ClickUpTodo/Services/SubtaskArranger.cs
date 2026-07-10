@@ -48,10 +48,21 @@ public static class SubtaskArranger
     /// Context parents are always expanded regardless of the set — they exist only to display their
     /// child, so they're never user-foldable.
     /// </param>
+    /// <param name="suppressTopLevel">
+    /// Ids that must <b>never</b> surface as a flat top-level (depth-0) row. A task in this set that would
+    /// otherwise fall through to the top level — because its parent isn't in the section and isn't a
+    /// context parent — is hidden along with its subtree instead of leaking out un-indented. This is how a
+    /// teammate-owned subtask pulled in only to nest under an in-view parent (#70) stays hidden when that
+    /// parent is filtered out of the section (e.g. by a <c>Status IS NOT</c> rule): it has no visible
+    /// parent to nest under, so showing it flat as "(not assigned to you)" would defeat the parent's
+    /// filter (#172). A suppressed id still nests normally when its parent <em>is</em> present — only the
+    /// top-level fall-through is suppressed. <c>null</c>/empty ⇒ no suppression (pre-#172 behaviour).
+    /// </param>
     public static IReadOnlyList<ArrangedRow> Arrange(
         IReadOnlyList<TaskItem> orderedTasks,
         IReadOnlyDictionary<string, TaskItem> contextParents,
-        IReadOnlySet<string>? expanded = null)
+        IReadOnlySet<string>? expanded = null,
+        IReadOnlySet<string>? suppressTopLevel = null)
     {
         var present = new HashSet<string>(orderedTasks.Select(t => t.Id));
 
@@ -126,6 +137,15 @@ public static class SubtaskArranger
                         Emit(child, depth: 1);
                 }
             }
+            else if (!string.IsNullOrEmpty(parentId)
+                     && suppressTopLevel is not null && suppressTopLevel.Contains(t.Id))
+            {
+                // A pulled-in subtask (#70) whose parent was filtered out of the section: it has a parent,
+                // just not a visible one, so hide it (and its subtree) rather than leak it as a flat
+                // top-level "(not assigned to you)" row (#172). A genuinely parentless task is never
+                // suppressed — it's a legitimate anchor, not an orphan.
+                Suppress(t);
+            }
             else
             {
                 // Genuine top-level task, or an orphan whose parent is entirely unknown → show flat.
@@ -135,10 +155,16 @@ public static class SubtaskArranger
 
         // Safety net: a task whose whole ancestor chain stays inside the section with no root anchor
         // (only possible with a parent cycle, which ClickUp doesn't produce) would otherwise be
-        // dropped. Emit any stragglers at top level so every input task appears exactly once.
+        // dropped. Emit any stragglers at top level so every input task appears exactly once — unless
+        // suppressed, in which case they stay hidden (a suppressed id must never surface flat, #172).
         foreach (var t in orderedTasks)
             if (!emitted.Contains(t.Id))
-                Emit(t, depth: 0);
+            {
+                if (suppressTopLevel is not null && suppressTopLevel.Contains(t.Id))
+                    Suppress(t);
+                else
+                    Emit(t, depth: 0);
+            }
 
         return result;
     }

@@ -52,6 +52,11 @@ public static class SectionLayout
     /// The ids of expanded parents for per-parent folding (#76), forwarded to <see cref="SubtaskArranger"/>.
     /// <c>null</c> ⇒ every parent expanded (pre-#76 behaviour).
     /// </param>
+    /// <param name="suppressTopLevel">
+    /// Ids that must never surface as a flat top-level row, forwarded to <see cref="SubtaskArranger"/> — the
+    /// teammate-owned subtasks pulled in by #70, so one whose parent is filtered out of its group stays
+    /// hidden rather than leaking un-indented as "(not assigned to you)" (#172). <c>null</c> ⇒ no suppression.
+    /// </param>
     public static IReadOnlyList<LayoutRow> BuildTodoSection(
         IReadOnlyList<TaskGroup> groups,
         IReadOnlyDictionary<string, TaskItem> contextParents,
@@ -59,7 +64,8 @@ public static class SectionLayout
         bool nest,
         string? ungroupedTasksHeader,
         IReadOnlyList<string?>? headerColors = null,
-        IReadOnlySet<string>? expanded = null)
+        IReadOnlySet<string>? expanded = null,
+        IReadOnlySet<string>? suppressTopLevel = null)
     {
         var rows = new List<LayoutRow>();
         for (var gi = 0; gi < groups.Count; gi++)
@@ -77,7 +83,7 @@ public static class SectionLayout
                 rows.Add(new LayoutRow(ungroupedTasksHeader, null, 0, false));
 
             if (nest)
-                foreach (var row in SubtaskArranger.Arrange(group.Tasks, contextParents, expanded))
+                foreach (var row in SubtaskArranger.Arrange(group.Tasks, contextParents, expanded, suppressTopLevel))
                     rows.Add(new LayoutRow(null, row.Task, row.Depth, row.IsContextParent) { Fold = row.Fold });
             else
                 foreach (var t in group.Tasks)

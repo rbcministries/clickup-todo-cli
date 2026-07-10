@@ -1284,7 +1284,14 @@ public sealed class TodoApp
         // The single tasks-section header only appears (when ungrouped) to separate the to-do rows
         // from a pinned section above them.
         var ungroupedTasksHeader = pinnedIds.Count > 0 ? $"{TasksHeaderPrefix} ({todoCount}) ─" : null;
-        foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors, _expanded))
+        // A teammate-owned subtask (#70) must never surface un-indented at top level: when its parent is
+        // filtered out of the to-do set (e.g. a completed parent dropped by a Status IS NOT rule), it has
+        // no visible parent to nest under, so the arranger suppresses it rather than leaking it flat as
+        // "(not assigned to you)" (#172). Only relevant while nesting and while foreign subtasks exist.
+        var suppressTopLevel = nest && _foreignSubtasks.Count > 0
+            ? new HashSet<string>(_foreignSubtasks.Keys, StringComparer.Ordinal)
+            : null;
+        foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors, _expanded, suppressTopLevel))
         {
             if (row.IsHeader)
                 AddHeader(row.HeaderText!, row.HeaderColor);
