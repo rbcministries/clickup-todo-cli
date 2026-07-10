@@ -25,11 +25,14 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
     /// <summary>Merged, de-duplicated, stably-ordered task snapshot.</summary>
     public async Task<IReadOnlyList<TaskItem>> LoadAsync(CancellationToken ct = default)
     {
-        // Assignee IS rules scope the assigned fetch server-side (#68). The default view's "Assignee IS
-        // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone. A
-        // username/email rule is resolved to an id via the workspace-members lookup (#73).
-        var assigned = await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), ct);
-        var personal = await client.GetListTasksAsync(config.PersonalTasksListId, ct: ct);
+        // The two source fetches are independent, so the personal-list fetch overlaps assignee-id
+        // resolution + the assigned fetch (#192): wall-clock is the slower of the two, not their sum.
+        // WhenAll (rather than awaiting in turn) so a fault in one still observes the other.
+        var personalFetch = client.GetListTasksAsync(config.PersonalTasksListId, ct: ct);
+        var assignedFetch = LoadAssignedAsync(ct);
+        await Task.WhenAll(assignedFetch, personalFetch);
+        var assigned = await assignedFetch;
+        var personal = await personalFetch;
 
         // De-dup by task id; a task assigned to me that also lives on my personal list appears once.
         var byId = new Dictionary<string, TaskItem>();
@@ -43,6 +46,19 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
             .OrderBy(t => t, TaskOrder.Instance)
             .ToList();
     }
+
+    // Assignee IS rules scope the assigned fetch server-side (#68). The default view's "Assignee IS
+    // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone. A
+    // username/email rule is resolved to an id via the workspace-members lookup (#73).
+    private async Task<List<TaskItem>> LoadAssignedAsync(CancellationToken ct)
+        => await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), ct);
+
+    /// <summary>
+    /// Cap on concurrent round-trips per fan-out (context parents, list colors). Small and fixed:
+    /// enough to hide per-call latency, low enough to stay polite to ClickUp's per-token rate limit
+    /// even when several fan-outs overlap (#192) — a process-wide budget is tracked in #193.
+    /// </summary>
+    internal const int MaxFanOutConcurrency = 4;
 
     // Workspace members, fetched at most once per service instance (they change rarely within a session)
     // and only when an Assignee rule actually needs a name/email resolved. A faulted fetch is not cached
@@ -219,62 +235,71 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
         IEnumerable<string> listIds, CancellationToken ct = default)
     {
         // Fetch the not-yet-cached lists concurrently; a session commonly spans several lists, so doing
-        // them sequentially would add a round-trip per list to the first List-grouped render.
+        // them sequentially would add a round-trip per list to the first List-grouped render. Bounded
+        // (was an unbounded WhenAll) so a many-list workspace can't burst-open a call per list (#192).
         var toFetch = listIds
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .Distinct(StringComparer.Ordinal)
             .Where(id => !_listColors.ContainsKey(id))
             .ToList();
 
-        await Task.WhenAll(toFetch.Select(async id =>
-        {
-            try
+        await Parallel.ForEachAsync(
+            toFetch,
+            new ParallelOptions { MaxDegreeOfParallelism = MaxFanOutConcurrency, CancellationToken = ct },
+            async (id, token) =>
             {
-                _listColors[id] = await client.GetListColorAsync(id, ct);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _listColors[id] = null; // best-effort: a list we can't fetch just falls back to a hue
-            }
-        }));
+                try
+                {
+                    _listColors[id] = await client.GetListColorAsync(id, token);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _listColors[id] = null; // best-effort: a list we can't fetch just falls back to a hue
+                }
+            });
 
         return new Dictionary<string, string?>(_listColors, StringComparer.Ordinal);
     }
 
     /// <summary>
     /// Fetches the parents of assigned subtasks that aren't themselves in <paramref name="snapshot"/>,
-    /// mapped to <see cref="TaskItem"/> headers for the nested subtasks view. Best-effort: a parent
+    /// mapped to <see cref="TaskItem"/> headers for the nested subtasks view. The per-parent fetches
+    /// fan out with at most <see cref="MaxFanOutConcurrency"/> in flight (#192) — they were serial,
+    /// which made this stage scale linearly with the number of foreign parents. Best-effort: a parent
     /// that can't be fetched (deleted / no access) is skipped rather than failing the whole load.
     /// </summary>
     public async Task<IReadOnlyDictionary<string, TaskItem>> ResolveContextParentsAsync(
         IReadOnlyList<TaskItem> snapshot, CancellationToken ct = default)
     {
-        var result = new Dictionary<string, TaskItem>();
-        foreach (var id in MissingParentIds(snapshot))
-        {
-            try
+        var result = new System.Collections.Concurrent.ConcurrentDictionary<string, TaskItem>(StringComparer.Ordinal);
+        await Parallel.ForEachAsync(
+            MissingParentIds(snapshot),
+            new ParallelOptions { MaxDegreeOfParallelism = MaxFanOutConcurrency, CancellationToken = ct },
+            async (id, token) =>
             {
-                var d = await client.GetTaskDetailAsync(id, ct);
-                // ParentId is intentionally left null: a context parent is a header for its subtask, so
-                // it's always rendered at the top level (it isn't nested under its own parent here).
-                result[id] = new TaskItem
+                try
                 {
-                    Id = d.Id,
-                    Name = d.Name,
-                    Url = d.Url,
-                    StatusName = d.StatusName,
-                    StatusColor = d.StatusColor,
-                    ListId = d.ListId,
-                    ListName = d.ListName,
-                    DueDateMs = d.DueDateMs,
-                    UpdatedMs = d.UpdatedMs,
-                };
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                // Best-effort: a parent we can't fetch just won't get a context header.
-            }
-        }
+                    var d = await client.GetTaskDetailAsync(id, token);
+                    // ParentId is intentionally left null: a context parent is a header for its subtask, so
+                    // it's always rendered at the top level (it isn't nested under its own parent here).
+                    result[id] = new TaskItem
+                    {
+                        Id = d.Id,
+                        Name = d.Name,
+                        Url = d.Url,
+                        StatusName = d.StatusName,
+                        StatusColor = d.StatusColor,
+                        ListId = d.ListId,
+                        ListName = d.ListName,
+                        DueDateMs = d.DueDateMs,
+                        UpdatedMs = d.UpdatedMs,
+                    };
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // Best-effort: a parent we can't fetch just won't get a context header.
+                }
+            });
         return result;
     }
 
