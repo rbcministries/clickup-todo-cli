@@ -42,6 +42,7 @@ public sealed class TodoApp
     private static readonly string TasksHeaderPrefix = $"─ {AppBranding.TasksSectionLabel}";
 
     private readonly TaskService _tasks;
+    private readonly FeedService _feed;
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
@@ -122,9 +123,10 @@ public sealed class TodoApp
     private string _status = "Loading…";
     private string _signature = "";
 
-    public TodoApp(TaskService tasks, AppConfig config, ConfigStore configStore, IFocusStore focus)
+    public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore, IFocusStore focus)
     {
         _tasks = tasks;
+        _feed = feed;
         _config = config;
         _configStore = configStore;
         _focus = focus;
@@ -369,17 +371,37 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// F5 — opens the mentions &amp; comments feed screen (#110, epic #109). Currently a walking-skeleton
-    /// scaffold rendering an empty-state placeholder; the data layers land in #112–#116. Opens through
-    /// the shared screen seam (guarded on <see cref="ActiveScreen"/> like the other list-initiated opens)
-    /// with no result to read back.
+    /// F5 — opens the mentions &amp; comments feed screen (#114, epic #109). Fetches the feed off the UI
+    /// thread (like <see cref="OpenDetail"/>: flash → <c>Task.Run</c> → <c>Application.Invoke</c>) and
+    /// swaps in the data-bearing screen back on it; the background dashboard refresh keeps running.
+    /// Opens through the shared screen seam, guarded on <see cref="ActiveScreen"/> like the other
+    /// list-initiated opens. The full feed is loaded once (every entry mention-stamped), so the
+    /// screen's F3 mentions-only toggle filters locally with no re-fetch. Loading and error states show
+    /// on the status line — the screen is only constructed on success.
     /// </summary>
     private void OpenNotificationsFeed()
     {
         if (ActiveScreen is not null)
             return;
 
-        ShowScreen(new NotificationsFeedScreen(), static () => { });
+        Flash("Loading feed…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var feed = await _feed.LoadFeedAsync(mentionsOnly: false);
+                Application.Invoke(() =>
+                {
+                    if (ActiveScreen is not null)
+                        return;
+                    ShowScreen(new NotificationsFeedScreen(feed), static () => { });
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not load feed: {Short(ex)}"));
+            }
+        });
     }
 
     /// <summary>Toggles the subtasks view (F4, #46) — hidden vs. shown nested — and persists it.</summary>

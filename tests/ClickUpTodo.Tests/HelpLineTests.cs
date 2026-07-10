@@ -35,8 +35,10 @@ public sealed class HelpLineTests
     }
 
     [Fact]
-    public void Format_NotificationsFeed_RendersF1AndEscOnly()
-        => Assert.Equal("F1 help · Esc back", HelpLine.Format(HelpItemSets.NotificationsFeed));
+    public void Format_NotificationsFeed_RendersMoveMentionsHelpAndBack()
+        => Assert.Equal(
+            "↑/↓ move · F3 mentions only · F1 help · Esc back",
+            HelpLine.Format(HelpItemSets.NotificationsFeed));
 
     [Fact]
     public void ForActiveScreen_PrefersScreenItems_WhenPresent()

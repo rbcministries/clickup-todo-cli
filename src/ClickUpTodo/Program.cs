@@ -78,8 +78,9 @@ catch (Exception ex)
 }
 
 var taskService = new TaskService(client, config, userId);
+var feedService = new FeedService(client, taskService, config);
 var focusStore = new LocalFocusStore(config, configStore);
-new TodoApp(taskService, config, configStore, focusStore).Run(driverName);
+new TodoApp(taskService, feedService, config, configStore, focusStore).Run(driverName);
 return 0;
 
 // Reads "--opt value" or "--opt=value" from args.
