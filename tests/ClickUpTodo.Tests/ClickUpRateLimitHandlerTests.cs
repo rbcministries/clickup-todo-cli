@@ -1,5 +1,7 @@
 using System.Net;
 using ClickUpTodo.ClickUp;
+using Microsoft.Kiota.Http.HttpClientLibrary.Middleware;
+using Microsoft.Kiota.Http.HttpClientLibrary.Middleware.Options;
 
 namespace ClickUpTodo.Tests;
 
@@ -113,7 +115,12 @@ public sealed class ClickUpRateLimitHandlerTests
         {
             var i = Interlocked.Increment(ref _index);
             await (OnSend?.Invoke() ?? Task.CompletedTask);
-            return script[Math.Min(i, script.Length - 1)]();
+            var response = script[Math.Min(i, script.Length - 1)]();
+            // A raw handler pipeline (HttpMessageInvoker, not HttpClient) doesn't auto-populate this;
+            // Kiota's RetryHandler clones response.RequestMessage to build its retry, so a scripted
+            // response without it would silently not be retried.
+            response.RequestMessage ??= request;
+            return response;
         }
     }
 
@@ -328,18 +335,60 @@ public sealed class ClickUpRateLimitHandlerTests
         {
             Content = new StringContent("{\"user\":{\"id\":1}}"),
         });
-        using var retry = new Microsoft.Kiota.Http.HttpClientLibrary.Middleware.RetryHandler(
-            new Microsoft.Kiota.Http.HttpClientLibrary.Middleware.Options.RetryHandlerOption
-            {
-                ShouldRetry = ClickUpClientFactory.KiotaShouldRetry,
-            })
-        { InnerHandler = inner };
+        using var retry = new RetryHandler(new RetryHandlerOption { ShouldRetry = ClickUpClientFactory.KiotaShouldRetry })
+        {
+            InnerHandler = inner,
+        };
         using var invoker = new HttpMessageInvoker(retry);
 
         var response = await invoker.SendAsync(Get(), CancellationToken.None);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(1, inner.Sends);
+    }
+
+    [Fact]
+    public async Task GovernedRetryHandler_StillRetriesA503_ThenRecovers()
+    {
+        // The other side of the coin: the predicate must not *over*-correct. A 503 (Retry-After: 0 to
+        // keep the stock handler's backoff instant) must still be retried by the stock RetryHandler,
+        // then the recovered 200 returned — proving the fix narrowed retries to exactly the read-429.
+        var inner = new ScriptedHandler(
+            () => Resp(HttpStatusCode.ServiceUnavailable, retryAfter: "0"),
+            () => Resp(HttpStatusCode.ServiceUnavailable, retryAfter: "0"),
+            () => new HttpResponseMessage(HttpStatusCode.OK));
+        using var retry = new RetryHandler(new RetryHandlerOption { ShouldRetry = ClickUpClientFactory.KiotaShouldRetry })
+        {
+            InnerHandler = inner,
+        };
+        using var invoker = new HttpMessageInvoker(retry);
+
+        var response = await invoker.SendAsync(Get(), CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(3, inner.Sends);
+    }
+
+    [Fact]
+    public async Task StockRetryHandlerOverGovernor_Read429_GovernorOwnsIt_NoStockAmplification()
+    {
+        // The real production stack for a read: stock RetryHandler (with the de-conflict predicate)
+        // wraps the governor. A persistent read-429 must be retried by the GOVERNOR only — the stock
+        // handler leaves it alone — so the physical send count is exactly the governor's budget
+        // (1 + MaxRetries), not that multiplied by the stock handler's own retries, and the final 429
+        // surfaces for the adapter to translate. Retry-After: 0 keeps the governor's waits instant.
+        var inner = new ScriptedHandler(() => Resp(retryAfter: "0"));
+        var governor = new ClickUpRateLimitHandler { InnerHandler = inner };
+        using var retry = new RetryHandler(new RetryHandlerOption { ShouldRetry = ClickUpClientFactory.KiotaShouldRetry })
+        {
+            InnerHandler = governor,
+        };
+        using var invoker = new HttpMessageInvoker(retry);
+
+        var response = await invoker.SendAsync(Get(), CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+        Assert.Equal(1 + ClickUpRateLimitHandler.MaxRetries, inner.Sends);
     }
 
     private static void InterlockedMax(ref int target, int value)
