@@ -162,9 +162,10 @@ public sealed class AgentPromptComposerTests
     }
 
     [Fact]
-    public void Compose_ToggleInstructionPlaceholders_RenderEmpty_UntilTheirTogglesLand()
+    public void Compose_ToggleInstructionPlaceholders_RenderEmpty_WhenTheirTogglesAreOff()
     {
-        // #97/#98 supply these; until then they expand to empty so a template referencing them is inert.
+        // Both #97 (postToComments) and #98 (outputSubdirectory) default off ⇒ their placeholders
+        // expand to empty, so a template referencing them is inert with no options supplied.
         var composed = AgentPromptComposer.Compose(
             Task(), [], "go", template: "[{postCommentInstruction}][{outputDirInstruction}]");
         Assert.Equal("[][]", composed);
@@ -275,7 +276,7 @@ public sealed class AgentPromptComposerTests
     {
         var template = AgentPromptComposer.DefaultTemplateWithPreamble("  Only use the JSON.  ");
 
-        Assert.Equal("{userPrompt}\n\n{outputDirInstruction}Only use the JSON.\n\n{contextJson}", template);
+        Assert.Equal("{userPrompt}\n\n{outputDirInstruction}{postCommentInstruction}Only use the JSON.\n\n{contextJson}", template);
         Assert.DoesNotContain(AgentPromptComposer.Preamble, template);
         // Renders like the old custom-preamble output (no output subdir ⇒ {outputDirInstruction} empty).
         var composed = AgentPromptComposer.Compose(Task(), [], "go", template);
@@ -390,6 +391,100 @@ public sealed class AgentPromptComposerTests
     [Fact]
     public void OutputSubdirectoryToken_NullTask_Throws()
         => Assert.Throws<ArgumentNullException>(() => AgentPromptComposer.OutputSubdirectoryToken(null!));
+
+    // ── post-results-to-Comments toggle (#97) ──────────────────────────────────────
+
+    /// <summary>The instruction paragraph the toggle inserts, for the task built by <see cref="Task"/>
+    /// (id <c>abc123</c>). Kept as a single source so the layout/id assertions below stay in sync.</summary>
+    private const string PostComment =
+        "When you finish, post a brief summary comment of your work to ClickUp task abc123 " +
+        "using your ClickUp MCP tools (requires ClickUp MCP access to this workspace).";
+
+    [Fact]
+    public void Compose_PostToComments_InsertsInstructionBeforeTheJson()
+    {
+        var composed = AgentPromptComposer.Compose(Task(), [Comment()], "triage", postToComments: true);
+
+        Assert.StartsWith($"triage\n\n{PostComment}\n\n{AgentPromptComposer.Preamble}\n\n{{", composed);
+        // The instruction sits ahead of the JSON body, not inside it.
+        Assert.True(composed.IndexOf(PostComment, StringComparison.Ordinal) < composed.IndexOf('{'));
+    }
+
+    [Fact]
+    public void Compose_PostToComments_UsesRawTaskId_NotCustomId()
+    {
+        // ClickUp's comment API / MCP tools key on the raw task id, so the instruction must use it
+        // even when a custom id is set. (The custom id still appears in the JSON context body, so the
+        // check is scoped to the instruction paragraph, not the whole prompt.)
+        var instruction = AgentPromptComposer.PostCommentInstruction(
+            Task(id: "abc123", customId: "TEAM-42"), postToComments: true);
+
+        Assert.Contains("ClickUp task abc123", instruction);
+        Assert.DoesNotContain("TEAM-42", instruction);
+    }
+
+    [Fact]
+    public void Compose_PostToCommentsOff_IsByteIdenticalToNoArg()
+    {
+        var expected = AgentPromptComposer.Compose(Task(), [Comment()], "triage");
+        var actual = AgentPromptComposer.Compose(Task(), [Comment()], "triage", postToComments: false);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void Compose_PostToComments_CombinesWithOutputSubdirectory_InAWellDefinedOrder()
+    {
+        // Both instruction paragraphs are on: output-subdir first (#98), then post-to-Comments (#97),
+        // then the preamble, then the JSON — the DefaultTemplate slot order.
+        var composed = AgentPromptComposer.Compose(
+            Task(), [], "triage", outputSubdirectory: "TEAM-42", postToComments: true);
+
+        Assert.StartsWith(
+            $"triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n{PostComment}\n\n{AgentPromptComposer.Preamble}\n\n{{",
+            composed);
+    }
+
+    [Fact]
+    public void Compose_PostToComments_CombinesWithCustomTemplatePreamble()
+    {
+        var template = AgentPromptComposer.DefaultTemplateWithPreamble("Use only the JSON.");
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", template, postToComments: true);
+
+        Assert.StartsWith($"triage\n\n{PostComment}\n\nUse only the JSON.\n\n{{", composed);
+    }
+
+    [Fact]
+    public void PostCommentInstruction_Off_IsEmpty()
+        => Assert.Equal(string.Empty, AgentPromptComposer.PostCommentInstruction(Task(), postToComments: false));
+
+    [Fact]
+    public void PostCommentInstruction_On_IsAParagraphKeyedOnTheTaskId()
+    {
+        var instruction = AgentPromptComposer.PostCommentInstruction(Task(id: "abc123"), postToComments: true);
+        Assert.Equal($"{PostComment}\n\n", instruction);
+    }
+
+    [Fact]
+    public void PostCommentInstruction_NullTask_Throws()
+        => Assert.Throws<ArgumentNullException>(() => AgentPromptComposer.PostCommentInstruction(null!, true));
+
+    [Fact]
+    public void WritePromptFile_HonorsPostToComments()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "clickup-todo-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var path = AgentPromptComposer.WritePromptFile(Task(), [], "triage", dir, postToComments: true);
+            Assert.Equal(
+                AgentPromptComposer.Compose(Task(), [], "triage", postToComments: true),
+                File.ReadAllText(path));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
+    }
 
     // ── task subset ──────────────────────────────────────────────────────────────
 

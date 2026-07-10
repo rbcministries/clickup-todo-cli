@@ -220,6 +220,40 @@ public sealed class AgentDispatcherTests : IDisposable
             File.ReadAllText(result.PromptFilePath));
     }
 
+    // ── post-results-to-Comments (#97) ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task DispatchAsync_PassesPostToComments_ToComposedFile()
+    {
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
+        var task = Detail(id: "abc123");
+        var comments = Comments();
+
+        var result = await dispatcher.DispatchAsync(task, comments, "go", postToComments: true);
+
+        Assert.Equal(
+            AgentPromptComposer.Compose(task, comments, "go", postToComments: true),
+            File.ReadAllText(result.PromptFilePath));
+        Assert.Contains("post a brief summary comment of your work to ClickUp task abc123",
+            File.ReadAllText(result.PromptFilePath));
+    }
+
+    [Fact]
+    public async Task DispatchAsync_DefaultsPostToCommentsOff()
+    {
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
+        var task = Detail();
+        var comments = Comments();
+
+        var result = await dispatcher.DispatchAsync(task, comments, "go");
+
+        // Omitting the flag is byte-identical to a plain dispatch (no comment instruction).
+        Assert.Equal(AgentPromptComposer.Compose(task, comments, "go"), File.ReadAllText(result.PromptFilePath));
+        Assert.DoesNotContain("summary comment", File.ReadAllText(result.PromptFilePath));
+    }
+
     // ── session mode (one-off vs interactive, #94) ──────────────────────────────────
 
     [Fact]
