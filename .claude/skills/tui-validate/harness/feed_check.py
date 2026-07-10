@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Feed screen validation (#114). Boots the TUI, opens the mentions & comments
-feed (F5), and asserts: rows render (author/preview), the mention row carries the
-amber " @ " chip (a truecolor bg cell), and the F3 mentions-only toggle narrows
-the list to the mention and widens back. Then Esc returns to the dashboard.
+feed (Ctrl+E — the List <-> Feed navigation key), and asserts: rows render
+(author/preview), the mention row carries the amber " @ " chip (a truecolor bg
+cell), and the F3 mentions-only toggle narrows the list to the mention and widens
+back. Then Ctrl+E toggles back to the dashboard.
 
 Usage: feed_check.py <e2e.dll> [out.txt]
 """
@@ -22,7 +23,7 @@ proc = subprocess.Popen(["dotnet", DLL], stdin=slave, stdout=slave, stderr=slave
                         env=env, close_fds=True, preexec_fn=os.setsid)
 os.close(slave)
 
-F5 = b"\x1b[15~"
+CTRL_E = b"\x05"   # List <-> Feed navigation
 F3 = b"\x1bOR"
 ESC = b"\x1b"
 
@@ -71,8 +72,8 @@ try:
     pump(8.0)
     check("Task" in visible(), "dashboard did not boot")
 
-    # Open the feed.
-    os.write(master, F5); pump(2.5)
+    # Open the feed (Ctrl+E).
+    os.write(master, CTRL_E); pump(2.5)
     v = visible()
     check("Feed" in v, "feed screen title not shown")
     check("Ben Seymour" in v, "feed rows (comment authors) not rendered")
@@ -97,13 +98,13 @@ try:
     v = visible()
     check("Ben Seymour" in v, "toggling back did not restore all comments")
 
-    # Esc → back to the dashboard, cursor intact.
-    os.write(master, ESC); pump(1.5)
+    # Ctrl+E → toggle back to the dashboard, cursor intact.
+    os.write(master, CTRL_E); pump(1.5)
     check("Task" in visible(), "did not return to the dashboard")
 
     with open(OUT + ".dashboard", "w") as f:
         f.write(visible())  # the restored dashboard (OUT keeps the all-comments feed view)
-    print("ok — feed renders, mention chip present, F3 filter narrows/widens, Esc returns")
+    print("ok — feed renders, mention chip present, F3 filter narrows/widens, Ctrl+E toggles back")
 finally:
     try: os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception: pass

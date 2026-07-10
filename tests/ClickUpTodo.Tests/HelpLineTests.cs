@@ -21,14 +21,14 @@ public sealed class HelpLineTests
     public void Format_SingleItem_HasNoSeparator()
         => Assert.Equal("Esc/Enter close", HelpLine.Format(HelpItemSets.Help));
 
-    // Pins the full main-list footer. It was byte-for-byte the pre-#103 line until #83 added the
-    // bulk expand/collapse-all chord (Ctrl+→/←) right after the per-parent →/← item.
+    // Pins the full main-list footer. F5 is the refresh key (icon ↻; Ctrl+R is its undisplayed alias)
+    // and Ctrl+E opens the feed — the List ↔ Feed navigation key.
     [Fact]
     public void Format_MainList_RendersTheFullFooter()
     {
         const string expected =
-            "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+R ↻ · "
-            + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 feed · F6 badges · "
+            "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
+            + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 ↻ · F6 badges · "
             + "→/← expand/collapse · Ctrl+→/← all · Ctrl+Q quit · type to search";
 
         Assert.Equal(expected, HelpLine.Format(HelpItemSets.MainList));
@@ -37,7 +37,7 @@ public sealed class HelpLineTests
     [Fact]
     public void Format_NotificationsFeed_RendersMoveMentionsHelpAndBack()
         => Assert.Equal(
-            "↑/↓ move · F3 mentions only · F1 help · Esc back",
+            "↑/↓ move · F3 mentions only · F5 ↻ · Ctrl+E list · F1 help · Esc back",
             HelpLine.Format(HelpItemSets.NotificationsFeed));
 
     [Fact]

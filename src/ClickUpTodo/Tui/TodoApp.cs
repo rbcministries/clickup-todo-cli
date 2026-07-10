@@ -53,6 +53,10 @@ public sealed class TodoApp
     // True while a dispatch is in flight, so a rapid second submit doesn't launch a duplicate session.
     // Only touched on the UI thread (set in DispatchAgent, cleared via Application.Invoke).
     private bool _dispatching;
+    // True while a feed / detail auto- or manual refresh fetch is outstanding, so ticks coalesce
+    // instead of piling up when a fan-out outlasts the cadence. UI-thread-only (like _dispatching).
+    private bool _refreshingFeed;
+    private bool _refreshingDetail;
 
     private Window _window = null!;
     private FrameView _frame = null!;
@@ -260,9 +264,14 @@ public sealed class TodoApp
                     TogglePin();
                     break;
                 case KeyCode.R:
+                    // Ctrl+R is the (undisplayed) alias for the F5 refresh key.
                     key.Handled = true;
-                    Flash("Refreshing…");
-                    _refresh.RequestRefresh();
+                    RequestRefresh();
+                    break;
+                case KeyCode.E:
+                    // Ctrl+E toggles to the mentions & comments feed — List ↔ Feed navigation.
+                    key.Handled = true;
+                    OpenNotificationsFeed();
                     break;
                 case KeyCode.B:
                     key.Handled = true;
@@ -345,8 +354,9 @@ public sealed class TodoApp
                 ToggleShowSubtasks();
                 break;
             case KeyCode.F5:
+                // F5 is the refresh key (icon ↻); Ctrl+R is its undisplayed alias.
                 key.Handled = true;
-                OpenNotificationsFeed();
+                RequestRefresh();
                 break;
             case KeyCode.F6:
                 key.Handled = true;
@@ -370,14 +380,22 @@ public sealed class TodoApp
         Render(keepTaskId: CurrentTask()?.Id);
     }
 
+    /// <summary>F5 (and its Ctrl+R alias) — refresh now: flashes and wakes the background poll loop.</summary>
+    private void RequestRefresh()
+    {
+        Flash("Refreshing…");
+        _refresh.RequestRefresh();
+    }
+
     /// <summary>
-    /// F5 — opens the mentions &amp; comments feed screen (#114, epic #109). Fetches the feed off the UI
-    /// thread (like <see cref="OpenDetail"/>: flash → <c>Task.Run</c> → <c>Application.Invoke</c>) and
-    /// swaps in the data-bearing screen back on it; the background dashboard refresh keeps running.
-    /// Opens through the shared screen seam, guarded on <see cref="ActiveScreen"/> like the other
-    /// list-initiated opens. The full feed is loaded once (every entry mention-stamped), so the
-    /// screen's F3 mentions-only toggle filters locally with no re-fetch. Loading and error states show
-    /// on the status line — the screen is only constructed on success.
+    /// Ctrl+E — opens the mentions &amp; comments feed screen (#114, epic #109), the List ↔ Feed
+    /// navigation key. Fetches the feed off the UI thread (like <see cref="OpenDetail"/>: flash →
+    /// <c>Task.Run</c> → <c>Application.Invoke</c>) and swaps in the data-bearing screen back on it; the
+    /// background dashboard refresh keeps running. Opens through the shared screen seam, guarded on
+    /// <see cref="ActiveScreen"/> like the other list-initiated opens. The full feed is loaded once
+    /// (every entry mention-stamped), so the screen's F3 mentions-only toggle filters locally with no
+    /// re-fetch. Loading and error states show on the status line — the screen is only constructed on
+    /// success.
     /// </summary>
     private void OpenNotificationsFeed()
     {
@@ -394,12 +412,59 @@ public sealed class TodoApp
                 {
                     if (ActiveScreen is not null)
                         return;
-                    ShowScreen(new NotificationsFeedScreen(feed), static () => { });
+                    // The feed auto-refreshes on the same cadence as the dashboard list (#114 follow-up);
+                    // F5 / Ctrl+R force one. RefreshFeed re-fetches and feeds the result back in place.
+                    var screen = new NotificationsFeedScreen(feed, _config.RefreshSeconds);
+                    screen.RefreshRequested += (_, _) => RefreshFeed(screen);
+                    ShowScreen(screen, static () => { });
                 });
             }
             catch (Exception ex)
             {
                 Application.Invoke(() => Flash($"Could not load feed: {Short(ex)}"));
+            }
+        });
+    }
+
+    /// <summary>
+    /// Re-fetches the feed for an open <see cref="NotificationsFeedScreen"/> (its F5 / Ctrl+R or
+    /// auto-refresh tick) and feeds it back on the UI thread. Mirrors <see cref="OpenNotificationsFeed"/>'s
+    /// off-thread fetch; skips while the feed isn't front-most, and drops the result if the screen has
+    /// since been torn down. A fetch error flashes without disturbing the view.
+    /// </summary>
+    private void RefreshFeed(NotificationsFeedScreen screen)
+    {
+        // Runs on the UI thread (from the screen's key handler or its timer tick), so ActiveScreen is a
+        // valid read: no point fetching to update a feed that isn't showing.
+        if (!ReferenceEquals(ActiveScreen, screen))
+            return;
+
+        // Coalesce: the feed fan-out (a comment fetch per assigned task) can outlast the refresh cadence
+        // on a large workspace. Skip a tick while one is still in flight so ticks don't pile up and
+        // multiply API load — and so an earlier fetch can't land after a later one with stale data. The
+        // flag is only touched on the UI thread (here and the finally's Invoke), so no locking is needed.
+        if (_refreshingFeed)
+            return;
+        _refreshingFeed = true;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var feed = await _feed.LoadFeedAsync(mentionsOnly: false);
+                Application.Invoke(() =>
+                {
+                    if (_screens.Contains(screen))
+                        screen.UpdateFeed(feed);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not refresh feed: {Short(ex)}"));
+            }
+            finally
+            {
+                Application.Invoke(() => _refreshingFeed = false);
             }
         });
     }
@@ -937,6 +1002,9 @@ public sealed class TodoApp
                     // post-to-Comments flag (#97) are consumed. The detail view opens on the configured
                     // tab/sort/scroll (#108).
                     screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request);
+                    // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data; re-fetch off the UI
+                    // thread and feed it back into the still-open screen (its tab/scroll stay put).
+                    screen.RefreshRequested += (_, _) => RefreshDetail(screen, task.Id);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -949,6 +1017,51 @@ public sealed class TodoApp
             catch (Exception ex)
             {
                 Application.Invoke(() => Flash($"Could not load task detail: {Short(ex)}"));
+            }
+        });
+    }
+
+    /// <summary>
+    /// Re-fetches a task's detail + comments for an open <see cref="TaskDetailScreen"/> (its F5 / Ctrl+R
+    /// or 30s auto-refresh, #114 follow-up) and feeds them back on the UI thread. Mirrors
+    /// <see cref="OpenDetail"/>'s off-thread fetch; the result is dropped if that screen has since been
+    /// torn down (it's no longer on the stack), and a fetch error flashes without disturbing the view.
+    /// The background dashboard refresh is independent and keeps running.
+    /// </summary>
+    private void RefreshDetail(TaskDetailScreen screen, string taskId)
+    {
+        // Skip while the detail isn't front-most (e.g. Help stacked over it): no point spending a
+        // round-trip to update a hidden view. Runs on the UI thread (from the screen's key handler or
+        // its 30s timer tick), so ActiveScreen is a valid read. The next tick refreshes once it's back.
+        if (!ReferenceEquals(ActiveScreen, screen))
+            return;
+
+        // Coalesce overlapping refreshes: skip a tick while one is still in flight so ticks can't pile
+        // up and an earlier fetch can't land after a later one with stale data (UI-thread-only flag).
+        if (_refreshingDetail)
+            return;
+        _refreshingDetail = true;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var detail = await _tasks.GetTaskDetailAsync(taskId);
+                var comments = await _tasks.GetTaskCommentsAsync(taskId);
+                Application.Invoke(() =>
+                {
+                    // Only apply if this screen is still mounted (it may sit beneath a stacked Help).
+                    if (_screens.Contains(screen))
+                        screen.UpdateData(detail, comments);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not refresh task: {Short(ex)}"));
+            }
+            finally
+            {
+                Application.Invoke(() => _refreshingDetail = false);
             }
         });
     }

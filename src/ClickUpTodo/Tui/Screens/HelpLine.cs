@@ -95,12 +95,12 @@ public static class HelpItemSets
         new("↩", "detail"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+P", "📌"),
-        new("Ctrl+R", "↻"),
+        new("Ctrl+E", "feed"),
         new("F1", "help"),
         new("F2", "⚙"),
         new("F3", "filter/sort/group"),
         new("F4", "subtasks"),
-        new("F5", "feed"),
+        new("F5", "↻"),
         new("F6", "badges"),
         new("→/←", "expand/collapse"),
         new("Ctrl+→/←", "all"),
@@ -116,6 +116,7 @@ public static class HelpItemSets
         new("Ctrl+PgUp/PgDn", "sort stream"),
         new("Ctrl+A", "dispatch to Claude"),
         new("Ctrl+B", "browser"),
+        new("F5", "↻"),
         new("F1", "help"),
         new("Esc", "back"),
     ];
@@ -157,12 +158,14 @@ public static class HelpItemSets
         new("Esc", "cancel"),
     ];
 
-    /// <summary>The mentions &amp; comments feed screen (F5, #109). F3 toggles the mentions-only filter
-    /// (#113/#114); the open-task item arrives with #115.</summary>
+    /// <summary>The mentions &amp; comments feed screen (opened with Ctrl+E, #109). F3 toggles the
+    /// mentions-only filter (#113/#114); Ctrl+E returns to the list; the open-task item arrives with #115.</summary>
     public static readonly IReadOnlyList<HelpItem> NotificationsFeed =
     [
         new("↑/↓", "move"),
         new("F3", "mentions only"),
+        new("F5", "↻"),
+        new("Ctrl+E", "list"),
         new("F1", "help"),
         new("Esc", "back"),
     ];
