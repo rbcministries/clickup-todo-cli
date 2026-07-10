@@ -977,6 +977,12 @@ public sealed class TodoApp
     /// </summary>
     private void RefreshDetail(TaskDetailScreen screen, string taskId)
     {
+        // Skip while the detail isn't front-most (e.g. Help stacked over it): no point spending a
+        // round-trip to update a hidden view. Runs on the UI thread (from the screen's key handler or
+        // its 30s timer tick), so ActiveScreen is a valid read. The next tick refreshes once it's back.
+        if (!ReferenceEquals(ActiveScreen, screen))
+            return;
+
         _ = Task.Run(async () =>
         {
             try

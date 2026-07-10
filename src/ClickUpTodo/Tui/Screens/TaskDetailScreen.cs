@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Drawing;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using Terminal.Gui.App;
@@ -338,19 +339,15 @@ public sealed class TaskDetailScreen : Screen
 
         var streamText = TaskDetailFormatter.Stream(task, comments, _streamSort);
         if (!string.Equals(_streamPane.Text, streamText, StringComparison.Ordinal))
-        {
-            _streamPane.Text = streamText;
-            _streamAutoScrollPending = true;
-            FlushStreamAutoScrollIfActive();
-        }
+            RefreshStreamPane(streamText);
 
         var descriptionText = TaskDetailFormatter.Description(task);
         if (!string.Equals(_descriptionPane.Text, descriptionText, StringComparison.Ordinal))
-            _descriptionPane.Text = descriptionText;
+            SetTextKeepingScroll(_descriptionPane, descriptionText);
 
         var commentsText = TaskDetailFormatter.Comments(comments);
         if (!string.Equals(_commentsPane.Text, commentsText, StringComparison.Ordinal))
-            _commentsPane.Text = commentsText;
+            SetTextKeepingScroll(_commentsPane, commentsText);
         var commentsTitle = $"Comments ({comments.Count})";
         if (!string.Equals(_commentsPane.Title, commentsTitle, StringComparison.Ordinal))
             _commentsPane.Title = commentsTitle;
@@ -362,6 +359,52 @@ public sealed class TaskDetailScreen : Screen
         {
             _otherSignature = otherSignature;
             _otherTab.Update(headerLines, customFieldsBody);
+        }
+    }
+
+    /// <summary>
+    /// Re-renders the Stream tab on refresh. If the reader was parked at the auto-scroll edge (i.e.
+    /// following the newest — or oldest — entry, per the #107 preference), keep following it as new
+    /// entries arrive; otherwise keep their scroll position so a fresh comment doesn't yank the view.
+    /// </summary>
+    private void RefreshStreamPane(string streamText)
+    {
+        var followingEdge = DetailScrollModel.ResolveEdge(_streamAutoScroll, _streamSort) switch
+        {
+            DetailScrollModel.Edge.Bottom => TopRow(_streamPane) >= MaxTopRow(_streamPane),
+            _ => TopRow(_streamPane) == 0,
+        };
+        if (followingEdge)
+        {
+            _streamPane.Text = streamText;   // reset scroll, then re-anchor to the (new) edge
+            _streamAutoScrollPending = true;
+            FlushStreamAutoScrollIfActive();
+        }
+        else
+        {
+            SetTextKeepingScroll(_streamPane, streamText);
+        }
+    }
+
+    /// <summary>The pane's current top scroll row.</summary>
+    private static int TopRow(TextView pane) => pane.Viewport.Y;
+
+    /// <summary>The largest valid top row for the pane's current content and viewport height.</summary>
+    private static int MaxTopRow(TextView pane) => Math.Max(0, pane.Lines - Math.Max(1, pane.Viewport.Height));
+
+    /// <summary>Sets a pane's text but restores the prior top scroll row (clamped to the new content),
+    /// so an in-place refresh (#114 follow-up) doesn't reset a reader to the top. On the front-most
+    /// (laid-out) pane the viewport height is real; on a background tab the clamp keeps it in range and
+    /// the offset re-applies when the user tabs to it.</summary>
+    private static void SetTextKeepingScroll(TextView pane, string text)
+    {
+        var top = TopRow(pane);
+        pane.Text = text;
+        var restored = Math.Min(top, MaxTopRow(pane));
+        if (restored > 0)
+        {
+            var vp = pane.Viewport;
+            pane.Viewport = new Rectangle(vp.X, restored, vp.Width, vp.Height);
         }
     }
 
