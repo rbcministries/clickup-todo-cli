@@ -78,6 +78,55 @@ public sealed class TaskDetailFormatterTests
     }
 
     [Fact]
+    public void Header_TitleLine_CarriesStatusAndPriorityBadges()
+    {
+        // The title line surfaces the same "{icon} {name}" badges as the main-list text mode (#162).
+        var header = TaskDetailFormatter.Header(Sample(statusName: "in progress", priority: "high"));
+        var titleLine = header.Split('\n')[0];
+        Assert.Contains(StatusPriorityBadge.Status("in progress"), titleLine);
+        Assert.Contains(StatusPriorityBadge.Priority("high"), titleLine);
+    }
+
+    [Fact]
+    public void HeaderLines_TitleLine_HasNameThenColouredStatusThenPriorityBadge()
+    {
+        var lines = TaskDetailFormatter.HeaderLines(
+            Sample(statusName: "in progress", priority: "high", statusColor: "#00ff00", priorityColor: "#ff0000"));
+
+        var title = lines[0];
+        Assert.StartsWith("Ship the report", title.Text);
+        // The name run is uncoloured; the status/priority badge runs carry their field colour.
+        Assert.Null(title.Runs[0].Color);
+        var status = Assert.Single(title.Runs, r => r.Text == StatusPriorityBadge.Status("in progress"));
+        Assert.Equal("#00ff00", status.Color);
+        var priority = Assert.Single(title.Runs, r => r.Text == StatusPriorityBadge.Priority("high"));
+        Assert.Equal("#ff0000", priority.Color);
+        // Status precedes priority on the line.
+        Assert.True(title.Text.IndexOf('○') < title.Text.IndexOf('⚑'));
+    }
+
+    [Fact]
+    public void HeaderLines_AbsentStatusOrPriority_EmitsNoBadgeRun()
+    {
+        var lines = TaskDetailFormatter.HeaderLines(Sample(statusName: null, priority: null));
+
+        var title = lines[0];
+        Assert.DoesNotContain('○', title.Text);
+        Assert.DoesNotContain('⚑', title.Text);
+        Assert.Equal("Ship the report", title.Text);
+    }
+
+    [Fact]
+    public void HeaderLines_TagsAndAssigneesFollowTheTitleLine()
+    {
+        var lines = TaskDetailFormatter.HeaderLines(
+            Sample(tags: ["urgent", "q3"], assignees: ["ben", "sam"]));
+
+        Assert.Equal("Tags: urgent, q3", lines[1].Text);
+        Assert.Equal("Assignees: ben, sam", lines[2].Text);
+    }
+
+    [Fact]
     public void Description_FallsBackWhenBlank()
     {
         Assert.Equal("(no description)", TaskDetailFormatter.Description(Sample(description: "  ")));

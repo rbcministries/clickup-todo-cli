@@ -13,21 +13,50 @@ namespace ClickUpTodo.Tui;
 /// </summary>
 public static class TaskDetailFormatter
 {
-    /// <summary>Header shown above the tabs: title, then tags and assignees when present.</summary>
-    public static string Header(TaskDetail task)
+    /// <summary>
+    /// Header shown above the tabs, as structured, per-run-coloured lines (#162): the title line
+    /// (<c>{Name}  ({CustomId})</c>) with trailing coloured <c>○ {status}</c> / <c>⚑ {priority}</c>
+    /// badges (sharing <see cref="StatusPriorityBadge"/> with the main-list text badges), then the Tags
+    /// line (when present) and the Assignees line — both uncoloured. Absent status/priority contribute
+    /// no badge (and no separator). The badge <em>values</em> carry their hex colour
+    /// (<see cref="TaskDetail.StatusColor"/> / <see cref="TaskDetail.PriorityColor"/>) so the view badges
+    /// them via <see cref="StatusBadgeListSource.HeaderAttr"/>, exactly like the Other tab (#66). The
+    /// single source both <see cref="Header"/> (plain text) and <see cref="DetailAttributesView"/> draw
+    /// from, so the two can't drift.
+    /// </summary>
+    public static IReadOnlyList<DetailLine> HeaderLines(TaskDetail task)
     {
-        var sb = new StringBuilder();
-        sb.Append(task.Name);
+        var title = new StringBuilder();
+        title.Append(task.Name);
         if (!string.IsNullOrWhiteSpace(task.CustomId))
-            sb.Append("  (").Append(task.CustomId).Append(')');
-        sb.Append('\n');
+            title.Append("  (").Append(task.CustomId).Append(')');
 
+        var runs = new List<DetailRun> { new(title.ToString()) };
+        // A two-space separator (uncoloured) precedes each badge, then the coloured "{icon} {name}".
+        if (!string.IsNullOrWhiteSpace(task.StatusName))
+        {
+            runs.Add(new DetailRun("  "));
+            runs.Add(new DetailRun(StatusPriorityBadge.Status(task.StatusName!), task.StatusColor));
+        }
+        if (!string.IsNullOrWhiteSpace(task.Priority))
+        {
+            runs.Add(new DetailRun("  "));
+            runs.Add(new DetailRun(StatusPriorityBadge.Priority(task.Priority!), task.PriorityColor));
+        }
+
+        var lines = new List<DetailLine> { new(runs) };
         if (task.Tags.Count > 0)
-            sb.Append("Tags: ").Append(string.Join(", ", task.Tags)).Append('\n');
-        sb.Append("Assignees: ")
-          .Append(task.Assignees.Count > 0 ? string.Join(", ", task.Assignees) : "(none)");
-        return sb.ToString();
+            lines.Add(new DetailLine([new DetailRun("Tags: " + string.Join(", ", task.Tags))]));
+        lines.Add(new DetailLine([new DetailRun(
+            "Assignees: " + (task.Assignees.Count > 0 ? string.Join(", ", task.Assignees) : "(none)"))]));
+        return lines;
     }
+
+    /// <summary>The header as plain text (its <see cref="HeaderLines"/> concatenated, one per line) —
+    /// used where per-span colour isn't available. Assembled from <see cref="HeaderLines"/> so the two
+    /// can't drift; the title line therefore includes the badge labels (<c>○ …</c> / <c>⚑ …</c>).</summary>
+    public static string Header(TaskDetail task)
+        => string.Join("\n", HeaderLines(task).Select(l => l.Text));
 
     /// <summary>The Description tab body.</summary>
     public static string Description(TaskDetail task)
