@@ -194,7 +194,10 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// <summary>
     /// Delta variant of <see cref="GetListTasksAsync"/> (#194): only tasks on the list whose
     /// <c>date_updated</c> is after <paramref name="updatedAfterMs"/> (epoch ms), closed included (see
-    /// <see cref="GetAssignedTasksDeltaAsync"/>), archived always dropped.
+    /// <see cref="GetAssignedTasksDeltaAsync"/>). Archived rows are always dropped — which means an
+    /// archive is <b>invisible</b> to a delta (the row just stops appearing) and the stale entry
+    /// lingers until the caller's periodic full resync; see
+    /// <see cref="Services.TaskService.LoadSnapshotAsync"/>.
     /// </summary>
     public Task<List<TaskItem>> GetListTasksDeltaAsync(string listId, long updatedAfterMs, CancellationToken ct = default)
         => Guard("GetTasks", () => PageAsync(page =>

@@ -40,4 +40,34 @@ public sealed class RefreshServiceKindTests
         lock (kinds)
             Assert.Equal([RefreshKind.Initial, RefreshKind.Manual], kinds.Take(2));
     }
+
+    [Fact]
+    public async Task HttpTimeoutStyleCancellation_DoesNotKillTheLoop()
+    {
+        // An HttpClient timeout surfaces as a TaskCanceledException with the loop's own token
+        // unsignalled. It must be routed to onError and the loop must keep serving refreshes —
+        // previously it silently broke out of the loop for the rest of the session.
+        var errors = 0;
+        var fetches = 0;
+        var secondFetch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        using var service = new RefreshService(
+            fetch: (_, _) =>
+            {
+                if (Interlocked.Increment(ref fetches) == 1)
+                    throw new TaskCanceledException("simulated HttpClient timeout");
+                secondFetch.TrySetResult();
+                return Task.FromResult<IReadOnlyList<TaskItem>>([]);
+            },
+            intervalSeconds: 600,
+            onUpdate: _ => { },
+            onError: _ => Interlocked.Increment(ref errors));
+
+        service.Start();
+        service.RequestRefresh(); // wake the loop for the post-error fetch
+        await secondFetch.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, errors);
+        Assert.True(Volatile.Read(ref fetches) >= 2);
+    }
 }

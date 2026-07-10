@@ -50,9 +50,11 @@ public sealed class RefreshService(
                 var tasks = await fetch(kind, ct);
                 onUpdate(tasks);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                break;
+                break; // genuine shutdown. An HttpClient timeout also surfaces as a (Task)Canceled-
+                       // Exception with our ct unsignalled — without this filter one network timeout
+                       // silently killed the polling loop for the rest of the session.
             }
             catch (Exception ex)
             {

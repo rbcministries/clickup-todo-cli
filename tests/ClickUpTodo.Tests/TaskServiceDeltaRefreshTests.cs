@@ -77,6 +77,60 @@ public sealed class TaskServiceDeltaRefreshTests
     }
 
     [Fact]
+    public void MergeDelta_SameUpdatedMs_IsANoOp()
+    {
+        // The 60s skew overlap re-reads the watermark-defining task on every poll; an upsert whose
+        // date_updated hasn't moved must not count as a change, or the steady-state Changed=false
+        // fast path would never fire against the real API (strict `>` + overlap ⇒ never-empty deltas).
+        var previous = new[] { Item("a", updated: 500), Item("b", updated: 400) };
+
+        var (tasks, changed) = TaskService.MergeDelta(previous, [Item("a", updated: 500)]);
+
+        Assert.False(changed);
+        Assert.Same(previous, tasks);
+    }
+
+    [Fact]
+    public void MergeDelta_NullUpdatedMs_AlwaysCountsAsChange()
+    {
+        // Without a timestamp we can't prove the re-read is stale — err toward a redraw.
+        var previous = new[] { Item("a") };
+
+        var (_, changed) = TaskService.MergeDelta(previous, [Item("a")]);
+
+        Assert.True(changed);
+    }
+
+    [Fact]
+    public void MergeDelta_EmptyPrevious_InsertsAll()
+    {
+        var (tasks, changed) = TaskService.MergeDelta([], [Item("a", due: 2), Item("b", due: 1)]);
+
+        Assert.True(changed);
+        Assert.Equal(["b", "a"], tasks.Select(t => t.Id));
+    }
+
+    [Fact]
+    public void MergeDelta_DuplicateIdWithinDelta_LastWins()
+    {
+        var (tasks, _) = TaskService.MergeDelta(
+            [], [Item("a", updated: 1) with { Name = "first" }, Item("a", updated: 2) with { Name = "second" }]);
+
+        Assert.Equal("second", tasks.Single().Name);
+    }
+
+    [Fact]
+    public void MergeDelta_EmptyId_Skipped()
+    {
+        var previous = new[] { Item("a") };
+
+        var (tasks, changed) = TaskService.MergeDelta(previous, [Item("", updated: 99)]);
+
+        Assert.False(changed);
+        Assert.Same(previous, tasks);
+    }
+
+    [Fact]
     public void MaxUpdatedMs_IgnoresNulls_NullWhenNone()
     {
         Assert.Equal(9, TaskService.MaxUpdatedMs([Item("a", 4), Item("b"), Item("c", 9)]));
@@ -208,7 +262,7 @@ public sealed class TaskServiceDeltaRefreshTests
     }
 
     [Fact]
-    public async Task TaskThatClosed_IsDroppedByTheDeltaPoll()
+    public async Task TaskThatClosed_IsDroppedByTheDeltaPoll_AndAdvancesTheWatermark()
     {
         var fake = new FakeClient { Assigned = [Item("a", updated: 500_000), Item("b", updated: 500_000)] };
         var service = Service(fake);
@@ -219,6 +273,44 @@ public sealed class TaskServiceDeltaRefreshTests
 
         Assert.True(result.Changed);
         Assert.Equal(["a"], result.Tasks.Select(t => t.Id));
+
+        // The closed task's timestamp must advance the watermark even though it left the snapshot.
+        fake.AssignedDelta = [];
+        await service.LoadSnapshotAsync(preferDelta: true);
+        Assert.Equal(600_000 - TaskService.DeltaSkewMs, fake.AssignedDeltaSince[^1]);
+    }
+
+    [Fact]
+    public async Task PersonalDelta_WinsIdCollision_MatchingFullLoadMergeOrder()
+    {
+        var fake = new FakeClient { Assigned = [Item("a", updated: 500_000)] };
+        var service = Service(fake);
+        await service.LoadSnapshotAsync(preferDelta: true);
+
+        fake.AssignedDelta = [Item("x", updated: 600_000) with { Name = "assigned view" }];
+        fake.PersonalDelta = [Item("x", updated: 600_000) with { Name = "personal view" }];
+        var result = await service.LoadSnapshotAsync(preferDelta: true);
+
+        Assert.Equal("personal view", result.Tasks.Single(t => t.Id == "x").Name);
+    }
+
+    [Fact]
+    public async Task FullResync_NeverRegressesTheWatermark()
+    {
+        // Deltas advanced the watermark to 900_000 (a task that then closed); the periodic full
+        // resync excludes closed tasks so its own max is older — the watermark must stay put or
+        // every resync would re-download the recently-closed churn window.
+        var fake = new FakeClient { Assigned = [Item("a", updated: 500_000)] };
+        var service = Service(fake);
+        await service.LoadSnapshotAsync(preferDelta: true);
+        fake.AssignedDelta = [Closed("b", updated: 900_000)];
+        await service.LoadSnapshotAsync(preferDelta: true);
+
+        await service.LoadSnapshotAsync(preferDelta: false); // resync: still only a@500_000
+
+        fake.AssignedDelta = [];
+        await service.LoadSnapshotAsync(preferDelta: true);
+        Assert.Equal(900_000 - TaskService.DeltaSkewMs, fake.AssignedDeltaSince[^1]);
     }
 
     [Fact]
