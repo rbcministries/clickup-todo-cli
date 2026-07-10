@@ -119,12 +119,14 @@ public sealed class StatusBadgeListSourceTests
     [Fact]
     public void StatusChip_ColumnsMatchBaseRenderer()
     {
-        // The status chip occupies chars [0,3); its overlay must paint exactly columns [0,3) — the base
-        // renderer's width for the same span — so the colour lands on the glyph and its two spaces.
+        // The status chip follows the leading id chip; its overlay must paint exactly the base
+        // renderer's column width for that span, so the colour lands on the glyph and its two spaces.
         var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", StatusColor = "#87909e" };
         var row = TaskRowFormatter.Format(task);
 
-        Assert.Equal(0, row.StatusStart);
+        // The id chip ("1 ") precedes the status chip (id text + its trailing separator space).
+        Assert.Equal(row.CustomIdLength + 1, row.StatusStart);
+        Assert.Equal(row.Text[..row.StatusStart].GetColumns(), LaidOutColumnAt(row.Text, row.StatusStart));
         var end = row.StatusStart + row.StatusLength;
         Assert.Equal(row.Text[..end].GetColumns(), LaidOutColumnAt(row.Text, end));
     }
@@ -132,8 +134,9 @@ public sealed class StatusBadgeListSourceTests
     [Fact]
     public void PriorityChip_FollowingStatusChip_ColumnsMatchBaseRenderer()
     {
-        // The priority chip sits at char-offset 3 (after the status chip); both its start and end
-        // overlay columns must equal the base renderer's cumulative width there, or the tint drifts.
+        // The priority chip sits immediately after the status chip (which itself follows the leading id
+        // chip); both its start and end overlay columns must equal the base renderer's cumulative width
+        // there, or the tint drifts.
         var task = new TaskItem
         {
             Id = "1",
@@ -145,7 +148,7 @@ public sealed class StatusBadgeListSourceTests
         };
         var row = TaskRowFormatter.Format(task);
 
-        Assert.Equal(TaskRowFormatter.StatusIcon.Length, row.PriorityStart);
+        Assert.Equal(row.StatusStart + row.StatusLength, row.PriorityStart);
         Assert.Equal(row.Text[..row.PriorityStart].GetColumns(), LaidOutColumnAt(row.Text, row.PriorityStart));
         var end = row.PriorityStart + row.PriorityLength;
         Assert.Equal(row.Text[..end].GetColumns(), LaidOutColumnAt(row.Text, end));
