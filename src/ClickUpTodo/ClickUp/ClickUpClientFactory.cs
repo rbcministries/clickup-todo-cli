@@ -72,9 +72,26 @@ public static class ClickUpClientFactory
         return httpClient;
     }
 
-    /// <summary>The de-conflicted retry predicate for Kiota's stock <c>RetryHandler</c>: everything it
-    /// would normally retry (503/504, and 429s on bodied writes) except read 429s, which belong to
-    /// <see cref="ClickUpRateLimitHandler"/>. internal for unit tests.</summary>
+    /// <summary>
+    /// The de-conflicted retry predicate for Kiota's stock <c>RetryHandler</c>. In Kiota 2.0 this
+    /// delegate is the handler's <b>sole</b> retry gate (there is no separate internal status check),
+    /// so it must itself return <c>false</c> for any non-retriable status — most importantly a plain
+    /// <c>200 OK</c>, which the previous <c>!= 429</c> form wrongly retried to exhaustion, turning the
+    /// very first successful read (startup's <c>GetAuthorizedUser</c>) into an "Too many retries"
+    /// <see cref="AggregateException"/>. It therefore mirrors Kiota's own retriable set
+    /// (<c>429</c>/<c>503</c>/<c>504</c>) and then subtracts read <c>429</c>s, which belong exclusively
+    /// to <see cref="ClickUpRateLimitHandler"/>; bodied-write <c>429</c>s stay with the stock handler
+    /// (it can clone their content — the governor defers them). internal for unit tests.
+    /// </summary>
     internal static bool KiotaShouldRetry(int delay, int executionCount, HttpResponseMessage response)
-        => response.StatusCode != HttpStatusCode.TooManyRequests || response.RequestMessage?.Content is not null;
+    {
+        var retriable = response.StatusCode is HttpStatusCode.ServiceUnavailable
+            or HttpStatusCode.GatewayTimeout
+            or HttpStatusCode.TooManyRequests;
+        if (!retriable)
+            return false;
+        // A read (bodyless) 429 is the governor's to retry; leave it alone so the final 429 surfaces
+        // as a ClickUpApiException rather than being re-driven here.
+        return response.StatusCode != HttpStatusCode.TooManyRequests || response.RequestMessage?.Content is not null;
+    }
 }
