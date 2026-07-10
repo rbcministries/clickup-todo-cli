@@ -5,6 +5,14 @@ using ClickUpTodo.Configuration;
 namespace ClickUpTodo.Services;
 
 /// <summary>
+/// Result of <see cref="TaskService.LoadSnapshotAsync"/> (#194): the merged snapshot, whether it
+/// differs from the previous one (<see cref="Changed"/> is false only for a provably-empty delta, so
+/// callers can skip snapshot-dependent follow-up work), and whether it was produced by a delta fetch
+/// (<see cref="WasDelta"/>, which callers use to drive their periodic full-resync cadence).
+/// </summary>
+public sealed record TaskSnapshotResult(IReadOnlyList<TaskItem> Tasks, bool Changed, bool WasDelta);
+
+/// <summary>
 /// Fetches and merges the user's actionable tasks (assigned-to-me ∪ Personal Tasks list),
 /// de-duplicated and stably ordered, and resolves per-list status options on demand (cached).
 /// </summary>
@@ -21,6 +29,138 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
 
     /// <summary>The signed-in app user's ClickUp id — the target of the default "Assignee IS me" rule.</summary>
     public long UserId { get; } = userId;
+
+    /// <summary>
+    /// Overlap allowance subtracted from the watermark on every delta query (#194). The watermark is
+    /// itself a ClickUp-server timestamp, so no local clock is involved; the minute of deliberate
+    /// re-reading guards against ClickUp-side write-visibility lag and out-of-order
+    /// <c>date_updated</c> stamps across its replicas (and the completion gap between the two
+    /// concurrent delta fetches). Harmless — the merge upserts by id and treats a same-timestamp
+    /// re-read as a no-op, so the overlap is idempotent.
+    /// </summary>
+    internal const long DeltaSkewMs = 60_000;
+
+    // Delta-refresh state (#194): the last snapshot this service produced and the newest
+    // date_updated seen in it. Null until the first successful full load — and reset to null by it —
+    // so a delta can never run against a stale baseline. Written only from LoadSnapshotAsync.
+    private IReadOnlyList<TaskItem>? _lastSnapshot;
+    private long? _watermarkMs;
+
+    /// <summary>
+    /// Loads the task snapshot, incrementally when possible (#194). With <paramref name="preferDelta"/>
+    /// set and a previous snapshot + watermark available, only tasks updated since the watermark are
+    /// fetched (closed included, so completions surface) and merged into the previous snapshot —
+    /// the steady-state poll cost drops from a full re-fetch to one or two tiny requests. Otherwise —
+    /// first load, caller wants guaranteed freshness (manual refresh, F3 fetch-rule change, periodic
+    /// resync), or nothing fetched yet carried a usable <c>date_updated</c> — it falls back to the full
+    /// <see cref="LoadAsync"/>. <see cref="TaskSnapshotResult.Changed"/> is false only when a delta
+    /// provably changed nothing, so the caller can skip snapshot-dependent follow-up work.
+    /// <para>
+    /// A delta cannot observe a task leaving the fetch's scope without an update it would match —
+    /// unassigned from me by someone else, moved out of scope, or <b>archived</b> (archived rows are
+    /// dropped from every fetch, delta included, so unlike a closed task an archived one just stops
+    /// appearing and lingers in the snapshot). That staleness is bounded by the caller's periodic
+    /// full-resync cadence (and any manual refresh), not handled here.
+    /// </para>
+    /// </summary>
+    public async Task<TaskSnapshotResult> LoadSnapshotAsync(bool preferDelta, CancellationToken ct = default)
+    {
+        if (preferDelta && _lastSnapshot is { } previous && _watermarkMs is { } watermark)
+        {
+            var since = Math.Max(0, watermark - DeltaSkewMs);
+            // Both delta fetches are independent; overlap them (#192 gives the full load's pair the
+            // same treatment).
+            var personalFetch = client.GetListTasksDeltaAsync(config.PersonalTasksListId, since, ct);
+            var assignedFetch = LoadAssignedDeltaAsync(since, ct);
+            await Task.WhenAll(assignedFetch, personalFetch);
+
+            // Union the two deltas by id BEFORE merging — personal wins collisions, matching
+            // LoadAsync's merge order. Deduping here (rather than relying on MergeDelta's last-wins
+            // iteration) matters because MergeDelta treats a same-timestamp upsert as a no-op re-read:
+            // fed both copies sequentially it would keep the assigned one and skip the personal one.
+            var delta = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
+            foreach (var task in (await assignedFetch).Concat(await personalFetch))
+            {
+                if (!string.IsNullOrEmpty(task.Id))
+                    delta[task.Id] = task;
+            }
+            var (merged, changed) = MergeDelta(previous, delta.Values.ToList());
+            _watermarkMs = MaxUpdatedMs(delta.Values) is { } newest ? Math.Max(watermark, newest) : watermark;
+            _lastSnapshot = merged;
+            return new TaskSnapshotResult(merged, changed, WasDelta: true);
+        }
+
+        var tasks = await LoadAsync(ct); // LoadAsync itself re-baselines the delta state
+        return new TaskSnapshotResult(tasks, Changed: true, WasDelta: false);
+    }
+
+    private async Task<List<TaskItem>> LoadAssignedDeltaAsync(long since, CancellationToken ct)
+        => await client.GetAssignedTasksDeltaAsync(
+            config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), since, ct);
+
+    /// <summary>
+    /// Merges a delta fetch into the previous snapshot (#194): a delta task whose status type is
+    /// <c>closed</c> is removed (the full fetch's server-side <c>include_closed=false</c> filter,
+    /// re-applied client-side), every other delta task is upserted by id, and the result is re-sorted
+    /// with the standard <see cref="TaskOrder"/>. Returns <c>Changed=false</c> — previous list
+    /// instance included, so no re-render churn — when the delta was empty or only "removed" tasks
+    /// that were never present. Pure and unit-testable.
+    /// </summary>
+    internal static (IReadOnlyList<TaskItem> Tasks, bool Changed) MergeDelta(
+        IReadOnlyList<TaskItem> previous, IReadOnlyList<TaskItem> delta)
+    {
+        if (delta.Count == 0)
+            return (previous, false);
+
+        var byId = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
+        foreach (var task in previous)
+            byId[task.Id] = task;
+
+        var changed = false;
+        foreach (var task in delta)
+        {
+            if (string.IsNullOrEmpty(task.Id))
+                continue;
+            if (IsClosed(task))
+            {
+                changed |= byId.Remove(task.Id);
+            }
+            else if (byId.TryGetValue(task.Id, out var existing)
+                     && existing.UpdatedMs is { } knownMs && task.UpdatedMs == knownMs)
+            {
+                // The skew overlap re-reads the watermark-defining task on every poll, so a delta is
+                // rarely literally empty. An upsert whose date_updated hasn't moved is provably the
+                // same edit we already hold (every real ClickUp change bumps date_updated) — it must
+                // not count as a change, or the steady-state Changed=false fast path would never fire.
+            }
+            else
+            {
+                changed = true; // a moved (or unknown) date_updated always counts: a spurious redraw
+                                // is cheap, while a missed change would freeze the view.
+                byId[task.Id] = task;
+            }
+        }
+
+        return changed
+            ? (byId.Values.OrderBy(t => t, TaskOrder.Instance).ToList(), true)
+            : (previous, false);
+    }
+
+    private static bool IsClosed(TaskItem task)
+        => string.Equals(task.StatusType, "closed", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The newest <see cref="TaskItem.UpdatedMs"/> in <paramref name="tasks"/>, or null when
+    /// none carries one (in which case delta refresh stays disabled until a full load provides one).</summary>
+    internal static long? MaxUpdatedMs(IEnumerable<TaskItem> tasks)
+    {
+        long? max = null;
+        foreach (var t in tasks)
+        {
+            if (t.UpdatedMs is { } ms && (max is null || ms > max))
+                max = ms;
+        }
+        return max;
+    }
 
     /// <summary>Merged, de-duplicated, stably-ordered task snapshot.</summary>
     public async Task<IReadOnlyList<TaskItem>> LoadAsync(CancellationToken ct = default)
@@ -42,9 +182,19 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
         // Status exclusion is no longer a separate mechanism — it's ordinary "Status IS NOT" filter
         // rules applied by TaskView.Filter at render time (#69). LoadAsync only fetches, merges, and
         // orders; visibility is decided in exactly one place.
-        return byId.Values
+        var snapshot = byId.Values
             .OrderBy(t => t, TaskOrder.Instance)
             .ToList();
+
+        // Every full load re-baselines the delta state (#194) — here, not in LoadSnapshotAsync, so a
+        // direct caller can never leave the incremental path merging into a baseline older than what
+        // that caller saw. The watermark only advances: this fetch excludes closed tasks, so its own
+        // newest date_updated can sit behind a delta-advanced watermark (recently-closed churn), and
+        // regressing to it would make every resync re-download that churn window.
+        _lastSnapshot = snapshot;
+        if (MaxUpdatedMs(snapshot) is { } newest && (_watermarkMs is not { } current || newest > current))
+            _watermarkMs = newest;
+        return snapshot;
     }
 
     // Assignee IS rules scope the assigned fetch server-side (#68). The default view's "Assignee IS

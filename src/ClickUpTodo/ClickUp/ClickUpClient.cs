@@ -173,6 +173,44 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             }, ct), ct));
 
     /// <summary>
+    /// Delta variant of <see cref="GetAssignedTasksAsync"/> (#194): only tasks whose
+    /// <c>date_updated</c> is after <paramref name="updatedAfterMs"/> (epoch ms), <b>including closed
+    /// ones</b> — a task that closed since the watermark must appear in the delta so the merge can
+    /// drop it from the snapshot rather than let it linger.
+    /// </summary>
+    public Task<List<TaskItem>> GetAssignedTasksDeltaAsync(
+        string workspaceId, IReadOnlyList<long> assigneeIds, long updatedAfterMs, CancellationToken ct = default)
+        => Guard("GetFilteredTeamTasks", () => PageAsync(page =>
+            _client.V2.Team[workspaceId].Task.GetAsync(cfg =>
+            {
+                if (assigneeIds.Count > 0)
+                    cfg.QueryParameters.Assignees = assigneeIds.Select(id => id.ToString(CultureInfo.InvariantCulture)).ToArray();
+                cfg.QueryParameters.Page = page;
+                cfg.QueryParameters.IncludeClosed = true;
+                cfg.QueryParameters.Subtasks = true;
+                cfg.QueryParameters.DateUpdatedGt = updatedAfterMs;
+            }, ct), ct));
+
+    /// <summary>
+    /// Delta variant of <see cref="GetListTasksAsync"/> (#194): only tasks on the list whose
+    /// <c>date_updated</c> is after <paramref name="updatedAfterMs"/> (epoch ms), closed included (see
+    /// <see cref="GetAssignedTasksDeltaAsync"/>). Archived rows are always dropped — which means an
+    /// archive is <b>invisible</b> to a delta (the row just stops appearing) and the stale entry
+    /// lingers until the caller's periodic full resync; see
+    /// <see cref="Services.TaskService.LoadSnapshotAsync"/>.
+    /// </summary>
+    public Task<List<TaskItem>> GetListTasksDeltaAsync(string listId, long updatedAfterMs, CancellationToken ct = default)
+        => Guard("GetTasks", () => PageAsync(page =>
+            _client.V2.List[listId].Task.GetAsync(cfg =>
+            {
+                cfg.QueryParameters.Page = page;
+                cfg.QueryParameters.IncludeClosed = true;
+                cfg.QueryParameters.Subtasks = true;
+                cfg.QueryParameters.Archived = false;
+                cfg.QueryParameters.DateUpdatedGt = updatedAfterMs;
+            }, ct), ct));
+
+    /// <summary>
     /// Set a task's status. <paramref name="statusName"/> must be one of its list's statuses.
     /// Returns the <b>confirmed</b> status name from the write response (ClickUp's
     /// <c>PUT /task/{id}</c> returns the updated task), or null if the response omits it — so the
@@ -318,6 +356,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             ListName = t.List?.Name,
             StatusName = t.Status?.StatusProp,
             StatusColor = t.Status?.Color,
+            StatusType = t.Status?.Type,
             PriorityLevel = priorityLevel,
             PriorityName = ClickUpPriority.NameFromLevel(priorityLevel),
             PriorityColor = t.Priority?.Color,
