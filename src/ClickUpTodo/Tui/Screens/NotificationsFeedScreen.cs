@@ -49,6 +49,15 @@ public sealed class NotificationsFeedScreen : Screen
     private readonly Label _emptyLabel;
     private bool _mentionsOnly;
 
+    /// <summary>The rows currently displayed (the feed after the F3 filter), kept so Enter can map the
+    /// selected <see cref="ListView"/> index back to its <see cref="CommentItem"/> exactly as shown.</summary>
+    private IReadOnlyList<CommentItem> _rows = [];
+
+    /// <summary>Raised when the user presses Enter on a feed row that is attributed to a task (#115).
+    /// The payload is the row's <see cref="CommentItem.TaskId"/>; the host opens that task's detail
+    /// stacked over the feed and Esc returns here with the selection intact.</summary>
+    public event EventHandler<string>? OpenTaskRequested;
+
     /// <param name="feed">The already-fetched, mention-stamped feed (newest first).</param>
     /// <param name="mentionsOnly">Whether the mentions-only filter starts on.</param>
     public NotificationsFeedScreen(IReadOnlyList<CommentItem> feed, bool mentionsOnly = false)
@@ -75,6 +84,10 @@ public sealed class NotificationsFeedScreen : Screen
     {
         switch (key.KeyCode)
         {
+            case KeyCode.Enter:
+                key.Handled = true;
+                OpenSelectedTask();
+                break;
             case KeyCode.F3:
                 key.Handled = true;
                 _mentionsOnly = !_mentionsOnly;
@@ -98,6 +111,7 @@ public sealed class NotificationsFeedScreen : Screen
     private void RenderFeed()
     {
         var rows = Filter(_feed, _mentionsOnly);
+        _rows = rows;
         Title = _mentionsOnly ? "Feed — mentions only" : "Feed — mentions & comments";
 
         var (text, badges, keys) = BuildRows(rows);
@@ -107,6 +121,30 @@ public sealed class NotificationsFeedScreen : Screen
         _emptyLabel.Visible = empty;
         _emptyLabel.Text = empty ? "\n" + EmptyMessage(_mentionsOnly, _feed.Count > 0) : "";
     }
+
+    /// <summary>Enter on a feed row (#115): opens the selected comment's task, or — when the selected
+    /// comment carries no task id — flashes a note. A no-selection / empty feed is a no-op. The task is
+    /// opened by raising <see cref="OpenTaskRequested"/>; the host stacks its detail over this screen.</summary>
+    private void OpenSelectedTask()
+    {
+        var index = _list.SelectedItem ?? -1;
+        if (index < 0 || index >= _rows.Count)
+            return; // empty feed or no selection — nothing to open
+
+        var taskId = SelectedTaskId(_rows, index);
+        if (taskId is null)
+            RequestFlash("This comment isn't linked to a task.");
+        else
+            OpenTaskRequested?.Invoke(this, taskId);
+    }
+
+    /// <summary>The task id of the row at <paramref name="index"/> in <paramref name="rows"/>, or null
+    /// when the index is out of range or the row's <see cref="CommentItem.TaskId"/> is missing. Pure and
+    /// unit-testable — the mapping Enter uses to decide which task (if any) to open.</summary>
+    internal static string? SelectedTaskId(IReadOnlyList<CommentItem> rows, int index)
+        => index >= 0 && index < rows.Count && !string.IsNullOrEmpty(rows[index].TaskId)
+            ? rows[index].TaskId
+            : null;
 
     /// <summary>The feed rows to show: all of it, or only the entries that mention the current user
     /// (#113). Pure and unit-testable.</summary>

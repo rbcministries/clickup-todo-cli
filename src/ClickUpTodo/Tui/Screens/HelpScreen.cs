@@ -33,7 +33,7 @@ public sealed class HelpScreen : Screen
                 + "  F2          Settings (refresh rate, excluded statuses)\n"
                 + "  F3          Filter / sort / group the list\n"
                 + "  F4          Show / hide subtasks (shown nested under their parent)\n"
-                + "  F5          Open the mentions & comments feed (in the feed: F3 shows mentions only)\n"
+                + "  F5          Open the mentions & comments feed (in the feed: Enter opens the task, F3 shows mentions only)\n"
                 + "  F6          Cycle status/priority badges (icons ○ ⚑, text, hidden)\n"
                 + "  → / ←       Expand / collapse the selected parent's subtasks (▶ collapsed, ▼ expanded)\n"
                 + "  Ctrl+→ / ←  Expand / collapse all parents at once\n"
