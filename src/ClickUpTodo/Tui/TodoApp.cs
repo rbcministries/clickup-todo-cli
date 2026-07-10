@@ -1291,9 +1291,11 @@ public sealed class TodoApp
         var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
         var grouped = view.GroupField is not null;
-        // Grouping and nesting compose: within each F3 group, subtasks nest under their parent when
-        // both fall in the same group; a subtask whose parent lands in a different group renders flat
-        // within its own group (SubtaskArranger, run per-group, yields exactly this). (#46, #57)
+        // Grouping and nesting compose: within each F3 group, subtasks nest under their parent when both
+        // fall in the same group. An in-snapshot (assigned) subtask whose parent lands in a different
+        // group renders flat within its own group; a pulled-in teammate-owned subtask (#70) in that same
+        // position is instead suppressed, since a "(not assigned to you)" row only belongs nested under a
+        // visible parent, never un-indented (#172). (#46, #57)
 
         _rows.Clear();
         _kinds.Clear();
@@ -1321,7 +1323,14 @@ public sealed class TodoApp
         // The single tasks-section header only appears (when ungrouped) to separate the to-do rows
         // from a pinned section above them.
         var ungroupedTasksHeader = pinnedIds.Count > 0 ? $"{TasksHeaderPrefix} ({todoCount}) ─" : null;
-        foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors, _expanded))
+        // A teammate-owned subtask (#70) must never surface un-indented at top level: when its parent is
+        // filtered out of the to-do set (e.g. a completed parent dropped by a Status IS NOT rule), it has
+        // no visible parent to nest under, so the arranger suppresses it rather than leaking it flat as
+        // "(not assigned to you)" (#172). Only relevant while nesting and while foreign subtasks exist.
+        var suppressTopLevel = nest && _foreignSubtasks.Count > 0
+            ? new HashSet<string>(_foreignSubtasks.Keys, StringComparer.Ordinal)
+            : null;
+        foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors, _expanded, suppressTopLevel))
         {
             if (row.IsHeader)
                 AddHeader(row.HeaderText!, row.HeaderColor);

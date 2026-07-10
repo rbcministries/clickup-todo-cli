@@ -48,10 +48,23 @@ public static class SubtaskArranger
     /// Context parents are always expanded regardless of the set — they exist only to display their
     /// child, so they're never user-foldable.
     /// </param>
+    /// <param name="suppressTopLevel">
+    /// Ids that must <b>never</b> surface as a flat top-level (depth-0) row — in practice the
+    /// teammate-owned subtasks pulled in only to nest under an in-view parent (#70). One that would
+    /// otherwise fall through to the top level — because its parent isn't in this section (filtered out by
+    /// a <c>Status IS NOT</c> rule, or bucketed into a different F3 group) and isn't a context parent — is
+    /// skipped as a row rather than leaked un-indented as "(not assigned to you)", which would defeat the
+    /// parent's filter (#172). Only the anchorless fall-through is suppressed: a suppressed id still nests
+    /// normally when its parent <em>is</em> present in the section, and any <em>non</em>-suppressed
+    /// descendant of a skipped orphan (e.g. the user's own assigned subtask nested under a teammate's) is
+    /// re-anchored flat rather than hidden with the foreign chain. <c>null</c>/empty ⇒ no suppression
+    /// (pre-#172 behaviour).
+    /// </param>
     public static IReadOnlyList<ArrangedRow> Arrange(
         IReadOnlyList<TaskItem> orderedTasks,
         IReadOnlyDictionary<string, TaskItem> contextParents,
-        IReadOnlySet<string>? expanded = null)
+        IReadOnlySet<string>? expanded = null,
+        IReadOnlySet<string>? suppressTopLevel = null)
     {
         var present = new HashSet<string>(orderedTasks.Select(t => t.Id));
 
@@ -78,6 +91,24 @@ public static class SubtaskArranger
             if (childrenByParent.TryGetValue(task.Id, out var children))
                 foreach (var child in children)
                     Suppress(child);
+        }
+
+        // Skip a pulled-in subtask (#70) that has no visible anchor as a *row*, while still placing its
+        // descendants: a foreign descendant is likewise skipped, but a non-foreign one (e.g. the user's
+        // own assigned subtask nested under a teammate's) is re-anchored flat at top level rather than
+        // vanishing with the foreign chain (#172). Only called when suppressTopLevel is non-null. Guards
+        // on emitted so a parent cycle can't recurse forever.
+        void SkipForeignOrphan(TaskItem task)
+        {
+            if (!emitted.Add(task.Id))
+                return;
+            if (!childrenByParent.TryGetValue(task.Id, out var children))
+                return;
+            foreach (var child in children)
+                if (suppressTopLevel!.Contains(child.Id))
+                    SkipForeignOrphan(child);
+                else
+                    Emit(child, depth: 0); // a non-foreign descendant keeps its own subtree, re-rooted flat
         }
 
         void Emit(TaskItem task, int depth)
@@ -126,6 +157,16 @@ public static class SubtaskArranger
                         Emit(child, depth: 1);
                 }
             }
+            else if (!string.IsNullOrEmpty(parentId)
+                     && suppressTopLevel is not null && suppressTopLevel.Contains(t.Id))
+            {
+                // A pulled-in subtask (#70) whose parent isn't visible in this section (filtered out, or
+                // in another F3 group): it has a parent, just not one to nest under here, so skip it as a
+                // row rather than leak it flat as a top-level "(not assigned to you)" item (#172). Its own
+                // non-foreign descendants are still re-anchored by SkipForeignOrphan. A genuinely
+                // parentless task is never suppressed — it's a legitimate anchor, not an orphan.
+                SkipForeignOrphan(t);
+            }
             else
             {
                 // Genuine top-level task, or an orphan whose parent is entirely unknown → show flat.
@@ -135,10 +176,16 @@ public static class SubtaskArranger
 
         // Safety net: a task whose whole ancestor chain stays inside the section with no root anchor
         // (only possible with a parent cycle, which ClickUp doesn't produce) would otherwise be
-        // dropped. Emit any stragglers at top level so every input task appears exactly once.
+        // dropped. Emit any stragglers at top level so every input task appears exactly once — unless
+        // suppressed, in which case they stay hidden (a suppressed id must never surface flat, #172).
         foreach (var t in orderedTasks)
             if (!emitted.Contains(t.Id))
-                Emit(t, depth: 0);
+            {
+                if (suppressTopLevel is not null && suppressTopLevel.Contains(t.Id))
+                    SkipForeignOrphan(t);
+                else
+                    Emit(t, depth: 0);
+            }
 
         return result;
     }

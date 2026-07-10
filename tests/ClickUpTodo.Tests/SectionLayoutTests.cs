@@ -18,8 +18,8 @@ public sealed class SectionLayoutTests
     private static IReadOnlyList<LayoutRow> Build(
         IReadOnlyList<TaskGroup> groups, bool grouped, bool nest,
         string? ungroupedTasksHeader = null, IReadOnlyDictionary<string, TaskItem>? context = null,
-        IReadOnlySet<string>? expanded = null)
-        => SectionLayout.BuildTodoSection(groups, context ?? NoContext, grouped, nest, ungroupedTasksHeader, headerColors: null, expanded);
+        IReadOnlySet<string>? expanded = null, IReadOnlySet<string>? suppressTopLevel = null)
+        => SectionLayout.BuildTodoSection(groups, context ?? NoContext, grouped, nest, ungroupedTasksHeader, headerColors: null, expanded, suppressTopLevel);
 
     private static IEnumerable<string> TaskIds(IEnumerable<LayoutRow> rows)
         => rows.Where(r => !r.IsHeader).Select(r => r.Task!.Id);
@@ -201,6 +201,53 @@ public sealed class SectionLayoutTests
         var groups = new[] { new TaskGroup("List A", new[] { Task("P"), Task("c", parent: "P") }) };
 
         var rows = Build(groups, grouped: true, nest: true);
+
+        Assert.Equal(["P", "c"], TaskIds(rows));
+        Assert.Equal(1, rows.Single(r => !r.IsHeader && r.Task!.Id == "c").Depth);
+    }
+
+    // ── #172: a pulled-in foreign subtask must never surface un-indented at top level ───────────────
+
+    [Fact]
+    public void Ungrouped_ForeignSubtaskOfFilteredParent_IsSuppressed()
+    {
+        // The parent was filtered out (e.g. a completed parent dropped by Status IS NOT), so it isn't in
+        // the group; its pulled-in "(not assigned to you)" child 'c' must not leak flat at top level.
+        var groups = new[] { new TaskGroup(null, new[] { Task("top"), Task("c", parent: "p") }) };
+
+        var rows = Build(groups, grouped: false, nest: true, suppressTopLevel: new HashSet<string>(["c"], StringComparer.Ordinal));
+
+        Assert.Equal(["top"], TaskIds(rows));
+        Assert.DoesNotContain(rows, r => !r.IsHeader && r.Task!.Id == "c");
+    }
+
+    [Fact]
+    public void Grouped_ForeignSubtaskWhoseParentIsInAnotherGroup_IsSuppressed()
+    {
+        // group-by-status: parent 'P' is present (In Progress); its foreign child 'c' is Done → a
+        // different group. A foreign child can't nest across groups, and a flat "(not assigned to you)"
+        // row is exactly what #172 forbids, so it's suppressed rather than rendered flat in the Done group.
+        var groups = new[]
+        {
+            new TaskGroup("In Progress", new[] { Task("P") }),
+            new TaskGroup("Done", new[] { Task("c", parent: "P") }),
+        };
+
+        var rows = Build(groups, grouped: true, nest: true, suppressTopLevel: new HashSet<string>(["c"], StringComparer.Ordinal));
+
+        Assert.DoesNotContain(rows, r => !r.IsHeader && r.Task!.Id == "c");
+        Assert.Equal(["IN PROGRESS", "P", "DONE"],
+            rows.Select(r => r.IsHeader ? StripHeader(r.HeaderText!) : r.Task!.Id));
+    }
+
+    [Fact]
+    public void Grouped_ForeignSubtaskSharingParentGroup_StillNests_DespiteSuppressSet()
+    {
+        // Even when 'c' is in the suppress set, it nests normally when its parent shares its group — only
+        // the anchorless top-level fall-through is suppressed, never legitimate nesting.
+        var groups = new[] { new TaskGroup("List A", new[] { Task("P"), Task("c", parent: "P") }) };
+
+        var rows = Build(groups, grouped: true, nest: true, suppressTopLevel: new HashSet<string>(["c"], StringComparer.Ordinal));
 
         Assert.Equal(["P", "c"], TaskIds(rows));
         Assert.Equal(1, rows.Single(r => !r.IsHeader && r.Task!.Id == "c").Depth);
