@@ -935,7 +935,9 @@ public sealed class TodoApp
     /// the session there. Otherwise, in the default <see cref="AgentWorkingDirectory.TaskDerived"/>
     /// mode the launch starts in the saved base working directory (#92, created on first use) and the
     /// prompt instructs the agent to write outputs to a per-task <c>./{custom-id}</c> subdir (#98);
-    /// Home/Fixed modes resolve to their own dir with no subdir instruction.
+    /// Home/Fixed modes resolve to their own dir with no subdir instruction. When the pane's
+    /// post-results toggle is on (#97, <see cref="DispatchRequest.PostToComments"/>) the seed prompt also
+    /// asks the agent to post a summary comment back to the task via its own ClickUp MCP tools.
     /// </summary>
     private void DispatchAgent(TaskDetail detail, IReadOnlyList<CommentItem> comments, DispatchRequest request)
     {
@@ -949,6 +951,9 @@ public sealed class TodoApp
         }
         _dispatching = true;
         var oneOff = request.SessionMode == AgentSessionMode.OneOff;
+        // The post-results toggle (#97) only adds an instruction to the seed prompt; the dispatched
+        // agent posts the comment via its own ClickUp MCP tools — the app never posts it.
+        var postToComments = request.PostToComments;
 
         // Resolve the dispatch settings on the UI thread before the background hand-off (#91).
         // Capture _agent locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap
@@ -989,7 +994,7 @@ public sealed class TodoApp
                 if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
                     Directory.CreateDirectory(workingDir);
 
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff);
+                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff, postToComments);
                 Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)

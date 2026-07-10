@@ -244,6 +244,40 @@ public sealed class AgentDispatcherTests : IDisposable
         Assert.True(launcher.OneOff);
     }
 
+    // ── post results to Comments (#97) ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task DispatchAsync_ThreadsPostToComments_ToComposedFile()
+    {
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
+        var task = Detail(id: "abc123");
+        var comments = Comments();
+
+        var result = await dispatcher.DispatchAsync(task, comments, "go", postToComments: true);
+
+        Assert.Equal(
+            AgentPromptComposer.Compose(task, comments, "go", postToComments: true),
+            File.ReadAllText(result.PromptFilePath));
+        Assert.Contains("post a brief summary comment on ClickUp task abc123",
+            File.ReadAllText(result.PromptFilePath));
+    }
+
+    [Fact]
+    public async Task DispatchAsync_DefaultsToNotPostingComments()
+    {
+        var launcher = new FakeLauncher();
+        var dispatcher = new AgentDispatcher(launcher, promptDirectory: _dir);
+        var task = Detail();
+        var comments = Comments();
+
+        var result = await dispatcher.DispatchAsync(task, comments, "go");
+
+        // Omitting the flag keeps the composed file byte-identical to today's zero-config dispatch.
+        Assert.Equal(AgentPromptComposer.Compose(task, comments, "go"), File.ReadAllText(result.PromptFilePath));
+        Assert.DoesNotContain("post a brief summary comment", File.ReadAllText(result.PromptFilePath));
+    }
+
     // ── Settings → dispatcher wiring (#91, #100) ─────────────────────────────────────
     // These mirror the glue TodoApp performs (options from ToLauncherOptions, working dir from
     // ResolveWorkingDirectory, template from settings) at the unit-testable dispatcher seam, since

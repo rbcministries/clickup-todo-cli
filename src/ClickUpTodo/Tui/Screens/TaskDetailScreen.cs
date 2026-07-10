@@ -62,8 +62,7 @@ public sealed class TaskDetailScreen : Screen
     private readonly FrameView _promptBox;
     private readonly TextField _promptField;
     // The Dispatch pane's controls, in focus (Tab) order. The prompt, the one-off/interactive toggle
-    // (#94), and the working-dir control (#95) feed a dispatch; the post-to-Comments (#97) toggle is
-    // still a stub that establishes the pane's layout + focus order until that feature lands.
+    // (#94), the working-dir control (#95), and the post-to-Comments toggle (#97) all feed a dispatch.
     private readonly View[] _dispatchControls;
     private readonly CheckBox _oneOffToggle;
     private readonly TextField _workingDirField;
@@ -184,8 +183,9 @@ public sealed class TaskDetailScreen : Screen
         _promptField = new TextField { X = 9, Y = 0, Width = Dim.Fill(1) };
         // The one-off/interactive toggle (#94) is live: seeded from the persisted default (#101) and
         // read into the DispatchRequest on submit. The working-dir control (#95) below is also live —
-        // an editable field plus a file-tree browser; blank ⇒ default working dir. Only the
-        // post-to-Comments (#97) toggle remains an inert stub (no comment post).
+        // an editable field plus a file-tree browser; blank ⇒ default working dir. The post-to-Comments
+        // (#97) toggle is live too: when checked it adds an instruction asking the dispatched agent to
+        // post a summary comment back to the task via its own ClickUp MCP tools (the app never posts).
         _oneOffToggle = new CheckBox
         {
             X = 1,
@@ -214,7 +214,7 @@ public sealed class TaskDetailScreen : Screen
         {
             X = 1,
             Y = DispatchRowsAboveBrowser + DispatchBrowserRows,
-            Text = "Post results to Comments (coming soon)",
+            Text = "Post results to Comments (requires ClickUp MCP access)",
         };
 
         _dispatchControls = [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle];
@@ -452,8 +452,8 @@ public sealed class TaskDetailScreen : Screen
     }
 
     /// <summary>Submits the pane: hides it, then (only for non-empty text) raises the dispatch event
-    /// carrying the prompt, the one-off/interactive session mode (#94), and the chosen working
-    /// directory (#95; blank ⇒ null ⇒ default dir).</summary>
+    /// carrying the prompt, the one-off/interactive session mode (#94), the chosen working
+    /// directory (#95; blank ⇒ null ⇒ default dir), and the post-results-to-Comments flag (#97).</summary>
     private void SubmitDispatch()
     {
         var text = _promptField.Text?.ToString() ?? string.Empty;
@@ -461,10 +461,11 @@ public sealed class TaskDetailScreen : Screen
             ? AgentSessionMode.OneOff
             : AgentSessionMode.Interactive;
         var dir = _workingDirField.Text?.ToString();
+        var postToComments = _postToCommentsToggle.Value == CheckState.Checked;
         HidePrompt();
         // A stray Enter shouldn't launch a session — only dispatch when something was typed.
         if (!string.IsNullOrWhiteSpace(text))
-            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, sessionMode, dir));
+            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, sessionMode, dir, postToComments));
     }
 
     /// <summary>Moves focus to the next/previous dispatch control, wrapping at both ends.</summary>
@@ -496,6 +497,10 @@ public sealed class TaskDetailScreen : Screen
         _workingDirField.Text = string.Empty;
         _browser.Reset();
         RefreshBrowser();
+        // Post-to-Comments is an explicit per-dispatch opt-in (#97): reset to off each open so a flip on
+        // an earlier dispatch never silently carries into a later one. (Unlike the one-off toggle, which
+        // reflects the persisted default #101, this has no saved default.)
+        _postToCommentsToggle.Value = CheckState.UnChecked;
         // Size the pane to the current tab body so it degrades gracefully on short terminals: the
         // prompt row + borders always survive; the bottom controls (browser, post-to-Comments) clip first.
         var height = DispatchPaneModel.ClampHeight(
