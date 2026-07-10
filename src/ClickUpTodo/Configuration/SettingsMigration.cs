@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace ClickUpTodo.Configuration;
 
 /// <summary>
@@ -23,8 +25,19 @@ public static class SettingsMigration
         if (target.Exists(StateKeys.Config))
             return false;
 
-        // Fresh install — nothing to bring across.
-        var legacyConfig = legacy.Load<AppConfig>(StateKeys.Config);
+        // Fresh install — nothing to bring across. A corrupt/partial config.json (e.g. a crash mid
+        // non-atomic write) is treated the same way: there is nothing safely importable, so the app
+        // falls through to first-time setup rather than aborting on an unhandled deserialize error.
+        AppConfig? legacyConfig;
+        try
+        {
+            legacyConfig = legacy.Load<AppConfig>(StateKeys.Config);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
         if (legacyConfig is null)
             return false;
 

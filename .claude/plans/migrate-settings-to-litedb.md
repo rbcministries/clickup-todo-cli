@@ -53,28 +53,44 @@ downgrade stays possible.
   `ConfigMigrations` still runs later on `ConfigStore.Load`).
 - **Leaves the legacy `config.json` in place** so a downgrade to the JSON
   backend still finds its settings.
+- **Corrupt/partial `config.json` is tolerated** — the legacy load is wrapped in
+  `try/catch (JsonException)` and treated as "nothing importable" so a garbled
+  file (e.g. a crash mid non-atomic write) can't abort startup; the app falls
+  through to first-time setup instead.
 
 ### Composition root (`Program.cs`)
 The single drop-in point the seam promised:
 
 ```csharp
-var dataDir = JsonFileStateStore.DefaultDirectory();
-var liteStore = new LiteDbStateStore(Path.Combine(dataDir, "state.db"));
-SettingsMigration.ImportLegacyConfig(liteStore, new JsonFileStateStore(dataDir));
+var dataDirectory = JsonFileStateStore.DefaultDirectory();
+using var liteStore = new LiteDbStateStore(Path.Combine(dataDirectory, "state.db"));
+var legacyStore = new JsonFileStateStore(dataDirectory);
 IStateStore stateStore = liteStore;
 var configStore = new ConfigStore(stateStore);
+// … --reset / --help / --driver argument handling …
+SettingsMigration.ImportLegacyConfig(liteStore, legacyStore);   // before the first Load()
 ```
 
 `liteStore` is disposed on exit (`using`). Everything else (`ConfigStore`,
-`--reset` via `configStore.Delete()`, `SetupWizard`, `TodoApp`,
-`LocalFocusStore`) is unchanged — it all flows through `IStateStore`.
+`SetupWizard`, `TodoApp`, `LocalFocusStore`) is unchanged — it all flows through
+`IStateStore`.
+
+**Ordering matters (review-driven):** the import runs *after* the
+`--reset`/`--logout` and `--help` early-returns and *before* the first
+`configStore.Load()`. That keeps a corrupt legacy file from blocking the
+documented `--reset` recovery path, and means `--help` does no import work.
+
+**`--reset` also clears the legacy file:** on `--reset`/`--logout` we call
+`configStore.Delete()` (removes the LiteDB `Config` document) **and**
+`legacyStore.Delete(Config)` (removes `config.json`). This restores parity with
+the pre-LiteDB behaviour — where `configStore.Delete()` deleted `config.json`
+directly — and closes a re-import hole: without it, a `--reset` that leaves
+`config.json` on disk would let the next launch re-import the just-forgotten
+settings.
 
 `ConfigStore.ConfigPath` / `DirectoryPath` (file-specific accessors used by
-SetupWizard messaging and `--reset` fallback) return `string.Empty` under a
-non-file backend today; `--reset` already uses the backend-agnostic
-`configStore.Delete()`, so no file-path dependency breaks. (The legacy
-`config.json` is intentionally *not* deleted by `--reset` since the live backend
-is now LiteDB; documented as acceptable — see "Deferred" below.)
+SetupWizard messaging) return `string.Empty` under a non-file backend; nothing
+depends on them being non-empty on the LiteDB path.
 
 ## Tests (`tests/ClickUpTodo.Tests/`)
 

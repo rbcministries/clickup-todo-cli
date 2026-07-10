@@ -15,9 +15,11 @@ namespace ClickUpTodo.Configuration;
 /// byte-for-byte identical across backends and <c>ConfigMigrations</c> / enum handling behave exactly
 /// as before. This makes the JSON and LiteDB stores drop-in interchangeable.
 /// </para>
-/// The connection is opened in shared mode so a stray second process cannot hard-lock the file, and
-/// the database handle is held for the store's lifetime (settings writes are rare; the cache work in
-/// #122+ reuses the open handle). Dispose at the composition root on exit.
+/// The connection is opened in shared mode so a stray second process cannot hard-lock the file (LiteDB
+/// serialises access and opens/closes the underlying file per operation in this mode). The
+/// <see cref="LiteDatabase"/> object is held for the store's lifetime — settings writes are rare, and
+/// the cache work in #122+ reuses this store rather than reopening the database. Dispose at the
+/// composition root on exit.
 /// </summary>
 public sealed class LiteDbStateStore : IStateStore, IDisposable
 {
@@ -42,7 +44,16 @@ public sealed class LiteDbStateStore : IStateStore, IDisposable
 
         // Shared connection so a second process can't hard-lock the file (LiteDB serialises access).
         _db = new LiteDatabase(new ConnectionString { Filename = DatabasePath, Connection = ConnectionType.Shared });
-        _collection = _db.GetCollection<StateDocument>(CollectionName);
+        try
+        {
+            _collection = _db.GetCollection<StateDocument>(CollectionName);
+        }
+        catch
+        {
+            // Don't leak the open database file/lock if collection setup fails after the DB opened.
+            _db.Dispose();
+            throw;
+        }
     }
 
     /// <summary>The default database path: <c>state.db</c> in the shared per-user data directory.</summary>

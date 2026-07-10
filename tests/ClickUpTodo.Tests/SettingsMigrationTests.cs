@@ -58,6 +58,39 @@ public sealed class SettingsMigrationTests : IDisposable
     }
 
     [Fact]
+    public void Import_WithCorruptLegacyConfig_IsNoOpAndDoesNotThrow()
+    {
+        // A truncated/garbled config.json (e.g. a crash mid non-atomic write) must not abort startup:
+        // the import treats it as nothing importable so the app falls through to first-time setup.
+        var legacy = new JsonFileStateStore(_dir);
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(legacy.PathFor(StateKeys.Config), "{ \"workspaceId\": \"ws\", ");  // malformed
+
+        var target = new InMemoryStateStore();
+
+        var imported = SettingsMigration.ImportLegacyConfig(target, legacy);
+
+        Assert.False(imported);
+        Assert.False(target.Exists(StateKeys.Config));
+        Assert.False(new ConfigStore(target).Load().IsConfigured);
+    }
+
+    [Fact]
+    public void Import_WithLiteralNullLegacyConfig_IsNoOp()
+    {
+        // A file whose content is the literal JSON `null` deserializes to null, not an error — import
+        // is a no-op rather than writing a null document.
+        var legacy = new JsonFileStateStore(_dir);
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(legacy.PathFor(StateKeys.Config), "null");
+
+        var target = new InMemoryStateStore();
+
+        Assert.False(SettingsMigration.ImportLegacyConfig(target, legacy));
+        Assert.False(target.Exists(StateKeys.Config));
+    }
+
+    [Fact]
     public void Import_LeavesLegacyFileInPlace_ForDowngrade()
     {
         var legacy = new JsonFileStateStore(_dir);
@@ -91,6 +124,32 @@ public sealed class SettingsMigrationTests : IDisposable
         // A second import (e.g. next launch) must be a no-op and must not resurrect the stale value.
         Assert.False(SettingsMigration.ImportLegacyConfig(target, legacy));
         Assert.Equal("new", targetStore.Load().WorkspaceId);
+    }
+
+    [Fact]
+    public void Import_IntoRealLiteDbStore_PersistsAcrossReopen()
+    {
+        // End-to-end over the production pairing: a legacy config.json imported into a real
+        // LiteDbStateStore lands in state.db and survives a subsequent app launch (fresh store,
+        // same file). Uses a distinct data directory so it doesn't collide with a legacy config.json.
+        var legacyDir = Path.Combine(_dir, "legacy");
+        var legacy = new JsonFileStateStore(legacyDir);
+        new ConfigStore(legacy).Save(new AppConfig { WorkspaceId = "ws-e2e", PersonalTasksListId = "list-e2e" });
+
+        var dbPath = Path.Combine(_dir, "state.db");
+        using (var target = new LiteDbStateStore(dbPath))
+        {
+            Assert.True(SettingsMigration.ImportLegacyConfig(target, legacy));
+            // A second import over the same live store is a no-op (Config now present).
+            Assert.False(SettingsMigration.ImportLegacyConfig(target, legacy));
+        }
+
+        using var reopened = new LiteDbStateStore(dbPath);
+        var loaded = new ConfigStore(reopened).Load();
+        Assert.Equal("ws-e2e", loaded.WorkspaceId);
+        Assert.Equal("list-e2e", loaded.PersonalTasksListId);
+        // Legacy file left in place for downgrade.
+        Assert.True(File.Exists(legacy.PathFor(StateKeys.Config)));
     }
 
     public void Dispose()
