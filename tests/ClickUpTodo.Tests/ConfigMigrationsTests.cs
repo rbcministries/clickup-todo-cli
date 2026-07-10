@@ -49,6 +49,20 @@ public sealed class ConfigMigrationsTests : IDisposable
     }
 
     [Fact]
+    public void Apply_NullTaskWorkingDirectories_CoalescedToEmptyMap()
+    {
+        // A hand-edited config.json with "taskWorkingDirectories": null deserializes to null (the
+        // property's `= []` default only fills a missing key). The #96 pre-fill/update call sites
+        // dereference it, so Apply must normalize it back to an empty map.
+        var config = new AppConfig { TaskWorkingDirectories = null! };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.NotNull(config.TaskWorkingDirectories);
+        Assert.Empty(config.TaskWorkingDirectories);
+    }
+
+    [Fact]
     public void Apply_AbsentLegacyField_SeedsDefaultExclusions()
     {
         // A config that never carried excludedStatuses (null) is treated as a fresh install: seed the
