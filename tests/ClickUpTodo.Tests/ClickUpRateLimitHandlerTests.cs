@@ -294,10 +294,52 @@ public sealed class ClickUpRateLimitHandlerTests
         };
         Assert.True(ClickUpClientFactory.KiotaShouldRetry(1, 1, write429));
 
-        // Non-429s keep stock behaviour regardless of body.
-        var unavailable = Resp(HttpStatusCode.ServiceUnavailable);
-        unavailable.RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://api.clickup.com/x");
-        Assert.True(ClickUpClientFactory.KiotaShouldRetry(1, 1, unavailable));
+        // Kiota's other retriable statuses keep stock behaviour.
+        foreach (var code in new[] { HttpStatusCode.ServiceUnavailable, HttpStatusCode.GatewayTimeout })
+        {
+            var retriable = Resp(code);
+            retriable.RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://api.clickup.com/x");
+            Assert.True(ClickUpClientFactory.KiotaShouldRetry(1, 1, retriable), $"{code} should retry");
+        }
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.OK)]              // the startup GetAuthorizedUser read — MUST NOT retry
+    [InlineData(HttpStatusCode.Created)]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.NotFound)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public void KiotaShouldRetry_NeverRetriesNonRetriableStatuses(HttpStatusCode code)
+    {
+        // In Kiota 2.0 this predicate is the RetryHandler's sole gate, so a `true` here retries the
+        // response. A `!= 429` form wrongly retried every 200 OK to exhaustion (the launch crash).
+        var response = Resp(code);
+        response.RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://api.clickup.com/x");
+        Assert.False(ClickUpClientFactory.KiotaShouldRetry(1, 1, response));
+    }
+
+    [Fact]
+    public async Task GovernedRetryHandler_DoesNotRetryASuccessfulRead()
+    {
+        // End-to-end guard: the predicate wired into a real Kiota RetryHandler must send a 200 OK
+        // exactly once and return it — not loop to "Too many retries". Mirrors the production wiring
+        // (ClickUpClientFactory.CreateHttpClient) at the RetryHandler layer.
+        var inner = new ScriptedHandler(() => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"user\":{\"id\":1}}"),
+        });
+        using var retry = new Microsoft.Kiota.Http.HttpClientLibrary.Middleware.RetryHandler(
+            new Microsoft.Kiota.Http.HttpClientLibrary.Middleware.Options.RetryHandlerOption
+            {
+                ShouldRetry = ClickUpClientFactory.KiotaShouldRetry,
+            })
+        { InnerHandler = inner };
+        using var invoker = new HttpMessageInvoker(retry);
+
+        var response = await invoker.SendAsync(Get(), CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, inner.Sends);
     }
 
     private static void InterlockedMax(ref int target, int value)
