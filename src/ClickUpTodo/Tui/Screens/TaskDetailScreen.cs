@@ -51,6 +51,10 @@ namespace ClickUpTodo.Tui.Screens;
 /// </summary>
 public sealed class TaskDetailScreen : Screen
 {
+    /// <summary>How often the detail view silently re-fetches its task + comments (#114 follow-up).
+    /// F5 / Ctrl+R force one between ticks.</summary>
+    private static readonly TimeSpan AutoRefreshInterval = TimeSpan.FromSeconds(30);
+
     private readonly Tabs _tabs;
     // The view inserted as each tab: Description/Comments are a plain TextView; Other is a container
     // (a coloured header view above its scrollable body), so this is typed as View, not TextView.
@@ -82,12 +86,27 @@ public sealed class TaskDetailScreen : Screen
     private const int DispatchBrowserRows = 5;
     private const int DispatchRowsBelowBrowser = 1;
 
+    // The task header (title/tags/assignees) and the three text-based tab bodies, kept as fields so a
+    // refresh (#114 follow-up) can re-render each in place — only when its content actually changed, so
+    // a 30s poll that finds nothing new never disturbs the cursor or scroll.
+    private readonly Label _headerLabel;
+    private readonly TextView _descriptionPane;
+    private readonly TextView _commentsPane;
+    private readonly DetailOtherTabView _otherTab;
+    // The last-rendered content signature of the Other tab (header attribute lines + custom-fields
+    // body), so a refresh only rebuilds that (heavier) tab when its content moved.
+    private string _otherSignature;
+
     // The Stream tab (#106) and the data it re-renders from on a sort toggle. The initial direction is
     // the persisted default (#108); the on-screen Ctrl+PgUp/PgDn toggle overrides it for this view only.
     private readonly TextView _streamPane;
-    private readonly TaskDetail _task;
-    private readonly IReadOnlyList<CommentItem> _comments;
+    private TaskDetail _task;
+    private IReadOnlyList<CommentItem> _comments;
     private StreamSort _streamSort;
+
+    // The repeating auto-refresh timer's token (Application.AddTimeout), removed on dispose. Null until
+    // OnShown arms it.
+    private object? _autoRefreshToken;
 
     // Where the Stream tab is scrolled to on open (#107), from the persisted detail-view settings (#108).
     // Content-relative (newest/oldest) so it stays correct across both sort directions; the concrete edge
@@ -114,6 +133,13 @@ public sealed class TaskDetailScreen : Screen
     /// <c>claude</c> session or a one-off <c>claude -p</c> run per the mode. The detail view stays open.
     /// </summary>
     public event EventHandler<DispatchRequest>? AgentDispatchRequested;
+
+    /// <summary>
+    /// Raised when the view wants fresh data — on F5 / Ctrl+R, or on the 30s auto-refresh tick (#114
+    /// follow-up). The host re-fetches the task detail + comments off the UI thread and feeds them back
+    /// via <see cref="UpdateData"/>; the view stays open on its current tab and scroll position.
+    /// </summary>
+    public event EventHandler? RefreshRequested;
 
     /// <param name="defaultSessionMode">
     /// Seeds the pane's one-off/interactive toggle (#94) from the persisted default (#101); the user
@@ -145,7 +171,7 @@ public sealed class TaskDetailScreen : Screen
 
         var headerText = TaskDetailFormatter.Header(task);
         var headerHeight = headerText.Split('\n').Length;
-        var header = new Label
+        _headerLabel = new Label
         {
             X = 1,
             Y = 0,
@@ -165,18 +191,20 @@ public sealed class TaskDetailScreen : Screen
         // The Stream tab (#106): Description + comments as one timeline, sortable in place. Built first
         // so it's the default selected tab below.
         _streamPane = NewPane("Stream", TaskDetailFormatter.Stream(task, comments, _streamSort));
-        var description = NewPane("Description", TaskDetailFormatter.Description(task));
-        var commentsPane = NewPane($"Comments ({comments.Count})", TaskDetailFormatter.Comments(comments));
+        _descriptionPane = NewPane("Description", TaskDetailFormatter.Description(task));
+        _commentsPane = NewPane($"Comments ({comments.Count})", TaskDetailFormatter.Comments(comments));
 
         // The Other tab colours its Priority/Status values (#66), which a plain TextView can't do. Its
         // content is a container (a coloured, fixed-height header view on top of the scrollable,
         // word-wrapped "Custom fields:" body). DetailOtherTabView owns that split and adapts it so both
         // the header attributes and the custom-fields section stay reachable on a very short window (#81).
         var headerLines = TaskDetailFormatter.HeaderAttributeLines(task);
-        var other = new DetailOtherTabView(headerLines, TaskDetailFormatter.CustomFieldsBody(task));
+        var customFieldsBody = TaskDetailFormatter.CustomFieldsBody(task);
+        _otherSignature = OtherTabSignature(headerLines, customFieldsBody);
+        _otherTab = new DetailOtherTabView(headerLines, customFieldsBody);
 
-        _tabContents = [_streamPane, description, commentsPane, other];
-        _scrollTargets = [_streamPane, description, commentsPane, other.ScrollTarget];
+        _tabContents = [_streamPane, _descriptionPane, _commentsPane, _otherTab];
+        _scrollTargets = [_streamPane, _descriptionPane, _commentsPane, _otherTab.ScrollTarget];
 
         for (var i = 0; i < _tabContents.Length; i++)
             _tabs.InsertTab(i, _tabContents[i]);
@@ -261,7 +289,7 @@ public sealed class TaskDetailScreen : Screen
             target.KeyDown += OnKey;
         KeyDown += OnKey;
 
-        Add([header, _tabs, _promptBox]);
+        Add([_headerLabel, _tabs, _promptBox]);
     }
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Detail;
@@ -275,7 +303,75 @@ public sealed class TaskDetailScreen : Screen
         // Land on the newest (or oldest) Stream entry per the preference (#107). Applied only if Stream
         // is the (now laid-out) front-most tab; otherwise it's deferred until the user tabs to it (#108).
         FlushStreamAutoScrollIfActive();
+
+        // Auto-refresh the detail every 30s (#114 follow-up). The timeout callback fires on the UI
+        // thread; returning true keeps it repeating. Armed once here and torn down in Dispose.
+        _autoRefreshToken ??= Application.AddTimeout(AutoRefreshInterval, () =>
+        {
+            RefreshRequested?.Invoke(this, EventArgs.Empty);
+            return true;
+        });
     }
+
+    /// <summary>F5 / Ctrl+R — flashes and asks the host to re-fetch this task's detail + comments.</summary>
+    private void RequestRefresh()
+    {
+        RequestFlash("Refreshing…");
+        RefreshRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Re-renders every tab from freshly-fetched data (F5 / Ctrl+R or the 30s tick). Must run on the UI
+    /// thread. Each pane is only reassigned when its text actually changed, so an unchanged poll leaves
+    /// the cursor and scroll untouched; the Stream tab re-arms its auto-scroll (#107) only when its
+    /// content moved, so a genuinely new comment lands on the configured edge without yanking the view
+    /// on every idle tick.
+    /// </summary>
+    public void UpdateData(TaskDetail task, IReadOnlyList<CommentItem> comments)
+    {
+        _task = task;
+        _comments = comments;
+
+        var headerText = TaskDetailFormatter.Header(task);
+        if (!string.Equals(_headerLabel.Text, headerText, StringComparison.Ordinal))
+            _headerLabel.Text = headerText;
+
+        var streamText = TaskDetailFormatter.Stream(task, comments, _streamSort);
+        if (!string.Equals(_streamPane.Text, streamText, StringComparison.Ordinal))
+        {
+            _streamPane.Text = streamText;
+            _streamAutoScrollPending = true;
+            FlushStreamAutoScrollIfActive();
+        }
+
+        var descriptionText = TaskDetailFormatter.Description(task);
+        if (!string.Equals(_descriptionPane.Text, descriptionText, StringComparison.Ordinal))
+            _descriptionPane.Text = descriptionText;
+
+        var commentsText = TaskDetailFormatter.Comments(comments);
+        if (!string.Equals(_commentsPane.Text, commentsText, StringComparison.Ordinal))
+            _commentsPane.Text = commentsText;
+        var commentsTitle = $"Comments ({comments.Count})";
+        if (!string.Equals(_commentsPane.Title, commentsTitle, StringComparison.Ordinal))
+            _commentsPane.Title = commentsTitle;
+
+        var headerLines = TaskDetailFormatter.HeaderAttributeLines(task);
+        var customFieldsBody = TaskDetailFormatter.CustomFieldsBody(task);
+        var otherSignature = OtherTabSignature(headerLines, customFieldsBody);
+        if (!string.Equals(_otherSignature, otherSignature, StringComparison.Ordinal))
+        {
+            _otherSignature = otherSignature;
+            _otherTab.Update(headerLines, customFieldsBody);
+        }
+    }
+
+    /// <summary>A cheap content fingerprint of the Other tab (attribute lines + custom-fields body) so
+    /// a refresh only rebuilds that tab when its rendered content moved. Line texts are newline-joined
+    /// and separated from the body by a sentinel; a collision would only skip a cosmetic rebuild.</summary>
+    private static string OtherTabSignature(
+        IReadOnlyList<TaskDetailFormatter.DetailLine> lines, string customFieldsBody)
+        => string.Join("\n", lines.Select(l => string.Concat(l.Runs.Select(r => r.Text))))
+           + "\n\u0000\n" + customFieldsBody;
 
     private void OnKey(object? sender, Key key)
     {
@@ -294,6 +390,16 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             ShowPrompt();
+            return;
+        }
+
+        // Ctrl+R is the (undisplayed) alias of the F5 refresh key: re-fetch this task's detail +
+        // comments in every tab (#114 follow-up). Handled here (wired to every scroll target) so it
+        // works from whichever tab is front-most. The bare F5 case is in the switch below.
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.R)
+        {
+            key.Handled = true;
+            RequestRefresh();
             return;
         }
 
@@ -318,6 +424,10 @@ public sealed class TaskDetailScreen : Screen
             case KeyCode.Tab:
                 key.Handled = true;
                 CycleTab(forward: !key.IsShift);
+                break;
+            case KeyCode.F5:
+                key.Handled = true;
+                RequestRefresh();
                 break;
             case KeyCode.F1:
                 key.Handled = true;
@@ -604,4 +714,16 @@ public sealed class TaskDetailScreen : Screen
         Width = Dim.Fill(),
         Height = Dim.Fill(),
     };
+
+    /// <inheritdoc/>
+    protected override void Dispose(bool disposing)
+    {
+        // Stop the 30s auto-refresh tick so it can't fire against a torn-down view (#114 follow-up).
+        if (disposing && _autoRefreshToken is { } token)
+        {
+            Application.RemoveTimeout(token);
+            _autoRefreshToken = null;
+        }
+        base.Dispose(disposing);
+    }
 }

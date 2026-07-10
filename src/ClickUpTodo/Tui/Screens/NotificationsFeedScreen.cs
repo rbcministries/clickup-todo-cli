@@ -73,6 +73,14 @@ public sealed class NotificationsFeedScreen : Screen
 
     private void OnKey(object? sender, Key key)
     {
+        // Ctrl+E toggles back to the task list — the same key that opened the feed (List ↔ Feed nav).
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.E)
+        {
+            key.Handled = true;
+            Close();
+            return;
+        }
+
         switch (key.KeyCode)
         {
             case KeyCode.F3:

@@ -19,12 +19,22 @@ namespace ClickUpTodo.Tui;
 /// </summary>
 public sealed class DetailAttributesView : View
 {
-    private readonly IReadOnlyList<TaskDetailFormatter.DetailLine> _lines;
+    private IReadOnlyList<TaskDetailFormatter.DetailLine> _lines;
 
     public DetailAttributesView(IReadOnlyList<TaskDetailFormatter.DetailLine> lines)
     {
         _lines = lines;
         CanFocus = false;
+    }
+
+    /// <summary>Swaps in a fresh set of attribute lines (a detail-view refresh, #114 follow-up) and
+    /// repaints. The height is re-sized to the new line count so the container's split arithmetic
+    /// (<see cref="DetailOtherTabView"/>) stays correct.</summary>
+    public void Update(IReadOnlyList<TaskDetailFormatter.DetailLine> lines)
+    {
+        _lines = lines;
+        Height = lines.Count;
+        SetNeedsDraw();
     }
 
     protected override bool OnDrawingContent(DrawContext? context)

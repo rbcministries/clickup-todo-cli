@@ -21,8 +21,8 @@ namespace ClickUpTodo.Tui;
 /// </summary>
 public sealed class DetailOtherTabView : View
 {
-    private readonly IReadOnlyList<TaskDetailFormatter.DetailLine> _lines;
-    private readonly string _customFieldsBody;
+    private IReadOnlyList<TaskDetailFormatter.DetailLine> _lines;
+    private string _customFieldsBody;
     private readonly DetailAttributesView _header;
     private readonly TextView _body;
     // The split currently applied to the subviews (null until the first layout). Guards against
@@ -68,6 +68,20 @@ public sealed class DetailOtherTabView : View
 
     /// <summary>The focusable, scrollable view the detail screen focuses and routes ↑/↓/PgUp/PgDn to.</summary>
     public TextView ScrollTarget => _body;
+
+    /// <summary>Swaps in fresh header lines and custom-fields body (a detail-view refresh, #114
+    /// follow-up) and forces the adaptive split to recompute so the body text and header height are
+    /// re-applied. Callers only invoke this when the content actually changed, so re-setting the body
+    /// (which resets its scroll) is bounded to real updates.</summary>
+    public void Update(IReadOnlyList<TaskDetailFormatter.DetailLine> lines, string customFieldsBody)
+    {
+        _lines = lines;
+        _customFieldsBody = customFieldsBody;
+        _header.Update(lines);
+        _applied = null;                 // force Apply() to recompute the split and reset the body text
+        _laidOutForHeight = int.MinValue;
+        SetNeedsLayout();
+    }
 
     /// <inheritdoc/>
     protected override void OnSubViewLayout(LayoutEventArgs args)

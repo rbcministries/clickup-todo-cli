@@ -95,12 +95,12 @@ public static class HelpItemSets
         new("↩", "detail"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+P", "📌"),
-        new("Ctrl+R", "↻"),
+        new("Ctrl+E", "feed"),
         new("F1", "help"),
         new("F2", "⚙"),
         new("F3", "filter/sort/group"),
         new("F4", "subtasks"),
-        new("F5", "feed"),
+        new("F5", "↻"),
         new("F6", "badges"),
         new("→/←", "expand/collapse"),
         new("Ctrl+→/←", "all"),
@@ -116,6 +116,7 @@ public static class HelpItemSets
         new("Ctrl+PgUp/PgDn", "sort stream"),
         new("Ctrl+A", "dispatch to Claude"),
         new("Ctrl+B", "browser"),
+        new("F5", "↻"),
         new("F1", "help"),
         new("Esc", "back"),
     ];
@@ -163,6 +164,7 @@ public static class HelpItemSets
     [
         new("↑/↓", "move"),
         new("F3", "mentions only"),
+        new("Ctrl+E", "list"),
         new("F1", "help"),
         new("Esc", "back"),
     ];

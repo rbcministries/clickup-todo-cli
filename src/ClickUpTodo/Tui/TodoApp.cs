@@ -260,9 +260,14 @@ public sealed class TodoApp
                     TogglePin();
                     break;
                 case KeyCode.R:
+                    // Ctrl+R is the (undisplayed) alias for the F5 refresh key.
                     key.Handled = true;
-                    Flash("Refreshing…");
-                    _refresh.RequestRefresh();
+                    RequestRefresh();
+                    break;
+                case KeyCode.E:
+                    // Ctrl+E toggles to the mentions & comments feed — List ↔ Feed navigation.
+                    key.Handled = true;
+                    OpenNotificationsFeed();
                     break;
                 case KeyCode.B:
                     key.Handled = true;
@@ -345,8 +350,9 @@ public sealed class TodoApp
                 ToggleShowSubtasks();
                 break;
             case KeyCode.F5:
+                // F5 is the refresh key (icon ↻); Ctrl+R is its undisplayed alias.
                 key.Handled = true;
-                OpenNotificationsFeed();
+                RequestRefresh();
                 break;
             case KeyCode.F6:
                 key.Handled = true;
@@ -370,14 +376,22 @@ public sealed class TodoApp
         Render(keepTaskId: CurrentTask()?.Id);
     }
 
+    /// <summary>F5 (and its Ctrl+R alias) — refresh now: flashes and wakes the background poll loop.</summary>
+    private void RequestRefresh()
+    {
+        Flash("Refreshing…");
+        _refresh.RequestRefresh();
+    }
+
     /// <summary>
-    /// F5 — opens the mentions &amp; comments feed screen (#114, epic #109). Fetches the feed off the UI
-    /// thread (like <see cref="OpenDetail"/>: flash → <c>Task.Run</c> → <c>Application.Invoke</c>) and
-    /// swaps in the data-bearing screen back on it; the background dashboard refresh keeps running.
-    /// Opens through the shared screen seam, guarded on <see cref="ActiveScreen"/> like the other
-    /// list-initiated opens. The full feed is loaded once (every entry mention-stamped), so the
-    /// screen's F3 mentions-only toggle filters locally with no re-fetch. Loading and error states show
-    /// on the status line — the screen is only constructed on success.
+    /// Ctrl+E — opens the mentions &amp; comments feed screen (#114, epic #109), the List ↔ Feed
+    /// navigation key. Fetches the feed off the UI thread (like <see cref="OpenDetail"/>: flash →
+    /// <c>Task.Run</c> → <c>Application.Invoke</c>) and swaps in the data-bearing screen back on it; the
+    /// background dashboard refresh keeps running. Opens through the shared screen seam, guarded on
+    /// <see cref="ActiveScreen"/> like the other list-initiated opens. The full feed is loaded once
+    /// (every entry mention-stamped), so the screen's F3 mentions-only toggle filters locally with no
+    /// re-fetch. Loading and error states show on the status line — the screen is only constructed on
+    /// success.
     /// </summary>
     private void OpenNotificationsFeed()
     {
@@ -935,6 +949,9 @@ public sealed class TodoApp
                     // prompt, the one-off/interactive mode (#94), and the working dir (#95) are consumed;
                     // #97 adds the rest. The detail view opens on the configured tab/sort/scroll (#108).
                     screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request);
+                    // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data; re-fetch off the UI
+                    // thread and feed it back into the still-open screen (its tab/scroll stay put).
+                    screen.RefreshRequested += (_, _) => RefreshDetail(screen, task.Id);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -947,6 +964,35 @@ public sealed class TodoApp
             catch (Exception ex)
             {
                 Application.Invoke(() => Flash($"Could not load task detail: {Short(ex)}"));
+            }
+        });
+    }
+
+    /// <summary>
+    /// Re-fetches a task's detail + comments for an open <see cref="TaskDetailScreen"/> (its F5 / Ctrl+R
+    /// or 30s auto-refresh, #114 follow-up) and feeds them back on the UI thread. Mirrors
+    /// <see cref="OpenDetail"/>'s off-thread fetch; the result is dropped if that screen has since been
+    /// torn down (it's no longer on the stack), and a fetch error flashes without disturbing the view.
+    /// The background dashboard refresh is independent and keeps running.
+    /// </summary>
+    private void RefreshDetail(TaskDetailScreen screen, string taskId)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var detail = await _tasks.GetTaskDetailAsync(taskId);
+                var comments = await _tasks.GetTaskCommentsAsync(taskId);
+                Application.Invoke(() =>
+                {
+                    // Only apply if this screen is still mounted (it may sit beneath a stacked Help).
+                    if (_screens.Contains(screen))
+                        screen.UpdateData(detail, comments);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not refresh task: {Short(ex)}"));
             }
         });
     }
