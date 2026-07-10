@@ -1,9 +1,14 @@
 using System.Collections.ObjectModel;
 using ClickUpTodo.ClickUp;
+using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
+
+// See TodoApp.cs: the static `Application` API is deprecated in Terminal.Gui 2.4 but remains the
+// supported v2 pattern; silence the deprecation until the instance-based API stabilizes.
+#pragma warning disable CS0618
 
 namespace ClickUpTodo.Tui.Screens;
 
@@ -44,7 +49,7 @@ public sealed class NotificationsFeedScreen : Screen
         + "You're seeing mentions only. Press F3 to show all recent comments,\n"
         + "or Esc to return to your tasks.";
 
-    private readonly IReadOnlyList<CommentItem> _feed;
+    private IReadOnlyList<CommentItem> _feed;
     private readonly ListView _list;
     private readonly Label _emptyLabel;
     private bool _mentionsOnly;
@@ -58,11 +63,26 @@ public sealed class NotificationsFeedScreen : Screen
     /// stacked over the feed and Esc returns here with the selection intact.</summary>
     public event EventHandler<string>? OpenTaskRequested;
 
+    // Auto-refresh cadence (seconds), tied to the list's RefreshSeconds so the feed and dashboard poll
+    // in step (#114 follow-up). Floored like RefreshService. The repeating timeout token is removed on
+    // dispose; null until OnShown arms it.
+    private readonly int _autoRefreshSeconds;
+    private object? _autoRefreshToken;
+
+    /// <summary>
+    /// Raised when the feed wants fresh data — on F5 / Ctrl+R, or on the auto-refresh tick. The host
+    /// re-fetches the feed off the UI thread and feeds it back via <see cref="UpdateFeed"/>; the
+    /// mentions-only filter and (where possible) the selected row are preserved.
+    /// </summary>
+    public event EventHandler? RefreshRequested;
+
     /// <param name="feed">The already-fetched, mention-stamped feed (newest first).</param>
+    /// <param name="autoRefreshSeconds">Background auto-refresh cadence, tied to the list's RefreshSeconds.</param>
     /// <param name="mentionsOnly">Whether the mentions-only filter starts on.</param>
-    public NotificationsFeedScreen(IReadOnlyList<CommentItem> feed, bool mentionsOnly = false)
+    public NotificationsFeedScreen(IReadOnlyList<CommentItem> feed, int autoRefreshSeconds, bool mentionsOnly = false)
     {
         _feed = feed;
+        _autoRefreshSeconds = Math.Max(5, autoRefreshSeconds);
         _mentionsOnly = mentionsOnly;
 
         // One focusable ListView fills the screen area (the shared footer #103 carries the shortcuts).
@@ -82,11 +102,31 @@ public sealed class NotificationsFeedScreen : Screen
 
     private void OnKey(object? sender, Key key)
     {
+        // Ctrl+E toggles back to the task list — the same key that opened the feed (List ↔ Feed nav).
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.E)
+        {
+            key.Handled = true;
+            Close();
+            return;
+        }
+
+        // Ctrl+R is the (undisplayed) alias for the F5 refresh key. The bare F5 case is in the switch.
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.R)
+        {
+            key.Handled = true;
+            RequestRefresh();
+            return;
+        }
+
         switch (key.KeyCode)
         {
             case KeyCode.Enter:
                 key.Handled = true;
                 OpenSelectedTask();
+                break;
+            case KeyCode.F5:
+                key.Handled = true;
+                RequestRefresh();
                 break;
             case KeyCode.F3:
                 key.Handled = true;
@@ -103,6 +143,28 @@ public sealed class NotificationsFeedScreen : Screen
                 Close();
                 break;
         }
+    }
+
+    /// <summary>F5 / Ctrl+R — flashes and asks the host to re-fetch the feed.</summary>
+    private void RequestRefresh()
+    {
+        RequestFlash("Refreshing feed…");
+        RefreshRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Swaps in a freshly-fetched feed (F5 / Ctrl+R or the auto-refresh tick) and re-renders. Must run
+    /// on the UI thread. The mentions-only filter is preserved (it filters locally), and the selected
+    /// row index is kept where it still fits so a background refresh doesn't jump the cursor.
+    /// </summary>
+    public void UpdateFeed(IReadOnlyList<CommentItem> feed)
+    {
+        var selected = _list.SelectedItem;
+        _feed = feed;
+        RenderFeed();
+        var rowCount = Filter(_feed, _mentionsOnly).Count;
+        if (rowCount > 0 && selected is int i)
+            _list.SelectedItem = Math.Clamp(i, 0, rowCount - 1);
     }
 
     /// <summary>Rebuilds the list rows from the (filtered) feed and toggles the empty-state placeholder.
@@ -189,5 +251,27 @@ public sealed class NotificationsFeedScreen : Screen
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.NotificationsFeed;
 
-    public override void OnShown() => _list.SetFocus();
+    public override void OnShown()
+    {
+        _list.SetFocus();
+        // Auto-refresh on the list's cadence (#114 follow-up). The callback fires on the UI thread;
+        // returning true keeps it repeating. Armed once here, torn down in Dispose.
+        _autoRefreshToken ??= Application.AddTimeout(TimeSpan.FromSeconds(_autoRefreshSeconds), () =>
+        {
+            RefreshRequested?.Invoke(this, EventArgs.Empty);
+            return true;
+        });
+    }
+
+    /// <inheritdoc/>
+    protected override void Dispose(bool disposing)
+    {
+        // Stop the auto-refresh tick so it can't fire against a torn-down screen (#114 follow-up).
+        if (disposing && _autoRefreshToken is { } token)
+        {
+            Application.RemoveTimeout(token);
+            _autoRefreshToken = null;
+        }
+        base.Dispose(disposing);
+    }
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Open-a-task-from-a-feed-entry validation (#115). Boots the TUI, opens the feed
-(F5), moves the cursor down, presses Enter to open the selected comment's task
+(Ctrl+E), moves the cursor down, presses Enter to open the selected comment's task
 detail *stacked over the feed*, and asserts:
 
   - Enter opens the correct task's detail (the detail tabs + the task's title).
@@ -26,7 +26,7 @@ proc = subprocess.Popen(["dotnet", DLL], stdin=slave, stdout=slave, stderr=slave
                         env=env, close_fds=True, preexec_fn=os.setsid)
 os.close(slave)
 
-F5 = b"\x1b[15~"
+CTRL_E = b"\x05"   # opens the feed (List ↔ Feed nav, #183)
 DOWN = b"\x1b[B"
 ENTER = b"\r"
 ESC = b"\x1b"
@@ -84,7 +84,7 @@ try:
     check("Task" in visible(), "dashboard did not boot")
 
     # Open the feed.
-    os.write(master, F5); pump(2.5)
+    os.write(master, CTRL_E); pump(2.5)
     check("Feed" in visible(), "feed screen title not shown")
     check("Alex Kim" in visible(), "feed rows not rendered")
 

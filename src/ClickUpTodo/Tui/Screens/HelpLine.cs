@@ -95,12 +95,12 @@ public static class HelpItemSets
         new("↩", "detail"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+P", "📌"),
-        new("Ctrl+R", "↻"),
+        new("Ctrl+E", "feed"),
         new("F1", "help"),
         new("F2", "⚙"),
         new("F3", "filter/sort/group"),
         new("F4", "subtasks"),
-        new("F5", "feed"),
+        new("F5", "↻"),
         new("F6", "badges"),
         new("→/←", "expand/collapse"),
         new("Ctrl+→/←", "all"),
@@ -113,9 +113,10 @@ public static class HelpItemSets
     [
         new("Tab", "switch tab"),
         new("↑/↓ PgUp/PgDn", "scroll"),
-        new("Ctrl+PgUp/PgDn", "sort stream"),
+        new("Ctrl+PgUp/PgDn", "order activity"),
         new("Ctrl+A", "dispatch to Claude"),
         new("Ctrl+B", "browser"),
+        new("F5", "↻"),
         new("F1", "help"),
         new("Esc", "back"),
     ];
@@ -157,15 +158,27 @@ public static class HelpItemSets
         new("Esc", "cancel"),
     ];
 
-    /// <summary>The mentions &amp; comments feed screen (F5, #109). F3 toggles the mentions-only filter
-    /// (#113/#114); Enter opens the selected comment's task (#115).</summary>
+    /// <summary>The mentions &amp; comments feed screen (opened with Ctrl+E, #109). Enter opens the
+    /// selected comment's task (#115); F3 toggles the mentions-only filter (#113/#114); Ctrl+E returns
+    /// to the list.</summary>
     public static readonly IReadOnlyList<HelpItem> NotificationsFeed =
     [
         new("↑/↓", "move"),
         new("Enter", "open"),
         new("F3", "mentions only"),
+        new("F5", "↻"),
+        new("Ctrl+E", "list"),
         new("F1", "help"),
         new("Esc", "back"),
+    ];
+
+    /// <summary>The background one-off run screen (#99): Esc cancels the in-flight run, then closes
+    /// once it has finished.</summary>
+    public static readonly IReadOnlyList<HelpItem> AgentRun =
+    [
+        new("↑/↓ PgUp/PgDn", "scroll"),
+        new("F1", "help"),
+        new("Esc", "cancel/back"),
     ];
 
     /// <summary>The help screen itself (no F1 — it is the help).</summary>

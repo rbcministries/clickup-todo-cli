@@ -116,6 +116,10 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
 
     /// <summary>Comments matching the field report that exposed sparse-flush artifacts: an emoji
     /// lead-in, em-dashes, curly quotes, and a URL (auto-hyperlinked cells) on the same lines.</summary>
+    // Counts comment fetches so E2E_VARY_COMMENTS can make each successive fetch return more comments —
+    // the only way to exercise the detail view's *content-changed* refresh path (scroll preservation).
+    private static int _commentFetches;
+
     private static string CommentsJson()
     {
         // 🛠️ is U+1F6E0 + U+FE0F (variation selector): ambiguous-width emoji presentation —
@@ -125,18 +129,24 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
                    "Branch: claude/ea-7221-address-display (off latest main)\n\n" +
                    "What was built\n\n" +
                    "Frontend-only filter in getAddressBookPageData (apps/account/src/api/account.ts): the Addresses page now displays only the primary address + addresses in use by an active (active/in_renewal) subscription; historical/unused addresses are suppressed.";
-        return JsonSerializer.Serialize(new
+        var comments = new List<object>
         {
-            comments = new object[]
-            {
-                new { id = "c1", comment_text = text, user = new { username = "Ben Seymour" }, date = "1751476320000", resolved = false },
-                new { id = "c2", comment_text = "Follow-up: verified against the staging account — looks good ✅", user = new { username = "Ben Seymour" }, date = "1751480000000", resolved = false },
-                // Mentions the signed-in user (username "bench", see the /user response), so the feed
-                // (#114) can be validated end-to-end: this row gets the mention chip and is the only one
-                // the F3 mentions-only filter keeps. Newest date so it sorts to the top of the feed.
-                new { id = "c3", comment_text = "@bench can you take a look when you get a chance?", user = new { username = "Alex Kim" }, date = "1751490000000", resolved = false },
-            },
-        });
+            new { id = "c1", comment_text = text, user = new { username = "Ben Seymour" }, date = "1751476320000", resolved = false },
+            new { id = "c2", comment_text = "Follow-up: verified against the staging account — looks good ✅", user = new { username = "Ben Seymour" }, date = "1751480000000", resolved = false },
+            // Mentions the signed-in user (username "bench", see the /user response), so the feed
+            // (#114) can be validated end-to-end: this row gets the mention chip and is the only one
+            // the F3 mentions-only filter keeps. Newest date so it sorts to the top of the feed.
+            new { id = "c3", comment_text = "@bench can you take a look when you get a chance?", user = new { username = "Alex Kim" }, date = "1751490000000", resolved = false },
+        };
+        // Optional: append a growing tail of comments so each refresh changes content (scroll-preservation
+        // check). Off by default, so every existing scenario sees the exact same three comments as before.
+        if (Environment.GetEnvironmentVariable("E2E_VARY_COMMENTS") == "1")
+        {
+            var seq = System.Threading.Interlocked.Increment(ref _commentFetches);
+            for (var i = 1; i <= seq; i++)
+                comments.Add(new { id = $"e{i}", comment_text = $"Auto-refresh probe comment {i}", user = new { username = "Probe Bot" }, date = $"{1751490000000L + i}", resolved = false });
+        }
+        return JsonSerializer.Serialize(new { comments });
     }
 
     private static string ListJson(string path)
