@@ -38,7 +38,9 @@ public sealed class AgentDispatcher
     /// the caller (#91, #100). <paramref name="outputSubdirectory"/> (blank unless the task-derived
     /// working-dir mode is active, #98) fills the template's <c>{outputDirInstruction}</c> with a
     /// "write outputs to <c>./{subdir}</c>" instruction. <paramref name="oneOff"/> selects a one-off
-    /// <c>claude -p</c> run over the default interactive session (#94).
+    /// <c>claude -p</c> run over the default interactive session (#94). <paramref name="postToComments"/>
+    /// (the #97 toggle) appends an instruction telling the agent to post a summary comment back to the
+    /// ClickUp task.
     /// </summary>
     public async Task<AgentDispatchResult> DispatchAsync(
         TaskDetail task,
@@ -48,11 +50,12 @@ public sealed class AgentDispatcher
         string? template = null,
         string? outputSubdirectory = null,
         bool oneOff = false,
+        bool postToComments = false,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, outputSubdirectory);
+        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, outputSubdirectory, postToComments);
         var result = await _launcher.LaunchAsync(promptFile, workingDir, _options, oneOff, ct).ConfigureAwait(false);
         return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile);
     }
