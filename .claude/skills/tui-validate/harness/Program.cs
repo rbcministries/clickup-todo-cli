@@ -32,8 +32,9 @@ if (Environment.GetEnvironmentVariable("E2E_VIEW") == "rich")
 var client = new ClickUpClient("fake-token", new HttpClient(new FakeClickUp(taskCount)));
 var configStore = new ConfigStore();
 var tasks = new TaskService(client, config, 1);
+var feed = new FeedService(client, tasks, config);
 var focus = new LocalFocusStore(config, configStore);
-new TodoApp(tasks, config, configStore, focus).Run("ansi");
+new TodoApp(tasks, feed, config, configStore, focus).Run("ansi");
 return;
 
 sealed class FakeClickUp(int taskCount) : HttpMessageHandler
@@ -130,6 +131,10 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
             {
                 new { id = "c1", comment_text = text, user = new { username = "Ben Seymour" }, date = "1751476320000", resolved = false },
                 new { id = "c2", comment_text = "Follow-up: verified against the staging account — looks good ✅", user = new { username = "Ben Seymour" }, date = "1751480000000", resolved = false },
+                // Mentions the signed-in user (username "bench", see the /user response), so the feed
+                // (#114) can be validated end-to-end: this row gets the mention chip and is the only one
+                // the F3 mentions-only filter keeps. Newest date so it sorts to the top of the feed.
+                new { id = "c3", comment_text = "@bench can you take a look when you get a chance?", user = new { username = "Alex Kim" }, date = "1751490000000", resolved = false },
             },
         });
     }
