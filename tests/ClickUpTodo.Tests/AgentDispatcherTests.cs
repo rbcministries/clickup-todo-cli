@@ -43,6 +43,31 @@ public sealed class AgentDispatcherTests : IDisposable
         }
     }
 
+    private sealed class FakeBackgroundRunner : IBackgroundAgentRunner
+    {
+        public string? PromptFilePath { get; private set; }
+        public string? PromptContent { get; private set; }
+        public bool PromptFileExistedDuringRun { get; private set; }
+        public string? WorkingDir { get; private set; }
+        public TerminalLauncherOptions? Options { get; private set; }
+        public BackgroundRunResult Result { get; init; } = BackgroundRunResult.Exited(0, "done", null);
+        public Func<CancellationToken, Task>? OnRun { get; init; }
+
+        public async Task<BackgroundRunResult> RunAsync(
+            string promptFilePath, string? workingDir, TerminalLauncherOptions options, CancellationToken ct = default)
+        {
+            PromptFilePath = promptFilePath;
+            WorkingDir = workingDir;
+            Options = options;
+            PromptFileExistedDuringRun = File.Exists(promptFilePath);
+            if (File.Exists(promptFilePath))
+                PromptContent = File.ReadAllText(promptFilePath);
+            if (OnRun is not null)
+                await OnRun(ct).ConfigureAwait(false);
+            return Result;
+        }
+    }
+
     private static TaskDetail Detail(string id = "abc123", string name = "Ship the Q3 report") =>
         new() { Id = id, Name = name };
 
@@ -352,6 +377,111 @@ public sealed class AgentDispatcherTests : IDisposable
         var message = AgentDispatcher.FormatStatus("Ship it", LaunchResult.Fail("boom"));
         Assert.Equal("Could not launch Claude: boom", message);
     }
+
+    // ── background one-off run (#99) ─────────────────────────────────────────────────
+    // These mirror the DispatchAsync tests at the background seam: a fake runner captures what it was
+    // handed, so no real `claude` is spawned; the composed prompt file lives in a scratch directory and
+    // is deleted by the background path once the run finishes.
+
+    [Fact]
+    public async Task DispatchBackgroundAsync_ComposesPromptFile_AndHandsContentWorkingDirAndOptionsToRunner()
+    {
+        var runner = new FakeBackgroundRunner();
+        var options = new TerminalLauncherOptions();
+        var dispatcher = new AgentDispatcher(new FakeLauncher(), options, _dir, runner);
+        var task = Detail();
+        var comments = Comments();
+
+        var result = await dispatcher.DispatchBackgroundAsync(task, comments, "please triage this", workingDir: "/work");
+
+        // The runner saw the exact composed prompt (default template render), plus the working dir + options.
+        Assert.True(runner.PromptFileExistedDuringRun);
+        Assert.StartsWith(_dir, runner.PromptFilePath);
+        Assert.Equal("/work", runner.WorkingDir);
+        Assert.Same(options, runner.Options);
+        Assert.Equal(AgentPromptComposer.Compose(task, comments, "please triage this"), runner.PromptContent);
+
+        Assert.True(result.Success);
+        Assert.Equal("done", result.Output);
+    }
+
+    [Fact]
+    public async Task DispatchBackgroundAsync_DeletesPromptFile_AfterTheRun()
+    {
+        var runner = new FakeBackgroundRunner();
+        var dispatcher = new AgentDispatcher(new FakeLauncher(), promptDirectory: _dir, backgroundRunner: runner);
+
+        await dispatcher.DispatchBackgroundAsync(Detail(), Comments(), "go");
+
+        // The file existed while the runner ran, but the background path cleans it up afterwards.
+        Assert.True(runner.PromptFileExistedDuringRun);
+        Assert.NotNull(runner.PromptFilePath);
+        Assert.False(File.Exists(runner.PromptFilePath!));
+    }
+
+    [Fact]
+    public async Task DispatchBackgroundAsync_ThreadsCompositionOptions_ToComposedPrompt()
+    {
+        var runner = new FakeBackgroundRunner();
+        var dispatcher = new AgentDispatcher(new FakeLauncher(), promptDirectory: _dir, backgroundRunner: runner);
+        var task = Detail(id: "abc123");
+        var comments = Comments();
+
+        await dispatcher.DispatchBackgroundAsync(
+            task, comments, "go", template: null, outputSubdirectory: "TEAM-42", postToComments: true);
+
+        var expected = AgentPromptComposer.Compose(task, comments, "go", outputSubdirectory: "TEAM-42", postToComments: true);
+        Assert.Equal(expected, runner.PromptContent);
+    }
+
+    [Fact]
+    public async Task DispatchBackgroundAsync_SurfacesNonZeroExit_AsFailure()
+    {
+        var runner = new FakeBackgroundRunner { Result = BackgroundRunResult.Exited(2, "partial", "boom") };
+        var dispatcher = new AgentDispatcher(new FakeLauncher(), promptDirectory: _dir, backgroundRunner: runner);
+
+        var result = await dispatcher.DispatchBackgroundAsync(Detail(), Comments(), "go");
+
+        Assert.False(result.Success);
+        Assert.Equal(2, result.ExitCode);
+        Assert.Equal("boom", result.Error);
+    }
+
+    [Fact]
+    public async Task DispatchBackgroundAsync_Cancellation_PropagatesAndStillDeletesPromptFile()
+    {
+        var runner = new FakeBackgroundRunner
+        {
+            OnRun = ct => Task.FromCanceled(new CancellationToken(canceled: true)),
+        };
+        var dispatcher = new AgentDispatcher(new FakeLauncher(), promptDirectory: _dir, backgroundRunner: runner);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => dispatcher.DispatchBackgroundAsync(Detail(), Comments(), "go"));
+
+        // The finally-block cleanup runs even when the run is cancelled.
+        Assert.NotNull(runner.PromptFilePath);
+        Assert.False(File.Exists(runner.PromptFilePath!));
+    }
+
+    [Fact]
+    public void BackgroundRunResult_Success_OnlyWhenStartedAndExitZero()
+    {
+        Assert.True(BackgroundRunResult.Exited(0, "ok", null).Success);
+        Assert.False(BackgroundRunResult.Exited(1, "", "err").Success);
+        Assert.False(BackgroundRunResult.NotStarted("no claude").Success);
+    }
+
+    [Fact]
+    public void BuildArguments_IsDashP_ThenExtraArgs_DroppingBlanks()
+    {
+        var options = new TerminalLauncherOptions { ExtraArgs = ["--model", "  ", "opus"] };
+        Assert.Equal(["-p", "--model", "opus"], BackgroundAgentRunner.BuildArguments(options));
+    }
+
+    [Fact]
+    public void BuildArguments_NoExtraArgs_IsJustDashP() =>
+        Assert.Equal(["-p"], BackgroundAgentRunner.BuildArguments(new TerminalLauncherOptions()));
 
     [Fact]
     public void Ctor_NullLauncher_Throws() =>

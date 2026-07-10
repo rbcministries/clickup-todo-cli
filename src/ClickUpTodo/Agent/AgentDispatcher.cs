@@ -16,15 +16,18 @@ namespace ClickUpTodo.Agent;
 public sealed class AgentDispatcher
 {
     private readonly ITerminalLauncher _launcher;
+    private readonly IBackgroundAgentRunner _backgroundRunner;
     private readonly TerminalLauncherOptions _options;
     private readonly string? _promptDirectory;
 
     public AgentDispatcher(
         ITerminalLauncher launcher,
         TerminalLauncherOptions? options = null,
-        string? promptDirectory = null)
+        string? promptDirectory = null,
+        IBackgroundAgentRunner? backgroundRunner = null)
     {
         _launcher = launcher ?? throw new ArgumentNullException(nameof(launcher));
+        _backgroundRunner = backgroundRunner ?? new BackgroundAgentRunner();
         _options = options ?? new TerminalLauncherOptions();
         _promptDirectory = promptDirectory;
     }
@@ -58,6 +61,53 @@ public sealed class AgentDispatcher
         var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, outputSubdirectory, postToComments);
         var result = await _launcher.LaunchAsync(promptFile, workingDir, _options, oneOff, ct).ConfigureAwait(false);
         return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile);
+    }
+
+    /// <summary>
+    /// Composes the prompt for <paramref name="task"/> exactly as <see cref="DispatchAsync"/> does, then
+    /// runs it as a <b>background one-off</b> <c>claude -p</c> child process (#99) via
+    /// <see cref="IBackgroundAgentRunner"/> instead of opening a terminal — capturing the output for
+    /// rendering in the TUI. All the composition inputs (<paramref name="workingDir"/>,
+    /// <paramref name="template"/>, <paramref name="outputSubdirectory"/>, <paramref name="postToComments"/>)
+    /// mean the same as on <see cref="DispatchAsync"/>, so a one-off run's prompt is identical to what the
+    /// interactive terminal path would have produced. The composed prompt file is fed to the child on
+    /// stdin and then <b>deleted</b> once the run finishes (or is cancelled) — the background path owns the
+    /// file, unlike the interactive path which retains it for the launched terminal to read.
+    /// </summary>
+    public async Task<BackgroundRunResult> DispatchBackgroundAsync(
+        TaskDetail task,
+        IReadOnlyList<CommentItem> comments,
+        string userPrompt,
+        string? workingDir = null,
+        string? template = null,
+        string? outputSubdirectory = null,
+        bool postToComments = false,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+
+        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, outputSubdirectory, postToComments);
+        try
+        {
+            return await _backgroundRunner.RunAsync(promptFile, workingDir, _options, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            TryDeletePromptFile(promptFile);
+        }
+    }
+
+    /// <summary>Best-effort delete of the background path's temp prompt file (it has been read into the
+    /// child via stdin); a leftover temp file is harmless, so IO failures are swallowed.</summary>
+    private static void TryDeletePromptFile(string promptFile)
+    {
+        try
+        {
+            if (File.Exists(promptFile))
+                File.Delete(promptFile);
+        }
+        catch (IOException) { /* best-effort cleanup */ }
+        catch (UnauthorizedAccessException) { /* best-effort cleanup */ }
     }
 
     /// <summary>
