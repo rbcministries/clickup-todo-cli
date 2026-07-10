@@ -1,0 +1,116 @@
+using ClickUpTodo.Configuration;
+
+namespace ClickUpTodo.Tests;
+
+/// <summary>
+/// Covers the one-time legacy-settings import (#121): upgrading users keep their <c>config.json</c>
+/// settings in the new LiteDB backend, the import is idempotent, and the old file is left in place so
+/// a downgrade is still possible. The target uses an in-memory <see cref="IStateStore"/> double so
+/// the migration logic is exercised independently of the LiteDB file backend.
+/// </summary>
+public sealed class SettingsMigrationTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "clickup-todo-tests", Guid.NewGuid().ToString("N"));
+
+    [Fact]
+    public void FreshInstall_NoLegacyFile_IsNoOp()
+    {
+        var legacy = new JsonFileStateStore(_dir); // nothing written
+        var target = new InMemoryStateStore();
+
+        var imported = SettingsMigration.ImportLegacyConfig(target, legacy);
+
+        Assert.False(imported);
+        Assert.False(target.Exists(StateKeys.Config));
+        Assert.False(new ConfigStore(target).Load().IsConfigured);
+    }
+
+    [Fact]
+    public void Upgrade_WithLegacyConfig_ImportsIdenticalEffectiveSettings()
+    {
+        // Arrange: a real config.json written through the file backend, as an existing install has.
+        var legacy = new JsonFileStateStore(_dir);
+        new ConfigStore(legacy).Save(new AppConfig
+        {
+            WorkspaceId = "ws-1",
+            WorkspaceName = "Acme",
+            PersonalTasksListId = "list-1",
+            RefreshSeconds = 45,
+            PinnedTaskIds = ["p1", "p2"],
+        });
+
+        var target = new InMemoryStateStore();
+
+        // Act
+        var imported = SettingsMigration.ImportLegacyConfig(target, legacy);
+
+        // Assert: imported, and the effective settings loaded from the target match the legacy ones.
+        Assert.True(imported);
+        var migrated = new ConfigStore(target).Load();
+        var original = new ConfigStore(legacy).Load();
+        Assert.True(migrated.IsConfigured);
+        Assert.Equal(original.WorkspaceId, migrated.WorkspaceId);
+        Assert.Equal(original.WorkspaceName, migrated.WorkspaceName);
+        Assert.Equal(original.PersonalTasksListId, migrated.PersonalTasksListId);
+        Assert.Equal(original.RefreshSeconds, migrated.RefreshSeconds);
+        Assert.Equal(original.PinnedTaskIds, migrated.PinnedTaskIds);
+        Assert.Equal(original.SchemaVersion, migrated.SchemaVersion);
+    }
+
+    [Fact]
+    public void Import_LeavesLegacyFileInPlace_ForDowngrade()
+    {
+        var legacy = new JsonFileStateStore(_dir);
+        new ConfigStore(legacy).Save(new AppConfig { WorkspaceId = "ws", PersonalTasksListId = "list" });
+        var configPath = legacy.PathFor(StateKeys.Config);
+        Assert.True(File.Exists(configPath));
+
+        SettingsMigration.ImportLegacyConfig(new InMemoryStateStore(), legacy);
+
+        // The old file must survive so a downgrade to the JSON backend still finds its settings.
+        Assert.True(File.Exists(configPath));
+    }
+
+    [Fact]
+    public void Import_IsIdempotent_AndNeverClobbersTheTarget()
+    {
+        var legacy = new JsonFileStateStore(_dir);
+        new ConfigStore(legacy).Save(new AppConfig { WorkspaceId = "old", PersonalTasksListId = "list" });
+
+        var target = new InMemoryStateStore();
+
+        // First import brings the legacy settings across.
+        Assert.True(SettingsMigration.ImportLegacyConfig(target, legacy));
+
+        // The user then changes a setting in the new backend.
+        var targetStore = new ConfigStore(target);
+        var updated = targetStore.Load();
+        updated.WorkspaceId = "new";
+        targetStore.Save(updated);
+
+        // A second import (e.g. next launch) must be a no-op and must not resurrect the stale value.
+        Assert.False(SettingsMigration.ImportLegacyConfig(target, legacy));
+        Assert.Equal("new", targetStore.Load().WorkspaceId);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_dir))
+            Directory.Delete(_dir, recursive: true);
+    }
+
+    /// <summary>A minimal non-file <see cref="IStateStore"/> — stands in for the LiteDB target.</summary>
+    private sealed class InMemoryStateStore : IStateStore
+    {
+        private readonly Dictionary<string, object> _values = [];
+
+        public bool Exists(string key) => _values.ContainsKey(key);
+
+        public T? Load<T>(string key) where T : class
+            => _values.TryGetValue(key, out var v) ? v as T : null;
+
+        public void Save<T>(string key, T value) where T : class => _values[key] = value;
+
+        public void Delete(string key) => _values.Remove(key);
+    }
+}

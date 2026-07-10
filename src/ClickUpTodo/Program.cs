@@ -6,9 +6,14 @@ using ClickUpTodo.Services;
 using ClickUpTodo.Setup;
 using ClickUpTodo.Tui;
 
-// The persistence backend is chosen here, once — the single drop-in point for a future backend
-// (the #119 verdict is LiteDB) without touching any call site. Today it's file-backed JSON.
-IStateStore stateStore = new JsonFileStateStore();
+// The persistence backend is chosen here, once — the single drop-in point the #120 seam left for the
+// #119 verdict (LiteDB), adopted in #121. On first launch after the upgrade, any existing file-backed
+// config.json is imported into the LiteDB store (idempotent; the old file is left in place so a
+// downgrade still finds its settings). Every call site keeps flowing through IStateStore unchanged.
+var dataDirectory = JsonFileStateStore.DefaultDirectory();
+using var liteStore = new LiteDbStateStore(Path.Combine(dataDirectory, "state.db"));
+SettingsMigration.ImportLegacyConfig(liteStore, new JsonFileStateStore(dataDirectory));
+IStateStore stateStore = liteStore;
 var configStore = new ConfigStore(stateStore);
 var tokenStore = new TokenStore();
 
