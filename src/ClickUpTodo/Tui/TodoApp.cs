@@ -53,6 +53,10 @@ public sealed class TodoApp
     // True while a dispatch is in flight, so a rapid second submit doesn't launch a duplicate session.
     // Only touched on the UI thread (set in DispatchAgent, cleared via Application.Invoke).
     private bool _dispatching;
+    // True while a feed / detail auto- or manual refresh fetch is outstanding, so ticks coalesce
+    // instead of piling up when a fan-out outlasts the cadence. UI-thread-only (like _dispatching).
+    private bool _refreshingFeed;
+    private bool _refreshingDetail;
 
     private Window _window = null!;
     private FrameView _frame = null!;
@@ -435,6 +439,14 @@ public sealed class TodoApp
         if (!ReferenceEquals(ActiveScreen, screen))
             return;
 
+        // Coalesce: the feed fan-out (a comment fetch per assigned task) can outlast the refresh cadence
+        // on a large workspace. Skip a tick while one is still in flight so ticks don't pile up and
+        // multiply API load — and so an earlier fetch can't land after a later one with stale data. The
+        // flag is only touched on the UI thread (here and the finally's Invoke), so no locking is needed.
+        if (_refreshingFeed)
+            return;
+        _refreshingFeed = true;
+
         _ = Task.Run(async () =>
         {
             try
@@ -449,6 +461,10 @@ public sealed class TodoApp
             catch (Exception ex)
             {
                 Application.Invoke(() => Flash($"Could not refresh feed: {Short(ex)}"));
+            }
+            finally
+            {
+                Application.Invoke(() => _refreshingFeed = false);
             }
         });
     }
@@ -1020,6 +1036,12 @@ public sealed class TodoApp
         if (!ReferenceEquals(ActiveScreen, screen))
             return;
 
+        // Coalesce overlapping refreshes: skip a tick while one is still in flight so ticks can't pile
+        // up and an earlier fetch can't land after a later one with stale data (UI-thread-only flag).
+        if (_refreshingDetail)
+            return;
+        _refreshingDetail = true;
+
         _ = Task.Run(async () =>
         {
             try
@@ -1036,6 +1058,10 @@ public sealed class TodoApp
             catch (Exception ex)
             {
                 Application.Invoke(() => Flash($"Could not refresh task: {Short(ex)}"));
+            }
+            finally
+            {
+                Application.Invoke(() => _refreshingDetail = false);
             }
         });
     }

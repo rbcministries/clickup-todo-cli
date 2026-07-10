@@ -366,6 +366,10 @@ public sealed class TaskDetailScreen : Screen
         {
             _headerSignature = headerSignature;
             _headerView.Update(titleHeaderLines);
+            // The header is variable-height (the Tags line appears only when the task has tags), so keep
+            // the one-row gap before the tabs correct if a refresh changed the line count. _headerView's
+            // own Height is re-set by Update; _tabs sits just below it.
+            _tabs.Y = titleHeaderLines.Count + 1;
         }
 
         var streamText = TaskDetailFormatter.Stream(task, comments, _streamSort);
