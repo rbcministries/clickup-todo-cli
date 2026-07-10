@@ -92,6 +92,16 @@ public sealed class ViewSettings
     public bool ShowAllSubtasksOfAssignedParents { get; set; }
 
     /// <summary>
+    /// When true, completed (ClickUp <c>closed</c>-type) tasks are fetched and shown; when false (the
+    /// default) they're hidden — the explicit F12 "Show Completed" toggle (#178). Off matches the app's
+    /// historical behaviour (closed-type tasks dropped server-side via <c>IncludeClosed=false</c>) and
+    /// additionally hides completed <em>subtasks</em> that were fetched as chain-integrity anchors. The
+    /// toggle applies consistently to top-level tasks and subtasks and composes with the F3 status
+    /// filters. A new field defaults to false for existing configs, so no migration is needed.
+    /// </summary>
+    public bool ShowCompleted { get; set; }
+
+    /// <summary>
     /// The literal filter value that means "the current app user" for an <see cref="TaskField.Assignee"/>
     /// rule. Kept as a token (not a numeric id) so the seeded default doesn't need the user id at
     /// config-load time; it's resolved to the id only at the fetch layer (#68).
@@ -127,7 +137,7 @@ public sealed class ViewSettings
     {
         get
         {
-            if (SortField is not null || GroupField is not null || ShowSubtasks || ShowAllSubtasksOfAssignedParents)
+            if (SortField is not null || GroupField is not null || ShowSubtasks || ShowAllSubtasksOfAssignedParents || ShowCompleted)
                 return false;
             if (Filters.Count != 1 + DefaultExcludedStatuses.Count)
                 return false;

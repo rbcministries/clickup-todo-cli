@@ -137,14 +137,17 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// everyone in the workspace — a deliberately broad (and slower) fetch the caller opts into by
     /// clearing the Assignee rule (#68).
     /// </summary>
-    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, CancellationToken ct = default)
+    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, CancellationToken ct = default)
         => Guard("GetFilteredTeamTasks", () => PageAsync(page =>
             _client.V2.Team[workspaceId].Task.GetAsync(cfg =>
             {
                 if (assigneeIds.Count > 0)
                     cfg.QueryParameters.Assignees = assigneeIds.Select(id => id.ToString(CultureInfo.InvariantCulture)).ToArray();
                 cfg.QueryParameters.Page = page;
-                cfg.QueryParameters.IncludeClosed = false;
+                // Open-only by default; the F12 "Show Completed" toggle (#178) flips this on so the server
+                // returns closed-type tasks too. When off, closed-type tasks are dropped server-side (and
+                // any that still arrive as subtask anchors are hidden client-side by TaskView).
+                cfg.QueryParameters.IncludeClosed = includeClosed;
                 cfg.QueryParameters.Subtasks = true;
             }, ct), ct));
 
@@ -310,6 +313,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             ListName = t.List?.Name,
             StatusName = t.Status?.StatusProp,
             StatusColor = t.Status?.Color,
+            StatusType = t.Status?.Type,
             PriorityLevel = priorityLevel,
             PriorityName = ClickUpPriority.NameFromLevel(priorityLevel),
             PriorityColor = t.Priority?.Color,

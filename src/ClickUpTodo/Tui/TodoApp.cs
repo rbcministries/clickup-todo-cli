@@ -381,6 +381,10 @@ public sealed class TodoApp
                 key.Handled = true;
                 CycleBadgeDisplay();
                 break;
+            case KeyCode.F12:
+                key.Handled = true;
+                ToggleShowCompleted();
+                break;
         }
     }
 
@@ -508,6 +512,29 @@ public sealed class TodoApp
             _foreignSubtasks = EmptyParents; // no nesting when subtasks are hidden (#70 is a no-op then)
             _foreignSubtasksTruncated = false;
         }
+        Render(keepTaskId: CurrentTask()?.Id);
+        _signature = CurrentSignature(_all);
+        if (on)
+            _refresh.RequestRefresh();
+    }
+
+    /// <summary>
+    /// Toggles the F12 "Show Completed" view (#178) — completed (closed-type) tasks and subtasks shown
+    /// vs. hidden — and persists it. Off (default) hides them; the display gate in <see cref="TaskView"/>
+    /// re-renders immediately from the current snapshot. Turning it on additionally requests a refresh so
+    /// the server returns the closed-type tasks it drops while off (a client-side re-render can't surface
+    /// tasks never fetched — mirrors <see cref="ToggleShowSubtasks"/>).
+    /// </summary>
+    private void ToggleShowCompleted()
+    {
+        if (ActiveScreen is not null)
+            return;
+
+        var on = !_config.View.ShowCompleted;
+        _config.View.ShowCompleted = on;
+        _configStore.Save(_config);
+        Flash(on ? "Showing completed tasks (F12)." : "Completed tasks hidden (F12).");
+
         Render(keepTaskId: CurrentTask()?.Id);
         _signature = CurrentSignature(_all);
         if (on)
@@ -1402,6 +1429,9 @@ public sealed class TodoApp
     private string CurrentSignature(IReadOnlyList<TaskItem> tasks)
     {
         var sb = new System.Text.StringBuilder(BuildSignature(tasks));
+        // Fold in "Show Completed" (#178) so toggling F12 is treated as a render change, not a no-op
+        // refresh, even when the underlying task set is byte-identical.
+        sb.Append("#done=").Append(_config.View.ShowCompleted);
         sb.Append("#sub=").Append(_config.View.ShowSubtasks);
         if (_config.View.ShowSubtasks)
         {
@@ -1441,6 +1471,8 @@ public sealed class TodoApp
             flags.Add($"sort {TaskFieldInfo.DisplayName(sf)} {(view.SortDirection == SortDirection.Ascending ? "↑" : "↓")}");
         if (view.GroupField is { } gf)
             flags.Add($"grouped by {TaskFieldInfo.DisplayName(gf)}");
+        if (view.ShowCompleted)
+            flags.Add("+completed");
         return flags.Count > 0 ? $"{title} · {string.Join(" · ", flags)}" : title;
     }
 
@@ -1460,7 +1492,12 @@ public sealed class TodoApp
         // Feed the pulled-in teammate-owned subtasks (#70) into the Focus layout too, so a foreign child of
         // a pinned parent nests under it in Focus rather than vanishing (#85). NestedSubtaskIds then covers
         // both in-snapshot and foreign rows pulled into Focus — the exact set to keep out of the to-do list.
-        var foreignList = nest && _foreignSubtasks.Count > 0 ? _foreignSubtasks.Values.ToList() : null;
+        // Drop completed (closed-type) foreign subtasks when "Show Completed" is off (#178), so a
+        // completed teammate-owned child doesn't nest under a pinned parent in Focus — matching the
+        // to-do section, where TaskView.Apply gates them. Explicit pins themselves stay visible.
+        var foreignList = nest && _foreignSubtasks.Count > 0
+            ? _foreignSubtasks.Values.Where(t => view.ShowCompleted || !TaskView.IsCompleted(t)).ToList()
+            : null;
         var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection, _expanded, foreignList);
         _focusNestedIds = focus.NestedSubtaskIds;
 

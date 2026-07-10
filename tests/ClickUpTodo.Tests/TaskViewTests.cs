@@ -15,12 +15,13 @@ public sealed class TaskViewTests
 
     private static TaskItem Task(
         string id, string name, string? status = null, string? list = null, long? due = null, long? updated = null,
-        long? created = null, int? priority = null)
+        long? created = null, int? priority = null, string? statusType = null)
         => new()
         {
             Id = id,
             Name = name,
             StatusName = status,
+            StatusType = statusType,
             ListName = list,
             DueDateMs = due,
             UpdatedMs = updated,
@@ -541,5 +542,84 @@ public sealed class TaskViewTests
         var result = TaskView.Filter(tasks, [Rule(TaskField.Priority, FilterOp.GreaterThan, "banana")]);
 
         Assert.Equal(2, result.Count);
+    }
+
+    // ── Show Completed toggle (F12, #178) ────────────────────────────────────
+
+    [Theory]
+    [InlineData("closed", true)]
+    [InlineData("Closed", true)]  // case-insensitive
+    [InlineData("CLOSED", true)]
+    [InlineData("open", false)]
+    [InlineData("custom", false)]
+    [InlineData("done", false)]   // a "done"-type status is not the terminal closed type (deferred scope)
+    [InlineData(null, false)]     // unmapped status type is never treated as completed
+    public void IsCompleted_OnlyClosedType(string? statusType, bool expected)
+    {
+        Assert.Equal(expected, TaskView.IsCompleted(Task("1", "a", statusType: statusType)));
+    }
+
+    [Fact]
+    public void Apply_HidesCompleted_WhenShowCompletedOff()
+    {
+        TaskItem[] tasks =
+        [
+            Task("1", "a", statusType: "open"),
+            Task("2", "b", statusType: "closed"),
+            Task("3", "c", statusType: null),
+        ];
+
+        var groups = TaskView.Apply(tasks, new ViewSettings { ShowCompleted = false });
+
+        Assert.Equal(["1", "3"], groups.SelectMany(g => g.Tasks).Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Apply_KeepsCompleted_WhenShowCompletedOn()
+    {
+        TaskItem[] tasks =
+        [
+            Task("1", "a", statusType: "open"),
+            Task("2", "b", statusType: "closed"),
+        ];
+
+        var groups = TaskView.Apply(tasks, new ViewSettings { ShowCompleted = true });
+
+        Assert.Equal(["1", "2"], groups.SelectMany(g => g.Tasks).Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Apply_CompletedGate_ComposesWithStatusFilter()
+    {
+        // A completed task also excluded by a Status IS NOT rule is gone either way; the gate is
+        // orthogonal to (and composes with) explicit F3 status filters (#178).
+        TaskItem[] tasks =
+        [
+            Task("1", "a", status: "In Progress", statusType: "open"),
+            Task("2", "b", status: "Complete", statusType: "closed"),
+            Task("3", "c", status: "Won't Do", statusType: "open"),
+        ];
+
+        var settings = new ViewSettings
+        {
+            ShowCompleted = false,
+            Filters = [Rule(TaskField.Status, FilterOp.IsNot, "Won't Do")],
+        };
+        var groups = TaskView.Apply(tasks, settings);
+
+        Assert.Equal(["1"], groups.SelectMany(g => g.Tasks).Select(t => t.Id));
+    }
+
+    [Fact]
+    public void Filter_DoesNotGateCompleted_GateLivesInApplyOnly()
+    {
+        // Filter is the pure F3-rule pass; the completed gate is applied by Apply (which also owns
+        // ShowCompleted). Filter alone must not drop closed-type tasks — callers that only filter
+        // (and existing tests) keep their behaviour.
+        TaskItem[] tasks = [Task("1", "a", statusType: "closed"), Task("2", "b", statusType: "open")];
+
+        var result = TaskView.Filter(tasks, rules: null);
+
+        Assert.Equal(["1", "2"], result.Select(t => t.Id));
     }
 }

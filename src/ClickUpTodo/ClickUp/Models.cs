@@ -97,6 +97,15 @@ public sealed record TaskItem
     public string? Url { get; init; }
     public string? StatusName { get; init; }
     public string? StatusColor { get; init; }
+
+    /// <summary>
+    /// The ClickUp status <c>type</c> (e.g. <c>open</c>, <c>custom</c>, <c>closed</c>), or null when
+    /// unmapped. <c>closed</c> is ClickUp's terminal closed type — exactly what a task fetch with
+    /// <c>IncludeClosed=false</c> drops server-side — used by the F12 "Show Completed" toggle (#178) to
+    /// hide completed tasks/subtasks consistently at every level (see <c>TaskView.IsCompleted</c>).
+    /// </summary>
+    public string? StatusType { get; init; }
+
     public string? ListId { get; init; }
     public string? ListName { get; init; }
 

@@ -28,8 +28,12 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
         // Assignee IS rules scope the assigned fetch server-side (#68). The default view's "Assignee IS
         // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone. A
         // username/email rule is resolved to an id via the workspace-members lookup (#73).
-        var assigned = await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), ct);
-        var personal = await client.GetListTasksAsync(config.PersonalTasksListId, ct: ct);
+        // The F12 "Show Completed" toggle (#178) widens both fetches to include closed-type tasks. When
+        // off (the default) closed-type tasks are dropped server-side; TaskView additionally hides any
+        // completed items that still arrive (e.g. subtask anchors) so hiding is consistent at every level.
+        var includeClosed = config.View.ShowCompleted;
+        var assigned = await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), includeClosed, ct);
+        var personal = await client.GetListTasksAsync(config.PersonalTasksListId, includeClosed, ct);
 
         // De-dup by task id; a task assigned to me that also lives on my personal list appears once.
         var byId = new Dictionary<string, TaskItem>();
