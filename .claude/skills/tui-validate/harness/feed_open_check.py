@@ -93,7 +93,7 @@ try:
     os.write(master, DOWN); pump(0.6)
     os.write(master, DOWN); pump(0.6)
     before = selected_row_text()
-    check(before is not None, "no selected (reverse-video) row on the feed")
+    check(before is not None, "no selected (highlighted) row on the feed")
 
     # Enter → open the selected comment's task detail, stacked over the feed.
     os.write(master, ENTER); pump(3.0)
