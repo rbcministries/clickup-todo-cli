@@ -1,3 +1,4 @@
+using System.Text;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 
@@ -238,22 +239,39 @@ public static class TaskRowFormatter
     private static readonly char[] AbbreviationSeparators = ['/', '-', '|', ' ', '\t', '\n', '\r', '\f', '\v'];
 
     /// <summary>
-    /// The four-column short-variant Status badge (#181): a parenthesised letter abbreviation of the
-    /// status name, e.g. <c>"Won't Do" → "(WD)"</c>, <c>"Blocked" → "(B )"</c>, <c>"In Progress" → "(IP)"</c>.
-    /// Multi-word names take the first char of the first and last words; a single word takes its first
-    /// letter followed by a space; letters are uppercased so lowercase ClickUp statuses stay consistent
-    /// (<c>"in progress" → "IP"</c>). Always exactly four display columns (<c>"(" + 2 chars + ")"</c>) with
-    /// no flanking padding, so short-variant Status badges never have mixed widths. A name that is all
-    /// separators (no words) yields <c>"(  )"</c>. Pure — unit-testable independent of Terminal.Gui.
+    /// The short-variant Status badge (#181): a parenthesised letter abbreviation of the status name,
+    /// e.g. <c>"Won't Do" → "(WD)"</c>, <c>"Blocked" → "(B )"</c>, <c>"In Progress" → "(IP)"</c>. The
+    /// abbreviation takes the first letter/digit of the first and last words; a single word takes its
+    /// first letter followed by a space; letters are uppercased so lowercase ClickUp statuses stay
+    /// consistent (<c>"in progress" → "IP"</c>). Initials are extracted as whole Unicode scalars
+    /// (<see cref="Rune"/>), never partial UTF-16 chars, and a word's leading non-letter/digit runes are
+    /// skipped — so an emoji-prefixed status (<c>"🔥 Blocked" → "(B )"</c>) abbreviates by its real
+    /// letters rather than producing a lone surrogate. A name with no letters/digits (all separators or
+    /// symbols) yields <c>"(  )"</c>. The result is always four characters (<c>"(" + 2 chars + ")"</c>)
+    /// with no flanking padding, so the common Latin/single-width case is a uniform four columns and
+    /// short-variant Status badges don't have mixed widths. Pure — unit-testable independent of
+    /// Terminal.Gui.
     /// </summary>
     public static string StatusAbbreviation(string statusName)
     {
         var words = (statusName ?? "").Split(AbbreviationSeparators, StringSplitOptions.RemoveEmptyEntries);
-        var letters = words.Length switch
+
+        // Each word's first letter/digit, as a whole Rune (so a surrogate-pair or combining sequence is
+        // never split into an ill-formed half). Leading punctuation/symbols/emoji in a word are skipped.
+        var initials = new List<Rune>(words.Length);
+        foreach (var word in words)
+            foreach (var rune in word.EnumerateRunes())
+                if (Rune.IsLetterOrDigit(rune))
+                {
+                    initials.Add(Rune.ToUpperInvariant(rune));
+                    break;
+                }
+
+        var letters = initials.Count switch
         {
             0 => "  ",
-            1 => $"{char.ToUpperInvariant(words[0][0])} ",
-            _ => $"{char.ToUpperInvariant(words[0][0])}{char.ToUpperInvariant(words[^1][0])}",
+            1 => $"{initials[0]} ",
+            _ => $"{initials[0]}{initials[^1]}",
         };
         return $"({letters})";
     }

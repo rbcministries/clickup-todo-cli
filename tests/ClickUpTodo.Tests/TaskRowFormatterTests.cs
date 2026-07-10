@@ -33,9 +33,27 @@ public sealed class TaskRowFormatterTests
     [InlineData("Won't", "(W )")]           // an apostrophe does NOT split — one word
     [InlineData("A/B/C/D", "(AD)")]         // multiple separators: still first + last word
     [InlineData("done", "(D )")]            // single lowercase word
+    [InlineData("3rd Party", "(3P)")]       // a digit is a valid initial
+    [InlineData("@blocked", "(B )")]        // a leading symbol is skipped to the first letter
+    [InlineData("🔥 Blocked", "(B )")]       // emoji word has no letter — the real word abbreviates
+    [InlineData("🔥 In Progress", "(IP)")]   // leading emoji word skipped; real words used
+    [InlineData("✅ Done", "(D )")]          // emoji-prefixed single real word
+    [InlineData("🔥", "(  )")]               // only a symbol/emoji, no letters/digits
     public void StatusAbbreviation_FollowsTheRules(string statusName, string expected)
     {
         Assert.Equal(expected, TaskRowFormatter.StatusAbbreviation(statusName));
+    }
+
+    [Fact]
+    public void StatusAbbreviation_EmojiPrefixedName_ProducesWellFormedText_NoLoneSurrogate()
+    {
+        // Regression for the UTF-16-indexing bug: taking the first *char* of "🚀" grabbed a lone high
+        // surrogate. Extracting whole runes (and skipping the symbol) yields the real letters, and the
+        // result must be well-formed UTF-16 (no unpaired surrogate).
+        var abbrev = TaskRowFormatter.StatusAbbreviation("🚀 Ship It");
+
+        Assert.Equal("(SI)", abbrev);
+        Assert.DoesNotContain(abbrev, c => char.IsSurrogate(c)); // no lone (or any) surrogate leaked through
     }
 
     [Theory]
