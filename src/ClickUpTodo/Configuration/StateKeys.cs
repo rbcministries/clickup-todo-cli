@@ -12,4 +12,12 @@ public static class StateKeys
     /// (<see cref="AppConfig.PinnedTaskIds"/>). Maps to <c>config.json</c> in the file backend.
     /// </summary>
     public const string Config = "config";
+
+    /// <summary>
+    /// The persisted task working-set cache (#122) — the last successfully-loaded snapshot, so the app
+    /// can paint instantly on launch while the live refresh runs. Maps to <c>tasks.json</c> in the file
+    /// backend. One document; the stored payload carries the workspace/list/assignee fingerprint it was
+    /// written for, so a context switch is a clean cache miss rather than a stale paint.
+    /// </summary>
+    public const string Tasks = "tasks";
 }

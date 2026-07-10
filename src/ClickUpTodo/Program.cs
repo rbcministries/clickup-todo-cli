@@ -10,6 +10,7 @@ using ClickUpTodo.Tui;
 // (the #119 verdict is LiteDB) without touching any call site. Today it's file-backed JSON.
 IStateStore stateStore = new JsonFileStateStore();
 var configStore = new ConfigStore(stateStore);
+var taskCache = new TaskCache(stateStore);
 var tokenStore = new TokenStore();
 
 // `clickup-todo --reset` / `--logout`: forget the saved token and settings, then exit.
@@ -17,6 +18,10 @@ if (args.Any(a => a is "--reset" or "--logout"))
 {
     tokenStore.Delete();
     configStore.Delete();
+    // Drop the cached working set too, so a reset leaves no stale snapshot behind (a fresh workspace
+    // would miss on the fingerprint anyway; this just doesn't orphan the file). #124 owns the broader
+    // token/workspace-change invalidation.
+    taskCache.Clear();
     Console.WriteLine("Cleared saved ClickUp token and settings. Run `clickup-todo` to sign in again.");
     return 0;
 }
@@ -82,7 +87,7 @@ catch (Exception ex)
 var taskService = new TaskService(client, config, userId);
 var feedService = new FeedService(client, taskService, config);
 var focusStore = new LocalFocusStore(config, configStore);
-new TodoApp(taskService, feedService, config, configStore, focusStore).Run(driverName);
+new TodoApp(taskService, feedService, config, configStore, focusStore, taskCache).Run(driverName);
 return 0;
 
 // Reads "--opt value" or "--opt=value" from args.

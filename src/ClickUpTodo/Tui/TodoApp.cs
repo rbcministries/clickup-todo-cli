@@ -46,6 +46,9 @@ public sealed class TodoApp
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
+    // Persists the last loaded working set for an instant first paint on the next launch (#122). Read
+    // once at startup (TryPaintCachedTasks) and written after each changed live load (OnTasksLoaded).
+    private readonly TaskCache _taskCache;
     // Composes the seed prompt + launches an interactive `claude` session for the detail view's A
     // keybinding (#26). Built from the persisted AgentDispatch settings (#91) and rebuilt after the F2
     // settings dialog saves, so a custom terminal / claude path / extra args apply without a restart.
@@ -127,13 +130,14 @@ public sealed class TodoApp
     private string _status = "Loading…";
     private string _signature = "";
 
-    public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore, IFocusStore focus)
+    public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore, IFocusStore focus, TaskCache taskCache)
     {
         _tasks = tasks;
         _feed = feed;
         _config = config;
         _configStore = configStore;
         _focus = focus;
+        _taskCache = taskCache;
         _agent = BuildAgentDispatcher();
     }
 
@@ -162,6 +166,12 @@ public sealed class TodoApp
         {
             _status = $"Loading… (driver: {driverName ?? "default (ansi)"}{(diffing ? ", diffed output" : "")})";
             Build();
+            // Instant first paint from the persisted working set (#122): render the last snapshot now,
+            // synchronously on the UI thread, before Application.Run starts pumping — so the first live
+            // refresh (marshalled in via Application.Invoke) can only ever arrive after this. When the
+            // live set matches, OnTasksLoaded's signature fast-path skips the re-render (no flicker);
+            // when it differs, the cursor is kept by task id.
+            TryPaintCachedTasks();
             _refresh = new RefreshService(
                 fetch: FetchAsync,
                 intervalSeconds: _config.RefreshSeconds,
@@ -1406,6 +1416,27 @@ public sealed class TodoApp
 
     // ── Rendering ────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Paints the persisted working set (#122) before the first network load, so a warm cache shows
+    /// the task list on the first frame. A miss (nothing cached, or the cache belongs to a different
+    /// workspace/list/assignee context) leaves the "Loading…" state untouched for the live load to
+    /// replace. Seeds <see cref="_signature"/> from the cached set so an identical live load is a no-op
+    /// (the OnTasksLoaded fast-path). The subtask resolvers are still empty here, so a cached paint is
+    /// the flat/nested view without pulled-in context parents/foreign subtasks; the first live refresh
+    /// fills those in. Runs on the UI thread during <see cref="Run"/>, before the run loop starts.
+    /// </summary>
+    private void TryPaintCachedTasks()
+    {
+        var cached = _taskCache.Load(_config);
+        if (cached is not { Count: > 0 })
+            return;
+
+        _all = cached;
+        _status = $"Showing cached tasks · {cached.Count} task(s) · refreshing…";
+        _signature = CurrentSignature(cached);
+        Render(keepTaskId: null);
+    }
+
     private void OnTasksLoaded(IReadOnlyList<TaskItem> tasks)
     {
         _all = tasks;
@@ -1430,6 +1461,14 @@ public sealed class TodoApp
         }
         _signature = signature;
         Render(keepTaskId: CurrentTask()?.Id);
+
+        // Persist the freshly-rendered working set for the next launch's instant first paint (#122).
+        // Only on a real change — the signature fast-path above already returned for a no-op poll, so
+        // the cache isn't rewritten every interval. The bounded payload keeps this off-critical-path;
+        // it rides the UI thread like the config save. The optimistic status path (UpdateTaskRow) is
+        // intentionally not cached here: the next authoritative load saves the confirmed set, and
+        // persisting an as-yet-unconfirmed value could outlive a server rejection.
+        _taskCache.Save(_config, tasks);
     }
 
     /// <summary>
