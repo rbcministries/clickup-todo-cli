@@ -7,7 +7,8 @@ namespace ClickUpTodo.Tests;
 /// Tests for the rate-limit governor (#193): pure header→delay math, plus handler-level behaviour
 /// through a scripted inner <see cref="HttpMessageHandler"/> (no sockets). Waits used in tests are
 /// zero or a few hundred ms so the suite stays fast; assertions on elapsed time are lower bounds
-/// only (an overloaded CI machine can only make waits longer, never shorter).
+/// (an overloaded CI machine can only make waits longer, never shorter), plus one deliberately
+/// generous upper-bound sanity check in <c>HealthyBudget_DoesNotPause</c>.
 /// </summary>
 public sealed class ClickUpRateLimitHandlerTests
 {
@@ -249,6 +250,54 @@ public sealed class ClickUpRateLimitHandlerTests
 
         Assert.Equal(12, inner.Sends);
         Assert.True(peak <= 3, $"peak in-flight {peak} exceeded the gate width");
+    }
+
+    // ── ShouldGiveUp / factory retry predicate (pure) ────────────────────────
+
+    [Fact]
+    public void ShouldGiveUp_CumulativeWaitBudget_StopsRetrying()
+    {
+        var half = TimeSpan.FromTicks(ClickUpRateLimitHandler.MaxWait.Ticks / 2);
+
+        Assert.False(ClickUpRateLimitHandler.ShouldGiveUp(0, hasBody: false, half, TimeSpan.Zero));
+        Assert.False(ClickUpRateLimitHandler.ShouldGiveUp(1, hasBody: false, half, half));
+        // A third half-budget wait would push the cumulative total past MaxWait.
+        Assert.True(ClickUpRateLimitHandler.ShouldGiveUp(2, hasBody: false, half, half + half));
+    }
+
+    [Theory]
+    [InlineData(0, true, true)]    // a body is never retried here
+    [InlineData(3, false, true)]   // attempts exhausted (MaxRetries = 3)
+    public void ShouldGiveUp_BodyAndAttemptRules(int attempt, bool hasBody, bool expected)
+        => Assert.Equal(expected,
+            ClickUpRateLimitHandler.ShouldGiveUp(attempt, hasBody, TimeSpan.FromSeconds(1), TimeSpan.Zero));
+
+    [Fact]
+    public void ShouldGiveUp_SingleWaitBeyondMaxWait()
+        => Assert.True(ClickUpRateLimitHandler.ShouldGiveUp(
+            0, hasBody: false, ClickUpRateLimitHandler.MaxWait + TimeSpan.FromSeconds(1), TimeSpan.Zero));
+
+    [Fact]
+    public void KiotaShouldRetry_LeavesRead429sToTheGovernor()
+    {
+        // Read (no body) 429: Kiota's RetryHandler must NOT retry — the governor owns it, and the
+        // final 429 must reach the adapter to surface as ClickUpApiException(429).
+        var read429 = Resp();
+        read429.RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://api.clickup.com/x");
+        Assert.False(ClickUpClientFactory.KiotaShouldRetry(1, 1, read429));
+
+        // Write (bodied) 429: RetryHandler keeps it (it can clone content; the governor defers it).
+        var write429 = Resp();
+        write429.RequestMessage = new HttpRequestMessage(HttpMethod.Put, "https://api.clickup.com/x")
+        {
+            Content = new StringContent("{}"),
+        };
+        Assert.True(ClickUpClientFactory.KiotaShouldRetry(1, 1, write429));
+
+        // Non-429s keep stock behaviour regardless of body.
+        var unavailable = Resp(HttpStatusCode.ServiceUnavailable);
+        unavailable.RequestMessage = new HttpRequestMessage(HttpMethod.Get, "https://api.clickup.com/x");
+        Assert.True(ClickUpClientFactory.KiotaShouldRetry(1, 1, unavailable));
     }
 
     private static void InterlockedMax(ref int target, int value)

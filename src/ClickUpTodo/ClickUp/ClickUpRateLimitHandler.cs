@@ -8,9 +8,11 @@ namespace ClickUpTodo.ClickUp;
 /// shared <see cref="HttpClient"/> (below Kiota's default middleware) so it sees every physical
 /// request. Three cooperating behaviours:
 /// <list type="number">
-///   <item><b>One in-flight budget:</b> a process-wide gate caps concurrent requests at
-///   <see cref="MaxInFlight"/>, so overlapping fan-outs (refresh resolvers, the feed, #192/#144)
-///   draw from a single budget instead of composing their per-stage caps.</item>
+///   <item><b>One in-flight budget:</b> a gate caps concurrent requests at
+///   <see cref="MaxInFlight"/> per handler instance — the app builds exactly one governed
+///   <see cref="HttpClient"/> (see <see cref="ClickUpClientFactory.CreateHttpClient"/>), so the
+///   budget is process-wide in practice — and overlapping fan-outs (refresh resolvers, the feed,
+///   #192/#144) draw from that single budget instead of composing their per-stage caps.</item>
 ///   <item><b>Proactive throttle:</b> every response's <c>X-RateLimit-Remaining</c>/<c>-Limit</c>/
 ///   <c>-Reset</c> headers are observed; when the remaining budget drops below ~10% of the limit,
 ///   new requests pause until the reset instead of spending the budget to zero — refresh gets
@@ -18,9 +20,12 @@ namespace ClickUpTodo.ClickUp;
 ///   <item><b>429 retry:</b> a throttled <em>read</em> (no request body — all the fetch volume) is
 ///   retried up to <see cref="MaxRetries"/> times after the server-indicated wait
 ///   (<c>Retry-After</c>, else <c>X-RateLimit-Reset</c>, else exponential backoff + jitter). A 429
-///   with a body (a write) or a wait beyond <see cref="MaxWait"/> is returned as-is — Kiota's own
-///   <c>RetryHandler</c> sits above and re-drives writes (it can clone request content; resending a
-///   consumed body from here is not safe), and our raised pause still spaces those retries out.</item>
+///   with a body (a write) or a wait beyond <see cref="MaxWait"/> (single or cumulative) is
+///   returned as-is: writes are re-driven by Kiota's <c>RetryHandler</c> above (it can clone request
+///   content; resending a consumed body from here is not safe) with our raised pause still spacing
+///   those retries out, while for reads the factory configures that handler to leave 429s alone —
+///   so the response reaches the adapter and surfaces as a <c>ClickUpApiException</c>(429) instead
+///   of an opaque retry-exhaustion error.</item>
 /// </list>
 /// All waits observe the request's <see cref="CancellationToken"/>, so shutdown or a superseded
 /// refresh is never held hostage by a backoff sleep. Absent/malformed headers degrade gracefully:
@@ -63,6 +68,7 @@ public sealed class ClickUpRateLimitHandler : DelegatingHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
+        var alreadyWaited = TimeSpan.Zero; // intended retry waits so far — see ShouldGiveUp
         for (var attempt = 0; ; attempt++)
         {
             await WaitOutPauseAsync(ct).ConfigureAwait(false);
@@ -88,9 +94,10 @@ public sealed class ClickUpRateLimitHandler : DelegatingHandler
                 // can't wedge the app).
                 RaisePause(now + Min(wait, MaxWait));
 
-                if (attempt >= MaxRetries || request.Content is not null || wait > MaxWait)
+                if (ShouldGiveUp(attempt, hasBody: request.Content is not null, wait, alreadyWaited))
                     return response;
 
+                alreadyWaited += wait;
                 response.Dispose();
                 continue; // the raised pause is the retry delay — WaitOutPauseAsync serves it
             }
@@ -104,6 +111,18 @@ public sealed class ClickUpRateLimitHandler : DelegatingHandler
         }
     }
 
+    /// <summary>
+    /// Whether a 429 should be returned to the caller instead of retried here: retries exhausted, a
+    /// request body we cannot safely resend, a single wait beyond <see cref="MaxWait"/>, or a
+    /// <b>cumulative</b> intended wait beyond it. The cumulative cap bounds this handler's added
+    /// latency per request to ~2×<see cref="MaxWait"/> worst case (one shared pause on entry + the
+    /// retry budget), which the factory's <c>HttpClient.Timeout</c> is sized to accommodate — without
+    /// it, back-to-back legit 60s waits could outlive any sane timeout mid-sleep and surface as an
+    /// opaque cancellation instead of a 429. Pure; internal for unit tests.
+    /// </summary>
+    internal static bool ShouldGiveUp(int attempt, bool hasBody, TimeSpan wait, TimeSpan alreadyWaited)
+        => attempt >= MaxRetries || hasBody || wait > MaxWait || alreadyWaited + wait > MaxWait;
+
     /// <summary>Delays until the shared pause (if any) has passed; re-checks in case it was raised
     /// again meanwhile. No-op on the common (unthrottled) path.</summary>
     private async Task WaitOutPauseAsync(CancellationToken ct)
@@ -114,7 +133,9 @@ public sealed class ClickUpRateLimitHandler : DelegatingHandler
             var remaining = until - _time.GetUtcNow().UtcTicks;
             if (remaining <= 0)
                 return;
-            await Task.Delay(TimeSpan.FromTicks(remaining), ct).ConfigureAwait(false);
+            // The TimeProvider overload keeps the sleep on the same clock as the arithmetic above,
+            // so a fake-clock test could drive the pause without real wall-time.
+            await Task.Delay(TimeSpan.FromTicks(remaining), _time, ct).ConfigureAwait(false);
         }
     }
 
