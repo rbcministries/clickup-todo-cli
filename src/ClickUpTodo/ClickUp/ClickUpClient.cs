@@ -22,17 +22,25 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     private readonly HttpClientRequestAdapter _adapter;
     private readonly ClickUpApiClient _client;
 
-    /// <summary>Drives the client with any Kiota auth provider (personal token or OAuth).</summary>
-    public ClickUpClient(IAuthenticationProvider authProvider, HttpClient? httpClient = null)
+    // Set when the caller hands over HttpClient ownership: the Kiota adapter only disposes a client
+    // it created itself, so a factory-built pipeline would otherwise leak its connection pool (and
+    // the rate-limit governor's semaphore) past ClickUpClient.Dispose.
+    private readonly HttpClient? _ownedHttpClient;
+
+    /// <summary>Drives the client with any Kiota auth provider (personal token or OAuth).
+    /// Pass <paramref name="ownsHttpClient"/> when this client should dispose
+    /// <paramref name="httpClient"/> along with itself (e.g. a pipeline the factory built for it).</summary>
+    public ClickUpClient(IAuthenticationProvider authProvider, HttpClient? httpClient = null, bool ownsHttpClient = false)
     {
         ArgumentNullException.ThrowIfNull(authProvider);
         _adapter = new HttpClientRequestAdapter(authProvider, httpClient: httpClient);
         _client = new ClickUpApiClient(_adapter);
+        _ownedHttpClient = ownsHttpClient ? httpClient : null;
     }
 
     /// <summary>Drives the client with a ClickUp personal API token (sent as a raw header).</summary>
-    public ClickUpClient(string token, HttpClient? httpClient = null)
-        : this(new ClickUpTokenAuthProvider(token), httpClient)
+    public ClickUpClient(string token, HttpClient? httpClient = null, bool ownsHttpClient = false)
+        : this(new ClickUpTokenAuthProvider(token), httpClient, ownsHttpClient)
     {
     }
 
@@ -556,5 +564,9 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         }
     }
 
-    public void Dispose() => _adapter.Dispose();
+    public void Dispose()
+    {
+        _adapter.Dispose();
+        _ownedHttpClient?.Dispose();
+    }
 }

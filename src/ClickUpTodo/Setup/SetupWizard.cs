@@ -31,7 +31,8 @@ public static class SetupWizard
             var accessToken = await RunOAuthSignInAsync(oauthCreds, ct);
             if (accessToken is not null)
             {
-                client = new ClickUpClient(ClickUpClientFactory.AuthProviderFor(AuthMode.OAuth, accessToken));
+                client = new ClickUpClient(ClickUpClientFactory.AuthProviderFor(AuthMode.OAuth, accessToken),
+                    ClickUpClientFactory.CreateHttpClient(), ownsHttpClient: true);
                 try
                 {
                     me = await client.GetMeAsync(ct);
@@ -71,7 +72,7 @@ public static class SetupWizard
             }
 
             client?.Dispose();
-            client = new ClickUpClient(token);
+            client = new ClickUpClient(token, ClickUpClientFactory.CreateHttpClient(), ownsHttpClient: true);
             try
             {
                 me = await client.GetMeAsync(ct);
