@@ -130,15 +130,18 @@ public sealed class TaskDetailScreen : Screen
         _streamAutoScroll = prefs.AutoScroll;
         Title = task.Name.Length > 60 ? task.Name[..59] + "…" : task.Name;
 
-        var headerText = TaskDetailFormatter.Header(task);
-        var headerHeight = headerText.Split('\n').Length;
-        var header = new Label
+        // The title line carries trailing coloured Status/Priority badges (#162), which a plain Label
+        // can't draw — render the header through the same per-run-coloured view the Other tab uses
+        // (DetailAttributesView), fed by the structured HeaderLines. Non-focusable, like the Label it
+        // replaces, so the screen's focus/latency model is unchanged.
+        var headerLinesForTitle = TaskDetailFormatter.HeaderLines(task);
+        var headerHeight = headerLinesForTitle.Count;
+        var header = new DetailAttributesView(headerLinesForTitle)
         {
             X = 1,
             Y = 0,
             Width = Dim.Fill(1),
             Height = headerHeight,
-            Text = headerText,
         };
 
         _tabs = new Tabs
