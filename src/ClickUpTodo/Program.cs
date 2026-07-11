@@ -94,7 +94,11 @@ catch (Exception ex)
 var taskService = new TaskService(client, config, userId);
 var feedService = new FeedService(client, taskService, config);
 var focusStore = new LocalFocusStore(config, configStore);
-new TodoApp(taskService, feedService, config, configStore, focusStore).Run(driverName);
+// The assignee-frequency candidate pool (#155) — warmed from the loaded tasks and topped up from
+// the workspace members — rides the same state store, scoped to the active workspace.
+var assigneeCache = new AssigneeFrequencyCache(
+    stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
+new TodoApp(taskService, feedService, config, configStore, focusStore, assigneeCache).Run(driverName);
 return 0;
 
 // Reads "--opt value" or "--opt=value" from args.
