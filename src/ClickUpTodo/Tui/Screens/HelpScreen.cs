@@ -30,6 +30,7 @@ public sealed class HelpScreen : Screen
                 + "  Ctrl+B      Open the task in your browser\n"
                 + "  Ctrl+P      Pin / unpin (pinned tasks group at the top)\n"
                 + "  Ctrl+E      Open the mentions & comments feed (in the feed: F3 shows mentions only)\n"
+                + "              Mentions need a per-Space automation — see docs/mention-assignee-automation.md\n"
                 + "  F1          This help\n"
                 + "  F2          Settings (refresh rate, excluded statuses)\n"
                 + "  F3          Filter / sort / group the list\n"
