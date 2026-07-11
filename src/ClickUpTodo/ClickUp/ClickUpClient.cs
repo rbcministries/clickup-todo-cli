@@ -387,7 +387,9 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// Maps a generated <see cref="Comment"/> onto the stable <see cref="CommentItem"/>, stamping the
     /// owning <paramref name="taskId"/> for feed attribution (#111). Author uses the same
     /// username → email → id fallback as task assignees; a missing/unparseable date yields a null
-    /// <see cref="CommentItem.DateMs"/>. internal (not private) so it can be unit-tested offline.
+    /// <see cref="CommentItem.DateMs"/>. The structured <c>comment</c> blocks are scanned for @-mention
+    /// runs and their referenced member ids surfaced as <see cref="CommentItem.MentionedUserIds"/> (#167).
+    /// internal (not private) so it can be unit-tested offline.
     /// </summary>
     internal static CommentItem MapComment(Comment c, string? taskId) => new(
         Id: c.Id ?? "",
@@ -395,7 +397,20 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         DateMs: ParseMs(c.Date),
         Text: c.CommentText ?? "",
         Resolved: c.Resolved == true,
-        TaskId: taskId);
+        TaskId: taskId,
+        MentionedUserIds: MapMentionedUserIds(c.CommentProp));
+
+    /// <summary>Extracts the distinct numeric ids of members @-mentioned in a comment's structured
+    /// blocks — the runs carrying a <c>user</c> with a positive id (a mention/tag block, per #167).
+    /// Plain-text runs and blocks with no/zero user id contribute nothing; a null blocks array yields an
+    /// empty list. internal for offline unit testing.</summary>
+    internal static IReadOnlyList<long> MapMentionedUserIds(List<CommentBlock>? blocks)
+        => blocks?
+            .Select(b => b.User?.Id ?? 0)
+            .Where(id => id > 0)
+            .Distinct()
+            .ToList()
+           ?? [];
 
     // internal (not private) so the mapping can be unit-tested without hitting the live API.
     internal static TaskDetail MapDetail(TaskObject t) => new()

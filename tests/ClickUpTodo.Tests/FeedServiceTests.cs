@@ -247,4 +247,21 @@ public sealed class FeedServiceTests
 
         Assert.Empty(FeedService.StampMentions(feed, MentionSpec.None, mentionsOnly: true));
     }
+
+    [Fact]
+    public void StampMentions_FlagsEntryByMentionedUserId_WithNoHandleInText()
+    {
+        // BenSpec carries id 7 (ClickUpUser(7, "Ben")); entry "a" has no matchable @handle in its text
+        // but a structured block referenced Ben's id, so the feed flags it via the #167 id path.
+        var feed = new[]
+        {
+            new CommentItem("a", "author", 100, "please review the change", false, "task1", MentionedUserIds: new long[] { 7 }),
+            Msg("b", "no mention and no id"),
+        };
+
+        var stamped = FeedService.StampMentions(feed, BenSpec, mentionsOnly: false);
+
+        Assert.True(stamped.Single(c => c.Id == "a").MentionsMe);
+        Assert.False(stamped.Single(c => c.Id == "b").MentionsMe);
+    }
 }

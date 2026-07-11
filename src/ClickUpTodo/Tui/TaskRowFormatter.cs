@@ -1,3 +1,4 @@
+using System.Text;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 
@@ -7,8 +8,9 @@ namespace ClickUpTodo.Tui;
 /// sit within it, so the list renderer can color exactly those spans. When badges show (icon or text),
 /// a task-identifier chip — the Space's custom id, or the plain task id as a fallback — leads the row
 /// as the first badge (#171 follow-up), followed by a single Status badge and a single Priority badge
-/// (Status first), rendered per the active <see cref="BadgeDisplay"/>: compact <c>○</c>/<c>⚑</c> icon
-/// chips, <c>{icon} {name}</c> text badges (<c>○ In Progress</c>/<c>⚑ Urgent</c>, sharing
+/// (Status first), rendered per the active <see cref="BadgeDisplay"/>: compact chips — a four-column
+/// <c>(XX)</c> status abbreviation (<see cref="StatusAbbreviation"/>, #181) and a <c>⚑</c> priority
+/// glyph — or <c>{icon} {name}</c> text badges (<c>○ In Progress</c>/<c>⚑ Urgent</c>, sharing
 /// <see cref="StatusPriorityBadge"/> with the detail title line), or nothing. Pure (no Terminal.Gui),
 /// so the layout and the badge spans are unit-testable.
 /// </summary>
@@ -33,22 +35,21 @@ public static class TaskRowFormatter
     /// <summary>Two spaces of indent per nesting level in the F4 subtasks view (#46).</summary>
     private const string IndentUnit = "  ";
 
-    /// <summary>
-    /// The Status icon chip: the <see cref="StatusPriorityBadge.StatusGlyph"/> flanked by a space on
-    /// each side (coloured with the status's background by the renderer). The glyph is intentionally a
-    /// single display column so the chip and <see cref="BlankGutter"/> occupy the same three columns,
-    /// giving a grid-like left gutter.
-    /// </summary>
-    public const string StatusIcon = $" {StatusPriorityBadge.StatusGlyph} ";
-
     /// <summary>The Priority icon chip: the <see cref="StatusPriorityBadge.PriorityGlyph"/> flanked by a
-    /// space on each side (coloured with the priority's background). Same fixed three-column width as
-    /// <see cref="StatusIcon"/>.</summary>
+    /// space on each side (coloured with the priority's background). A fixed three-column width, matching
+    /// <see cref="BlankGutter"/> so the Priority column lines up across rows.</summary>
     public const string PriorityIcon = $" {StatusPriorityBadge.PriorityGlyph} ";
 
-    /// <summary>The blank gutter used, in icon mode, when a badge is absent — same width as an icon chip
-    /// so titles still line up across rows.</summary>
+    /// <summary>The blank gutter used, in icon mode, for an absent <b>Priority</b> badge — same width as
+    /// <see cref="PriorityIcon"/> so titles still line up across rows. The Status column has its own,
+    /// wider <see cref="StatusGutter"/> because the Status chip is now a four-column abbreviation (#181).</summary>
     public const string BlankGutter = "   ";
+
+    /// <summary>The blank gutter used, in icon mode, for an absent <b>Status</b> badge — four columns to
+    /// match the width of the <c>(XX)</c> status abbreviation chip (<see cref="StatusAbbreviation"/>), so
+    /// titles line up whether or not a status is present (#181). Status-specific: Priority stays three
+    /// columns (<see cref="BlankGutter"/>).</summary>
+    public const string StatusGutter = "    ";
 
     /// <summary>The trailing Assignees icon chip (#161): a <c>👥</c> glyph flanked by a space on each
     /// side, coloured with a fixed white background by the renderer. Shown, in icon mode, when a task
@@ -141,12 +142,14 @@ public static class TaskRowFormatter
         switch (badges)
         {
             case BadgeDisplay.Icons:
-                // Fixed-width chips (Status first, then Priority) following the id chip. A present badge is
-                // a coloured glyph chip; an absent-but-not-grouped badge is a blank chip so titles still
-                // line up; a grouped-away badge is dropped entirely (every row drops it uniformly). The
-                // chips align relative to the id chip that precedes them, so their grid holds across rows
-                // whose leading ids are the same width (the common case within a Space).
-                (statusStart, statusLength) = AppendIconChip(ref text, showStatus, hasStatus, StatusIcon);
+                // Fixed-width chips (Status first, then Priority) following the id chip. The Status chip is
+                // a four-column (XX) letter abbreviation tinted the status colour (#181), so it reads by
+                // both colour and letters; the Priority chip stays a coloured ⚑ glyph. An absent-but-not-
+                // grouped badge is a same-width blank gutter so titles still line up (four columns for
+                // Status, three for Priority); a grouped-away badge is dropped entirely (every row drops it
+                // uniformly). The chips align relative to the id chip that precedes them, so their grid
+                // holds across rows whose leading ids are the same width (the common case within a Space).
+                (statusStart, statusLength) = AppendStatusChip(ref text, showStatus, hasStatus, task.StatusName);
                 (priorityStart, priorityLength) = AppendIconChip(ref text, showPriority, hasPriority, PriorityIcon);
                 break;
             case BadgeDisplay.Text:
@@ -205,6 +208,72 @@ public static class TaskRowFormatter
         var start = text.Length;
         text += glyph;
         return (start, glyph.Length);
+    }
+
+    /// <summary>
+    /// Appends the icon-mode Status chip — a four-column <c>(XX)</c> letter abbreviation of the status
+    /// name (#181), tinted the status colour by the renderer — returning its coloured span. A grouped-away
+    /// Status (<paramref name="show"/> false) appends nothing; an absent one appends the four-column
+    /// <see cref="StatusGutter"/> for alignment; both report the <c>(-1, 0)</c> "no span" sentinel so no
+    /// colour is drawn. The abbreviation reads by both colour and letters, unlike the old colour-only
+    /// <c>○</c> chip.
+    /// </summary>
+    private static (int Start, int Length) AppendStatusChip(ref string text, bool show, bool has, string? name)
+    {
+        if (!show)
+            return (-1, 0);
+        if (!has)
+        {
+            text += StatusGutter;
+            return (-1, 0);
+        }
+        var chip = StatusAbbreviation(name!);
+        var start = text.Length;
+        text += chip;
+        return (start, chip.Length);
+    }
+
+    /// <summary>Characters that separate words in a status name for abbreviation: <c>/</c>, <c>-</c>,
+    /// <c>|</c>, and any whitespace. Other punctuation (e.g. an apostrophe) does not split, so
+    /// <c>"Won't Do"</c> is the two words <c>Won't</c> / <c>Do</c> (#181).</summary>
+    private static readonly char[] AbbreviationSeparators = ['/', '-', '|', ' ', '\t', '\n', '\r', '\f', '\v'];
+
+    /// <summary>
+    /// The short-variant Status badge (#181): a parenthesised letter abbreviation of the status name,
+    /// e.g. <c>"Won't Do" → "(WD)"</c>, <c>"Blocked" → "(B )"</c>, <c>"In Progress" → "(IP)"</c>. The
+    /// abbreviation takes the first letter/digit of the first and last words; a single word takes its
+    /// first letter followed by a space; letters are uppercased so lowercase ClickUp statuses stay
+    /// consistent (<c>"in progress" → "IP"</c>). Initials are extracted as whole Unicode scalars
+    /// (<see cref="Rune"/>), never partial UTF-16 chars, and a word's leading non-letter/digit runes are
+    /// skipped — so an emoji-prefixed status (<c>"🔥 Blocked" → "(B )"</c>) abbreviates by its real
+    /// letters rather than producing a lone surrogate. A name with no letters/digits (all separators or
+    /// symbols) yields <c>"(  )"</c>. The result is always four characters (<c>"(" + 2 chars + ")"</c>)
+    /// with no flanking padding, so the common Latin/single-width case is a uniform four columns and
+    /// short-variant Status badges don't have mixed widths. Pure — unit-testable independent of
+    /// Terminal.Gui.
+    /// </summary>
+    public static string StatusAbbreviation(string statusName)
+    {
+        var words = (statusName ?? "").Split(AbbreviationSeparators, StringSplitOptions.RemoveEmptyEntries);
+
+        // Each word's first letter/digit, as a whole Rune (so a surrogate-pair or combining sequence is
+        // never split into an ill-formed half). Leading punctuation/symbols/emoji in a word are skipped.
+        var initials = new List<Rune>(words.Length);
+        foreach (var word in words)
+            foreach (var rune in word.EnumerateRunes())
+                if (Rune.IsLetterOrDigit(rune))
+                {
+                    initials.Add(Rune.ToUpperInvariant(rune));
+                    break;
+                }
+
+        var letters = initials.Count switch
+        {
+            0 => "  ",
+            1 => $"{initials[0]} ",
+            _ => $"{initials[0]}{initials[^1]}",
+        };
+        return $"({letters})";
     }
 
     /// <summary>
