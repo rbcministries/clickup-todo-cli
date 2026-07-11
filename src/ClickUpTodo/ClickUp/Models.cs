@@ -97,6 +97,16 @@ public sealed record TaskItem
     public string? Url { get; init; }
     public string? StatusName { get; init; }
     public string? StatusColor { get; init; }
+
+    /// <summary>
+    /// The workflow category of the status (ClickUp <c>status.type</c>: <c>open</c>, <c>custom</c>,
+    /// <c>done</c>, or <c>closed</c>), or null when the API omits it. The delta refresh (#194) needs it
+    /// to recognise a task that closed since the last snapshot: the delta fetch includes closed tasks
+    /// precisely so the merge can drop them, mirroring the full fetch's server-side
+    /// <c>include_closed=false</c> filter.
+    /// </summary>
+    public string? StatusType { get; init; }
+
     public string? ListId { get; init; }
     public string? ListName { get; init; }
 
