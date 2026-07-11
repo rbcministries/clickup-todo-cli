@@ -363,7 +363,7 @@ public sealed class TodoApp
         {
             case KeyCode.Space:
                 key.Handled = true;
-                OpenStatusPicker();
+                OpenQuickUpdates();
                 break;
             case KeyCode.Enter:
                 key.Handled = true;
@@ -1263,13 +1263,13 @@ public sealed class TodoApp
     }
 
 
-    private void OpenStatusPicker()
+    private void OpenQuickUpdates()
     {
         var task = CurrentTask();
         if (task is null)
             return;
         // A context-parent header (a parent not assigned to me, shown only so its subtask can nest
-        // beneath it) is context, not my work — don't change its status. (#46)
+        // beneath it) is context, not my work — don't change it. (#46)
         if (_contextParents.ContainsKey(task.Id))
         {
             Flash("This is a parent shown for context (not assigned to you) — status unchanged.");
@@ -1290,18 +1290,18 @@ public sealed class TodoApp
         // Fast path: statuses were warmed by the background prefetch — open instantly, no round-trip.
         if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
         {
-            ShowStatusPicker(task, cached);
+            ShowQuickUpdates(task, cached);
             return;
         }
 
-        // Cold path: fetch off the UI thread with a loading indicator, then show the modal back on it.
+        // Cold path: fetch off the UI thread with a loading indicator, then show the screen back on it.
         Flash("Loading statuses…");
         _ = Task.Run(async () =>
         {
             try
             {
                 var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
-                Application.Invoke(() => ShowStatusPicker(task, statuses));
+                Application.Invoke(() => ShowQuickUpdates(task, statuses));
             }
             catch (Exception ex)
             {
@@ -1310,8 +1310,10 @@ public sealed class TodoApp
         });
     }
 
-    /// <summary>Shows the status picker for a task and applies the choice. Must run on the UI thread.</summary>
-    private void ShowStatusPicker(TaskItem task, IReadOnlyList<StatusOption> statuses)
+    /// <summary>Shows the Quick Updates screen for a task and applies the status choice. Must run on the
+    /// UI thread. Priority/assignee application lands in #157/#158; here the Status pane preserves the
+    /// old picker behaviour so nothing regresses.</summary>
+    private void ShowQuickUpdates(TaskItem task, IReadOnlyList<StatusOption> statuses)
     {
         if (statuses.Count == 0)
         {
@@ -1322,7 +1324,8 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
-        var screen = new StatusPickerScreen(task.Name, statuses, task.StatusName);
+        var screen = new QuickUpdatesScreen(
+            task.Name, statuses, task.StatusName, task.PriorityLevel, task.Assignees);
         ShowScreen(screen, () =>
         {
             var chosen = screen.Chosen;
