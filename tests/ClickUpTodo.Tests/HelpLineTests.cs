@@ -70,7 +70,7 @@ public sealed class HelpLineTests
         HelpItemSets.Detail,
         HelpItemSets.Settings,
         HelpItemSets.FilterSortGroup,
-        HelpItemSets.StatusPicker,
+        HelpItemSets.QuickUpdates,
         HelpItemSets.NotificationsFeed,
         HelpItemSets.Help,
     };
@@ -87,7 +87,7 @@ public sealed class HelpLineTests
         HelpItemSets.Detail,
         HelpItemSets.Settings,
         HelpItemSets.FilterSortGroup,
-        HelpItemSets.StatusPicker,
+        HelpItemSets.QuickUpdates,
         HelpItemSets.NotificationsFeed,
     };
 

@@ -23,7 +23,8 @@ public sealed class HelpScreen : Screen
                 + "  ↑ / ↓       Move between tasks\n"
                 + "  (type)      Search tasks by title (type-ahead)\n"
                 + "  Tab         Jump to the first task in the next section\n"
-                + "  Space       Set the focused task's status\n"
+                + "  Space       Quick Updates for the focused task — set its status (Tab switches to the\n"
+                + "              Priority & Assignees panes; Esc exits)\n"
                 + "  Enter       Open the task detail view (description, comments, attributes)\n"
                 + "  Ctrl+A      In the detail view: dispatch a Claude session (a one-off run shows its\n"
                 + "              output in the app; press Esc there to cancel a run in progress)\n"
@@ -42,7 +43,7 @@ public sealed class HelpScreen : Screen
                 + "              (F4's 'all' state also nests subtasks not assigned to you)\n"
                 + "  Ctrl+Q/Esc  Quit\n"
                 + "\n"
-                + "  Settings, the status picker, the task detail, and this help open as full-window\n"
+                + "  Settings, Quick Updates, the task detail, and this help open as full-window\n"
                 + "  screens; Esc returns to the task list (your cursor stays on the same task).\n"
                 + "\n"
                 + "  Esc or Enter to close this help.",
