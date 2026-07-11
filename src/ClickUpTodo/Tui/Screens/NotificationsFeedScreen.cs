@@ -29,6 +29,19 @@ namespace ClickUpTodo.Tui.Screens;
 public sealed class NotificationsFeedScreen : Screen
 {
     /// <summary>
+    /// The mention-coverage prerequisite note (#126) shown in every empty state. Because ClickUp has no
+    /// inbox API, the feed is built from comments on the user's <b>assigned</b> tasks, so a mention on a
+    /// task they aren't assigned to only appears when a per-Space automation turns mentions into
+    /// assignments — which the app can't create or verify. Baked into the placeholders below (rather than
+    /// appended at render time) so the pure <see cref="EmptyMessage"/> surface keeps returning a single
+    /// constant that already carries the guidance. Ends with the doc path.
+    /// </summary>
+    public const string MentionCoverageNote =
+        "Note: @-mentions only appear here if your ClickUp Space runs the\n"
+        + "mention→assignee automation. It's per-Space and not retroactive, and the app\n"
+        + "can't set it up for you. Setup & caveats: docs/mention-assignee-automation.md";
+
+    /// <summary>
     /// The empty-state copy shown when the feed has no comments at all. Kept as a constant so the copy
     /// is unit-testable without instantiating the Terminal.Gui view (the test suite never calls
     /// <c>Application.Init</c>), mirroring the repo's pure-surface testing pattern.
@@ -39,6 +52,8 @@ public sealed class NotificationsFeedScreen : Screen
         + "This feed lists recent comments and @-mentions across the tasks assigned to you,\n"
         + "newest first.\n"
         + "\n"
+        + MentionCoverageNote + "\n"
+        + "\n"
         + "Press Esc to return to your tasks.";
 
     /// <summary>The empty-state copy shown when the mentions-only filter is on but nothing mentions
@@ -47,7 +62,9 @@ public sealed class NotificationsFeedScreen : Screen
         "No @-mentions of you to show.\n"
         + "\n"
         + "You're seeing mentions only. Press F3 to show all recent comments,\n"
-        + "or Esc to return to your tasks.";
+        + "or Esc to return to your tasks.\n"
+        + "\n"
+        + MentionCoverageNote;
 
     private IReadOnlyList<CommentItem> _feed;
     private readonly ListView _list;

@@ -82,6 +82,36 @@ public sealed class NotificationsFeedScreenTests
             NotificationsFeedScreen.EmptyMessage(mentionsOnly: false, feedHasAnyComments: true));
 
     [Fact]
+    public void MentionCoverageNote_NamesTheAutomationAndCitesTheDoc()
+    {
+        var note = NotificationsFeedScreen.MentionCoverageNote;
+
+        Assert.False(string.IsNullOrWhiteSpace(note));
+        Assert.Contains("mention", note, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("automation", note, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("per-Space", note, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("docs/mention-assignee-automation.md", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EmptyStatePlaceholder_CarriesTheCoverageNote()
+        => Assert.Contains(NotificationsFeedScreen.MentionCoverageNote,
+            NotificationsFeedScreen.EmptyStatePlaceholder, StringComparison.Ordinal);
+
+    [Fact]
+    public void NoMentionsPlaceholder_CarriesTheCoverageNote()
+        => Assert.Contains(NotificationsFeedScreen.MentionCoverageNote,
+            NotificationsFeedScreen.NoMentionsPlaceholder, StringComparison.Ordinal);
+
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void EmptyMessage_AlwaysCarriesTheCoverageNote(bool mentionsOnly, bool feedHasAnyComments)
+        => Assert.Contains(NotificationsFeedScreen.MentionCoverageNote,
+            NotificationsFeedScreen.EmptyMessage(mentionsOnly, feedHasAnyComments), StringComparison.Ordinal);
+
+    [Fact]
     public void BuildRows_AttachesABadgeOnlyToMentionRows()
     {
         var feed = new[] { Comment("c1", mentionsMe: false), Comment("c2", mentionsMe: true) };
