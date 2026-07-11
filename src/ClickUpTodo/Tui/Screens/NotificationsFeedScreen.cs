@@ -37,9 +37,9 @@ public sealed class NotificationsFeedScreen : Screen
     /// constant that already carries the guidance. Ends with the doc path.
     /// </summary>
     public const string MentionCoverageNote =
-        "Note: @-mentions only appear here if your ClickUp Space runs the mention→assignee\n"
-        + "automation (it's per-Space and not retroactive; the app can't set it up for you).\n"
-        + "Setup & caveats: docs/mention-assignee-automation.md";
+        "Note: @-mentions only appear here if your ClickUp Space runs the\n"
+        + "mention→assignee automation. It's per-Space and not retroactive, and the app\n"
+        + "can't set it up for you. Setup & caveats: docs/mention-assignee-automation.md";
 
     /// <summary>
     /// The empty-state copy shown when the feed has no comments at all. Kept as a constant so the copy
