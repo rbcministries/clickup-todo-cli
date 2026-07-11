@@ -340,6 +340,69 @@ public sealed class ConfigMigrationsTests : IDisposable
         Assert.Contains("promptTemplate", json);
     }
 
+    // ── v4 (#179): ShowSubtasks/ShowAllSubtasksOfAssignedParents booleans → SubtaskView enum ──────────
+
+    [Theory]
+    [InlineData(null, null, SubtaskView.Hidden)]      // fresh install / never carried the keys
+    [InlineData(false, null, SubtaskView.Hidden)]     // explicitly off
+    [InlineData(false, true, SubtaskView.Hidden)]     // off wins even if the #70 flag lingered
+    [InlineData(true, null, SubtaskView.MineAndUnassigned)] // on, #70 absent → new default on-state
+    [InlineData(true, false, SubtaskView.MineAndUnassigned)] // on, #70 off
+    [InlineData(true, true, SubtaskView.All)]         // on + #70 → all
+    public void Apply_MapsLegacySubtaskBooleans_OntoEnum(bool? legacyShow, bool? legacyAll, SubtaskView expected)
+    {
+        var config = new AppConfig
+        {
+            View = new ViewSettings { LegacyShowSubtasks = legacyShow, LegacyShowAllSubtasks = legacyAll },
+        };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(expected, config.View.Subtasks);
+        Assert.Null(config.View.LegacyShowSubtasks);   // shims dropped after the one-shot migration
+        Assert.Null(config.View.LegacyShowAllSubtasks);
+    }
+
+    [Fact]
+    public void Apply_AlreadyV4_WithStraySubtaskBooleans_DropsThem_WithoutMigrating()
+    {
+        // A hand-added showSubtasks on an already-v4 config isn't migrated (version-gated), but the
+        // deserialize-only shims are still nulled so they stop being persisted.
+        var config = new AppConfig
+        {
+            SchemaVersion = 4,
+            View = new ViewSettings { Subtasks = SubtaskView.Hidden, LegacyShowSubtasks = true, LegacyShowAllSubtasks = true },
+        };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(SubtaskView.Hidden, config.View.Subtasks); // not migrated (already current)
+        Assert.Null(config.View.LegacyShowSubtasks);
+        Assert.Null(config.View.LegacyShowAllSubtasks);
+    }
+
+    [Fact]
+    public void Load_LegacyConfigWithSubtaskBooleans_MigratesOnDisk_AndDropsTheKeys()
+    {
+        var store = new ConfigStore(_dir);
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(store.ConfigPath,
+            """{ "schemaVersion": 3, "workspaceId": "1", "personalTasksListId": "2", "view": { "filters": [], "showSubtasks": true, "showAllSubtasksOfAssignedParents": true } }""");
+
+        var loaded = store.Load();
+
+        Assert.Equal(ConfigMigrations.CurrentVersion, loaded.SchemaVersion);
+        Assert.Equal(SubtaskView.All, loaded.View.Subtasks);
+        Assert.Null(loaded.View.LegacyShowSubtasks);
+        Assert.Null(loaded.View.LegacyShowAllSubtasks);
+
+        store.Save(loaded);
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.DoesNotContain("showSubtasks", json);
+        Assert.DoesNotContain("showAllSubtasksOfAssignedParents", json);
+        Assert.Contains("\"All\"", json); // the enum persists by name
+    }
+
     [Fact]
     public void Load_FreshConfig_SeedsDefaultsAndIsDefault()
     {

@@ -451,6 +451,41 @@ public sealed class TaskRowFormatterTests
         Assert.Contains("(parent — not assigned to you)", row.Text);
     }
 
+    [Fact]
+    public void Format_UnassignedSubtask_AppendsUnassignedMarker()
+    {
+        var task = new TaskItem { Id = "1", Name = "Nobody's subtask", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, depth: 1, isUnassignedSubtask: true);
+
+        Assert.Contains("(unassigned)", row.Text);
+        Assert.DoesNotContain("not assigned to you", row.Text); // the unassigned marker, not the foreign one
+        Assert.Equal("(TD)", row.Text.Substring(row.StatusStart, row.StatusLength));
+    }
+
+    [Fact]
+    public void Format_UnassignedSubtaskWins_OverForeignSubtaskMarker()
+    {
+        // A row is classified as one or the other; unassigned takes precedence over the not-mine marker.
+        var task = new TaskItem { Id = "1", Name = "S", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, isUnassignedSubtask: true, isForeignSubtask: true);
+
+        Assert.Contains("(unassigned)", row.Text);
+        Assert.DoesNotContain("not assigned to you", row.Text);
+    }
+
+    [Fact]
+    public void Format_ContextParentWins_OverUnassignedSubtaskMarker()
+    {
+        var task = new TaskItem { Id = "1", Name = "P", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, isContextParent: true, isUnassignedSubtask: true);
+
+        Assert.Contains("(parent — not assigned to you)", row.Text);
+        Assert.DoesNotContain("(unassigned)", row.Text);
+    }
+
     // ── Trailing assignees badge (#161) ──────────────────────────────────────
 
     private const long Me = 100;
