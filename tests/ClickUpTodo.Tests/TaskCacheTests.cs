@@ -106,6 +106,19 @@ public sealed class TaskCacheTests : IDisposable
     }
 
     [Fact]
+    public void Load_WhenDocumentIsCorrupt_ReturnsNullNotThrow()
+    {
+        // A truncated / garbage tasks.json (e.g. a quit or crash mid-write of the frequently-rewritten
+        // cache) must degrade to a miss, not throw — the load runs before the UI loop, so a throw would
+        // brick every launch.
+        var store = Store();
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(store.PathFor(StateKeys.Tasks), "{ \"tasks\": [ {\"id\": \"t1\""); // truncated
+
+        Assert.Null(new TaskCache(store).Load(Config()));
+    }
+
+    [Fact]
     public void Load_WhenSchemaVersionMismatch_ReturnsNull()
     {
         // A document written by an incompatible (future) schema is discarded rather than trusted.
@@ -188,6 +201,22 @@ public sealed class TaskCacheTests : IDisposable
         };
 
         Assert.Equal(TaskCache.KeyFor(Config(view: plain)), TaskCache.KeyFor(Config(view: tweaked)));
+    }
+
+    [Fact]
+    public void KeyFor_IsCaseInsensitive_InTheAssigneeValues()
+    {
+        // Same server-side scope typed with different casing → same fingerprint (no false miss).
+        var upper = new ViewSettings
+        {
+            Filters = [new FilterRule { Field = TaskField.Assignee, Op = FilterOp.Is, Value = "Ben" }],
+        };
+        var lower = new ViewSettings
+        {
+            Filters = [new FilterRule { Field = TaskField.Assignee, Op = FilterOp.Is, Value = "ben" }],
+        };
+
+        Assert.Equal(TaskCache.KeyFor(Config(view: upper)), TaskCache.KeyFor(Config(view: lower)));
     }
 
     [Fact]

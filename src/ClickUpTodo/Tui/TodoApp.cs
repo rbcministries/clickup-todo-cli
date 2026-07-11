@@ -1420,10 +1420,12 @@ public sealed class TodoApp
     /// Paints the persisted working set (#122) before the first network load, so a warm cache shows
     /// the task list on the first frame. A miss (nothing cached, or the cache belongs to a different
     /// workspace/list/assignee context) leaves the "Loading…" state untouched for the live load to
-    /// replace. Seeds <see cref="_signature"/> from the cached set so an identical live load is a no-op
-    /// (the OnTasksLoaded fast-path). The subtask resolvers are still empty here, so a cached paint is
-    /// the flat/nested view without pulled-in context parents/foreign subtasks; the first live refresh
-    /// fills those in. Runs on the UI thread during <see cref="Run"/>, before the run loop starts.
+    /// replace. Seeds <see cref="_signature"/> from the cached set so an identical live load hits the
+    /// OnTasksLoaded fast-path with no re-render. That no-op holds in the default (subtasks-off) view;
+    /// with the F4 subtasks view persisted on, the first live load resolves context parents / foreign
+    /// subtasks that <see cref="CurrentSignature"/> folds in (empty here), so it re-renders once — but
+    /// the cursor is preserved by task id, so there's no selection loss either way. Runs on the UI
+    /// thread during <see cref="Run"/>, before the run loop starts.
     /// </summary>
     private void TryPaintCachedTasks()
     {

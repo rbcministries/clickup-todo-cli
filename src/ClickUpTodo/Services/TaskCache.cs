@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 
@@ -55,7 +56,21 @@ public sealed class TaskCache(IStateStore store)
     /// </summary>
     public IReadOnlyList<TaskItem>? Load(AppConfig config)
     {
-        var doc = store.Load<TaskCacheDocument>(StateKeys.Tasks);
+        TaskCacheDocument? doc;
+        try
+        {
+            doc = store.Load<TaskCacheDocument>(StateKeys.Tasks);
+        }
+        catch (JsonException)
+        {
+            // A corrupt cache is a miss, never a crash: the payload is rewritten (non-atomically) on
+            // every changed poll, so a quit/kill/power-loss mid-write can truncate it — and this load
+            // runs synchronously in Run() before the UI loop, so a throw here would brick every launch
+            // until the file was hand-deleted. Falling back to the live load is exactly the safe
+            // degradation the cache is meant to have. (A missing/older-shape doc missing the required
+            // members surfaces as a JsonException here too, before the version check below.)
+            return null;
+        }
         if (doc is null || doc.SchemaVersion != CurrentSchemaVersion || doc.Key != KeyFor(config))
             return null;
         return doc.Tasks;
@@ -78,7 +93,13 @@ public sealed class TaskCache(IStateStore store)
     /// </summary>
     internal static string KeyFor(AppConfig config)
     {
-        var assignees = TaskService.AssigneeRuleValues(config.View).OrderBy(v => v, StringComparer.Ordinal);
+        // AssigneeRuleValues dedupes case-insensitively but keeps each value's original casing, so
+        // normalise before joining — otherwise "Ben" and "ben" (which resolve to the same server-side
+        // fetch) would fingerprint differently and cause a false miss (lost instant paint, never a
+        // wrong set). Consistent with the case-insensitive matching used at the fetch layer.
+        var assignees = TaskService.AssigneeRuleValues(config.View)
+            .Select(v => v.ToLowerInvariant())
+            .OrderBy(v => v, StringComparer.Ordinal);
         return string.Join('|', new[] { config.WorkspaceId, config.PersonalTasksListId }.Concat(assignees));
     }
 }
