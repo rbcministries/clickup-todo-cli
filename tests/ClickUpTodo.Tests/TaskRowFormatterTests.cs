@@ -460,7 +460,7 @@ public sealed class TaskRowFormatterTests
 
         Assert.Contains("(unassigned)", row.Text);
         Assert.DoesNotContain("not assigned to you", row.Text); // the unassigned marker, not the foreign one
-        Assert.Equal(TaskRowFormatter.StatusIcon, row.Text.Substring(row.StatusStart, row.StatusLength));
+        Assert.Equal("(TD)", row.Text.Substring(row.StatusStart, row.StatusLength));
     }
 
     [Fact]
