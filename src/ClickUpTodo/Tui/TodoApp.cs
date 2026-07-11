@@ -990,11 +990,14 @@ public sealed class TodoApp
         var task = CurrentTask();
         if (task is null)
             return;
-        // A subtask pulled in under my parent that isn't assigned to me (#70) isn't part of my snapshot,
-        // so pinning it would be a no-op (Focus renders from _all). Refuse it with a clear message.
+        // A subtask pulled in under my parent (not in my snapshot, #70/#179) isn't part of my work, so
+        // pinning it would be a no-op (Focus renders from _all). Refuse it with a clear message, worded for
+        // whether it's unassigned (shown in the F4 "mine + unassigned" state) or assigned to someone else.
         if (_foreignSubtasks.ContainsKey(task.Id))
         {
-            Flash("This subtask isn't assigned to you — nothing to pin.");
+            Flash(SubtaskVisibility.IsUnassigned(task)
+                ? "This subtask isn't assigned to anyone — nothing to pin."
+                : "This subtask isn't assigned to you — nothing to pin.");
             return;
         }
         // The pin write goes through IFocusStore (local today, possibly network-backed later), so
@@ -1306,10 +1309,12 @@ public sealed class TodoApp
             Flash("This is a parent shown for context (not assigned to you) — status unchanged.");
             return;
         }
-        // A subtask pulled in under my parent that isn't assigned to me is context, not my work (#70).
+        // A subtask pulled in under my parent (not in my snapshot) is context, not my work (#70/#179).
         if (_foreignSubtasks.ContainsKey(task.Id))
         {
-            Flash("This subtask isn't assigned to you — status unchanged.");
+            Flash(SubtaskVisibility.IsUnassigned(task)
+                ? "This subtask isn't assigned to anyone — status unchanged."
+                : "This subtask isn't assigned to you — status unchanged.");
             return;
         }
         if (string.IsNullOrWhiteSpace(task.ListId))
