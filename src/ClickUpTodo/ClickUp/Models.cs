@@ -169,10 +169,17 @@ public sealed record CustomFieldItem(
 /// is null for callers (like the single-task detail view) that don't need attribution.
 /// <see cref="MentionsMe"/> is stamped by the feed (#113) when the comment mentions the current user;
 /// it defaults to <c>false</c> so the mapper and non-feed callers are unaffected.
+/// <see cref="MentionedUserIds"/> carries the numeric ids of members @-mentioned in the comment's
+/// structured blocks (#167), enabling id-based mention detection alongside the <c>@handle</c> text match.
 /// </summary>
 public sealed record CommentItem(
     string Id, string Author, long? DateMs, string Text, bool Resolved, string? TaskId = null,
-    bool MentionsMe = false);
+    bool MentionsMe = false, IReadOnlyList<long>? MentionedUserIds = null)
+{
+    /// <summary>The numeric ids of members @-mentioned in the comment's structured <c>comment</c> blocks
+    /// (#167); never null (empty when the comment mentions no one, or the blocks weren't mapped).</summary>
+    public IReadOnlyList<long> MentionedUserIds { get; init; } = MentionedUserIds ?? [];
+}
 
 /// <summary>
 /// The full detail of a single task, fetched on demand for the detail view (issue #17). Richer than

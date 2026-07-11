@@ -25,7 +25,17 @@ public sealed class ClickUpClientCommentMapTests
 
         var mapped = ClickUpClient.MapComment(c, "task-9");
 
-        Assert.Equal(new CommentItem("c1", "Ben", 1_699_000_000_000, "Looks good.", true, "task-9"), mapped);
+        // Field-by-field rather than whole-record equality: CommentItem now carries a MentionedUserIds
+        // collection, which records compare by reference — two equal-content empty collections wouldn't
+        // be Equal. This also asserts the no-mention default explicitly.
+        Assert.Equal("c1", mapped.Id);
+        Assert.Equal("Ben", mapped.Author);
+        Assert.Equal(1_699_000_000_000, mapped.DateMs);
+        Assert.Equal("Looks good.", mapped.Text);
+        Assert.True(mapped.Resolved);
+        Assert.Equal("task-9", mapped.TaskId);
+        Assert.False(mapped.MentionsMe);
+        Assert.Empty(mapped.MentionedUserIds);
     }
 
     [Fact]
@@ -62,4 +72,35 @@ public sealed class ClickUpClientCommentMapTests
     [Fact]
     public void MapComment_NullTaskId_LeavesAttributionNull()
         => Assert.Null(ClickUpClient.MapComment(new Comment { Id = "c1" }, taskId: null).TaskId);
+
+    // ── Structured mention-block mapping (#167) ────────────────────────────────
+
+    [Fact]
+    public void MapComment_ExtractsMentionedUserIds_DistinctIgnoringPlainAndZeroAndUserless()
+    {
+        var c = new Comment
+        {
+            Id = "c1",
+            CommentText = "@Ben and @Alice please look",
+            CommentProp = new List<CommentBlock>
+            {
+                new() { Text = "hey " },                                              // plain run → ignored
+                new() { Text = "@Ben", Type = "tag", User = new User { Id = 7 } },
+                new() { Text = "@Alice", Type = "tag", User = new User { Id = 9 } },
+                new() { Text = "@Ben", Type = "tag", User = new User { Id = 7 } },     // duplicate → deduped
+                new() { Text = "@nobody", Type = "tag", User = new User { Id = 0 } },  // id 0 → ignored
+                new() { Text = "@ghost", Type = "tag" },                              // null user → ignored
+            },
+        };
+
+        Assert.Equal(new long[] { 7, 9 }, ClickUpClient.MapComment(c, "task-1").MentionedUserIds);
+    }
+
+    [Fact]
+    public void MapComment_NoBlocks_YieldsEmptyMentionedUserIds()
+        => Assert.Empty(ClickUpClient.MapComment(new Comment { Id = "c1" }, "t").MentionedUserIds);
+
+    [Fact]
+    public void MapMentionedUserIds_NullBlocks_YieldsEmpty()
+        => Assert.Empty(ClickUpClient.MapMentionedUserIds(null));
 }
