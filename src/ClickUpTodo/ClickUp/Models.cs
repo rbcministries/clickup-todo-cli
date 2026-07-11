@@ -177,7 +177,11 @@ public sealed record CommentItem(
     bool MentionsMe = false, IReadOnlyList<long>? MentionedUserIds = null)
 {
     /// <summary>The numeric ids of members @-mentioned in the comment's structured <c>comment</c> blocks
-    /// (#167); never null (empty when the comment mentions no one, or the blocks weren't mapped).</summary>
+    /// (#167); never null (empty when the comment mentions no one, or the blocks weren't mapped).
+    /// NOTE: as a collection member it participates in the record's synthesized equality by <b>reference</b>,
+    /// so two content-equal <see cref="CommentItem"/>s from separate mappings are not <c>Equals</c>. No
+    /// consumer relies on <see cref="CommentItem"/> value equality (the feed de-dups by <see cref="Id"/>);
+    /// give this member structural equality before using it as a <c>HashSet</c>/dictionary key.</summary>
     public IReadOnlyList<long> MentionedUserIds { get; init; } = MentionedUserIds ?? [];
 }
 

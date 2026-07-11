@@ -1,5 +1,7 @@
+using System.Text.Json;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.ClickUp.Generated.Models;
+using Microsoft.Kiota.Serialization.Json;
 
 namespace ClickUpTodo.Tests;
 
@@ -103,4 +105,41 @@ public sealed class ClickUpClientCommentMapTests
     [Fact]
     public void MapMentionedUserIds_NullBlocks_YieldsEmpty()
         => Assert.Empty(ClickUpClient.MapMentionedUserIds(null));
+
+    // Pins the wire contract: runs the real Kiota deserializer over a captured ClickUp v2 comment payload
+    // to prove the structured `comment` blocks (and their `user.id`) land in `CommentProp` where the
+    // mapper reads them — i.e. the curated spec faithfully models ClickUp's mention-block shape (#167).
+    private static Comment Parse(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var node = new JsonParseNode(doc.RootElement);
+        return node.GetObjectValue(Comment.CreateFromDiscriminatorValue)!;
+    }
+
+    [Fact]
+    public void MapComment_DeserializesStructuredMentionBlocks_FromRealPayloadShape()
+    {
+        // Shape captured from GET /v2/task/{id}/comment: a plain run followed by an @-mention tag block
+        // carrying the mentioned member as { user: { id, username } }, alongside the flat comment_text.
+        const string json = """
+            {
+              "id": "90120076543210",
+              "comment": [
+                { "text": "cc " },
+                { "text": "@Ben Seymour", "type": "tag", "user": { "id": 183, "username": "Ben Seymour" } },
+                { "text": " please review" }
+              ],
+              "comment_text": "cc @Ben Seymour please review",
+              "user": { "id": 42, "username": "Alex Kim" },
+              "date": "1699000000000",
+              "resolved": false
+            }
+            """;
+
+        var mapped = ClickUpClient.MapComment(Parse(json), "task-1");
+
+        Assert.Equal(new long[] { 183 }, mapped.MentionedUserIds);
+        Assert.Equal("cc @Ben Seymour please review", mapped.Text);
+        Assert.Equal("Alex Kim", mapped.Author); // the comment author, not the mentioned user
+    }
 }

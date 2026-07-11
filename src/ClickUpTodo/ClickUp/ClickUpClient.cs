@@ -407,7 +407,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     internal static IReadOnlyList<long> MapMentionedUserIds(List<CommentBlock>? blocks)
         => blocks?
             .Select(b => b.User?.Id ?? 0)
-            .Where(id => id != 0)
+            .Where(id => id > 0)
             .Distinct()
             .ToList()
            ?? [];
