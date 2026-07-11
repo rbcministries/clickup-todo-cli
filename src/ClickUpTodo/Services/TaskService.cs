@@ -587,8 +587,9 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
         var frontier = plan.PerParentIds.ToList();
         while (frontier.Count > 0)
         {
-            // Ids already expanded (a duplicate, or a child a whole-list fetch pooled) cost no budget,
-            // matching the old expanded-set guard. Dedup within the level too.
+            // Ids already expanded (a parent recursion surfaced again) cost no budget, matching the old
+            // expanded-set guard; dedup within the level too. A child a whole-list fetch already pooled
+            // is instead dropped at merge time by fetched.TryAdd, so it never enters the frontier.
             var level = new List<string>();
             var levelSeen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var id in frontier)
