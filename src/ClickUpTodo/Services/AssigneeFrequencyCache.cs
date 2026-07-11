@@ -6,7 +6,10 @@ namespace ClickUpTodo.Services;
 /// <summary>The persisted assignee-frequency pool. Carries the <see cref="WorkspaceId"/> it was
 /// captured for — a mismatch on load is a clean miss (empty pool), so switching workspace never
 /// surfaces the wrong people (#155 note; aligns with #124's reset-on-workspace-change) — and a
-/// <see cref="SchemaVersion"/> guarding against an incompatible future shape.</summary>
+/// <see cref="SchemaVersion"/> guarding against an incompatible future shape. Each entry carries the
+/// distinct task ids the person was seen on, so the count is reproducible and idempotent across
+/// restarts (re-observing the same task never re-inflates it). Bounding the pool's growth over time
+/// (TTL / eviction) is the epic-#118 cache-policy issue #124.</summary>
 public sealed record AssigneeFrequencyDocument(
     int SchemaVersion, string WorkspaceId, IReadOnlyList<AssigneeFrequencyEntry> Entries);
 
@@ -16,6 +19,12 @@ public sealed record AssigneeFrequencyDocument(
 /// the workspace members so the future Assignees pane (#158) has a full candidate pool even when few
 /// people ride along on the loaded tasks. The pure tally / ranking / matching rules live in
 /// <see cref="AssigneeFrequency"/>; this class is the glue (load, persist, fetch).
+/// <para>
+/// Counting is by <b>distinct task id</b> (see <see cref="AssigneeFrequency.Accumulate"/>), so
+/// <see cref="RecordFromTasks"/> can be called on every refresh with the same working set without
+/// inflating anyone or rewriting the store — a steady-state poll that adds no new (person, task) pair
+/// is a no-op.
+/// </para>
 /// </summary>
 public sealed class AssigneeFrequencyCache
 {
@@ -69,8 +78,9 @@ public sealed class AssigneeFrequencyCache
         }
     }
 
-    /// <summary>Tally the assignees on the just-loaded working set and persist if anything changed.
-    /// Cheap and synchronous; call it from the load callback.</summary>
+    /// <summary>Record the assignees on the just-loaded working set and persist if anything changed.
+    /// Cheap and idempotent — safe to call from the refresh callback on every poll; a working set with
+    /// no new (person, task) pair neither inflates the pool nor touches the store.</summary>
     public void RecordFromTasks(IReadOnlyList<TaskItem> tasks)
     {
         lock (_gate)
@@ -83,16 +93,18 @@ public sealed class AssigneeFrequencyCache
     /// <summary>
     /// Best-effort one-shot top-up: when the pool has fewer than <paramref name="minCandidates"/>
     /// people, fetch the workspace members and seed them (count 0) so the pane's empty state can still
-    /// fill. Runs at most once per instance, off the UI thread; a fetch failure is swallowed (the pool
-    /// simply stays as-is). Persists only when it added anyone.
+    /// fill. Attempts at most once per instance, off the UI thread; a fetch failure is swallowed (the
+    /// pool simply stays as-is). Persists only when it added anyone.
     /// </summary>
     public async Task TopUpAsync(int minCandidates, CancellationToken ct = default)
     {
         lock (_gate)
         {
-            if (_toppedUp || _entries.Count >= minCandidates)
+            if (_toppedUp)
                 return;
-            _toppedUp = true;
+            _toppedUp = true; // consume the one-shot on first entry, so it never fetches twice.
+            if (_entries.Count >= minCandidates)
+                return;
         }
 
         IReadOnlyList<WorkspaceMember> members;
@@ -106,7 +118,7 @@ public sealed class AssigneeFrequencyCache
         }
 
         var seeds = members
-            .Select(m => new AssigneeFrequencyEntry(m.Id, MemberName(m), 0))
+            .Select(m => new TaskAssignee(m.Id, MemberName(m)))
             .ToList();
 
         lock (_gate)
@@ -132,11 +144,24 @@ public sealed class AssigneeFrequencyCache
             return AssigneeFrequency.Match(_entries.Values, query, exclude);
     }
 
+    // Caller holds _gate. Serialising the write under the lock is deliberate: it satisfies IStateStore's
+    // "caller must serialise concurrent access to a key" contract (RecordFromTasks runs on the UI
+    // thread, the top-up completes on a background thread). Writes are rare — only on a genuinely new
+    // (person, task) pair or a name change — so holding the lock across the write is not a hot path.
     private void Persist()
     {
-        var doc = new AssigneeFrequencyDocument(
-            CurrentSchemaVersion, _workspaceId, _entries.Values.ToList());
-        _store.Save(StateKeys.Assignees, doc);
+        try
+        {
+            var doc = new AssigneeFrequencyDocument(
+                CurrentSchemaVersion, _workspaceId, _entries.Values.ToList());
+            _store.Save(StateKeys.Assignees, doc);
+        }
+        catch
+        {
+            // Best-effort warm-cache persistence: a failed write (read-only / full disk) must never
+            // break the refresh loop that calls RecordFromTasks on the UI thread. The pool lives on in
+            // memory; the next change retries.
+        }
     }
 
     /// <summary>A display name for a workspace member: username, else the email's local part, else
@@ -147,6 +172,6 @@ public sealed class AssigneeFrequencyCache
             return member.Username.Trim();
         var email = member.Email?.Trim() ?? "";
         var at = email.IndexOf('@');
-        return at > 0 ? email[..at] : email;
+        return at >= 0 ? email[..at] : email; // local part; "@x" → "" (skipped as nameless).
     }
 }

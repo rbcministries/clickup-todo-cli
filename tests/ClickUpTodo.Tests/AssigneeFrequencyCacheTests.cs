@@ -69,7 +69,7 @@ public sealed class AssigneeFrequencyCacheTests : IDisposable
         var store = new JsonFileStateStore(_dir);
         store.Save(StateKeys.Assignees, new AssigneeFrequencyDocument(
             AssigneeFrequencyCache.CurrentSchemaVersion + 1, "ws1",
-            [new AssigneeFrequencyEntry(1, "Ada", 5)]));
+            [new AssigneeFrequencyEntry(1, "Ada", ["t1"])]));
 
         var cache = new AssigneeFrequencyCache(new JsonFileStateStore(_dir), "ws1", NoMembers);
 
@@ -88,6 +88,29 @@ public sealed class AssigneeFrequencyCacheTests : IDisposable
         // Nothing tallied (no valid assignees) → no extra save.
         cache.RecordFromTasks([MakeTask("t2"), MakeTask("t3", (0, "Zero"))]);
         Assert.Equal(1, store.Saves);
+
+        // Re-observing the SAME task on a later poll is idempotent: no inflation, no extra write —
+        // the hot-path guard the distinct-task model exists to provide.
+        cache.RecordFromTasks([MakeTask("t1", (1, "Ada"))]);
+        Assert.Equal(1, store.Saves);
+        Assert.Single(cache.TopMostFrequent(10));
+    }
+
+    [Fact]
+    public void RecordFromTasks_SameWorkingSetTwice_DoesNotInflateAcrossWarmRestart()
+    {
+        var first = new AssigneeFrequencyCache(new JsonFileStateStore(_dir), "ws1", NoMembers);
+        first.RecordFromTasks([MakeTask("t1", (1, "Ada")), MakeTask("t2", (1, "Ada"))]);
+
+        // A fresh instance loads the warm pool, then a first poll re-observes the same tasks — the
+        // persisted distinct-task ids make that a no-op rather than doubling Ada's count.
+        var second = new AssigneeFrequencyCache(new JsonFileStateStore(_dir), "ws1", NoMembers);
+        second.RecordFromTasks([MakeTask("t1", (1, "Ada")), MakeTask("t2", (1, "Ada"))]);
+
+        var ada = second.TopMostFrequent(10).Single();
+        Assert.Equal(1, ada.Id);
+        // 2 distinct tasks (t1, t2), not 4 — no cross-restart inflation.
+        Assert.Equal(1, second.Count);
     }
 
     [Fact]

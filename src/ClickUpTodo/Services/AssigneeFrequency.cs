@@ -1,12 +1,20 @@
+using System.Text.Json.Serialization;
 using ClickUpTodo.ClickUp;
 
 namespace ClickUpTodo.Services;
 
 /// <summary>One tallied candidate person: a stable id, the latest non-blank display name seen for
-/// them, and how many times they've appeared as an assignee across the loaded task working set.
-/// This is also the persisted shape (see <see cref="AssigneeFrequencyCache"/>), so it stays a plain
-/// serialisable record.</summary>
-public sealed record AssigneeFrequencyEntry(long Id, string Name, int Count);
+/// them, and the set of <b>distinct task ids</b> they've been seen assigned to across the loaded
+/// working set. <see cref="Count"/> — the ranking key — is that distinct-task count, so re-observing
+/// the same task on a later refresh never inflates it (the steady-state poll is idempotent). This is
+/// also the persisted shape (see <see cref="AssigneeFrequencyCache"/>), so it stays a plain
+/// serialisable record; <see cref="Count"/> is derived and excluded from serialisation.</summary>
+public sealed record AssigneeFrequencyEntry(long Id, string Name, IReadOnlyList<string> TaskIds)
+{
+    /// <summary>Number of distinct tasks this person has been seen assigned to — the ranking weight.</summary>
+    [JsonIgnore]
+    public int Count => TaskIds.Count;
+}
 
 /// <summary>
 /// Pure tally / ranking / matching rules backing the assignee-frequency cache (#155), kept free of
@@ -14,25 +22,30 @@ public sealed record AssigneeFrequencyEntry(long Id, string Name, int Count);
 /// (loading, persistence, the deferred workspace-members top-up) lives in
 /// <see cref="AssigneeFrequencyCache"/>.
 /// <para>
-/// The pool is the most-frequent assignees across the task lists the user has loaded; the Assignees
-/// pane (#158) uses it to fill its empty-state list up to N rows and to back type-ahead search.
+/// The pool is the assignees seen across the task lists the user has loaded, weighted by how many
+/// distinct tasks each was assigned to; the Assignees pane (#158) uses it to fill its empty-state
+/// list up to N rows and to back type-ahead search.
 /// </para>
 /// </summary>
 public static class AssigneeFrequency
 {
     /// <summary>
-    /// Tallies every assignee on <paramref name="tasks"/> into <paramref name="acc"/> (id ⇒ entry):
-    /// increments the occurrence count and refreshes the stored name to the latest non-blank value
-    /// seen. Assignees with a non-positive id or a blank name are ignored (an id is required to
-    /// address a person for an assignee write, and a nameless row is useless to the pane). Mutates
-    /// <paramref name="acc"/> in place and returns <see langword="true"/> only when it actually
-    /// changed, so the caller persists exactly when needed.
+    /// Records every assignee on <paramref name="tasks"/> into <paramref name="acc"/> (id ⇒ entry):
+    /// adds the task's id to that person's distinct-task set and refreshes the stored name to the
+    /// latest non-blank value seen. Because it tracks distinct task ids, re-feeding a task already
+    /// recorded for a person is a no-op — so calling this every refresh with the same working set does
+    /// not inflate anyone's count. Assignees with a non-positive id or a blank name are ignored (an id
+    /// is required to address a person for an assignee write, and a nameless row is useless to the
+    /// pane), as are tasks with a blank id. Mutates <paramref name="acc"/> in place and returns
+    /// <see langword="true"/> only when it actually changed, so the caller persists exactly when needed.
     /// </summary>
     public static bool Accumulate(IDictionary<long, AssigneeFrequencyEntry> acc, IEnumerable<TaskItem> tasks)
     {
         var changed = false;
         foreach (var task in tasks)
         {
+            if (string.IsNullOrEmpty(task.Id))
+                continue;
             foreach (var person in task.Assignees)
             {
                 if (person.Id <= 0)
@@ -42,9 +55,17 @@ public static class AssigneeFrequency
                     continue;
 
                 if (acc.TryGetValue(person.Id, out var existing))
-                    acc[person.Id] = existing with { Name = name, Count = existing.Count + 1 };
+                {
+                    var hasTask = existing.TaskIds.Contains(task.Id);
+                    if (hasTask && existing.Name == name)
+                        continue; // already recorded for this task, name unchanged — nothing to do.
+                    var taskIds = hasTask ? existing.TaskIds : [.. existing.TaskIds, task.Id];
+                    acc[person.Id] = existing with { Name = name, TaskIds = taskIds };
+                }
                 else
-                    acc[person.Id] = new AssigneeFrequencyEntry(person.Id, name, 1);
+                {
+                    acc[person.Id] = new AssigneeFrequencyEntry(person.Id, name, [task.Id]);
+                }
                 changed = true;
             }
         }
@@ -52,12 +73,13 @@ public static class AssigneeFrequency
     }
 
     /// <summary>
-    /// Adds <paramref name="people"/> as candidates at count <c>0</c> without disturbing anyone already
-    /// tallied — an existing entry keeps its real (&gt;0) count and its known name. Only genuinely new
-    /// people (positive id, non-blank name) are inserted. Used by the deferred workspace-members
-    /// top-up to fatten a thin pool. Mutates <paramref name="acc"/>; returns whether it changed.
+    /// Adds <paramref name="people"/> as candidates with no tasks yet (count <c>0</c>) without
+    /// disturbing anyone already tallied — an existing entry keeps its distinct-task count and its
+    /// known name. Only genuinely new people (positive id, non-blank name) are inserted. Used by the
+    /// deferred workspace-members top-up to fatten a thin pool. Mutates <paramref name="acc"/>; returns
+    /// whether it changed.
     /// </summary>
-    public static bool Seed(IDictionary<long, AssigneeFrequencyEntry> acc, IEnumerable<AssigneeFrequencyEntry> people)
+    public static bool Seed(IDictionary<long, AssigneeFrequencyEntry> acc, IEnumerable<TaskAssignee> people)
     {
         var changed = false;
         foreach (var person in people)
@@ -68,14 +90,14 @@ public static class AssigneeFrequency
             if (name.Length == 0 || acc.ContainsKey(person.Id))
                 continue;
 
-            acc[person.Id] = new AssigneeFrequencyEntry(person.Id, name, 0);
+            acc[person.Id] = new AssigneeFrequencyEntry(person.Id, name, []);
             changed = true;
         }
         return changed;
     }
 
     /// <summary>
-    /// The top <paramref name="n"/> candidates ranked by occurrence (count desc), breaking ties by
+    /// The top <paramref name="n"/> candidates ranked by distinct-task count (desc), breaking ties by
     /// name (case-insensitive asc) then id — a total, deterministic order. Ids in
     /// <paramref name="exclude"/> (typically the task's current assignees) and blank-named entries are
     /// dropped. Returns <see cref="TaskAssignee"/>-shaped results the pane consumes directly. A

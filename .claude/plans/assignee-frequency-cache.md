@@ -23,15 +23,18 @@ pure vs `TaskService` glue, and `DispatchWorkingDirectoryCache` pure vs `AppConf
 
 ### 1. Pure logic — `Services/AssigneeFrequency.cs` (static)
 
-- `AssigneeFrequencyEntry(long Id, string Name, int Count)` — the tally unit (also the
-  persisted shape).
+- `AssigneeFrequencyEntry(long Id, string Name, IReadOnlyList<string> TaskIds)` — the tally unit
+  (also the persisted shape). `Count => TaskIds.Count` (`[JsonIgnore]`) is the **distinct-task**
+  ranking weight, so re-observing the same task never inflates it.
 - `Accumulate(IDictionary<long, AssigneeFrequencyEntry> acc, IEnumerable<TaskItem> tasks)` →
-  `bool changed`. Increments each task assignee's count; refreshes `Name` to the latest
-  non-blank seen; ignores id `0` / blank names. Returns whether anything changed so the caller
-  persists exactly when needed.
+  `bool changed`. Adds each task's id to that assignee's distinct-task set and refreshes `Name`
+  to the latest non-blank seen; ignores id `0` / blank names / blank task ids. **Idempotent** —
+  re-feeding a task already recorded for a person is a no-op — so calling it on every poll with
+  the same working set neither inflates counts nor reports a change (the caller then skips the
+  persist). Returns whether anything changed so the caller persists exactly when needed.
 - `Seed(IDictionary<…> acc, IEnumerable<TaskAssignee> people)` → `bool changed` — adds
-  candidates at count `0` **without** clobbering a real (>0) count or a known name. Used by the
-  deferred workspace-members top-up.
+  candidates with an empty task set (count `0`) **without** clobbering a real count or a known
+  name. Used by the deferred workspace-members top-up.
 - `TopMostFrequent(IEnumerable<AssigneeFrequencyEntry> entries, int n, ISet<long>? exclude)` →
   `IReadOnlyList<TaskAssignee>`. Ranked by count desc, then name asc (case-insensitive), then id
   — deterministic. Excludes the given ids (the task's current assignees). Drops blank names.
@@ -47,7 +50,9 @@ pure vs `TaskService` glue, and `DispatchWorkingDirectoryCache` pure vs `AppConf
   per-workspace keying and #124 reset-on-workspace-change). A `SchemaVersion` guards an
   incompatible future shape (mismatch → miss).
 - `RecordFromTasks(IReadOnlyList<TaskItem>)` — `Accumulate` into the in-memory map; persists (one
-  `store.Save`) only when it changed. Called from `OnTasksLoaded`.
+  `store.Save`, wrapped in try/catch so a failed write never breaks the refresh loop) only when
+  it changed. Idempotent, so calling it on every `OnTasksLoaded` poll is a no-op in steady state
+  (no inflation, no hot-path write).
 - `TopUpAsync(int minCandidates, CancellationToken)` — if the pool is thinner than
   `minCandidates`, fetch workspace members off-thread and `Seed` them (count 0); persist if
   changed. Failures are swallowed (non-fatal, best-effort). Runs once, after first paint.

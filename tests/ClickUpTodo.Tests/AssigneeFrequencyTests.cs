@@ -5,8 +5,8 @@ namespace ClickUpTodo.Tests;
 
 /// <summary>
 /// Pure tally / ranking / matching rules for the assignee-frequency cache (#155) —
-/// <see cref="AssigneeFrequency"/>. No I/O, no persistence; the stateful glue is covered by
-/// <see cref="AssigneeFrequencyCacheTests"/>.
+/// <see cref="AssigneeFrequency"/>. Counting is by distinct task id, so no I/O and no per-poll
+/// inflation; the stateful glue is covered by <see cref="AssigneeFrequencyCacheTests"/>.
 /// </summary>
 public sealed class AssigneeFrequencyTests
 {
@@ -25,15 +25,29 @@ public sealed class AssigneeFrequencyTests
     }
 
     [Fact]
-    public void Accumulate_CountsOccurrencesAcrossTasks()
+    public void Accumulate_CountsDistinctTasksAcrossTasks()
     {
         var acc = Tally(
             Task("t1", (1, "Ada"), (2, "Bo")),
             Task("t2", (1, "Ada")),
             Task("t3", (1, "Ada"), (2, "Bo")));
 
-        Assert.Equal(3, acc[1].Count);
-        Assert.Equal(2, acc[2].Count);
+        Assert.Equal(3, acc[1].Count); // t1, t2, t3
+        Assert.Equal(2, acc[2].Count); // t1, t3
+    }
+
+    [Fact]
+    public void Accumulate_IsIdempotent_ReObservingTheSameTaskDoesNotInflate()
+    {
+        var acc = new Dictionary<long, AssigneeFrequencyEntry>();
+
+        // First "poll": records t1 for Ada.
+        Assert.True(AssigneeFrequency.Accumulate(acc, [Task("t1", (1, "Ada"))]));
+        // A later poll returns the same task — must not bump the count and must report no change,
+        // so the caller doesn't re-persist (fixes the per-poll inflation / hot-path write).
+        Assert.False(AssigneeFrequency.Accumulate(acc, [Task("t1", (1, "Ada"))]));
+
+        Assert.Equal(1, acc[1].Count);
     }
 
     [Fact]
@@ -48,12 +62,32 @@ public sealed class AssigneeFrequencyTests
     }
 
     [Fact]
+    public void Accumulate_NameChangeOnAlreadyRecordedTask_UpdatesName_WithoutInflating()
+    {
+        var acc = new Dictionary<long, AssigneeFrequencyEntry>();
+        AssigneeFrequency.Accumulate(acc, [Task("t1", (1, "Ada"))]);
+
+        // Same task id, new name → a change (name refresh) but the distinct-task count stays 1.
+        Assert.True(AssigneeFrequency.Accumulate(acc, [Task("t1", (1, "Ada L."))]));
+        Assert.Equal("Ada L.", acc[1].Name);
+        Assert.Equal(1, acc[1].Count);
+    }
+
+    [Fact]
     public void Accumulate_IgnoresNonPositiveIdAndBlankName()
     {
         var acc = Tally(Task("t1", (0, "Zero"), (-5, "Neg"), (3, "  "), (4, "Cid")));
 
         Assert.Equal([4], acc.Keys.OrderBy(k => k));
         Assert.Equal("Cid", acc[4].Name);
+    }
+
+    [Fact]
+    public void Accumulate_IgnoresTaskWithBlankId()
+    {
+        var acc = Tally(Task("", (1, "Ada")));
+
+        Assert.Empty(acc);
     }
 
     [Fact]
@@ -167,12 +201,12 @@ public sealed class AssigneeFrequencyTests
 
         var changed = AssigneeFrequency.Seed(acc,
         [
-            new AssigneeFrequencyEntry(1, "Different Name", 0), // existing — must not be clobbered
-            new AssigneeFrequencyEntry(5, "Newcomer", 0),       // genuinely new
+            new TaskAssignee(1, "Different Name"), // existing — must not be clobbered
+            new TaskAssignee(5, "Newcomer"),       // genuinely new
         ]);
 
         Assert.True(changed);
-        Assert.Equal(1, acc[1].Count);          // real count preserved
+        Assert.Equal(1, acc[1].Count);          // real distinct-task count preserved
         Assert.Equal("Ada", acc[1].Name);       // known name preserved
         Assert.Equal(0, acc[5].Count);
         Assert.Equal("Newcomer", acc[5].Name);
@@ -185,9 +219,9 @@ public sealed class AssigneeFrequencyTests
 
         var changed = AssigneeFrequency.Seed(acc,
         [
-            new AssigneeFrequencyEntry(0, "Zero", 0),
-            new AssigneeFrequencyEntry(2, "  ", 0),
-            new AssigneeFrequencyEntry(1, "Ada", 0), // already present
+            new TaskAssignee(0, "Zero"),
+            new TaskAssignee(2, "  "),
+            new TaskAssignee(1, "Ada"), // already present
         ]);
 
         Assert.False(changed);
@@ -198,7 +232,7 @@ public sealed class AssigneeFrequencyTests
     public void SeededZeroCountPeople_RankBelowTallied_ButStillAppear()
     {
         var acc = Tally(Task("t1", (1, "Ada")));
-        AssigneeFrequency.Seed(acc, [new AssigneeFrequencyEntry(5, "Newcomer", 0)]);
+        AssigneeFrequency.Seed(acc, [new TaskAssignee(5, "Newcomer")]);
 
         var top = AssigneeFrequency.TopMostFrequent(acc.Values, 10);
 
