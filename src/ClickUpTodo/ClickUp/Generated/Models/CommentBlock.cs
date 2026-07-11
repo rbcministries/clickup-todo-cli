@@ -7,47 +7,30 @@ using System.IO;
 using System;
 namespace ClickUpTodo.ClickUp.Generated.Models
 {
+    /// <summary>
+    /// One rich-text run of a comment&apos;s structured &apos;comment&apos; array. A plain run carries only &apos;text&apos;; an @-mention run additionally carries &apos;type&apos;:&apos;tag&apos; and the mentioned member as &apos;user&apos; (with the numeric id) — the substrate for id-based mention detection (#167).
+    /// </summary>
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
-    #pragma warning disable CS1591
-    public partial class Comment : IAdditionalDataHolder, IParsable
-    #pragma warning restore CS1591
+    public partial class CommentBlock : IAdditionalDataHolder, IParsable
     {
         /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
         public IDictionary<string, object> AdditionalData { get; set; }
-        /// <summary>The comment property</summary>
+        /// <summary>The text property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
-        public List<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock>? CommentProp { get; set; }
+        public string? Text { get; set; }
 #nullable restore
 #else
-        public List<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock> CommentProp { get; set; }
+        public string Text { get; set; }
 #endif
-        /// <summary>The comment_text property</summary>
+        /// <summary>The type property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
-        public string? CommentText { get; set; }
+        public string? Type { get; set; }
 #nullable restore
 #else
-        public string CommentText { get; set; }
+        public string Type { get; set; }
 #endif
-        /// <summary>The date property</summary>
-#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
-#nullable enable
-        public string? Date { get; set; }
-#nullable restore
-#else
-        public string Date { get; set; }
-#endif
-        /// <summary>The id property</summary>
-#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
-#nullable enable
-        public string? Id { get; set; }
-#nullable restore
-#else
-        public string Id { get; set; }
-#endif
-        /// <summary>The resolved property</summary>
-        public bool? Resolved { get; set; }
         /// <summary>The user property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -57,21 +40,21 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         public global::ClickUpTodo.ClickUp.Generated.Models.User User { get; set; }
 #endif
         /// <summary>
-        /// Instantiates a new <see cref="global::ClickUpTodo.ClickUp.Generated.Models.Comment"/> and sets the default values.
+        /// Instantiates a new <see cref="global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock"/> and sets the default values.
         /// </summary>
-        public Comment()
+        public CommentBlock()
         {
             AdditionalData = new Dictionary<string, object>();
         }
         /// <summary>
         /// Creates a new instance of the appropriate class based on discriminator value
         /// </summary>
-        /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.Comment"/></returns>
+        /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock"/></returns>
         /// <param name="parseNode">The parse node to use to read the discriminator value and create the object</param>
-        public static global::ClickUpTodo.ClickUp.Generated.Models.Comment CreateFromDiscriminatorValue(IParseNode parseNode)
+        public static global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock CreateFromDiscriminatorValue(IParseNode parseNode)
         {
             if(ReferenceEquals(parseNode, null)) throw new ArgumentNullException(nameof(parseNode));
-            return new global::ClickUpTodo.ClickUp.Generated.Models.Comment();
+            return new global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock();
         }
         /// <summary>
         /// The deserialization information for the current model
@@ -81,11 +64,8 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         {
             return new Dictionary<string, Action<IParseNode>>
             {
-                { "comment", n => { CommentProp = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock>(global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock.CreateFromDiscriminatorValue)?.AsList(); } },
-                { "comment_text", n => { CommentText = n.GetStringValue(); } },
-                { "date", n => { Date = n.GetStringValue(); } },
-                { "id", n => { Id = n.GetStringValue(); } },
-                { "resolved", n => { Resolved = n.GetBoolValue(); } },
+                { "text", n => { Text = n.GetStringValue(); } },
+                { "type", n => { Type = n.GetStringValue(); } },
                 { "user", n => { User = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.User>(global::ClickUpTodo.ClickUp.Generated.Models.User.CreateFromDiscriminatorValue); } },
             };
         }
@@ -96,11 +76,8 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         public virtual void Serialize(ISerializationWriter writer)
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
-            writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock>("comment", CommentProp);
-            writer.WriteStringValue("comment_text", CommentText);
-            writer.WriteStringValue("date", Date);
-            writer.WriteStringValue("id", Id);
-            writer.WriteBoolValue("resolved", Resolved);
+            writer.WriteStringValue("text", Text);
+            writer.WriteStringValue("type", Type);
             writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.User>("user", User);
             writer.WriteAdditionalData(AdditionalData);
         }
