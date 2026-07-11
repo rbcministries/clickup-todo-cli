@@ -32,20 +32,31 @@ public sealed class ResolveForeignSubtasksTests
         public HashSet<string> ThrowOnSubtask { get; } = new(StringComparer.Ordinal);
         public HashSet<string> ThrowOnList { get; } = new(StringComparer.Ordinal);
 
+        // Call logs are lock-guarded: the per-parent BFS now fetches a level's parents concurrently
+        // (#144), so same-level calls can record simultaneously. Reads happen after the resolve completes.
+        private readonly object _sync = new();
         public List<string> SubtaskCalls { get; } = [];
         public List<(string ListId, bool IncludeClosed)> ListCalls { get; } = [];
 
-        public Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default)
+        /// <summary>Optional per-call hook, awaited before the result is returned, so a test can observe
+        /// or gate concurrency (e.g. a rendezvous proving genuine same-level overlap).</summary>
+        public Func<string, Task>? OnSubtask { get; set; }
+
+        public async Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default)
         {
-            SubtaskCalls.Add(taskId);
+            lock (_sync)
+                SubtaskCalls.Add(taskId);
+            if (OnSubtask is { } hook)
+                await hook(taskId);
             if (ThrowOnSubtask.Contains(taskId))
                 throw new InvalidOperationException("boom");
-            return Task.FromResult(Subtasks.TryGetValue(taskId, out var v) ? v : (IReadOnlyList<TaskItem>)[]);
+            return Subtasks.TryGetValue(taskId, out var v) ? v : (IReadOnlyList<TaskItem>)[];
         }
 
         public Task<List<TaskItem>> GetListTasksAsync(string listId, bool includeClosed = false, CancellationToken ct = default)
         {
-            ListCalls.Add((listId, includeClosed));
+            lock (_sync)
+                ListCalls.Add((listId, includeClosed));
             if (ThrowOnList.Contains(listId))
                 throw new InvalidOperationException("boom");
             return Task.FromResult(Lists.TryGetValue(listId, out var v) ? v : []);
@@ -200,5 +211,66 @@ public sealed class ResolveForeignSubtasksTests
 
         Assert.True(result.Truncated);
         Assert.Equal(2, fake.SubtaskCalls.Count); // only the two un-dropped seeds were fetched
+    }
+
+    [Fact]
+    public async Task PerParentBranch_FetchesOverlap_AndRespectCap()
+    {
+        // 12 sparse parents (each alone in its list, below WholeListMinParents) -> all per-parent, one BFS
+        // level. Every fetch counts itself in flight; the first MaxFanOutConcurrency arrivals rendezvous
+        // (proving genuine same-level overlap — the pre-#144 serial BFS never gets a second call in flight
+        // and times out), and the peak in-flight must never exceed the cap (the SemaphoreSlim gate bounds
+        // it, so no flakiness). Each parent has a foreign child, so the concurrent pooling is exercised too.
+        var fake = new FakeClickUpClient();
+        var parentIds = Enumerable.Range(0, 12).Select(i => $"p{i}").ToList();
+        foreach (var id in parentIds)
+            fake.Subtasks[id] = [Item($"c-{id}", parent: id, list: $"L-{id}")];
+        var snapshot = parentIds.Select((id, i) => Item(id, list: $"L{i}")).ToArray();
+
+        // The rendezvous completes once MaxFanOutConcurrency calls are in flight together; the first
+        // parent cohort trips it, and every later call (remaining parents + the recursed children, a
+        // second gated level) then finds it already satisfied and proceeds without stalling.
+        var rendezvous = new Rendezvous(TaskService.MaxFanOutConcurrency);
+        var inFlight = 0;
+        var peak = 0;
+        fake.OnSubtask = async _ =>
+        {
+            var now = Interlocked.Increment(ref inFlight);
+            InterlockedMax(ref peak, now);
+            await rendezvous.ArriveAsync();
+            Interlocked.Decrement(ref inFlight);
+        };
+
+        var result = await Service(fake).ResolveForeignSubtasksAsync(snapshot);
+
+        Assert.Equal(12, result.Subtasks.Count);                                    // every foreign child pooled
+        Assert.Equal(24, fake.SubtaskCalls.Count);                                  // 12 parents + 12 recursed children
+        Assert.True(peak <= TaskService.MaxFanOutConcurrency, $"peak in-flight {peak} exceeded the cap");
+        Assert.True(peak >= 2, "per-parent fetches never overlapped"); // rendezvous makes >= cap certain; >= 2 is the safe floor
+    }
+
+    /// <summary>A rendezvous of <paramref name="parties"/> arrivals: each caller signals and waits for the
+    /// rest. Only reachable if the callers are genuinely concurrent — serial callers time out.</summary>
+    private sealed class Rendezvous(int parties)
+    {
+        private readonly TaskCompletionSource _allArrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _arrived;
+
+        public Task ArriveAsync()
+        {
+            if (Interlocked.Increment(ref _arrived) >= parties)
+                _allArrived.TrySetResult();
+            return _allArrived.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    /// <summary>Lock-free max: raises <paramref name="target"/> to <paramref name="value"/> if higher.</summary>
+    private static void InterlockedMax(ref int target, int value)
+    {
+        int current;
+        while (value > (current = Volatile.Read(ref target))
+               && Interlocked.CompareExchange(ref target, value, current) != current)
+        {
+        }
     }
 }
