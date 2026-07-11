@@ -12,4 +12,11 @@ public static class StateKeys
     /// (<see cref="AppConfig.PinnedTaskIds"/>). Maps to <c>config.json</c> in the file backend.
     /// </summary>
     public const string Config = "config";
+
+    /// <summary>
+    /// The assignee-frequency candidate pool (#155) — most-frequent assignees across the loaded task
+    /// lists, plus a deferred workspace-members top-up, scoped to one workspace. Maps to
+    /// <c>assignees.json</c> in the file backend.
+    /// </summary>
+    public const string Assignees = "assignees";
 }

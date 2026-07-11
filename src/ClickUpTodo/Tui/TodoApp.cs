@@ -46,6 +46,16 @@ public sealed class TodoApp
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
+    // Candidate-people pool for the future Quick Updates Assignees pane (#155/#158): tallied from each
+    // loaded working set and topped up (once, off-thread) from the workspace members. Never touches
+    // rendering or input — no #3/#12 impact.
+    private readonly AssigneeFrequencyCache _assignees;
+    // How many candidates the Assignees pane wants available before it stops needing the deferred
+    // workspace-members top-up (it fills its empty state up to 10 rows).
+    private const int AssigneeCandidateTarget = 10;
+    // Set once the one-shot assignee top-up has been kicked, so it fires after the first load, not on
+    // every refresh. UI-thread-only.
+    private bool _assigneeTopUpKicked;
     // Composes the seed prompt + launches an interactive `claude` session for the detail view's A
     // keybinding (#26). Built from the persisted AgentDispatch settings (#91) and rebuilt after the F2
     // settings dialog saves, so a custom terminal / claude path / extra args apply without a restart.
@@ -127,13 +137,15 @@ public sealed class TodoApp
     private string _status = "Loading…";
     private string _signature = "";
 
-    public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore, IFocusStore focus)
+    public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
+        IFocusStore focus, AssigneeFrequencyCache assignees)
     {
         _tasks = tasks;
         _feed = feed;
         _config = config;
         _configStore = configStore;
         _focus = focus;
+        _assignees = assignees;
         _agent = BuildAgentDispatcher();
     }
 
@@ -1412,6 +1424,18 @@ public sealed class TodoApp
     private void OnTasksLoaded(IReadOnlyList<TaskItem> tasks)
     {
         _all = tasks;
+
+        // Tally this working set into the assignee-frequency pool (#155) and, once, kick the deferred
+        // workspace-members top-up so the pool is full even when few people ride along on the tasks.
+        // Both are non-blocking: the tally is a cheap synchronous dictionary update, and the top-up
+        // yields to the network off the UI thread (best-effort; failures are swallowed).
+        _assignees.RecordFromTasks(tasks);
+        if (!_assigneeTopUpKicked)
+        {
+            _assigneeTopUpKicked = true;
+            _ = _assignees.TopUpAsync(AssigneeCandidateTarget);
+        }
+
         _status = $"Updated {DateTime.Now:HH:mm:ss} · {tasks.Count} task(s) · refresh every {_config.RefreshSeconds}s";
         // Surface an adaptive-fetch cap (#87) on the persisted status line — a Flash here would be
         // repainted away by this same success path, so it's folded into the line the path writes.

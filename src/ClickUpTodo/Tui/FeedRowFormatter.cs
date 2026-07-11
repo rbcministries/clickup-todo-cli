@@ -24,8 +24,8 @@ public static class FeedRowFormatter
 
     /// <summary>The mention chip: an <c>@</c> glyph flanked by a space on each side (coloured with
     /// <see cref="MentionBadgeColor"/> by the renderer). Three display columns — the same width as the
-    /// <see cref="BlankGutter"/> and <see cref="TaskRowFormatter.StatusIcon"/> — so authors line up
-    /// across mention and non-mention rows.</summary>
+    /// <see cref="BlankGutter"/> and the dashboard's <see cref="TaskRowFormatter.PriorityIcon"/> — so
+    /// authors line up across mention and non-mention rows.</summary>
     public const string MentionChip = " @ ";
 
     /// <summary>The blank gutter shown on a non-mention row — same width as <see cref="MentionChip"/>

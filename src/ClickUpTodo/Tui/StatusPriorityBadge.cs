@@ -7,9 +7,10 @@ namespace ClickUpTodo.Tui;
 /// (<see cref="TaskDetailFormatter.HeaderLines"/>, drawn by <see cref="DetailAttributesView"/>), so the
 /// two surfaces render an identical label (#162). Pure text with no Terminal.Gui dependency: the field
 /// colour is applied by each surface's renderer (<see cref="StatusBadgeListSource"/> /
-/// <see cref="DetailAttributesView"/>), keyed off <see cref="StatusBadgeColor"/>. The glyphs are the
-/// single source shared with the icon-mode chips (<see cref="TaskRowFormatter.StatusIcon"/> /
-/// <see cref="TaskRowFormatter.PriorityIcon"/>).
+/// <see cref="DetailAttributesView"/>), keyed off <see cref="StatusBadgeColor"/>. <see cref="PriorityGlyph"/>
+/// is the single source shared with the icon-mode Priority chip (<see cref="TaskRowFormatter.PriorityIcon"/>);
+/// the icon-mode Status chip is a letter abbreviation rather than the glyph (#181), so
+/// <see cref="StatusGlyph"/> is shared only with the Text-mode badge and the detail title line.
 /// </summary>
 public static class StatusPriorityBadge
 {

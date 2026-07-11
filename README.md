@@ -108,6 +108,18 @@ redirect URL, set `CLICKUP_OAUTH_REDIRECT_URI` (it must match the URL registered
 Pinned tasks persist across restarts. The list refreshes in the background on your configured
 interval, and your cursor stays on the same task across refreshes so the screen stays steady.
 
+## Mentions & Comments feed
+
+Press `Ctrl+E` to open a feed of recent comments and `@`-mentions across the tasks assigned to you
+(`F3` toggles a mentions-only view). ClickUp has no inbox/mentions API, so the feed is synthesised
+from the comments on your **assigned** tasks — which means a mention on a task you aren't assigned to
+won't appear unless a small **per-Space ClickUp Automation** turns mentions into assignments.
+
+That automation is an optional user prerequisite the app can't set up or verify for you. See
+[docs/mention-assignee-automation.md](docs/mention-assignee-automation.md) for the exact
+trigger/condition/action, setup steps, and the caveats (per-Space, paid, not retroactive, and its
+blast radius on your ClickUp "Assigned to me").
+
 ## How it's built
 
 - **TUI:** [Terminal.Gui](https://github.com/gui-cs/Terminal.Gui) v2.

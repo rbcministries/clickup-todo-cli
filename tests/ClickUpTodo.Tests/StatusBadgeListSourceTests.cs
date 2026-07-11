@@ -103,15 +103,18 @@ public sealed class StatusBadgeListSourceTests
     // ── Leading icon-chip gutter ─────────────────────────────────────────────
 
     [Fact]
-    public void IconChips_And_BlankGutter_OccupyTheSameDisplayColumns()
+    public void IconChips_And_Gutters_OccupyTheirColumnWidths()
     {
-        // The grid-like gutter only lines up if the ○/⚑ chips and the blank gutter render at the same
-        // width — i.e. each glyph is a single display column so " ○ "/" ⚑ " match "   " (three columns).
-        var statusWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.StatusIcon).Sum(g => g.Width);
+        // The grid lines up per column: the ⚑ priority chip and its blank gutter are three display columns
+        // (single-column glyph flanked by spaces); the Status abbrev chip "(XX)" and its wider gutter are
+        // four (#181). Widths are measured the same grapheme-aware way the overlay positions colour.
+        var statusChipWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.StatusAbbreviation("In Progress")).Sum(g => g.Width);
+        var statusGutterWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.StatusGutter).Sum(g => g.Width);
         var priorityWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.PriorityIcon).Sum(g => g.Width);
         var blankWidth = StatusBadgeListSource.LayOutGraphemes(TaskRowFormatter.BlankGutter).Sum(g => g.Width);
 
-        Assert.Equal(3, statusWidth);
+        Assert.Equal(4, statusChipWidth);
+        Assert.Equal(4, statusGutterWidth);
         Assert.Equal(3, priorityWidth);
         Assert.Equal(3, blankWidth);
     }
@@ -120,7 +123,7 @@ public sealed class StatusBadgeListSourceTests
     public void StatusChip_ColumnsMatchBaseRenderer()
     {
         // The status chip follows the leading id chip; its overlay must paint exactly the base
-        // renderer's column width for that span, so the colour lands on the glyph and its two spaces.
+        // renderer's column width for that span, so the colour lands on the full four-column "(XX)" abbrev.
         var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", StatusColor = "#87909e" };
         var row = TaskRowFormatter.Format(task);
 
