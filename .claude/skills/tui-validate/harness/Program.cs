@@ -23,9 +23,9 @@ var config = new AppConfig
 
 if (Environment.GetEnvironmentVariable("E2E_VIEW") == "rich")
 {
-    // A realistic power view: grouped by list, subtasks nested, a few pins.
+    // A realistic power view: grouped by list, subtasks nested (all assignees, #179), a few pins.
     config.View.GroupField = TaskField.List;
-    config.View.ShowSubtasks = true;
+    config.View.Subtasks = SubtaskView.All;
     config.PinnedTaskIds = ["t1", "t5", "t9"];
 }
 
