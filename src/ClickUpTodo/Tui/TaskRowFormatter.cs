@@ -63,6 +63,10 @@ public static class TaskRowFormatter
     /// <summary>Trailing marker on a subtask pulled in under my parent that isn't assigned to me (#70).</summary>
     private const string ForeignSubtaskMarker = "  · (not assigned to you)";
 
+    /// <summary>Trailing marker on a pulled-in subtask that has no assignee (#179): shown in the F4
+    /// "mine + unassigned" state, mirroring how a not-mine subtask shows <c>(not assigned to you)</c>.</summary>
+    private const string UnassignedSubtaskMarker = "  · (unassigned)";
+
     /// <summary>
     /// Formats a task row, optionally indented for the nested subtasks view.
     /// </summary>
@@ -100,10 +104,15 @@ public static class TaskRowFormatter
     /// every assignee counts as "other". Grouping by <see cref="TaskField.Assignee"/> drops the badge,
     /// mirroring how Status/Priority drop when grouped by their field (#67).
     /// </param>
+    /// <param name="isUnassignedSubtask">
+    /// True when the task is a pulled-in subtask with no assignee (#179), shown in the F4 "mine +
+    /// unassigned" state; appends an <c>(unassigned)</c> marker. Takes precedence over
+    /// <paramref name="isForeignSubtask"/> (a row is one or the other, never both).
+    /// </param>
     public static Row Format(
         TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null,
         string marker = "", bool isForeignSubtask = false, BadgeDisplay badges = BadgeDisplay.Icons,
-        long? currentUserId = null)
+        long? currentUserId = null, bool isUnassignedSubtask = false)
     {
         var indent = depth > 0 ? string.Concat(Enumerable.Repeat(IndentUnit, depth)) : "";
 
@@ -174,6 +183,8 @@ public static class TaskRowFormatter
 
         if (isContextParent)
             text += ContextParentMarker;
+        else if (isUnassignedSubtask)
+            text += UnassignedSubtaskMarker;
         else if (isForeignSubtask)
             text += ForeignSubtaskMarker;
 

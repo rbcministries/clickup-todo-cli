@@ -32,8 +32,7 @@ public sealed class ViewSettingsConfigTests : IDisposable
                 SortField = TaskField.LastActivity,
                 SortDirection = SortDirection.Descending,
                 GroupField = TaskField.List,
-                ShowSubtasks = true,
-                ShowAllSubtasksOfAssignedParents = true,
+                Subtasks = SubtaskView.All,
             },
         };
 
@@ -48,8 +47,32 @@ public sealed class ViewSettingsConfigTests : IDisposable
         Assert.Equal(TaskField.LastActivity, loaded.View.SortField);
         Assert.Equal(SortDirection.Descending, loaded.View.SortDirection);
         Assert.Equal(TaskField.List, loaded.View.GroupField);
+        Assert.Equal(SubtaskView.All, loaded.View.Subtasks);
+        // The read-only convenience getters follow from the enum.
         Assert.True(loaded.View.ShowSubtasks);
         Assert.True(loaded.View.ShowAllSubtasksOfAssignedParents);
+    }
+
+    [Fact]
+    public void SaveThenLoad_RoundTripsSubtaskView_AsAString()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig
+        {
+            SchemaVersion = ConfigMigrations.CurrentVersion, // isolate round-trip from the boolean migration
+            View = new ViewSettings { Subtasks = SubtaskView.MineAndUnassigned },
+        });
+
+        var loaded = store.Load();
+        Assert.Equal(SubtaskView.MineAndUnassigned, loaded.View.Subtasks);
+        Assert.True(loaded.View.ShowSubtasks);
+        Assert.False(loaded.View.ShowAllSubtasksOfAssignedParents);
+
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.Contains("\"MineAndUnassigned\"", json); // persisted by name, not ordinal
+        // The legacy boolean shims are never re-persisted.
+        Assert.DoesNotContain("showSubtasks", json);
+        Assert.DoesNotContain("showAllSubtasksOfAssignedParents", json);
     }
 
     [Fact]
@@ -117,8 +140,8 @@ public sealed class ViewSettingsConfigTests : IDisposable
     {
         Assert.False(new ViewSettings().IsDefault); // zero filters
         Assert.False(new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()] }.IsDefault); // assignee alone (missing exclusions)
-        Assert.False(new ViewSettings { Filters = DefaultFilters(), ShowSubtasks = true }.IsDefault);
-        Assert.False(new ViewSettings { Filters = DefaultFilters(), ShowAllSubtasksOfAssignedParents = true }.IsDefault); // #70 flag
+        Assert.False(new ViewSettings { Filters = DefaultFilters(), Subtasks = SubtaskView.MineAndUnassigned }.IsDefault);
+        Assert.False(new ViewSettings { Filters = DefaultFilters(), Subtasks = SubtaskView.All }.IsDefault); // #179 F4 states
         Assert.False(new ViewSettings { Filters = DefaultFilters(), GroupField = TaskField.List }.IsDefault);
         // An extra rule beyond the default set.
         Assert.False(new ViewSettings

@@ -380,6 +380,41 @@ public sealed class TaskRowFormatterTests
         Assert.Contains("(parent — not assigned to you)", row.Text);
     }
 
+    [Fact]
+    public void Format_UnassignedSubtask_AppendsUnassignedMarker()
+    {
+        var task = new TaskItem { Id = "1", Name = "Nobody's subtask", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, depth: 1, isUnassignedSubtask: true);
+
+        Assert.Contains("(unassigned)", row.Text);
+        Assert.DoesNotContain("not assigned to you", row.Text); // the unassigned marker, not the foreign one
+        Assert.Equal(TaskRowFormatter.StatusIcon, row.Text.Substring(row.StatusStart, row.StatusLength));
+    }
+
+    [Fact]
+    public void Format_UnassignedSubtaskWins_OverForeignSubtaskMarker()
+    {
+        // A row is classified as one or the other; unassigned takes precedence over the not-mine marker.
+        var task = new TaskItem { Id = "1", Name = "S", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, isUnassignedSubtask: true, isForeignSubtask: true);
+
+        Assert.Contains("(unassigned)", row.Text);
+        Assert.DoesNotContain("not assigned to you", row.Text);
+    }
+
+    [Fact]
+    public void Format_ContextParentWins_OverUnassignedSubtaskMarker()
+    {
+        var task = new TaskItem { Id = "1", Name = "P", StatusName = "to do" };
+
+        var row = TaskRowFormatter.Format(task, isContextParent: true, isUnassignedSubtask: true);
+
+        Assert.Contains("(parent — not assigned to you)", row.Text);
+        Assert.DoesNotContain("(unassigned)", row.Text);
+    }
+
     // ── Trailing assignees badge (#161) ──────────────────────────────────────
 
     private const long Me = 100;
@@ -533,7 +568,11 @@ public sealed class TaskRowFormatterTests
     {
         var task = new TaskItem
         {
-            Id = "86xyz", CustomId = "ABC-123", Name = "Ship it", StatusName = "to do", PriorityName = "High",
+            Id = "86xyz",
+            CustomId = "ABC-123",
+            Name = "Ship it",
+            StatusName = "to do",
+            PriorityName = "High",
         };
 
         var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Icons);
@@ -578,7 +617,11 @@ public sealed class TaskRowFormatterTests
     {
         var task = new TaskItem
         {
-            Id = "1", CustomId = "DEV-42", Name = "Ship it", StatusName = "to do", PriorityName = "High",
+            Id = "1",
+            CustomId = "DEV-42",
+            Name = "Ship it",
+            StatusName = "to do",
+            PriorityName = "High",
         };
 
         var row = TaskRowFormatter.Format(task, badges: BadgeDisplay.Text);
@@ -625,7 +668,11 @@ public sealed class TaskRowFormatterTests
         // The id isn't a groupable field, so grouping never drops it (unlike Status/Priority badges, #67).
         var task = new TaskItem
         {
-            Id = "1", CustomId = "ABC-123", Name = "Ship it", StatusName = "to do", PriorityName = "High",
+            Id = "1",
+            CustomId = "ABC-123",
+            Name = "Ship it",
+            StatusName = "to do",
+            PriorityName = "High",
         };
 
         foreach (var field in new[] { TaskField.Status, TaskField.Priority, TaskField.Assignee })

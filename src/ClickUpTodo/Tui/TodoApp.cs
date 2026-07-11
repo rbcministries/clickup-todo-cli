@@ -242,9 +242,10 @@ public sealed class TodoApp
         var parentsFetch = _config.View.ShowSubtasks
             ? _tasks.ResolveContextParentsAsync(tasks, ct)
             : Task.FromResult(EmptyParents);
-        // A parent's teammate-owned subtasks (regardless of assignee) are pulled in only when both the
-        // subtasks view and the ShowAllSubtasksOfAssignedParents setting are on (#70).
-        var foreignFetch = _config.View.ShowSubtasks && _config.View.ShowAllSubtasksOfAssignedParents
+        // A parent's subtasks (regardless of assignee) are pulled in whenever the subtasks view is on at
+        // all (#70, #179): both F4 on-states need the full set — "all" shows every pulled-in child, while
+        // "mine + unassigned" filters it down to the unassigned ones at render. Hidden fetches nothing.
+        var foreignFetch = _config.View.Subtasks != SubtaskView.Hidden
             ? _tasks.ResolveForeignSubtasksAsync(tasks, ct: ct)
             : Task.FromResult(NoForeignSubtasks);
         // List colors are only needed to tint headers when grouping by List.
@@ -407,7 +408,7 @@ public sealed class TodoApp
                 break;
             case KeyCode.F4:
                 key.Handled = true;
-                ToggleShowSubtasks();
+                CycleSubtaskView();
                 break;
             case KeyCode.F5:
                 // F5 is the refresh key (icon ↻); Ctrl+R is its undisplayed alias.
@@ -525,29 +526,37 @@ public sealed class TodoApp
         });
     }
 
-    /// <summary>Toggles the subtasks view (F4, #46) — hidden vs. shown nested — and persists it.</summary>
-    private void ToggleShowSubtasks()
+    /// <summary>
+    /// Cycles the three-state subtasks view (F4, #179): mine + unassigned -> all -> hidden -> …, persisting
+    /// the choice. Both on-states fetch the full pulled-in subtask set (so the "mine + unassigned" state can
+    /// surface unassigned children); the render then filters it per state, so switching between the two
+    /// on-states is a pure client-side re-render. Turning the view on from Hidden needs a refresh to fetch
+    /// the context parents and pulled-in subtasks that a client-side re-render can't invent.
+    /// </summary>
+    private void CycleSubtaskView()
     {
         if (ActiveScreen is not null)
             return;
 
-        var on = !_config.View.ShowSubtasks;
-        _config.View.ShowSubtasks = on;
+        var previous = _config.View.Subtasks;
+        var next = previous.Next();
+        _config.View.Subtasks = next;
         _configStore.Save(_config);
-        Flash(on ? "Subtasks view on — press → to expand a parent, ← to collapse (F4)." : "Subtasks hidden (F4).");
+        Flash(next.Describe());
 
-        // Re-render immediately (in-snapshot parents nest without waiting on the network), keep the
-        // stored signature in sync, then — when turning on — refresh to pull in parents not assigned
-        // to me as context headers; that fetch changes the signature again and re-renders when it lands.
-        if (!on)
+        // Hidden drops the pulled-in resolvers so the list returns to a flat top-level view immediately,
+        // without waiting on a refresh.
+        if (next == SubtaskView.Hidden)
         {
             _contextParents = EmptyParents;
-            _foreignSubtasks = EmptyParents; // no nesting when subtasks are hidden (#70 is a no-op then)
+            _foreignSubtasks = EmptyParents;
             _foreignSubtasksTruncated = false;
         }
         Render(keepTaskId: CurrentTask()?.Id);
         _signature = CurrentSignature(_all);
-        if (on)
+        // Only Hidden -> on needs a fetch; between the two on-states the full set is already resolved and
+        // the render filter alone changes what's shown.
+        if (previous == SubtaskView.Hidden)
             _refresh.RequestRefresh();
     }
 
@@ -580,19 +589,10 @@ public sealed class TodoApp
         var after = TaskService.AssigneeRuleValues(result);
         var assigneeChanged = !before.SetEquals(after);
 
-        // Turning on "show all subtasks of my parents" (#70) needs a fetch to pull the teammate-owned
-        // children in — a client-side re-render can't surface tasks never fetched — but only when the F4
-        // subtasks view is also on (otherwise it's a no-op). Turning it off drops the pulled-in children
-        // immediately so the view updates without waiting on a refresh.
-        var pullChildrenNowOn = result.ShowAllSubtasksOfAssignedParents && result.ShowSubtasks;
-        var pullChildrenNeedsFetch = pullChildrenNowOn && !previous.ShowAllSubtasksOfAssignedParents;
-        if (!result.ShowAllSubtasksOfAssignedParents)
-        {
-            _foreignSubtasks = EmptyParents;
-            _foreignSubtasksTruncated = false;
-        }
-
-        if (assigneeChanged || pullChildrenNeedsFetch)
+        // The subtasks view is owned by F4 (#179), not this screen, so F3 never changes it — the pulled-in
+        // subtask set is unaffected here and only an assignee-rule change needs a refetch (a client-side
+        // re-render can't surface tasks never fetched).
+        if (assigneeChanged)
         {
             if (assigneeChanged && after.Count == 0)
                 Flash("Fetching tasks for all assignees — this may be slow.");
@@ -938,19 +938,50 @@ public sealed class TodoApp
             _list.SelectedItem = Math.Min(priorRow, _display.Count - 1);
     }
 
-    /// <summary>Every task that can appear in the subtasks view — the snapshot plus the teammate-owned
-    /// subtasks pulled in under my parents (#70) — the universe over which foldable parents and ancestor
-    /// walks are computed. The two sources are disjoint with unique ids: <see cref="TaskService"/>'s
-    /// foreign-subtask resolution (#70) excludes snapshot ids and de-dupes.</summary>
+    /// <summary>Every task that can appear in the subtasks view — the snapshot plus the pulled-in
+    /// subtasks currently <em>visible</em> under the active F4 state (#70, #179) — the universe over which
+    /// foldable parents and ancestor walks are computed. Uses <see cref="VisibleForeignSubtasks"/> so
+    /// fold/expand-all reasons about the same rows the render shows (in "mine + unassigned" the
+    /// others-only children are neither rendered nor fold candidates). The two sources are disjoint with
+    /// unique ids: foreign-subtask resolution excludes snapshot ids and de-dupes.</summary>
     private IReadOnlyList<TaskItem> CandidateUniverse()
     {
-        if (_foreignSubtasks.Count == 0)
+        var visibleForeign = VisibleForeignSubtasks();
+        if (visibleForeign.Count == 0)
             return _all;
-        var universe = new List<TaskItem>(_all.Count + _foreignSubtasks.Count);
+        var universe = new List<TaskItem>(_all.Count + visibleForeign.Count);
         universe.AddRange(_all);
-        universe.AddRange(_foreignSubtasks.Values);
+        universe.AddRange(visibleForeign.Values);
         return universe;
     }
+
+    /// <summary>
+    /// The pulled-in ("foreign") subtasks that render under the active F4 state (#179): the full resolved
+    /// set in <see cref="SubtaskView.All"/>, only the unassigned ones in
+    /// <see cref="SubtaskView.MineAndUnassigned"/>, and none when Hidden. Both on-states fetch the full
+    /// set, so switching between them is a pure re-render over this filtered view.
+    /// </summary>
+    private IReadOnlyDictionary<string, TaskItem> VisibleForeignSubtasks()
+    {
+        var state = _config.View.Subtasks;
+        if (_foreignSubtasks.Count == 0 || state == SubtaskView.Hidden)
+            return EmptyParents;
+        if (state == SubtaskView.All)
+            return _foreignSubtasks;
+        return _foreignSubtasks.Values
+            .Where(SubtaskVisibility.IsUnassigned)
+            .ToDictionary(t => t.Id, StringComparer.Ordinal);
+    }
+
+    /// <summary>A visible pulled-in subtask that has no assignee (#179) — rendered with the
+    /// <c>(unassigned)</c> marker.</summary>
+    private static bool IsForeignUnassigned(TaskItem task, IReadOnlyDictionary<string, TaskItem> visibleForeign)
+        => visibleForeign.ContainsKey(task.Id) && SubtaskVisibility.IsUnassigned(task);
+
+    /// <summary>A visible pulled-in subtask assigned only to others (#70) — rendered with the
+    /// <c>(not assigned to you)</c> marker (F4 "all" state only).</summary>
+    private static bool IsForeignOthers(TaskItem task, IReadOnlyDictionary<string, TaskItem> visibleForeign)
+        => visibleForeign.ContainsKey(task.Id) && !SubtaskVisibility.IsUnassigned(task);
 
     // ── Actions ────────────────────────────────────────────────────────────
 
@@ -1439,7 +1470,9 @@ public sealed class TodoApp
     private string CurrentSignature(IReadOnlyList<TaskItem> tasks)
     {
         var sb = new System.Text.StringBuilder(BuildSignature(tasks));
-        sb.Append("#sub=").Append(_config.View.ShowSubtasks);
+        // Fold in the F4 state (not just on/off) so switching between the two on-states — a pure re-render
+        // over the same fetched set — is treated as a change rather than a no-op (#179).
+        sb.Append("#sub=").Append(_config.View.Subtasks);
         if (_config.View.ShowSubtasks)
         {
             foreach (var id in _contextParents.Keys.OrderBy(x => x, StringComparer.Ordinal))
@@ -1478,6 +1511,8 @@ public sealed class TodoApp
             flags.Add($"sort {TaskFieldInfo.DisplayName(sf)} {(view.SortDirection == SortDirection.Ascending ? "↑" : "↓")}");
         if (view.GroupField is { } gf)
             flags.Add($"grouped by {TaskFieldInfo.DisplayName(gf)}");
+        if (view.Subtasks.TitleFlag() is { } subtaskFlag)
+            flags.Add(subtaskFlag);
         return flags.Count > 0 ? $"{title} · {string.Join(" · ", flags)}" : title;
     }
 
@@ -1488,6 +1523,10 @@ public sealed class TodoApp
         // vanish); the filter/sort/group view (F3) applies to the non-pinned set. Sort applies to both.
         var view = _config.View;
         var nest = view.ShowSubtasks;
+        // The pulled-in subtasks visible under the active F4 state (#179): the full set in "all", only the
+        // unassigned ones in "mine + unassigned". Used everywhere the render places or suppresses pulled-in
+        // rows, so the "mine + unassigned" state excludes others-only children consistently.
+        var visibleForeign = VisibleForeignSubtasks();
 
         // The pinned "Current Focus" section. When the subtasks view (F4) is on, a pinned parent's
         // in-snapshot subtasks nest indented beneath it (reusing SubtaskArranger) instead of falling
@@ -1497,7 +1536,7 @@ public sealed class TodoApp
         // Feed the pulled-in teammate-owned subtasks (#70) into the Focus layout too, so a foreign child of
         // a pinned parent nests under it in Focus rather than vanishing (#85). NestedSubtaskIds then covers
         // both in-snapshot and foreign rows pulled into Focus — the exact set to keep out of the to-do list.
-        var foreignList = nest && _foreignSubtasks.Count > 0 ? _foreignSubtasks.Values.ToList() : null;
+        var foreignList = nest && visibleForeign.Count > 0 ? visibleForeign.Values.ToList() : null;
         var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection, _expanded, foreignList);
         _focusNestedIds = focus.NestedSubtaskIds;
 
@@ -1512,9 +1551,9 @@ public sealed class TodoApp
         // under their present parent. Populated only when the F4 view + the setting are both on. Foreign
         // children whose ancestor is pinned were already pulled into the Focus section above (#85), so
         // exclude exactly those (NestedSubtaskIds) here — the rest nest under their non-pinned parent.
-        else if (_foreignSubtasks.Count > 0)
+        else if (visibleForeign.Count > 0)
             nonPinned = nonPinned.Concat(
-                _foreignSubtasks.Values.Where(t => !focus.NestedSubtaskIds.Contains(t.Id)));
+                visibleForeign.Values.Where(t => !focus.NestedSubtaskIds.Contains(t.Id)));
         var groups = TaskView.Apply(nonPinned, view);
         var todoCount = groups.Sum(g => g.Tasks.Count);
         var grouped = view.GroupField is not null;
@@ -1542,10 +1581,11 @@ public sealed class TodoApp
         if (pinnedIds.Count > 0)
             AddHeader($"{FocusHeaderPrefix} ({pinnedIds.Count})");
         foreach (var row in focus.Rows)
-            // A pulled-in teammate-owned subtask (#70/#85) nested under a pinned parent gets the not-mine
-            // marker, exactly as it would in the to-do section.
+            // A pulled-in subtask (#70/#85) nested under a pinned parent gets the not-mine marker, or the
+            // (unassigned) marker when it has no assignee (#179), exactly as it would in the to-do section.
             AddTask(row.Task, row.Depth, row.IsContextParent, groupedBy: null, fold: row.Fold,
-                isForeignSubtask: _foreignSubtasks.ContainsKey(row.Task.Id));
+                isForeignSubtask: IsForeignOthers(row.Task, visibleForeign),
+                isUnassignedSubtask: IsForeignUnassigned(row.Task, visibleForeign));
 
         // The single tasks-section header only appears (when ungrouped) to separate the to-do rows
         // from a pinned section above them.
@@ -1554,8 +1594,8 @@ public sealed class TodoApp
         // filtered out of the to-do set (e.g. a completed parent dropped by a Status IS NOT rule), it has
         // no visible parent to nest under, so the arranger suppresses it rather than leaking it flat as
         // "(not assigned to you)" (#172). Only relevant while nesting and while foreign subtasks exist.
-        var suppressTopLevel = nest && _foreignSubtasks.Count > 0
-            ? new HashSet<string>(_foreignSubtasks.Keys, StringComparer.Ordinal)
+        var suppressTopLevel = nest && visibleForeign.Count > 0
+            ? new HashSet<string>(visibleForeign.Keys, StringComparer.Ordinal)
             : null;
         foreach (var row in SectionLayout.BuildTodoSection(groups, _contextParents, grouped, nest, ungroupedTasksHeader, headerColors, _expanded, suppressTopLevel))
         {
@@ -1564,10 +1604,11 @@ public sealed class TodoApp
             else
                 // Omit the grouped field from each to-do row — the group header above already shows it
                 // (#67). The pinned Focus section has no group headers, so its rows keep every segment.
-                // Carry the ▶/▼ fold state (#76); a pulled-in teammate-owned subtask (#70) also gets a
-                // not-mine marker.
+                // Carry the ▶/▼ fold state (#76); a pulled-in subtask (#70) also gets a not-mine or, when
+                // it has no assignee, an (unassigned) marker (#179).
                 AddTask(row.Task!, row.Depth, row.IsContextParent, view.GroupField,
-                    fold: row.Fold, isForeignSubtask: _foreignSubtasks.ContainsKey(row.Task!.Id));
+                    fold: row.Fold, isForeignSubtask: IsForeignOthers(row.Task!, visibleForeign),
+                    isUnassignedSubtask: IsForeignUnassigned(row.Task!, visibleForeign));
         }
 
         // A custom source that draws text like the stock wrapper, overlays each [status] badge with its
@@ -1620,9 +1661,9 @@ public sealed class TodoApp
         _folds.Add(FoldState.None);
     }
 
-    private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None, bool isForeignSubtask = false)
+    private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None, bool isForeignSubtask = false, bool isUnassignedSubtask = false)
     {
-        var (text, badges) = BuildRow(task, _config.BadgeDisplay, _tasks.UserId, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask);
+        var (text, badges) = BuildRow(task, _config.BadgeDisplay, _tasks.UserId, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask, isUnassignedSubtask);
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);
@@ -1663,9 +1704,9 @@ public sealed class TodoApp
     /// <paramref name="currentUserId"/> decides the trailing assignees badge (shown when a non-current
     /// user is assigned).</summary>
     private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
-        TaskItem task, BadgeDisplay badgeDisplay, long currentUserId, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false)
+        TaskItem task, BadgeDisplay badgeDisplay, long currentUserId, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false, bool isUnassignedSubtask = false)
     {
-        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask, badgeDisplay, currentUserId);
+        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask, badgeDisplay, currentUserId, isUnassignedSubtask);
         var badges = new List<StatusBadgeListSource.Badge>(4);
         // The Status/Priority badges (icon chip or bracketed text) are tinted with their field colours;
         // an absent/hidden badge carries no span, so TryCreate returns null and nothing is shaded.
