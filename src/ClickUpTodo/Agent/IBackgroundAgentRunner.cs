@@ -12,11 +12,16 @@ public interface IBackgroundAgentRunner
     /// <summary>
     /// Runs <c>claude -p</c> (plus <see cref="TerminalLauncherOptions.ExtraArgs"/>) with the prompt read
     /// from <paramref name="promptFilePath"/> fed to the child's stdin, in <paramref name="workingDir"/>
-    /// (null ⇒ inherit), capturing stdout/stderr.
+    /// (null ⇒ inherit), capturing stdout/stderr. The captured <see cref="BackgroundRunResult.Output"/>
+    /// is the assembled display text (byte-identical to the concatenation of the chunks reported to
+    /// <paramref name="progress"/>), so the final render matches what streamed.
     /// </summary>
     /// <param name="promptFilePath">Path to the composed prompt file; its content seeds the run.</param>
     /// <param name="workingDir">Directory to run in, or null to inherit the current one.</param>
     /// <param name="options">Launcher configuration (the <c>claude</c> executable + extra args).</param>
+    /// <param name="progress">Optional sink for incremental display chunks parsed from the stream as the
+    /// run produces them (#187), so the UI can paint progress instead of a blank spinner. Null ⇒ the run
+    /// still completes and returns the same assembled output, just without live updates.</param>
     /// <param name="ct">Cancels the run; the implementation kills the child and throws
     /// <see cref="OperationCanceledException"/>.</param>
     /// <returns>The captured outcome (see <see cref="BackgroundRunResult"/>).</returns>
@@ -24,6 +29,7 @@ public interface IBackgroundAgentRunner
         string promptFilePath,
         string? workingDir,
         TerminalLauncherOptions options,
+        IProgress<string>? progress = null,
         CancellationToken ct = default);
 }
 

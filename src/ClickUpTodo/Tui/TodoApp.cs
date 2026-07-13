@@ -1349,7 +1349,7 @@ public sealed class TodoApp
                 if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
                     Directory.CreateDirectory(workingDir);
 
-                var run = await agent.DispatchBackgroundAsync(detail, comments, prompt, workingDir, template, outputSubdir, postToComments, cts.Token);
+                var run = await agent.DispatchBackgroundAsync(detail, comments, prompt, workingDir, template, outputSubdir, postToComments, progress: null, cts.Token);
                 Application.Invoke(() => { _dispatching = false; screen.ShowResult(AgentRunModel.FormatOutput(run), run.Success); });
             }
             catch (OperationCanceledException)
