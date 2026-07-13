@@ -88,10 +88,12 @@ public sealed class BackgroundAgentRunner : IBackgroundAgentRunner
             await stdinTask.ConfigureAwait(false);
             await process.WaitForExitAsync(ct).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (Exception)
         {
+            // Any abnormal exit — cancellation, or a pipe/read fault surfacing from the stdout loop —
+            // kills the child so it can't be orphaned, and observes the in-flight stdin/stderr tasks so
+            // their cancellation/pipe faults aren't left unobserved. The original exception rethrows.
             KillTree(process);
-            // Observe the in-flight tasks so their cancellation/pipe faults aren't left unobserved.
             await ObserveAsync(stdinTask).ConfigureAwait(false);
             await ObserveAsync(stderrTask).ConfigureAwait(false);
             throw;

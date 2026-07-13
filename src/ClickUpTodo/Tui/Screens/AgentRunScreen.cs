@@ -1,3 +1,4 @@
+using System.Text;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
@@ -34,8 +35,8 @@ public sealed class AgentRunScreen : Screen
     private readonly AgentRunModel _model;
     private readonly Label _header;
     private readonly TextView _output;
+    private readonly StringBuilder _streamBuffer = new();
     private object? _spinnerToken;
-    private bool _streamed;
 
     /// <summary>Raised when the user asks to cancel an in-flight run (Esc while running). The host
     /// cancels the run's <see cref="System.Threading.CancellationTokenSource"/>, which kills the child.</summary>
@@ -97,8 +98,11 @@ public sealed class AgentRunScreen : Screen
         if (string.IsNullOrEmpty(chunk) || !_model.IsActive)
             return;
 
-        _output.Text = _streamed ? _output.Text + chunk : chunk;
-        _streamed = true;
+        // Accumulate in our own buffer and assign once, rather than reading TextView.Text back and
+        // re-concatenating each chunk (which would re-materialize the whole rune buffer per append — the
+        // #3/#38 latency class). The first assignment overwrites the initial "Working…" hint.
+        _streamBuffer.Append(chunk);
+        _output.Text = _streamBuffer.ToString();
         // Follow the tail so the latest streamed output is on screen.
         _output.MoveEnd();
         _output.SetNeedsDraw();
