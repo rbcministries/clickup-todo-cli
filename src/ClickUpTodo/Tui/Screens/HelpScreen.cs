@@ -30,7 +30,7 @@ public sealed class HelpScreen : Screen
                 + "              output in the app; press Esc there to cancel a run in progress)\n"
                 + "  Ctrl+B      Open the task in your browser\n"
                 + "  Ctrl+P      Pin / unpin (pinned tasks group at the top)\n"
-                + "  Ctrl+E      Open the mentions & comments feed (in the feed: F3 shows mentions only)\n"
+                + "  Ctrl+E      Open the mentions & comments feed (in the feed: Enter opens the task, F3 shows mentions only)\n"
                 + "              Mentions need a per-Space automation — see docs/mention-assignee-automation.md\n"
                 + "  F1          This help\n"
                 + "  F2          Settings (refresh rate, excluded statuses)\n"
