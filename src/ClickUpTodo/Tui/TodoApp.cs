@@ -1340,6 +1340,10 @@ public sealed class TodoApp
             cts.Dispose();
         });
 
+        // Stream the parsed output into the run screen as it arrives (#187): the runner reports display
+        // chunks off the UI thread, marshalled here onto the UI thread before appending.
+        var progress = new DelegateProgress<string>(chunk => Application.Invoke(() => screen.AppendOutput(chunk)));
+
         _ = Task.Run(async () =>
         {
             try
@@ -1349,7 +1353,7 @@ public sealed class TodoApp
                 if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
                     Directory.CreateDirectory(workingDir);
 
-                var run = await agent.DispatchBackgroundAsync(detail, comments, prompt, workingDir, template, outputSubdir, postToComments, progress: null, cts.Token);
+                var run = await agent.DispatchBackgroundAsync(detail, comments, prompt, workingDir, template, outputSubdir, postToComments, progress, cts.Token);
                 Application.Invoke(() => { _dispatching = false; screen.ShowResult(AgentRunModel.FormatOutput(run), run.Success); });
             }
             catch (OperationCanceledException)

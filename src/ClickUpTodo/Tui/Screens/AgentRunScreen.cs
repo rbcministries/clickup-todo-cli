@@ -35,6 +35,7 @@ public sealed class AgentRunScreen : Screen
     private readonly Label _header;
     private readonly TextView _output;
     private object? _spinnerToken;
+    private bool _streamed;
 
     /// <summary>Raised when the user asks to cancel an in-flight run (Esc while running). The host
     /// cancels the run's <see cref="System.Threading.CancellationTokenSource"/>, which kills the child.</summary>
@@ -81,6 +82,26 @@ public sealed class AgentRunScreen : Screen
     {
         _output.SetFocus();
         StartSpinner();
+    }
+
+    /// <summary>
+    /// Appends a parsed display <paramref name="chunk"/> to the output pane while the run is in flight
+    /// (#187), so the user sees progress instead of a blank spinner. The first chunk replaces the
+    /// "Working…" hint; each append follows the tail so the newest output stays visible. Called on the UI
+    /// thread (via <see cref="Application.Invoke"/>) by the host as the runner reports chunks. A chunk
+    /// arriving after the run has finished (a late marshalled report) is ignored so it can't clobber the
+    /// authoritative final render.
+    /// </summary>
+    public void AppendOutput(string chunk)
+    {
+        if (string.IsNullOrEmpty(chunk) || !_model.IsActive)
+            return;
+
+        _output.Text = _streamed ? _output.Text + chunk : chunk;
+        _streamed = true;
+        // Follow the tail so the latest streamed output is on screen.
+        _output.MoveEnd();
+        _output.SetNeedsDraw();
     }
 
     /// <summary>
