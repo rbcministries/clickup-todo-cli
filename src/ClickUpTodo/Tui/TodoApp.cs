@@ -573,7 +573,18 @@ public sealed class TodoApp
                     // the data is valid for the next open either way (#123).
                     _feedCache.Save(_config, feed);
                     if (_screens.Contains(screen))
+                    {
                         screen.UpdateFeed(feed);
+                    }
+                    else if (ActiveScreen is NotificationsFeedScreen active)
+                    {
+                        // The instance that started this fetch was torn down (a close+reopen during the
+                        // in-flight refresh), but a feed screen is front-most again. Because the warm-open
+                        // reopen is coalesced away by `_refreshingFeed`, dropping this result would leave
+                        // the reopened feed on cached data until the next tick — so land the fresh,
+                        // context-correct result on the current feed instead (#123 review).
+                        active.UpdateFeed(feed);
+                    }
                 });
             }
             catch (Exception ex)
