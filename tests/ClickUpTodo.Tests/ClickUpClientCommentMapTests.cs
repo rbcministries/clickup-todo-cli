@@ -1,5 +1,7 @@
+using System.Text.Json;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.ClickUp.Generated.Models;
+using Microsoft.Kiota.Serialization.Json;
 
 namespace ClickUpTodo.Tests;
 
@@ -25,7 +27,17 @@ public sealed class ClickUpClientCommentMapTests
 
         var mapped = ClickUpClient.MapComment(c, "task-9");
 
-        Assert.Equal(new CommentItem("c1", "Ben", 1_699_000_000_000, "Looks good.", true, "task-9"), mapped);
+        // Field-by-field rather than whole-record equality: CommentItem now carries a MentionedUserIds
+        // collection, which records compare by reference — two equal-content empty collections wouldn't
+        // be Equal. This also asserts the no-mention default explicitly.
+        Assert.Equal("c1", mapped.Id);
+        Assert.Equal("Ben", mapped.Author);
+        Assert.Equal(1_699_000_000_000, mapped.DateMs);
+        Assert.Equal("Looks good.", mapped.Text);
+        Assert.True(mapped.Resolved);
+        Assert.Equal("task-9", mapped.TaskId);
+        Assert.False(mapped.MentionsMe);
+        Assert.Empty(mapped.MentionedUserIds);
     }
 
     [Fact]
@@ -62,4 +74,72 @@ public sealed class ClickUpClientCommentMapTests
     [Fact]
     public void MapComment_NullTaskId_LeavesAttributionNull()
         => Assert.Null(ClickUpClient.MapComment(new Comment { Id = "c1" }, taskId: null).TaskId);
+
+    // ── Structured mention-block mapping (#167) ────────────────────────────────
+
+    [Fact]
+    public void MapComment_ExtractsMentionedUserIds_DistinctIgnoringPlainAndZeroAndUserless()
+    {
+        var c = new Comment
+        {
+            Id = "c1",
+            CommentText = "@Ben and @Alice please look",
+            CommentProp = new List<CommentBlock>
+            {
+                new() { Text = "hey " },                                              // plain run → ignored
+                new() { Text = "@Ben", Type = "tag", User = new User { Id = 7 } },
+                new() { Text = "@Alice", Type = "tag", User = new User { Id = 9 } },
+                new() { Text = "@Ben", Type = "tag", User = new User { Id = 7 } },     // duplicate → deduped
+                new() { Text = "@nobody", Type = "tag", User = new User { Id = 0 } },  // id 0 → ignored
+                new() { Text = "@ghost", Type = "tag" },                              // null user → ignored
+            },
+        };
+
+        Assert.Equal(new long[] { 7, 9 }, ClickUpClient.MapComment(c, "task-1").MentionedUserIds);
+    }
+
+    [Fact]
+    public void MapComment_NoBlocks_YieldsEmptyMentionedUserIds()
+        => Assert.Empty(ClickUpClient.MapComment(new Comment { Id = "c1" }, "t").MentionedUserIds);
+
+    [Fact]
+    public void MapMentionedUserIds_NullBlocks_YieldsEmpty()
+        => Assert.Empty(ClickUpClient.MapMentionedUserIds(null));
+
+    // Pins the wire contract: runs the real Kiota deserializer over a captured ClickUp v2 comment payload
+    // to prove the structured `comment` blocks (and their `user.id`) land in `CommentProp` where the
+    // mapper reads them — i.e. the curated spec faithfully models ClickUp's mention-block shape (#167).
+    private static Comment Parse(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var node = new JsonParseNode(doc.RootElement);
+        return node.GetObjectValue(Comment.CreateFromDiscriminatorValue)!;
+    }
+
+    [Fact]
+    public void MapComment_DeserializesStructuredMentionBlocks_FromRealPayloadShape()
+    {
+        // Shape captured from GET /v2/task/{id}/comment: a plain run followed by an @-mention tag block
+        // carrying the mentioned member as { user: { id, username } }, alongside the flat comment_text.
+        const string json = """
+            {
+              "id": "90120076543210",
+              "comment": [
+                { "text": "cc " },
+                { "text": "@Ben Seymour", "type": "tag", "user": { "id": 183, "username": "Ben Seymour" } },
+                { "text": " please review" }
+              ],
+              "comment_text": "cc @Ben Seymour please review",
+              "user": { "id": 42, "username": "Alex Kim" },
+              "date": "1699000000000",
+              "resolved": false
+            }
+            """;
+
+        var mapped = ClickUpClient.MapComment(Parse(json), "task-1");
+
+        Assert.Equal(new long[] { 183 }, mapped.MentionedUserIds);
+        Assert.Equal("cc @Ben Seymour please review", mapped.Text);
+        Assert.Equal("Alex Kim", mapped.Author); // the comment author, not the mentioned user
+    }
 }

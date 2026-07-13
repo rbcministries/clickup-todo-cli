@@ -1,4 +1,58 @@
+using System.Text.Json.Serialization;
+
 namespace ClickUpTodo.Configuration;
+
+/// <summary>
+/// The three-state subtask view cycled by F4 (#179), superseding the old
+/// <c>ShowSubtasks</c> + <c>ShowAllSubtasksOfAssignedParents</c> boolean pair. F4 advances
+/// <see cref="MineAndUnassigned"/> -> <see cref="All"/> -> <see cref="Hidden"/> -> …
+/// (see <see cref="SubtaskViewExtensions.Next"/>).
+/// </summary>
+public enum SubtaskView
+{
+    /// <summary>Subtasks are hidden; the main list stays a flat top-level view (the default, and the
+    /// pre-#179 <c>ShowSubtasks == false</c> behaviour).</summary>
+    Hidden,
+
+    /// <summary>The default on-state: nested subtasks that are assigned <b>to me</b> (already in the
+    /// snapshot) or <b>unassigned</b> (pulled in and marked <c>(unassigned)</c>). Subtasks assigned only
+    /// to others are excluded.</summary>
+    MineAndUnassigned,
+
+    /// <summary>Additionally include subtasks <b>not assigned to me</b> — the pre-#179
+    /// <c>ShowAllSubtasksOfAssignedParents</c> (#70) behaviour, marked <c>(not assigned to you)</c>.</summary>
+    All,
+}
+
+/// <summary>Cycle order and display text for <see cref="SubtaskView"/> (F4, #179). Pure and
+/// unit-testable.</summary>
+public static class SubtaskViewExtensions
+{
+    /// <summary>The next state in the F4 cycle: MineAndUnassigned -> All -> Hidden -> MineAndUnassigned,
+    /// so pressing F4 from Hidden lands on the default on-state and wraps 1 -> 2 -> 3 -> 1.</summary>
+    public static SubtaskView Next(this SubtaskView state) => state switch
+    {
+        SubtaskView.MineAndUnassigned => SubtaskView.All,
+        SubtaskView.All => SubtaskView.Hidden,
+        _ => SubtaskView.MineAndUnassigned,
+    };
+
+    /// <summary>The transient status-line description shown when F4 lands on <paramref name="state"/>.</summary>
+    public static string Describe(this SubtaskView state) => state switch
+    {
+        SubtaskView.MineAndUnassigned => "Subtasks: mine + unassigned — → expand a parent, ← collapse (F4).",
+        SubtaskView.All => "Subtasks: all, including others' (F4).",
+        _ => "Subtasks hidden (F4).",
+    };
+
+    /// <summary>A compact frame-title flag for the active subtask view, or null when hidden.</summary>
+    public static string? TitleFlag(this SubtaskView state) => state switch
+    {
+        SubtaskView.MineAndUnassigned => "subtasks: mine+unassigned",
+        SubtaskView.All => "subtasks: all",
+        _ => null,
+    };
+}
 
 /// <summary>A task attribute usable for filtering, sorting, and grouping the list (F3).</summary>
 public enum TaskField
@@ -77,19 +131,40 @@ public sealed class ViewSettings
     public TaskField? GroupField { get; set; }
 
     /// <summary>
-    /// When true, subtasks are shown nested (indented) directly beneath their parent (F4, #46). When
-    /// false (the default) subtasks are hidden from the main list so it stays a flat top-level view.
+    /// The three-state subtask view cycled by F4 (#179): hidden, mine + unassigned, or all. The single
+    /// source of truth, superseding the <see cref="ShowSubtasks"/> / <see cref="ShowAllSubtasksOfAssignedParents"/>
+    /// boolean pair (kept below as read-only convenience getters). Persisted by name via the
+    /// enum-as-string converter; a legacy boolean config is migrated onto it (see <see cref="ConfigMigrations"/>).
     /// </summary>
-    public bool ShowSubtasks { get; set; }
+    public SubtaskView Subtasks { get; set; } = SubtaskView.Hidden;
 
     /// <summary>
-    /// When true (and <see cref="ShowSubtasks"/> is on), a parent that is in my view has <b>all</b> of
-    /// its subtasks nested beneath it regardless of who each is assigned to — the teammate-owned children
-    /// that the assignee-scoped fetch (#68) leaves out are pulled in and shown as not-mine context rows
-    /// (#70). When false (the default) only subtasks that independently qualify for the snapshot nest,
-    /// exactly as #46 behaves. A no-op while <see cref="ShowSubtasks"/> is off (there's nothing to nest).
+    /// True when subtasks are nested at all (F4 not in <see cref="SubtaskView.Hidden"/>) — i.e. either
+    /// on-state. Read-only convenience over <see cref="Subtasks"/>; not persisted (a legacy
+    /// <c>showSubtasks</c> key is read once by the migration via <see cref="LegacyShowSubtasks"/>).
     /// </summary>
-    public bool ShowAllSubtasksOfAssignedParents { get; set; }
+    [JsonIgnore]
+    public bool ShowSubtasks => Subtasks != SubtaskView.Hidden;
+
+    /// <summary>
+    /// True only in <see cref="SubtaskView.All"/> — subtasks not assigned to me are pulled in and nested
+    /// as not-mine context rows (#70). Read-only convenience over <see cref="Subtasks"/>; not persisted.
+    /// </summary>
+    [JsonIgnore]
+    public bool ShowAllSubtasksOfAssignedParents => Subtasks == SubtaskView.All;
+
+    /// <summary>Legacy boolean subtask setting (pre-#179), retained only as a <b>deserialize-only</b>
+    /// migration shim: <see cref="ConfigMigrations"/> reads a saved <c>showSubtasks</c> on load, folds it
+    /// into <see cref="Subtasks"/>, then nulls it so it's never written again.</summary>
+    [JsonPropertyName("showSubtasks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacyShowSubtasks { get; set; }
+
+    /// <summary>Legacy #70 boolean (pre-#179), retained only as a <b>deserialize-only</b> migration shim,
+    /// like <see cref="LegacyShowSubtasks"/>.</summary>
+    [JsonPropertyName("showAllSubtasksOfAssignedParents")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacyShowAllSubtasks { get; set; }
 
     /// <summary>
     /// When true, completed (ClickUp <c>closed</c>-type) tasks are fetched and shown; when false (the
@@ -137,7 +212,7 @@ public sealed class ViewSettings
     {
         get
         {
-            if (SortField is not null || GroupField is not null || ShowSubtasks || ShowAllSubtasksOfAssignedParents || ShowCompleted)
+            if (SortField is not null || GroupField is not null || Subtasks != SubtaskView.Hidden || ShowCompleted)
                 return false;
             if (Filters.Count != 1 + DefaultExcludedStatuses.Count)
                 return false;

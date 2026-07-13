@@ -21,6 +21,17 @@ public interface IClickUpClient
     Task<IReadOnlyList<StatusOption>> GetListStatusesAsync(string listId, CancellationToken ct = default);
     Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, CancellationToken ct = default);
     Task<List<TaskItem>> GetListTasksAsync(string listId, bool includeClosed = false, CancellationToken ct = default);
+
+    /// <summary>Delta fetches for the incremental refresh (#194): tasks updated after the epoch-ms
+    /// watermark, closed included so closures surface. Default implementations throw so a fake that a
+    /// delta test forgot to extend fails loudly instead of silently behaving like a full fetch;
+    /// <see cref="ClickUpClient"/> overrides both.</summary>
+    Task<List<TaskItem>> GetAssignedTasksDeltaAsync(string workspaceId, IReadOnlyList<long> assigneeIds, long updatedAfterMs, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement the delta fetch.");
+
+    /// <inheritdoc cref="GetAssignedTasksDeltaAsync"/>
+    Task<List<TaskItem>> GetListTasksDeltaAsync(string listId, long updatedAfterMs, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement the delta fetch.");
     Task<string?> SetTaskStatusAsync(string taskId, string statusName, CancellationToken ct = default);
     Task<int?> SetTaskPriorityAsync(string taskId, int? priorityLevel, CancellationToken ct = default);
     Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);

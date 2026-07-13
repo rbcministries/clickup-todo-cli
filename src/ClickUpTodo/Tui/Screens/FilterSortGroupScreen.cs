@@ -78,18 +78,9 @@ public sealed class FilterSortGroupScreen : Screen
         groupList.SetSource(new ObservableCollection<string>(FilterSortGroupForm.FieldChoices()));
         groupList.SelectedItem = FilterSortGroupForm.FieldToIndex(current.GroupField);
 
-        // ── Right column: subtasks modifier (#70) ────────────────────────────
-        // A checkbox-style Button (mirroring dirButton — no new control type). It's a modifier on the
-        // F4 subtasks view: when the parent is mine, nest all of its subtasks regardless of assignee.
-        // A no-op while F4 subtasks are hidden, so the label says so.
-        var pullChildren = current.ShowAllSubtasksOfAssignedParents;
-        var subtasksHeader = new Label { X = rightX, Y = 19, Text = "─ Subtasks (F4) ─" };
-        var pullChildrenButton = new Button { X = rightX, Y = 20, Width = Dim.Fill(2), Text = PullChildrenText(pullChildren) };
-        pullChildrenButton.Accepting += (_, _) =>
-        {
-            pullChildren = !pullChildren;
-            pullChildrenButton.Text = PullChildrenText(pullChildren);
-        };
+        // The subtasks view (hidden / mine + unassigned / all) is now owned entirely by the F4 cycle
+        // (#179), superseding the old #70 "pull children" toggle that used to live here — so this screen
+        // no longer edits subtasks; it only preserves the current value on save.
 
         void AddFilter()
         {
@@ -148,10 +139,9 @@ public sealed class FilterSortGroupScreen : Screen
                 SortField = FilterSortGroupForm.IndexToField(sortList.SelectedItem),
                 SortDirection = direction,
                 GroupField = FilterSortGroupForm.IndexToField(groupList.SelectedItem),
-                // Preserve the F4 subtasks toggle, which this screen doesn't edit — otherwise saving the
-                // F3 view would silently turn subtasks off (and, since #68, flip IsDefault).
-                ShowSubtasks = current.ShowSubtasks,
-                ShowAllSubtasksOfAssignedParents = pullChildren,
+                // Preserve the F4 subtasks view, which this screen doesn't edit (#179) — otherwise saving
+                // the F3 view would silently reset subtasks to Hidden (and, since #68, flip IsDefault).
+                Subtasks = current.Subtasks,
             };
             Close();
         };
@@ -169,8 +159,6 @@ public sealed class FilterSortGroupScreen : Screen
             groupList.SelectedItem = 0;
             direction = SortDirection.Ascending;
             dirButton.Text = DirectionText(direction);
-            pullChildren = false;
-            pullChildrenButton.Text = PullChildrenText(pullChildren);
         };
 
         // Esc cancels from anywhere on the screen (Result stays null); F1 opens Help (#103).
@@ -193,7 +181,6 @@ public sealed class FilterSortGroupScreen : Screen
             addHeader, fieldLabel, _fieldList, opLabel, opList, valueLabel, valueField, addButton, removeButton,
             activeHeader, filtersList,
             sortHeader, sortLabel, sortList, dirButton, groupHeader, groupLabel, groupList,
-            subtasksHeader, pullChildrenButton,
             save, cancel, clear,
         ]);
     }
@@ -204,8 +191,4 @@ public sealed class FilterSortGroupScreen : Screen
 
     private static string DirectionText(SortDirection direction)
         => $"Direction: {(direction == SortDirection.Ascending ? "Ascending" : "Descending")}";
-
-    /// <summary>Checkbox-style label for the #70 "show all subtasks of my parents" toggle.</summary>
-    private static string PullChildrenText(bool on)
-        => $"[{(on ? "x" : " ")}] Show all subtasks of my tasks (regardless of assignee)";
 }

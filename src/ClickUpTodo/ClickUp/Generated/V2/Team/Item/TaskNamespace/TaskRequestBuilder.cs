@@ -22,7 +22,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Team.Item.TaskNamespace
         /// </summary>
         /// <param name="pathParameters">Path parameters for the request</param>
         /// <param name="requestAdapter">The request adapter to use to execute the requests.</param>
-        public TaskRequestBuilder(Dictionary<string, object> pathParameters, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/team/{team_id}/task{?assignees%5B%5D*,include_closed*,page*,subtasks*}", pathParameters)
+        public TaskRequestBuilder(Dictionary<string, object> pathParameters, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/team/{team_id}/task{?assignees%5B%5D*,date_updated_gt*,include_closed*,page*,subtasks*}", pathParameters)
         {
         }
         /// <summary>
@@ -30,7 +30,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Team.Item.TaskNamespace
         /// </summary>
         /// <param name="rawUrl">The raw URL to use for the request builder.</param>
         /// <param name="requestAdapter">The request adapter to use to execute the requests.</param>
-        public TaskRequestBuilder(string rawUrl, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/team/{team_id}/task{?assignees%5B%5D*,include_closed*,page*,subtasks*}", rawUrl)
+        public TaskRequestBuilder(string rawUrl, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/team/{team_id}/task{?assignees%5B%5D*,date_updated_gt*,include_closed*,page*,subtasks*}", rawUrl)
         {
         }
         /// <summary>
@@ -95,6 +95,9 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Team.Item.TaskNamespace
             [QueryParameter("assignees%5B%5D")]
             public string[] Assignees { get; set; }
 #endif
+            /// <summary>Only tasks updated after this epoch-milliseconds timestamp (delta refresh, #194).</summary>
+            [QueryParameter("date_updated_gt")]
+            public long? DateUpdatedGt { get; set; }
             [QueryParameter("include_closed")]
             public bool? IncludeClosed { get; set; }
             /// <summary>Page to fetch (starts at 0).</summary>

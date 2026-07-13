@@ -28,10 +28,18 @@ public sealed class StatusPriorityBadgeTests
     }
 
     [Fact]
-    public void IconChips_ShareTheGlyphs()
+    public void PriorityIconChip_SharesTheGlyph()
     {
-        // The icon-mode chips are the same glyphs, flanked by a space — one source of truth.
-        Assert.Equal($" {StatusPriorityBadge.StatusGlyph} ", TaskRowFormatter.StatusIcon);
+        // The icon-mode Priority chip is the glyph flanked by a space — one source of truth. (The
+        // icon-mode Status chip is now a letter abbreviation, not the glyph, so it no longer shares it — #181.)
         Assert.Equal($" {StatusPriorityBadge.PriorityGlyph} ", TaskRowFormatter.PriorityIcon);
+    }
+
+    [Fact]
+    public void StatusGlyph_StillBacksTheTextBadge_NotTheIconChip()
+    {
+        // The ○ glyph moved out of the icon-mode Status chip (now "(XX)") but still leads the Text-mode
+        // Status badge and the detail title line, so the glyph remains a single shared source there.
+        Assert.StartsWith($"{StatusPriorityBadge.StatusGlyph} ", StatusPriorityBadge.Status("Blocked"));
     }
 }

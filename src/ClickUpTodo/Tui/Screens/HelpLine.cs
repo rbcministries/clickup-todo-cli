@@ -141,13 +141,15 @@ public static class HelpItemSets
         new("Esc", "cancels"),
     ];
 
-    /// <summary>The status picker (Space).</summary>
-    public static readonly IReadOnlyList<HelpItem> StatusPicker =
+    /// <summary>The Quick Updates screen (Space, #156): Tab cycles Status → Priority → Assignees,
+    /// ↑/↓ move within a pane, Enter sets the status (priority/assignee apply land in #157/#158).</summary>
+    public static readonly IReadOnlyList<HelpItem> QuickUpdates =
     [
+        new("Tab", "Status/Priority/Assignees"),
         new("↑/↓", "move"),
-        new("Enter", "select"),
+        new("Enter", "set status"),
         new("F1", "help"),
-        new("Esc", "cancel"),
+        new("Esc", "exit"),
     ];
 
     /// <summary>The dispatch prompt-template editor (#100), reached from F2.</summary>

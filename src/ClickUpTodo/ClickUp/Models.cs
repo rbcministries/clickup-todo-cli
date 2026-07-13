@@ -99,10 +99,12 @@ public sealed record TaskItem
     public string? StatusColor { get; init; }
 
     /// <summary>
-    /// The ClickUp status <c>type</c> (e.g. <c>open</c>, <c>custom</c>, <c>closed</c>), or null when
-    /// unmapped. <c>closed</c> is ClickUp's terminal closed type — exactly what a task fetch with
-    /// <c>IncludeClosed=false</c> drops server-side — used by the F12 "Show Completed" toggle (#178) to
-    /// hide completed tasks/subtasks consistently at every level (see <c>TaskView.IsCompleted</c>).
+    /// The workflow category of the status (ClickUp <c>status.type</c>: <c>open</c>, <c>custom</c>,
+    /// <c>done</c>, or <c>closed</c>), or null when the API omits it. <c>closed</c> is ClickUp's terminal
+    /// closed type — exactly what a task fetch with <c>include_closed=false</c> drops server-side. Used by
+    /// the delta refresh (#194) to recognise a task that closed since the last snapshot (the delta fetch
+    /// includes closed tasks precisely so the merge can drop them) and by the F12 "Show Completed" toggle
+    /// (#178) to hide completed tasks/subtasks consistently at every level (see <c>TaskView.IsCompleted</c>).
     /// </summary>
     public string? StatusType { get; init; }
 
@@ -168,10 +170,21 @@ public sealed record CustomFieldItem(
 /// is null for callers (like the single-task detail view) that don't need attribution.
 /// <see cref="MentionsMe"/> is stamped by the feed (#113) when the comment mentions the current user;
 /// it defaults to <c>false</c> so the mapper and non-feed callers are unaffected.
+/// <see cref="MentionedUserIds"/> carries the numeric ids of members @-mentioned in the comment's
+/// structured blocks (#167), enabling id-based mention detection alongside the <c>@handle</c> text match.
 /// </summary>
 public sealed record CommentItem(
     string Id, string Author, long? DateMs, string Text, bool Resolved, string? TaskId = null,
-    bool MentionsMe = false);
+    bool MentionsMe = false, IReadOnlyList<long>? MentionedUserIds = null)
+{
+    /// <summary>The numeric ids of members @-mentioned in the comment's structured <c>comment</c> blocks
+    /// (#167); never null (empty when the comment mentions no one, or the blocks weren't mapped).
+    /// NOTE: as a collection member it participates in the record's synthesized equality by <b>reference</b>,
+    /// so two content-equal <see cref="CommentItem"/>s from separate mappings are not <c>Equals</c>. No
+    /// consumer relies on <see cref="CommentItem"/> value equality (the feed de-dups by <see cref="Id"/>);
+    /// give this member structural equality before using it as a <c>HashSet</c>/dictionary key.</summary>
+    public IReadOnlyList<long> MentionedUserIds { get; init; } = MentionedUserIds ?? [];
+}
 
 /// <summary>
 /// The full detail of a single task, fetched on demand for the detail view (issue #17). Richer than
