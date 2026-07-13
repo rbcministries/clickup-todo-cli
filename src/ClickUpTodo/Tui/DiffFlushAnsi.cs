@@ -84,14 +84,14 @@ internal sealed class DiffFlushAnsiOutput(AppModel appModel) : AnsiOutput(appMod
         if (IsFullInvalidation(contents, dirtyLines, rows, cols))
         {
             for (var r = 0; r < rows; r++)
-            for (var c = 0; c < cols; c++)
-            {
-                ref var known = ref shadow[r, c];
-                known.Seen = true;
-                known.Grapheme = contents[r, c].Grapheme;
-                known.Attr = contents[r, c].Attribute;
-                known.Url = buffer.GetCellUrl(c, r);
-            }
+                for (var c = 0; c < cols; c++)
+                {
+                    ref var known = ref shadow[r, c];
+                    known.Seen = true;
+                    known.Grapheme = contents[r, c].Grapheme;
+                    known.Attr = contents[r, c].Attribute;
+                    known.Url = buffer.GetCellUrl(c, r);
+                }
             return;
         }
 

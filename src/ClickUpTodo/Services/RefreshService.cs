@@ -2,13 +2,25 @@ using ClickUpTodo.ClickUp;
 
 namespace ClickUpTodo.Services;
 
+/// <summary>Why the refresh loop is invoking the fetch (#194): the first load of the session, an
+/// explicit user request (which must be a guaranteed-fresh full fetch), or the background poll timer
+/// (where an incremental fetch is acceptable).</summary>
+public enum RefreshKind
+{
+    Initial,
+    Manual,
+    Poll,
+}
+
 /// <summary>
 /// Runs a background polling loop that fetches tasks every <c>intervalSeconds</c> and pushes the
 /// result to <paramref name="onUpdate"/>. A manual refresh can be requested at any time, which
-/// short-circuits the wait. Callbacks fire on a background thread — marshal UI work to the UI thread.
+/// short-circuits the wait; the fetch is told which case it is (<see cref="RefreshKind"/>) so it can
+/// choose between a full and an incremental load (#194). Callbacks fire on a background thread —
+/// marshal UI work to the UI thread.
 /// </summary>
 public sealed class RefreshService(
-    Func<CancellationToken, Task<IReadOnlyList<TaskItem>>> fetch,
+    Func<RefreshKind, CancellationToken, Task<IReadOnlyList<TaskItem>>> fetch,
     int intervalSeconds,
     Action<IReadOnlyList<TaskItem>> onUpdate,
     Action<Exception> onError) : IDisposable
@@ -30,16 +42,19 @@ public sealed class RefreshService(
 
     private async Task RunAsync(CancellationToken ct)
     {
+        var kind = RefreshKind.Initial;
         while (!ct.IsCancellationRequested)
         {
             try
             {
-                var tasks = await fetch(ct);
+                var tasks = await fetch(kind, ct);
                 onUpdate(tasks);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                break;
+                break; // genuine shutdown. An HttpClient timeout also surfaces as a (Task)Canceled-
+                       // Exception with our ct unsignalled — without this filter one network timeout
+                       // silently killed the polling loop for the rest of the session.
             }
             catch (Exception ex)
             {
@@ -48,8 +63,11 @@ public sealed class RefreshService(
 
             try
             {
-                // Wait for the interval OR an explicit refresh request, whichever comes first.
-                await _trigger.WaitAsync(TimeSpan.FromSeconds(Math.Max(5, IntervalSeconds)), ct);
+                // Wait for the interval OR an explicit refresh request, whichever comes first; the
+                // trigger firing means a user asked (Manual), a timeout means the poll timer did (Poll).
+                kind = await _trigger.WaitAsync(TimeSpan.FromSeconds(Math.Max(5, IntervalSeconds)), ct)
+                    ? RefreshKind.Manual
+                    : RefreshKind.Poll;
             }
             catch (OperationCanceledException)
             {

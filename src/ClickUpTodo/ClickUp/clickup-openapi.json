@@ -50,7 +50,13 @@
           },
           { "name": "page", "in": "query", "description": "Page to fetch (starts at 0).", "schema": { "type": "integer" } },
           { "name": "include_closed", "in": "query", "schema": { "type": "boolean" } },
-          { "name": "subtasks", "in": "query", "schema": { "type": "boolean" } }
+          { "name": "subtasks", "in": "query", "schema": { "type": "boolean" } },
+          {
+            "name": "date_updated_gt",
+            "in": "query",
+            "description": "Only tasks updated after this epoch-milliseconds timestamp (delta refresh, #194).",
+            "schema": { "type": "integer", "format": "int64" }
+          }
         ],
         "responses": {
           "200": {
@@ -148,7 +154,13 @@
           { "name": "page", "in": "query", "description": "Page to fetch (starts at 0).", "schema": { "type": "integer" } },
           { "name": "include_closed", "in": "query", "schema": { "type": "boolean" } },
           { "name": "subtasks", "in": "query", "schema": { "type": "boolean" } },
-          { "name": "archived", "in": "query", "schema": { "type": "boolean" } }
+          { "name": "archived", "in": "query", "schema": { "type": "boolean" } },
+          {
+            "name": "date_updated_gt",
+            "in": "query",
+            "description": "Only tasks updated after this epoch-milliseconds timestamp (delta refresh, #194).",
+            "schema": { "type": "integer", "format": "int64" }
+          }
         ],
         "responses": {
           "200": {
@@ -339,11 +351,21 @@
           "type": { "type": "string", "nullable": true }
         }
       },
+      "CommentBlock": {
+        "type": "object",
+        "description": "One rich-text run of a comment's structured 'comment' array. A plain run carries only 'text'; an @-mention run additionally carries 'type':'tag' and the mentioned member as 'user' (with the numeric id) — the substrate for id-based mention detection (#167).",
+        "properties": {
+          "text": { "type": "string", "nullable": true },
+          "type": { "type": "string", "nullable": true },
+          "user": { "$ref": "#/components/schemas/User" }
+        }
+      },
       "Comment": {
         "type": "object",
         "properties": {
           "id": { "type": "string" },
           "comment_text": { "type": "string", "nullable": true },
+          "comment": { "type": "array", "nullable": true, "items": { "$ref": "#/components/schemas/CommentBlock" } },
           "user": { "$ref": "#/components/schemas/User" },
           "date": { "type": "string", "nullable": true },
           "resolved": { "type": "boolean", "nullable": true }

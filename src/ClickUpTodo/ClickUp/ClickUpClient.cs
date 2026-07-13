@@ -22,17 +22,25 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     private readonly HttpClientRequestAdapter _adapter;
     private readonly ClickUpApiClient _client;
 
-    /// <summary>Drives the client with any Kiota auth provider (personal token or OAuth).</summary>
-    public ClickUpClient(IAuthenticationProvider authProvider, HttpClient? httpClient = null)
+    // Set when the caller hands over HttpClient ownership: the Kiota adapter only disposes a client
+    // it created itself, so a factory-built pipeline would otherwise leak its connection pool (and
+    // the rate-limit governor's semaphore) past ClickUpClient.Dispose.
+    private readonly HttpClient? _ownedHttpClient;
+
+    /// <summary>Drives the client with any Kiota auth provider (personal token or OAuth).
+    /// Pass <paramref name="ownsHttpClient"/> when this client should dispose
+    /// <paramref name="httpClient"/> along with itself (e.g. a pipeline the factory built for it).</summary>
+    public ClickUpClient(IAuthenticationProvider authProvider, HttpClient? httpClient = null, bool ownsHttpClient = false)
     {
         ArgumentNullException.ThrowIfNull(authProvider);
         _adapter = new HttpClientRequestAdapter(authProvider, httpClient: httpClient);
         _client = new ClickUpApiClient(_adapter);
+        _ownedHttpClient = ownsHttpClient ? httpClient : null;
     }
 
     /// <summary>Drives the client with a ClickUp personal API token (sent as a raw header).</summary>
-    public ClickUpClient(string token, HttpClient? httpClient = null)
-        : this(new ClickUpTokenAuthProvider(token), httpClient)
+    public ClickUpClient(string token, HttpClient? httpClient = null, bool ownsHttpClient = false)
+        : this(new ClickUpTokenAuthProvider(token), httpClient, ownsHttpClient)
     {
     }
 
@@ -162,6 +170,44 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 cfg.QueryParameters.IncludeClosed = includeClosed;
                 cfg.QueryParameters.Subtasks = true;
                 cfg.QueryParameters.Archived = false;
+            }, ct), ct));
+
+    /// <summary>
+    /// Delta variant of <see cref="GetAssignedTasksAsync"/> (#194): only tasks whose
+    /// <c>date_updated</c> is after <paramref name="updatedAfterMs"/> (epoch ms), <b>including closed
+    /// ones</b> — a task that closed since the watermark must appear in the delta so the merge can
+    /// drop it from the snapshot rather than let it linger.
+    /// </summary>
+    public Task<List<TaskItem>> GetAssignedTasksDeltaAsync(
+        string workspaceId, IReadOnlyList<long> assigneeIds, long updatedAfterMs, CancellationToken ct = default)
+        => Guard("GetFilteredTeamTasks", () => PageAsync(page =>
+            _client.V2.Team[workspaceId].Task.GetAsync(cfg =>
+            {
+                if (assigneeIds.Count > 0)
+                    cfg.QueryParameters.Assignees = assigneeIds.Select(id => id.ToString(CultureInfo.InvariantCulture)).ToArray();
+                cfg.QueryParameters.Page = page;
+                cfg.QueryParameters.IncludeClosed = true;
+                cfg.QueryParameters.Subtasks = true;
+                cfg.QueryParameters.DateUpdatedGt = updatedAfterMs;
+            }, ct), ct));
+
+    /// <summary>
+    /// Delta variant of <see cref="GetListTasksAsync"/> (#194): only tasks on the list whose
+    /// <c>date_updated</c> is after <paramref name="updatedAfterMs"/> (epoch ms), closed included (see
+    /// <see cref="GetAssignedTasksDeltaAsync"/>). Archived rows are always dropped — which means an
+    /// archive is <b>invisible</b> to a delta (the row just stops appearing) and the stale entry
+    /// lingers until the caller's periodic full resync; see
+    /// <see cref="Services.TaskService.LoadSnapshotAsync"/>.
+    /// </summary>
+    public Task<List<TaskItem>> GetListTasksDeltaAsync(string listId, long updatedAfterMs, CancellationToken ct = default)
+        => Guard("GetTasks", () => PageAsync(page =>
+            _client.V2.List[listId].Task.GetAsync(cfg =>
+            {
+                cfg.QueryParameters.Page = page;
+                cfg.QueryParameters.IncludeClosed = true;
+                cfg.QueryParameters.Subtasks = true;
+                cfg.QueryParameters.Archived = false;
+                cfg.QueryParameters.DateUpdatedGt = updatedAfterMs;
             }, ct), ct));
 
     /// <summary>
@@ -310,6 +356,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             ListName = t.List?.Name,
             StatusName = t.Status?.StatusProp,
             StatusColor = t.Status?.Color,
+            StatusType = t.Status?.Type,
             PriorityLevel = priorityLevel,
             PriorityName = ClickUpPriority.NameFromLevel(priorityLevel),
             PriorityColor = t.Priority?.Color,
@@ -340,7 +387,9 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// Maps a generated <see cref="Comment"/> onto the stable <see cref="CommentItem"/>, stamping the
     /// owning <paramref name="taskId"/> for feed attribution (#111). Author uses the same
     /// username → email → id fallback as task assignees; a missing/unparseable date yields a null
-    /// <see cref="CommentItem.DateMs"/>. internal (not private) so it can be unit-tested offline.
+    /// <see cref="CommentItem.DateMs"/>. The structured <c>comment</c> blocks are scanned for @-mention
+    /// runs and their referenced member ids surfaced as <see cref="CommentItem.MentionedUserIds"/> (#167).
+    /// internal (not private) so it can be unit-tested offline.
     /// </summary>
     internal static CommentItem MapComment(Comment c, string? taskId) => new(
         Id: c.Id ?? "",
@@ -348,7 +397,20 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         DateMs: ParseMs(c.Date),
         Text: c.CommentText ?? "",
         Resolved: c.Resolved == true,
-        TaskId: taskId);
+        TaskId: taskId,
+        MentionedUserIds: MapMentionedUserIds(c.CommentProp));
+
+    /// <summary>Extracts the distinct numeric ids of members @-mentioned in a comment's structured
+    /// blocks — the runs carrying a <c>user</c> with a positive id (a mention/tag block, per #167).
+    /// Plain-text runs and blocks with no/zero user id contribute nothing; a null blocks array yields an
+    /// empty list. internal for offline unit testing.</summary>
+    internal static IReadOnlyList<long> MapMentionedUserIds(List<CommentBlock>? blocks)
+        => blocks?
+            .Select(b => b.User?.Id ?? 0)
+            .Where(id => id > 0)
+            .Distinct()
+            .ToList()
+           ?? [];
 
     // internal (not private) so the mapping can be unit-tested without hitting the live API.
     internal static TaskDetail MapDetail(TaskObject t) => new()
@@ -556,5 +618,9 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         }
     }
 
-    public void Dispose() => _adapter.Dispose();
+    public void Dispose()
+    {
+        _adapter.Dispose();
+        _ownedHttpClient?.Dispose();
+    }
 }

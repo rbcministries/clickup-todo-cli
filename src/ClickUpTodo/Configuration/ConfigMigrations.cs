@@ -10,7 +10,7 @@ namespace ClickUpTodo.Configuration;
 public static class ConfigMigrations
 {
     /// <summary>The version an up-to-date config carries once all migrations have run.</summary>
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
 
     /// <summary>Applies any migrations the config hasn't seen yet, then stamps it current.</summary>
     public static void Apply(AppConfig config)
@@ -51,7 +51,33 @@ public static class ConfigMigrations
         // key (e.g. hand-added to an already-v3 config) is dropped rather than re-persisted forever.
         config.AgentDispatch.LegacyPromptPreamble = null;
 
+        // v4 (#179): the ShowSubtasks + ShowAllSubtasksOfAssignedParents boolean pair became the
+        // three-state SubtaskView (F4 cycle). Fold a saved pair onto the enum so an existing user's
+        // subtasks view is preserved; version-gated so a user who later returns to Hidden isn't re-seeded.
+        if (config.SchemaVersion < 4)
+            MigrateSubtaskView(config.View);
+
+        // The subtask boolean shims are deserialize-only: null them regardless of version so stray keys
+        // (e.g. hand-added to an already-v4 config) are dropped rather than re-persisted forever.
+        config.View.LegacyShowSubtasks = null;
+        config.View.LegacyShowAllSubtasks = null;
+
         config.SchemaVersion = CurrentVersion;
+    }
+
+    /// <summary>
+    /// Maps a legacy boolean subtask pair onto <see cref="ViewSettings.Subtasks"/> (#179): a saved
+    /// <c>showSubtasks == true</c> becomes <see cref="SubtaskView.All"/> when the #70
+    /// <c>showAllSubtasksOfAssignedParents</c> was also set, otherwise <see cref="SubtaskView.MineAndUnassigned"/>
+    /// (the new default on-state). An absent or false <c>showSubtasks</c> means Hidden — the enum's default —
+    /// so nothing is written. Only the legacy bools are consulted; the shims are nulled by the caller.
+    /// </summary>
+    private static void MigrateSubtaskView(ViewSettings view)
+    {
+        if (view.LegacyShowSubtasks == true)
+            view.Subtasks = view.LegacyShowAllSubtasks == true
+                ? SubtaskView.All
+                : SubtaskView.MineAndUnassigned;
     }
 
     private static void MigratePromptPreamble(AgentDispatchSettings dispatch)

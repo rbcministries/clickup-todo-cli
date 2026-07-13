@@ -14,6 +14,14 @@ namespace ClickUpTodo.ClickUp.Generated.Models
     {
         /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
         public IDictionary<string, object> AdditionalData { get; set; }
+        /// <summary>The comment property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock>? CommentProp { get; set; }
+#nullable restore
+#else
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock> CommentProp { get; set; }
+#endif
         /// <summary>The comment_text property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -73,6 +81,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         {
             return new Dictionary<string, Action<IParseNode>>
             {
+                { "comment", n => { CommentProp = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock>(global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock.CreateFromDiscriminatorValue)?.AsList(); } },
                 { "comment_text", n => { CommentText = n.GetStringValue(); } },
                 { "date", n => { Date = n.GetStringValue(); } },
                 { "id", n => { Id = n.GetStringValue(); } },
@@ -87,6 +96,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         public virtual void Serialize(ISerializationWriter writer)
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
+            writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock>("comment", CommentProp);
             writer.WriteStringValue("comment_text", CommentText);
             writer.WriteStringValue("date", Date);
             writer.WriteStringValue("id", Id);

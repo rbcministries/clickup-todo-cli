@@ -1,5 +1,4 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace ClickUpTodo.Configuration;
 
@@ -16,13 +15,8 @@ namespace ClickUpTodo.Configuration;
 /// </summary>
 public sealed class JsonFileStateStore : IStateStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        // Persist enums (e.g. the F3 view's fields/operators) as readable strings, not ordinals.
-        Converters = { new JsonStringEnumConverter() },
-    };
+    // The serializer contract is shared with the LiteDB backend so payloads stay byte-identical.
+    private static readonly JsonSerializerOptions JsonOptions = StateJson.Options;
 
     /// <summary>The directory holding every state file.</summary>
     public string DirectoryPath { get; }
