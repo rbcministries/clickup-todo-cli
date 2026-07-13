@@ -35,6 +35,14 @@ public sealed class AppConfig
     public int RefreshSeconds { get; set; } = 60;
 
     /// <summary>
+    /// How often the mentions/comments feed (#109) polls ClickUp, in seconds — deliberately separate
+    /// from (and, by default, longer than) <see cref="RefreshSeconds"/> because assembling the feed
+    /// fans a comment fetch out across every assigned task, which is far heavier than a task-list poll
+    /// (#123). An absent key loads this default, so existing configs need no migration.
+    /// </summary>
+    public int FeedRefreshSeconds { get; set; } = 300;
+
+    /// <summary>
     /// How the task list renders each row's Status/Priority badges (F6 cycles Icons → Text → Hidden).
     /// A cosmetic display preference, deliberately kept out of <see cref="ViewSettings"/> so it's
     /// independent of the F3 filter/sort/group view (and its <see cref="ViewSettings.IsDefault"/>).

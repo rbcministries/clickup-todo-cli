@@ -80,9 +80,10 @@ public sealed class NotificationsFeedScreen : Screen
     /// stacked over the feed and Esc returns here with the selection intact.</summary>
     public event EventHandler<string>? OpenTaskRequested;
 
-    // Auto-refresh cadence (seconds), tied to the list's RefreshSeconds so the feed and dashboard poll
-    // in step (#114 follow-up). Floored like RefreshService. The repeating timeout token is removed on
-    // dispose; null until OnShown arms it.
+    // Auto-refresh cadence (seconds) — the feed's own, longer interval (FeedRefreshSeconds, #123),
+    // independent of the dashboard list's RefreshSeconds because assembling the feed is far heavier.
+    // Floored like RefreshService. The repeating timeout token is removed on dispose; null until
+    // OnShown arms it.
     private readonly int _autoRefreshSeconds;
     private object? _autoRefreshToken;
 
@@ -94,7 +95,8 @@ public sealed class NotificationsFeedScreen : Screen
     public event EventHandler? RefreshRequested;
 
     /// <param name="feed">The already-fetched, mention-stamped feed (newest first).</param>
-    /// <param name="autoRefreshSeconds">Background auto-refresh cadence, tied to the list's RefreshSeconds.</param>
+    /// <param name="autoRefreshSeconds">Background auto-refresh cadence — the feed's own
+    /// <see cref="Configuration.AppConfig.FeedRefreshSeconds"/> (#123), independent of the task list.</param>
     /// <param name="mentionsOnly">Whether the mentions-only filter starts on.</param>
     public NotificationsFeedScreen(IReadOnlyList<CommentItem> feed, int autoRefreshSeconds, bool mentionsOnly = false)
     {
@@ -271,7 +273,7 @@ public sealed class NotificationsFeedScreen : Screen
     public override void OnShown()
     {
         _list.SetFocus();
-        // Auto-refresh on the list's cadence (#114 follow-up). The callback fires on the UI thread;
+        // Auto-refresh on the feed's own longer cadence (#123). The callback fires on the UI thread;
         // returning true keeps it repeating. Armed once here, torn down in Dispose.
         _autoRefreshToken ??= Application.AddTimeout(TimeSpan.FromSeconds(_autoRefreshSeconds), () =>
         {

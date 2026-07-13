@@ -14,6 +14,7 @@ var legacyStore = new JsonFileStateStore(dataDirectory);
 IStateStore stateStore = liteStore;
 var configStore = new ConfigStore(stateStore);
 var taskCache = new TaskCache(stateStore);
+var feedCache = new FeedCache(stateStore);
 var tokenStore = new TokenStore();
 
 // `clickup-todo --reset` / `--logout`: forget the saved token and settings, then exit. Runs before
@@ -25,10 +26,11 @@ if (args.Any(a => a is "--reset" or "--logout"))
     tokenStore.Delete();
     configStore.Delete();
     legacyStore.Delete(StateKeys.Config);
-    // Drop the cached working set too, so a reset leaves no stale snapshot behind (a fresh workspace
-    // would miss on the fingerprint anyway; this just doesn't orphan the document). #124 owns the
-    // broader token/workspace-change invalidation.
+    // Drop the cached working set and feed too, so a reset leaves no stale snapshot behind (a fresh
+    // workspace would miss on the fingerprint anyway; this just doesn't orphan the documents). #124
+    // owns the broader token/workspace-change invalidation.
     taskCache.Clear();
+    feedCache.Clear();
     Console.WriteLine("Cleared saved ClickUp token and settings. Run `clickup-todo` to sign in again.");
     return 0;
 }
@@ -103,7 +105,7 @@ var focusStore = new LocalFocusStore(config, configStore);
 // the workspace members — rides the same state store, scoped to the active workspace.
 var assigneeCache = new AssigneeFrequencyCache(
     stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
-new TodoApp(taskService, feedService, config, configStore, focusStore, taskCache, assigneeCache).Run(driverName);
+new TodoApp(taskService, feedService, config, configStore, focusStore, taskCache, feedCache, assigneeCache).Run(driverName);
 return 0;
 
 // Reads "--opt value" or "--opt=value" from args.

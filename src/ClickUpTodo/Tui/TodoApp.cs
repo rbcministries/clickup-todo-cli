@@ -49,6 +49,9 @@ public sealed class TodoApp
     // Persists the last loaded working set for an instant first paint on the next launch (#122). Read
     // once at startup (TryPaintCachedTasks) and written after each changed live load (OnTasksLoaded).
     private readonly TaskCache _taskCache;
+    // Persists the last aggregated feed for an instant paint when the feed screen opens (#123). Read
+    // in OpenNotificationsFeed and written after each successful aggregation (open + RefreshFeed).
+    private readonly FeedCache _feedCache;
     // Candidate-people pool for the future Quick Updates Assignees pane (#155/#158): tallied from each
     // loaded working set and topped up (once, off-thread) from the workspace members. Never touches
     // rendering or input — no #3/#12 impact.
@@ -141,7 +144,7 @@ public sealed class TodoApp
     private string _signature = "";
 
     public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
-        IFocusStore focus, TaskCache taskCache, AssigneeFrequencyCache assignees)
+        IFocusStore focus, TaskCache taskCache, FeedCache feedCache, AssigneeFrequencyCache assignees)
     {
         _tasks = tasks;
         _feed = feed;
@@ -149,6 +152,7 @@ public sealed class TodoApp
         _configStore = configStore;
         _focus = focus;
         _taskCache = taskCache;
+        _feedCache = feedCache;
         _assignees = assignees;
         _agent = BuildAgentDispatcher();
     }
@@ -472,18 +476,31 @@ public sealed class TodoApp
 
     /// <summary>
     /// Ctrl+E — opens the mentions &amp; comments feed screen (#114, epic #109), the List ↔ Feed
-    /// navigation key. Fetches the feed off the UI thread (like <see cref="OpenDetail"/>: flash →
-    /// <c>Task.Run</c> → <c>Application.Invoke</c>) and swaps in the data-bearing screen back on it; the
-    /// background dashboard refresh keeps running. Opens through the shared screen seam, guarded on
-    /// <see cref="ActiveScreen"/> like the other list-initiated opens. The full feed is loaded once
-    /// (every entry mention-stamped), so the screen's F3 mentions-only toggle filters locally with no
-    /// re-fetch. Loading and error states show on the status line — the screen is only constructed on
-    /// success.
+    /// navigation key. On a <b>warm cache</b> (#123) the last aggregated feed paints immediately and a
+    /// background <see cref="RefreshFeed"/> then swaps in live data — so the screen opens on the first
+    /// frame with no "Loading…" wait. On a <b>cold cache</b> it keeps the original flow: fetch off the
+    /// UI thread (like <see cref="OpenDetail"/>: flash → <c>Task.Run</c> → <c>Application.Invoke</c>)
+    /// and construct the screen only on success. Either way the background dashboard refresh keeps
+    /// running, the open is guarded on <see cref="ActiveScreen"/> like the other list-initiated opens,
+    /// and the full feed is loaded once (every entry mention-stamped) so the screen's F3 mentions-only
+    /// toggle filters locally with no re-fetch.
     /// </summary>
     private void OpenNotificationsFeed()
     {
         if (ActiveScreen is not null)
             return;
+
+        // Warm cache (#123): paint the last aggregated feed instantly, then refresh live in the
+        // background. An empty cached feed is treated as a miss (nothing to instant-paint) and takes the
+        // cold path below. Load runs on the UI thread, matching the store's single-threaded contract.
+        if (_feedCache.Load(_config) is { Count: > 0 } cached)
+        {
+            var screen = CreateFeedScreen(cached);
+            ShowScreen(screen, static () => { });
+            Flash("Showing cached feed · refreshing…");
+            RefreshFeed(screen); // off-thread live load, swaps fresh in + re-saves the cache
+            return;
+        }
 
         Flash("Loading feed…");
         _ = Task.Run(async () =>
@@ -495,14 +512,9 @@ public sealed class TodoApp
                 {
                     if (ActiveScreen is not null)
                         return;
-                    // The feed auto-refreshes on the same cadence as the dashboard list (#114 follow-up);
-                    // F5 / Ctrl+R force one. RefreshFeed re-fetches and feeds the result back in place.
-                    var screen = new NotificationsFeedScreen(feed, _config.RefreshSeconds);
-                    screen.RefreshRequested += (_, _) => RefreshFeed(screen);
-                    // Enter on a feed row opens that comment's task detail stacked over the feed (#115);
-                    // Esc returns to the feed at the same row.
-                    screen.OpenTaskRequested += (_, taskId) => OpenTaskDetail(taskId);
-                    ShowScreen(screen, static () => { });
+                    // Cache the freshly-aggregated feed so the next open paints instantly (#123).
+                    _feedCache.Save(_config, feed);
+                    ShowScreen(CreateFeedScreen(feed), static () => { });
                 });
             }
             catch (Exception ex)
@@ -513,10 +525,27 @@ public sealed class TodoApp
     }
 
     /// <summary>
+    /// Builds a <see cref="NotificationsFeedScreen"/> over <paramref name="feed"/> with the host's
+    /// event wiring: F5 / Ctrl+R and the auto-refresh tick re-fetch via <see cref="RefreshFeed"/>, and
+    /// Enter on a row opens that comment's task detail stacked over the feed (#115, Esc returns here).
+    /// The feed runs on its own longer cadence (<see cref="AppConfig.FeedRefreshSeconds"/>, #123),
+    /// independent of the dashboard task-list poll, because assembling it is far heavier.
+    /// </summary>
+    private NotificationsFeedScreen CreateFeedScreen(IReadOnlyList<CommentItem> feed)
+    {
+        var screen = new NotificationsFeedScreen(feed, _config.FeedRefreshSeconds);
+        screen.RefreshRequested += (_, _) => RefreshFeed(screen);
+        screen.OpenTaskRequested += (_, taskId) => OpenTaskDetail(taskId);
+        return screen;
+    }
+
+    /// <summary>
     /// Re-fetches the feed for an open <see cref="NotificationsFeedScreen"/> (its F5 / Ctrl+R or
-    /// auto-refresh tick) and feeds it back on the UI thread. Mirrors <see cref="OpenNotificationsFeed"/>'s
-    /// off-thread fetch; skips while the feed isn't front-most, and drops the result if the screen has
-    /// since been torn down. A fetch error flashes without disturbing the view.
+    /// auto-refresh tick, or the initial background load behind a warm-cache open) and feeds it back on
+    /// the UI thread, re-saving the cache after each successful aggregation (#123). Mirrors
+    /// <see cref="OpenNotificationsFeed"/>'s off-thread fetch; skips while the feed isn't front-most,
+    /// and drops the screen update if it has since been torn down. A fetch error flashes without
+    /// disturbing the view.
     /// </summary>
     private void RefreshFeed(NotificationsFeedScreen screen)
     {
@@ -540,6 +569,9 @@ public sealed class TodoApp
                 var feed = await _feed.LoadFeedAsync(mentionsOnly: false);
                 Application.Invoke(() =>
                 {
+                    // Cache the freshly-aggregated feed regardless of whether the screen is still open —
+                    // the data is valid for the next open either way (#123).
+                    _feedCache.Save(_config, feed);
                     if (_screens.Contains(screen))
                         screen.UpdateFeed(feed);
                 });
@@ -676,7 +708,7 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.DefaultWorkingDirectory, _config.AgentDispatch, _config.DetailView);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.DefaultWorkingDirectory, _config.AgentDispatch, _config.DetailView);
 
         // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
         // save it folds the edited template back into the settings screen via the request's callback, so
@@ -698,6 +730,9 @@ public sealed class TodoApp
                 return;
 
             _config.RefreshSeconds = result.RefreshSeconds;
+            // The feed screen reads FeedRefreshSeconds when it opens (#123), so a reopened feed picks
+            // up the new cadence — no live retiming of an already-open feed's timer is needed.
+            _config.FeedRefreshSeconds = result.FeedRefreshSeconds;
             _config.DefaultWorkingDirectory = result.DefaultWorkingDirectory;
             _config.AgentDispatch = result.AgentDispatch;
             _config.DetailView = result.DetailView;
