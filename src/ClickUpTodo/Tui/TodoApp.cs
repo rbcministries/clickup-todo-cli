@@ -526,15 +526,21 @@ public sealed class TodoApp
 
     /// <summary>
     /// Builds a <see cref="NotificationsFeedScreen"/> over <paramref name="feed"/> with the host's
-    /// event wiring: F5 / Ctrl+R and the auto-refresh tick re-fetch via <see cref="RefreshFeed"/>, and
-    /// Enter on a row opens that comment's task detail stacked over the feed (#115, Esc returns here).
-    /// The feed runs on its own longer cadence (<see cref="AppConfig.FeedRefreshSeconds"/>, #123),
-    /// independent of the dashboard task-list poll, because assembling it is far heavier.
+    /// event wiring: F5 / Ctrl+R and the auto-refresh tick re-fetch via <see cref="RefreshFeed"/>, Enter
+    /// on a row opens that comment's task detail stacked over the feed (#115, Esc returns here), and F12
+    /// toggles whether completed-task activity is included (the feed's own "Show Completed", independent
+    /// of the list's #178). The feed runs on its own longer cadence
+    /// (<see cref="AppConfig.FeedRefreshSeconds"/>, #123), independent of the dashboard task-list poll,
+    /// because assembling it is far heavier.
     /// </summary>
     private NotificationsFeedScreen CreateFeedScreen(IReadOnlyList<CommentItem> feed)
     {
-        var screen = new NotificationsFeedScreen(feed, _config.FeedRefreshSeconds);
+        var screen = new NotificationsFeedScreen(
+            feed, _config.FeedRefreshSeconds, showCompleted: _config.FeedShowCompleted);
         screen.RefreshRequested += (_, _) => RefreshFeed(screen);
+        // F12 changes what's fetched (closed tasks were never loaded while off), so unlike the F3 local
+        // filter the host persists the flag and re-fetches — see ToggleFeedShowCompleted.
+        screen.ToggleCompletedRequested += (_, _) => ToggleFeedShowCompleted(screen);
         screen.OpenTaskRequested += (_, taskId) => OpenTaskDetail(taskId);
         return screen;
     }
@@ -596,6 +602,28 @@ public sealed class TodoApp
                 Application.Invoke(() => _refreshingFeed = false);
             }
         });
+    }
+
+    /// <summary>
+    /// Toggles the feed's F12 "Show Completed" — whether the feed includes activity from completed
+    /// (closed-type) tasks — and persists it (<see cref="AppConfig.FeedShowCompleted"/>). Independent of
+    /// the main list's F12 (#178), which owns <see cref="ViewSettings.ShowCompleted"/>. Because the
+    /// closed tasks were never fetched, a client-side re-render can't surface them: this re-fetches (via
+    /// <see cref="RefreshFeed"/>, which re-reads the flag through <see cref="FeedService.LoadFeedAsync"/>)
+    /// after reflecting the new state in the screen's title. Runs on the UI thread (from the screen's key
+    /// handler); no-op if that screen isn't front-most.
+    /// </summary>
+    private void ToggleFeedShowCompleted(NotificationsFeedScreen screen)
+    {
+        if (!ReferenceEquals(ActiveScreen, screen))
+            return;
+
+        var on = !_config.FeedShowCompleted;
+        _config.FeedShowCompleted = on;
+        _configStore.Save(_config);
+        screen.SetShowCompleted(on);
+        Flash(on ? "Feed: showing completed tickets (F12)." : "Feed: completed tickets hidden (F12).");
+        RefreshFeed(screen);
     }
 
     /// <summary>
