@@ -339,6 +339,35 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             return (IReadOnlyList<CommentItem>)comments.Select(c => MapComment(c, taskId)).ToList();
         });
 
+    /// <summary>
+    /// Post a <b>plain-text</b> comment to a task (<c>POST /task/{id}/comment</c>, #210) and return it
+    /// as a <see cref="CommentItem"/> so a caller (the #216 composer) can append it optimistically.
+    /// Rich content — @-mentions, task links, other entity tagging — is out of scope (a later epic);
+    /// only <c>comment_text</c> is sent. <c>notify_all</c> is sent as <c>false</c>.
+    /// <para>
+    /// ClickUp's create-comment response is <b>minimal</b> — it returns only the new comment's
+    /// <c>id</c>, a <c>hist_id</c>, and the server <c>date</c> (epoch ms); it does <b>not</b> echo the
+    /// text, author, or structured blocks. So <see cref="MapComment"/> (which reads those off a full
+    /// <see cref="Comment"/>) can't recover them here. The returned <see cref="CommentItem"/> is built
+    /// from the response <c>id</c>/<c>date</c> plus the <paramref name="text"/> we just posted (lossless
+    /// for plain text); <see cref="CommentItem.Author"/> is left empty for the caller's optimistic row
+    /// to stamp (it knows the current user) and is reconciled on the next comment fetch.
+    /// </para>
+    /// </summary>
+    public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default)
+        => Guard("CreateTaskComment", async () =>
+        {
+            var request = new CreateCommentRequest { CommentText = text, NotifyAll = false };
+            var created = await _client.V2.Task[taskId].Comment.PostAsync(request, cancellationToken: ct);
+            return new CommentItem(
+                Id: created?.Id ?? "",
+                Author: "",
+                DateMs: created?.Date,
+                Text: text,
+                Resolved: false,
+                TaskId: taskId);
+        });
+
     // ── Mapping & plumbing ──────────────────────────────────────────────────
 
     // internal (not private) so the mapping can be unit-tested without hitting the live API.

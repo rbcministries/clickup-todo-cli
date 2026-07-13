@@ -39,4 +39,9 @@ public interface IClickUpClient
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default);
+
+    /// <summary>Post a plain-text comment to a task (#210) and return it as a <see cref="CommentItem"/>
+    /// for optimistic append. Rich content (@-mentions, task links) is out of scope. See
+    /// <see cref="ClickUpClient.CreateTaskCommentAsync"/> for the minimal-response mapping contract.</summary>
+    Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default);
 }

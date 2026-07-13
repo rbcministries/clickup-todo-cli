@@ -52,6 +52,26 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment
             return await RequestAdapter.SendAsync<global::ClickUpTodo.ClickUp.Generated.Models.CommentsResponse>(requestInfo, global::ClickUpTodo.ClickUp.Generated.Models.CommentsResponse.CreateFromDiscriminatorValue, default, cancellationToken).ConfigureAwait(false);
         }
         /// <summary>
+        /// Post a plain-text comment to a task.
+        /// </summary>
+        /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentResponse"/></returns>
+        /// <param name="body">Body for POST /task/{task_id}/comment. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.</param>
+        /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
+        /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public async Task<global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentResponse?> PostAsync(global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentRequest body, Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
+        {
+#nullable restore
+#else
+        public async Task<global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentResponse> PostAsync(global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentRequest body, Action<RequestConfiguration<DefaultQueryParameters>> requestConfiguration = default, CancellationToken cancellationToken = default)
+        {
+#endif
+            if(ReferenceEquals(body, null)) throw new ArgumentNullException(nameof(body));
+            var requestInfo = ToPostRequestInformation(body, requestConfiguration);
+            return await RequestAdapter.SendAsync<global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentResponse>(requestInfo, global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentResponse.CreateFromDiscriminatorValue, default, cancellationToken).ConfigureAwait(false);
+        }
+        /// <summary>
         /// Get the comments on a task (most recent first).
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
@@ -68,6 +88,28 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment
             var requestInfo = new RequestInformation(Method.GET, UrlTemplate, PathParameters);
             requestInfo.Configure(requestConfiguration);
             requestInfo.Headers.TryAdd("Accept", "application/json");
+            return requestInfo;
+        }
+        /// <summary>
+        /// Post a plain-text comment to a task.
+        /// </summary>
+        /// <returns>A <see cref="RequestInformation"/></returns>
+        /// <param name="body">Body for POST /task/{task_id}/comment. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.</param>
+        /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public RequestInformation ToPostRequestInformation(global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentRequest body, Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default)
+        {
+#nullable restore
+#else
+        public RequestInformation ToPostRequestInformation(global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentRequest body, Action<RequestConfiguration<DefaultQueryParameters>> requestConfiguration = default)
+        {
+#endif
+            if(ReferenceEquals(body, null)) throw new ArgumentNullException(nameof(body));
+            var requestInfo = new RequestInformation(Method.POST, UrlTemplate, PathParameters);
+            requestInfo.Configure(requestConfiguration);
+            requestInfo.Headers.TryAdd("Accept", "application/json");
+            requestInfo.SetContentFromParsable(RequestAdapter, "application/json", body);
             return requestInfo;
         }
         /// <summary>
