@@ -159,8 +159,8 @@ public sealed class QuickUpdatesScreen : Screen
             RequestFlash("Status unchanged.");
             return;
         }
-        // Optimistically move the ✓, then hand the write to the host; it reconciles us on confirm/revert.
-        SetEffectiveStatus(name);
+        // Hand the write to the host; it moves the ✓ (via SetEffectiveStatus) only once it commits to
+        // attempting the write, and reconciles us again from the server-confirmed value.
         StatusCommitted?.Invoke(name);
     }
 
@@ -174,7 +174,6 @@ public sealed class QuickUpdatesScreen : Screen
             RequestFlash("Priority unchanged.");
             return;
         }
-        SetEffectivePriority(level);
         PriorityCommitted?.Invoke(level);
     }
 
