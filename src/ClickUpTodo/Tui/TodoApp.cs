@@ -46,6 +46,9 @@ public sealed class TodoApp
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
+    // Persists the last loaded working set for an instant first paint on the next launch (#122). Read
+    // once at startup (TryPaintCachedTasks) and written after each changed live load (OnTasksLoaded).
+    private readonly TaskCache _taskCache;
     // Candidate-people pool for the future Quick Updates Assignees pane (#155/#158): tallied from each
     // loaded working set and topped up (once, off-thread) from the workspace members. Never touches
     // rendering or input — no #3/#12 impact.
@@ -138,13 +141,14 @@ public sealed class TodoApp
     private string _signature = "";
 
     public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
-        IFocusStore focus, AssigneeFrequencyCache assignees)
+        IFocusStore focus, TaskCache taskCache, AssigneeFrequencyCache assignees)
     {
         _tasks = tasks;
         _feed = feed;
         _config = config;
         _configStore = configStore;
         _focus = focus;
+        _taskCache = taskCache;
         _assignees = assignees;
         _agent = BuildAgentDispatcher();
     }
@@ -174,6 +178,12 @@ public sealed class TodoApp
         {
             _status = $"Loading… (driver: {driverName ?? "default (ansi)"}{(diffing ? ", diffed output" : "")})";
             Build();
+            // Instant first paint from the persisted working set (#122): render the last snapshot now,
+            // synchronously on the UI thread, before Application.Run starts pumping — so the first live
+            // refresh (marshalled in via Application.Invoke) can only ever arrive after this. When the
+            // live set matches, OnTasksLoaded's signature fast-path skips the re-render (no flicker);
+            // when it differs, the cursor is kept by task id.
+            TryPaintCachedTasks();
             _refresh = new RefreshService(
                 fetch: FetchAsync,
                 intervalSeconds: _config.RefreshSeconds,
@@ -489,6 +499,9 @@ public sealed class TodoApp
                     // F5 / Ctrl+R force one. RefreshFeed re-fetches and feeds the result back in place.
                     var screen = new NotificationsFeedScreen(feed, _config.RefreshSeconds);
                     screen.RefreshRequested += (_, _) => RefreshFeed(screen);
+                    // Enter on a feed row opens that comment's task detail stacked over the feed (#115);
+                    // Esc returns to the feed at the same row.
+                    screen.OpenTaskRequested += (_, taskId) => OpenTaskDetail(taskId);
                     ShowScreen(screen, static () => { });
                 });
             }
@@ -1097,6 +1110,21 @@ public sealed class TodoApp
         if (task is null || ActiveScreen is not null)
             return;
 
+        OpenTaskDetail(task.Id);
+    }
+
+    /// <summary>
+    /// Loads a task's detail + comments off the UI thread and mounts a <see cref="TaskDetailScreen"/>
+    /// stacked on the current layer — the list (from <see cref="OpenDetail"/>) or the feed (from an
+    /// Enter on a feed entry, #115). Captures the layer that requested the open and, once the fetch
+    /// lands, only mounts when it is still the active layer: from the list that means "still idle" (a
+    /// second open is blocked, matching the old guard); from the feed it means the detail stacks over
+    /// the feed and a second Enter is a no-op (the detail is by then active). Esc closes the detail and
+    /// the screen seam restores the layer beneath with its selection intact.
+    /// </summary>
+    private void OpenTaskDetail(string taskId)
+    {
+        var requester = ActiveScreen;
         Flash("Loading details…");
         // Fetch the detail + comments off the UI thread, then swap in the detail screen back on it.
         // The background dashboard refresh keeps running while the screen is open.
@@ -1104,11 +1132,11 @@ public sealed class TodoApp
         {
             try
             {
-                var detail = await _tasks.GetTaskDetailAsync(task.Id);
-                var comments = await _tasks.GetTaskCommentsAsync(task.Id);
+                var detail = await _tasks.GetTaskDetailAsync(taskId);
+                var comments = await _tasks.GetTaskCommentsAsync(taskId);
                 Application.Invoke(() =>
                 {
-                    if (ActiveScreen is not null)
+                    if (ActiveScreen != requester)
                         return;
                     // Root the Dispatch pane's working-dir browser (#95) at the saved base dir (#92),
                     // falling back to home if it doesn't exist yet (a task-derived launch creates it on
@@ -1133,7 +1161,7 @@ public sealed class TodoApp
                     screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request);
                     // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data; re-fetch off the UI
                     // thread and feed it back into the still-open screen (its tab/scroll stay put).
-                    screen.RefreshRequested += (_, _) => RefreshDetail(screen, task.Id);
+                    screen.RefreshRequested += (_, _) => RefreshDetail(screen, taskId);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -1484,6 +1512,29 @@ public sealed class TodoApp
 
     // ── Rendering ────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Paints the persisted working set (#122) before the first network load, so a warm cache shows
+    /// the task list on the first frame. A miss (nothing cached, or the cache belongs to a different
+    /// workspace/list/assignee context) leaves the "Loading…" state untouched for the live load to
+    /// replace. Seeds <see cref="_signature"/> from the cached set so an identical live load hits the
+    /// OnTasksLoaded fast-path with no re-render. That no-op holds in the default (subtasks-off) view;
+    /// with the F4 subtasks view persisted on, the first live load resolves context parents / foreign
+    /// subtasks that <see cref="CurrentSignature"/> folds in (empty here), so it re-renders once — but
+    /// the cursor is preserved by task id, so there's no selection loss either way. Runs on the UI
+    /// thread during <see cref="Run"/>, before the run loop starts.
+    /// </summary>
+    private void TryPaintCachedTasks()
+    {
+        var cached = _taskCache.Load(_config);
+        if (cached is not { Count: > 0 })
+            return;
+
+        _all = cached;
+        _status = $"Showing cached tasks · {cached.Count} task(s) · refreshing…";
+        _signature = CurrentSignature(cached);
+        Render(keepTaskId: null);
+    }
+
     private void OnTasksLoaded(IReadOnlyList<TaskItem> tasks)
     {
         _all = tasks;
@@ -1520,6 +1571,14 @@ public sealed class TodoApp
         }
         _signature = signature;
         Render(keepTaskId: CurrentTask()?.Id);
+
+        // Persist the freshly-rendered working set for the next launch's instant first paint (#122).
+        // Only on a real change — the signature fast-path above already returned for a no-op poll, so
+        // the cache isn't rewritten every interval. The bounded payload keeps this off-critical-path;
+        // it rides the UI thread like the config save. The optimistic status path (UpdateTaskRow) is
+        // intentionally not cached here: the next authoritative load saves the confirmed set, and
+        // persisting an as-yet-unconfirmed value could outlive a server rejection.
+        _taskCache.Save(_config, tasks);
     }
 
     /// <summary>

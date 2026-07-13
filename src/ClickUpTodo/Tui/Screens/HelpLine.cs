@@ -161,11 +161,13 @@ public static class HelpItemSets
         new("Esc", "cancel"),
     ];
 
-    /// <summary>The mentions &amp; comments feed screen (opened with Ctrl+E, #109). F3 toggles the
-    /// mentions-only filter (#113/#114); Ctrl+E returns to the list; the open-task item arrives with #115.</summary>
+    /// <summary>The mentions &amp; comments feed screen (opened with Ctrl+E, #109). Enter opens the
+    /// selected comment's task (#115); F3 toggles the mentions-only filter (#113/#114); Ctrl+E returns
+    /// to the list.</summary>
     public static readonly IReadOnlyList<HelpItem> NotificationsFeed =
     [
         new("↑/↓", "move"),
+        new("Enter", "open"),
         new("F3", "mentions only"),
         new("F5", "↻"),
         new("Ctrl+E", "list"),
