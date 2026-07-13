@@ -84,7 +84,7 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
                 if (!string.IsNullOrEmpty(task.Id))
                     delta[task.Id] = task;
             }
-            var (merged, changed) = MergeDelta(previous, delta.Values.ToList());
+            var (merged, changed) = MergeDelta(previous, delta.Values.ToList(), keepClosed: config.View.ShowCompleted);
             _watermarkMs = MaxUpdatedMs(delta.Values) is { } newest ? Math.Max(watermark, newest) : watermark;
             _lastSnapshot = merged;
             return new TaskSnapshotResult(merged, changed, WasDelta: true);
@@ -105,9 +105,15 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
     /// with the standard <see cref="TaskOrder"/>. Returns <c>Changed=false</c> — previous list
     /// instance included, so no re-render churn — when the delta was empty or only "removed" tasks
     /// that were never present. Pure and unit-testable.
+    /// <para>
+    /// When <paramref name="keepClosed"/> is true (the F12 "Show Completed" toggle on, #178), a closed
+    /// delta task is upserted like any other rather than removed — matching the full load, which fetches
+    /// with <c>include_closed=true</c> in that mode — so a task that closes since the last snapshot stays
+    /// visible instead of vanishing on the next delta.
+    /// </para>
     /// </summary>
     internal static (IReadOnlyList<TaskItem> Tasks, bool Changed) MergeDelta(
-        IReadOnlyList<TaskItem> previous, IReadOnlyList<TaskItem> delta)
+        IReadOnlyList<TaskItem> previous, IReadOnlyList<TaskItem> delta, bool keepClosed = false)
     {
         if (delta.Count == 0)
             return (previous, false);
@@ -121,7 +127,7 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
         {
             if (string.IsNullOrEmpty(task.Id))
                 continue;
-            if (IsClosed(task))
+            if (!keepClosed && IsClosed(task))
             {
                 changed |= byId.Remove(task.Id);
             }
@@ -168,8 +174,12 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
         // The two source fetches are independent, so the personal-list fetch overlaps assignee-id
         // resolution + the assigned fetch (#192): wall-clock is the slower of the two, not their sum.
         // WhenAll (rather than awaiting in turn) so a fault in one still observes the other.
-        var personalFetch = client.GetListTasksAsync(config.PersonalTasksListId, ct: ct);
-        var assignedFetch = LoadAssignedAsync(ct);
+        // The F12 "Show Completed" toggle (#178) widens both fetches to include closed-type tasks; when
+        // off (the default) closed-type tasks are dropped server-side and TaskView hides any that still
+        // arrive (e.g. subtask anchors), so hiding is consistent at every level.
+        var includeClosed = config.View.ShowCompleted;
+        var personalFetch = client.GetListTasksAsync(config.PersonalTasksListId, includeClosed, ct);
+        var assignedFetch = LoadAssignedAsync(includeClosed, ct);
         await Task.WhenAll(assignedFetch, personalFetch);
         var assigned = await assignedFetch;
         var personal = await personalFetch;
@@ -200,8 +210,8 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
     // Assignee IS rules scope the assigned fetch server-side (#68). The default view's "Assignee IS
     // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone. A
     // username/email rule is resolved to an id via the workspace-members lookup (#73).
-    private async Task<List<TaskItem>> LoadAssignedAsync(CancellationToken ct)
-        => await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), ct);
+    private async Task<List<TaskItem>> LoadAssignedAsync(bool includeClosed, CancellationToken ct)
+        => await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), includeClosed, ct);
 
     /// <summary>
     /// Cap on concurrent round-trips per fan-out (context parents, list colors). Small and fixed:

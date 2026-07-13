@@ -124,10 +124,25 @@ public static class TaskFieldInfo
 /// </summary>
 public static class TaskView
 {
-    /// <summary>Filters, sorts, then groups <paramref name="tasks"/> per <paramref name="settings"/>.</summary>
+    /// <summary>
+    /// The ClickUp status <c>type</c> that marks a task completed for the F12 "Show Completed" toggle
+    /// (#178): ClickUp's terminal <c>closed</c> type — exactly what a task fetch with
+    /// <c>IncludeClosed=false</c> drops server-side. Scoped to <c>closed</c> so the toggle's off state
+    /// matches the app's historical behaviour; a broader "done"/custom-complete definition is a
+    /// follow-up. Case-insensitive; a task with no mapped status type is never treated as completed.
+    /// </summary>
+    public static bool IsCompleted(TaskItem task)
+        => string.Equals(task.StatusType, "closed", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Filters, sorts, then groups <paramref name="tasks"/> per <paramref name="settings"/>.
+    /// When <see cref="ViewSettings.ShowCompleted"/> is off (the default), completed
+    /// (<see cref="IsCompleted"/>) tasks are dropped after the F3 filters — the single place list
+    /// visibility is decided, so both top-level tasks and pulled-in subtasks are hidden consistently (#178).</summary>
     public static IReadOnlyList<TaskGroup> Apply(IEnumerable<TaskItem> tasks, ViewSettings settings)
     {
         var filtered = Filter(tasks, settings.Filters);
+        if (!settings.ShowCompleted)
+            filtered = filtered.Where(t => !IsCompleted(t)).ToList();
         var sorted = Sort(filtered, settings.SortField, settings.SortDirection);
         return Group(sorted, settings.GroupField);
     }
