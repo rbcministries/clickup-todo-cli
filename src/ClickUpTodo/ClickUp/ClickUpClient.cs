@@ -235,7 +235,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             {
                 Name = task.Name,
                 Description = string.IsNullOrEmpty(task.Description) ? null : task.Description,
-                Assignees = task.Assignees.Count > 0 ? task.Assignees.Select(id => (long?)id).ToList() : null,
+                Assignees = task.Assignees is { Count: > 0 } ids ? ids.Select(id => (long?)id).ToList() : null,
                 Priority = task.PriorityLevel,
                 DueDate = task.DueDateMs,
             };
