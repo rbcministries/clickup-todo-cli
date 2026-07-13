@@ -67,6 +67,21 @@ public sealed class ClickUpPriorityTests
         => Assert.Equal(["Urgent", "High", "Normal", "Low"], ClickUpPriority.Names);
 
     [Theory]
+    [InlineData(1, "#f50000")]
+    [InlineData(2, "#ffcc00")]
+    [InlineData(3, "#6fddff")]
+    [InlineData(4, "#d8d8d8")]
+    public void ColorFromLevel_MapsEachLevelToItsCanonicalHex(int level, string expected)
+        => Assert.Equal(expected, ClickUpPriority.ColorFromLevel(level));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0)]
+    [InlineData(5)]
+    public void ColorFromLevel_OutOfRangeIsNull(int? level)
+        => Assert.Null(ClickUpPriority.ColorFromLevel(level));
+
+    [Theory]
     [InlineData("Urgent", 1)]
     [InlineData("low", 4)]
     [InlineData("1", 1)]

@@ -340,6 +340,14 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
     public Task<string?> SetStatusAsync(string taskId, string statusName, CancellationToken ct = default)
         => client.SetTaskStatusAsync(taskId, statusName, ct);
 
+    /// <summary>
+    /// Sets (or clears, when <paramref name="priorityLevel"/> is null) a task's priority and returns the
+    /// <b>confirmed</b> effective level from the write response, so the UI can show the server-confirmed
+    /// value. Mirrors <see cref="SetStatusAsync"/>.
+    /// </summary>
+    public Task<int?> SetPriorityAsync(string taskId, int? priorityLevel, CancellationToken ct = default)
+        => client.SetTaskPriorityAsync(taskId, priorityLevel, ct);
+
     /// <summary>Full detail for a single task, fetched on demand for the detail view (#17).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskDetailAsync(taskId, ct);
@@ -355,6 +363,18 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
     /// </summary>
     public static IReadOnlyList<TaskItem> ApplyStatusChange(IReadOnlyList<TaskItem> tasks, string taskId, string? newStatus)
         => tasks.Select(t => t.Id == taskId ? t with { StatusName = newStatus } : t).ToList();
+
+    /// <summary>
+    /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying the given
+    /// priority fields (level + name + colour), leaving every other task and the overall order
+    /// untouched. Pure (the input list is not mutated), the priority sibling of
+    /// <see cref="ApplyStatusChange"/> so the TUI can reflect an optimistic priority change in place.
+    /// </summary>
+    public static IReadOnlyList<TaskItem> ApplyPriorityChange(
+        IReadOnlyList<TaskItem> tasks, string taskId, int? level, string? name, string? color)
+        => tasks.Select(t => t.Id == taskId
+            ? t with { PriorityLevel = level, PriorityName = name, PriorityColor = color }
+            : t).ToList();
 
     /// <summary>
     /// The distinct parent ids referenced by a subtask in <paramref name="snapshot"/> that aren't

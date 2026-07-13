@@ -21,16 +21,6 @@ namespace ClickUpTodo.Tui;
 /// </summary>
 public static class GroupHeaderPalette
 {
-    /// <summary>Canonical ClickUp priority colors by level (1=Urgent…4=Low), the fallback when a task
-    /// carries no explicit priority color.</summary>
-    private static readonly IReadOnlyDictionary<int, string> CanonicalPriorityColors = new Dictionary<int, string>
-    {
-        [1] = "#f50000", // Urgent — red
-        [2] = "#ffcc00", // High — yellow
-        [3] = "#6fddff", // Normal — light blue
-        [4] = "#d8d8d8", // Low — gray
-    };
-
     // Rainbow sweep for date gradients: earliest group at 0° (red), latest near 280° (violet). A
     // partial sweep (not the full 360°) avoids red reappearing at both ends. Vivid but not neon, so
     // the WCAG contrast picker still lands a readable text color.
@@ -81,9 +71,7 @@ public static class GroupHeaderPalette
             return null;
         if (!string.IsNullOrWhiteSpace(task.PriorityColor))
             return task.PriorityColor;
-        return task.PriorityLevel is { } level && CanonicalPriorityColors.TryGetValue(level, out var hex)
-            ? hex
-            : null;
+        return ClickUpPriority.ColorFromLevel(task.PriorityLevel);
     }
 
     /// <summary>
