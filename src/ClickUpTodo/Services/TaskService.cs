@@ -527,7 +527,9 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
     /// against <see cref="SubtaskFetchOptions.MaxPerParentFetches"/> so a deep/wide foreign subtree can't
     /// blow the budget. Any cap that drops work sets <see cref="ForeignSubtaskResolution.Truncated"/> so
     /// the caller can surface it (the TUI appends a note to the post-refresh status line) rather than
-    /// truncating silently.
+    /// truncating silently. The per-parent BFS fetches each level's parents concurrently under the shared
+    /// <see cref="MaxFanOutConcurrency"/> cap (#144), matching the sibling fan-outs
+    /// (<see cref="ResolveContextParentsAsync"/>, <see cref="ResolveListColorsAsync"/>).
     /// Best-effort: a task/list whose fetch fails is skipped rather than failing the whole load.
     /// Non-assignee filters (status/closed) still apply — the pulled-in children flow through
     /// <c>TaskView.Apply</c> like any other task.
@@ -568,36 +570,83 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
         // whole-list fetch is skipped (and not re-enqueued) by the dedup add below. The budget bounds the
         // TOTAL round-trips (seeds + recursion), not just the seed count, so an unexpectedly deep/wide
         // subtree stops at the cap and flags truncation instead of fanning out unboundedly.
+        //
+        // The BFS runs one level at a time, fetching a level's parents concurrently under the shared
+        // MaxFanOutConcurrency cap (#144, follow-up to #87 — the per-parent path was serial, so it scaled
+        // linearly with the number of foreign parents). A plain FIFO queue already visited the tree in
+        // level order (all seeds, then their children), so this is behaviourally equivalent in which ids
+        // are fetched and their cross-level round-trip order — it only overlaps the calls within a level.
+        // Each level's results are merged single-threaded in level order, so `fetched` never sees a
+        // concurrent write and the next frontier is deterministic.
         var budget = opts.MaxPerParentFetches;
         var spent = 0;
         var expanded = new HashSet<string>(StringComparer.Ordinal);
-        var toExpand = new Queue<string>(plan.PerParentIds);
-        while (toExpand.Count > 0)
+        using var gate = new SemaphoreSlim(MaxFanOutConcurrency);
+        // plan.PerParentIds is already distinct (SubtaskFetchStrategy dedups parents); the per-level
+        // guards below handle any duplicates that recursion could surface.
+        var frontier = plan.PerParentIds.ToList();
+        while (frontier.Count > 0)
         {
-            var id = toExpand.Dequeue();
-            if (!expanded.Add(id))
-                continue;
-            if (spent >= budget)
+            // Ids already expanded (a parent recursion surfaced again) cost no budget, matching the old
+            // expanded-set guard; dedup within the level too. A child a whole-list fetch already pooled
+            // is instead dropped at merge time by fetched.TryAdd, so it never enters the frontier.
+            var level = new List<string>();
+            var levelSeen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var id in frontier)
             {
-                truncated = true; // still-pending ids we won't reach this refresh
+                if (!expanded.Contains(id) && levelSeen.Add(id))
+                    level.Add(id);
+            }
+            if (level.Count == 0)
                 break;
-            }
-            spent++;
-            IReadOnlyList<TaskItem> children;
-            try
+
+            // Spend at most the remaining budget on this level, in stable order; a level that overflows
+            // the budget drops its tail — pending work we won't reach this refresh, exactly the old
+            // `spent >= budget` break — and flags truncation.
+            if (spent + level.Count > budget)
             {
-                children = await client.GetSubtasksAsync(id, ct);
+                level = level.Take(Math.Max(0, budget - spent)).ToList();
+                truncated = true;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            if (level.Count == 0)
+                break; // budget exhausted with work still pending (truncated already set)
+
+            foreach (var id in level)
+                expanded.Add(id);
+            spent += level.Count;
+
+            // Fetch the level concurrently, bounded by the gate, preserving order so the merge below is
+            // deterministic. Best-effort: a parent whose fetch throws contributes no children.
+            var childLists = await Task.WhenAll(level.Select(async id =>
             {
-                continue; // best-effort: a task whose subtasks we can't fetch contributes nothing
-            }
-            foreach (var child in children)
+                await gate.WaitAsync(ct);
+                try
+                {
+                    return await client.GetSubtasksAsync(id, ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    return (IReadOnlyList<TaskItem>)[];
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }));
+
+            // Merge single-threaded in level order; newly-pooled children become the next frontier
+            // (their own subtasks may be foreign too).
+            var next = new List<string>();
+            foreach (var children in childLists)
             {
-                if (string.IsNullOrEmpty(child.Id) || !fetched.TryAdd(child.Id, child))
-                    continue;
-                toExpand.Enqueue(child.Id); // its own subtasks may be foreign too
+                foreach (var child in children)
+                {
+                    if (string.IsNullOrEmpty(child.Id) || !fetched.TryAdd(child.Id, child))
+                        continue;
+                    next.Add(child.Id);
+                }
             }
+            frontier = next;
         }
 
         return new ForeignSubtaskResolution(ForeignDescendants(snapshot, fetched.Values.ToList()), truncated);

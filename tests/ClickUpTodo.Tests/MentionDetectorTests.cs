@@ -107,4 +107,53 @@ public sealed class MentionDetectorTests
         var comment = new CommentItem("c1", "Alice", 100, "cc @Ben here", false, "task1");
         Assert.True(MentionDetector.Mentions(comment, Spec("Ben")));
     }
+
+    // ── Structured user-id matching (#167) ─────────────────────────────────────
+
+    private static CommentItem CommentWithIds(string text, params long[] ids)
+        => new("c1", "author", 100, text, false, "task1", MentionedUserIds: ids);
+
+    [Fact]
+    public void Mentions_ByUserId_WhenTextHasNoHandleMatch_IsMention()
+    {
+        // The rendered text carries no "@Ben" we'd match, but a structured block references Ben's id (7).
+        Assert.True(MentionDetector.Mentions(CommentWithIds("thanks, will take a look", 42, 7), Spec("Ben")));
+    }
+
+    [Fact]
+    public void Mentions_ByUserId_DifferentIdsOnly_IsNotMention()
+    {
+        Assert.False(MentionDetector.Mentions(CommentWithIds("thanks, will take a look", 42, 99), Spec("Ben")));
+    }
+
+    [Fact]
+    public void Mentions_TextHandleStillMatches_WhenNoMentionedIds()
+    {
+        // With the id signal empty, the @handle text path (#113) still flags the mention.
+        Assert.True(MentionDetector.Mentions(CommentWithIds("cc @Ben here"), Spec("Ben")));
+    }
+
+    [Fact]
+    public void Mentions_NoneSpec_NeverMatchesById()
+    {
+        // MentionSpec.None has no handles and no UserId, so even a matching-looking id can't flag it.
+        Assert.False(MentionDetector.Mentions(CommentWithIds("plain", 7), MentionSpec.None));
+    }
+
+    [Fact]
+    public void ForUser_CarriesPositiveUserId_AndDropsNonPositiveId()
+    {
+        Assert.Equal(7, MentionSpec.ForUser(new ClickUpUser(7, "Ben")).UserId);
+        Assert.Null(MentionSpec.ForUser(new ClickUpUser(0, "Ben")).UserId);
+    }
+
+    [Fact]
+    public void ForUser_BlankName_ButValidId_MatchesByIdAlone()
+    {
+        // The precise case #167 targets: no usable @handle, but the mentioned numeric id still matches.
+        var spec = MentionSpec.ForUser(new ClickUpUser(7, ""));
+        Assert.Empty(spec.Handles);
+        Assert.Equal(7, spec.UserId);
+        Assert.True(MentionDetector.Mentions(CommentWithIds("no handle rendered here", 7), spec));
+    }
 }

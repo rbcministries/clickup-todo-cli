@@ -6,21 +6,28 @@ using ClickUpTodo.Services;
 using ClickUpTodo.Setup;
 using ClickUpTodo.Tui;
 
-// The persistence backend is chosen here, once — the single drop-in point for a future backend
-// (the #119 verdict is LiteDB) without touching any call site. Today it's file-backed JSON.
-IStateStore stateStore = new JsonFileStateStore();
+// The persistence backend is chosen here, once — the single drop-in point the #120 seam left for the
+// #119 verdict (LiteDB), adopted in #121. Every call site keeps flowing through IStateStore unchanged.
+var dataDirectory = JsonFileStateStore.DefaultDirectory();
+using var liteStore = new LiteDbStateStore(Path.Combine(dataDirectory, "state.db"));
+var legacyStore = new JsonFileStateStore(dataDirectory);
+IStateStore stateStore = liteStore;
 var configStore = new ConfigStore(stateStore);
 var taskCache = new TaskCache(stateStore);
 var tokenStore = new TokenStore();
 
-// `clickup-todo --reset` / `--logout`: forget the saved token and settings, then exit.
+// `clickup-todo --reset` / `--logout`: forget the saved token and settings, then exit. Runs before
+// the legacy import below so a corrupt config.json can't block recovery, and clears the legacy file
+// too (parity with the pre-LiteDB behaviour, where deleting the config removed config.json) so a
+// later launch can't re-import the just-forgotten settings.
 if (args.Any(a => a is "--reset" or "--logout"))
 {
     tokenStore.Delete();
     configStore.Delete();
+    legacyStore.Delete(StateKeys.Config);
     // Drop the cached working set too, so a reset leaves no stale snapshot behind (a fresh workspace
-    // would miss on the fingerprint anyway; this just doesn't orphan the file). #124 owns the broader
-    // token/workspace-change invalidation.
+    // would miss on the fingerprint anyway; this just doesn't orphan the document). #124 owns the
+    // broader token/workspace-change invalidation.
     taskCache.Clear();
     Console.WriteLine("Cleared saved ClickUp token and settings. Run `clickup-todo` to sign in again.");
     return 0;
@@ -52,6 +59,11 @@ if (!string.IsNullOrEmpty(driverName) && !validDrivers.Contains(driverName))
     Console.Error.WriteLine($"Unknown driver '{driverName}'. Valid drivers: {string.Join(", ", validDrivers)} (default: ansi).");
     return 1;
 }
+
+// One-time import of any existing file-backed config.json into the LiteDB store (idempotent; the old
+// file is left in place so a downgrade still finds its settings). Runs after --reset/--help so those
+// paths never touch a possibly-corrupt legacy file, and before the first configStore.Load() below.
+SettingsMigration.ImportLegacyConfig(liteStore, legacyStore);
 
 // First run (or after --reset): collect a token and pick the workspace + Personal Tasks list.
 var token = tokenStore.Load();
@@ -87,7 +99,11 @@ catch (Exception ex)
 var taskService = new TaskService(client, config, userId);
 var feedService = new FeedService(client, taskService, config);
 var focusStore = new LocalFocusStore(config, configStore);
-new TodoApp(taskService, feedService, config, configStore, focusStore, taskCache).Run(driverName);
+// The assignee-frequency candidate pool (#155) — warmed from the loaded tasks and topped up from
+// the workspace members — rides the same state store, scoped to the active workspace.
+var assigneeCache = new AssigneeFrequencyCache(
+    stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
+new TodoApp(taskService, feedService, config, configStore, focusStore, taskCache, assigneeCache).Run(driverName);
 return 0;
 
 // Reads "--opt value" or "--opt=value" from args.

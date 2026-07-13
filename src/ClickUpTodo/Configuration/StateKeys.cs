@@ -20,4 +20,11 @@ public static class StateKeys
     /// written for, so a context switch is a clean cache miss rather than a stale paint.
     /// </summary>
     public const string Tasks = "tasks";
+
+    /// <summary>
+    /// The assignee-frequency candidate pool (#155) — most-frequent assignees across the loaded task
+    /// lists, plus a deferred workspace-members top-up, scoped to one workspace. Maps to
+    /// <c>assignees.json</c> in the file backend.
+    /// </summary>
+    public const string Assignees = "assignees";
 }

@@ -23,14 +23,15 @@ var config = new AppConfig
 
 if (Environment.GetEnvironmentVariable("E2E_VIEW") == "rich")
 {
-    // A realistic power view: grouped by list, subtasks nested, a few pins.
+    // A realistic power view: grouped by list, subtasks nested (all assignees, #179), a few pins.
     config.View.GroupField = TaskField.List;
-    config.View.ShowSubtasks = true;
+    config.View.Subtasks = SubtaskView.All;
     config.PinnedTaskIds = ["t1", "t5", "t9"];
 }
 
 var client = new ClickUpClient("fake-token", new HttpClient(new FakeClickUp(taskCount)));
-var configStore = new ConfigStore();
+IStateStore stateStore = new JsonFileStateStore();
+var configStore = new ConfigStore(stateStore);
 var tasks = new TaskService(client, config, 1);
 var feed = new FeedService(client, tasks, config);
 var focus = new LocalFocusStore(config, configStore);
@@ -39,7 +40,9 @@ var focus = new LocalFocusStore(config, configStore);
 // paint, which keeps the A/B renders byte-identical to the stock renderer.
 var taskCache = new TaskCache(new JsonFileStateStore(
     Path.Combine(Path.GetTempPath(), "clickup-todo-e2e", Guid.NewGuid().ToString("N"))));
-new TodoApp(tasks, feed, config, configStore, focus, taskCache).Run("ansi");
+var assignees = new AssigneeFrequencyCache(
+    stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
+new TodoApp(tasks, feed, config, configStore, focus, taskCache, assignees).Run("ansi");
 return;
 
 sealed class FakeClickUp(int taskCount) : HttpMessageHandler
