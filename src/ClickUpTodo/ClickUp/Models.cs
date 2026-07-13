@@ -80,6 +80,23 @@ public sealed record StatusOption(string Name, string? Color);
 /// a display name (for labels and grouping).</summary>
 public sealed record TaskAssignee(long Id, string Name);
 
+/// <summary>
+/// The fields for creating a task via <see cref="IClickUpClient.CreateTaskAsync"/> (#209) — the stable,
+/// domain-facing input to the create-task facade, so callers (the New Task screen, #213/#215) never touch
+/// the generated request type. Only <see cref="Name"/> is required; the rest are omitted from the request
+/// when unset (null / empty assignees). Shaped forward-compatibly so the later Tags epic can add tags
+/// without reshaping. <see cref="PriorityLevel"/> is ClickUp's importance level (1=Urgent … 4=Low; see
+/// <see cref="ClickUpPriority"/>); <see cref="DueDateMs"/> is Unix epoch milliseconds.
+/// </summary>
+public sealed record NewTaskRequest
+{
+    public required string Name { get; init; }
+    public string? Description { get; init; }
+    public IReadOnlyList<long> Assignees { get; init; } = [];
+    public int? PriorityLevel { get; init; }
+    public long? DueDateMs { get; init; }
+}
+
 /// <summary>A unified task as shown in the to-do list, merged from either source endpoint.</summary>
 public sealed record TaskItem
 {
