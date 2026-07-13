@@ -70,6 +70,21 @@ public sealed class ClickUpClientCommentCreateTests
         Assert.Equal("t9", created.TaskId);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task CreateTaskComment_RejectsEmptyText_WithoutHittingTheNetwork(string text)
+    {
+        // Empty comment_text is a 400 at ClickUp; the facade guards it at the boundary so the request
+        // is never sent (the handler would throw if reached, proving the guard fires first).
+        var handler = new CapturingHandler("""{ "id": "c1" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => client.CreateTaskCommentAsync("t1", text));
+
+        Assert.Null(handler.Method);
+    }
+
     /// <summary>Records the outgoing request (method, URI, parsed JSON body) and returns a canned body.</summary>
     private sealed class CapturingHandler(string responseBody) : HttpMessageHandler
     {

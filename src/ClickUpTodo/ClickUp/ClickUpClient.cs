@@ -355,7 +355,10 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// </para>
     /// </summary>
     public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default)
-        => Guard("CreateTaskComment", async () =>
+    {
+        // ClickUp rejects an empty comment_text with a 400; fail faster and clearer at the boundary.
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        return Guard("CreateTaskComment", async () =>
         {
             var request = new CreateCommentRequest { CommentText = text, NotifyAll = false };
             var created = await _client.V2.Task[taskId].Comment.PostAsync(request, cancellationToken: ct);
@@ -367,6 +370,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 Resolved: false,
                 TaskId: taskId);
         });
+    }
 
     // ── Mapping & plumbing ──────────────────────────────────────────────────
 
