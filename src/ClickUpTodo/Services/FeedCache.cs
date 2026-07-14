@@ -77,17 +77,29 @@ public sealed class FeedCache(IStateStore store)
     /// <summary>Persist <paramref name="items"/> as the feed cache for <paramref name="config"/>'s
     /// context, replacing any prior document.</summary>
     public void Save(AppConfig config, IReadOnlyList<CommentItem> items)
-        => store.Save(StateKeys.Feed, new FeedCacheDocument { Key = KeyFor(config), Items = items });
+        => Save(KeyFor(config), items);
+
+    /// <summary>
+    /// Persist <paramref name="items"/> under an explicit context <paramref name="key"/> (from
+    /// <see cref="KeyFor"/>), replacing any prior document. Used when the key must be captured at
+    /// fetch-start rather than at save-time — the feed's F12 toggle can flip a
+    /// <see cref="KeyFor"/>-relevant flag mid-fetch, so saving under the live config's key could file the
+    /// just-fetched data under the wrong fingerprint.
+    /// </summary>
+    public void Save(string key, IReadOnlyList<CommentItem> items)
+        => store.Save(StateKeys.Feed, new FeedCacheDocument { Key = key, Items = items });
 
     /// <summary>Forget the cached feed (used by <c>--reset</c>). A no-op when nothing is cached.</summary>
     public void Clear() => store.Delete(StateKeys.Feed);
 
     /// <summary>
-    /// The context fingerprint that determines the aggregated feed: the workspace id and the (sorted)
-    /// <c>Assignee IS</c> rule values that scope the assigned fetch the feed fans out from. The Personal
-    /// Tasks list id and client-side sort/group/non-assignee filters are deliberately excluded — they
-    /// don't change which tasks' comments are fetched — so the cache survives those between sessions.
-    /// Pure and stable (order-independent in the assignee set).
+    /// The context fingerprint that determines the aggregated feed: the workspace id, the (sorted)
+    /// <c>Assignee IS</c> rule values that scope the assigned fetch the feed fans out from, and the
+    /// <see cref="AppConfig.FeedShowCompleted"/> (F12) flag — which changes <b>which tasks</b> are
+    /// fetched (open-only vs. open + closed), so a cache captured under one setting must not instant-paint
+    /// under the other. The Personal Tasks list id and client-side sort/group/non-assignee filters are
+    /// deliberately excluded — they don't change which tasks' comments are fetched — so the cache survives
+    /// those between sessions. Pure and stable (order-independent in the assignee set).
     /// </summary>
     internal static string KeyFor(AppConfig config)
     {
@@ -98,6 +110,7 @@ public sealed class FeedCache(IStateStore store)
         var assignees = TaskService.AssigneeRuleValues(config.View)
             .Select(v => v.ToLowerInvariant())
             .OrderBy(v => v, StringComparer.Ordinal);
-        return string.Join('|', new[] { config.WorkspaceId }.Concat(assignees));
+        var completed = config.FeedShowCompleted ? "completed" : "open";
+        return string.Join('|', new[] { config.WorkspaceId, completed }.Concat(assignees));
     }
 }

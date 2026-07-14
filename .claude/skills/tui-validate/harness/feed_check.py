@@ -3,7 +3,9 @@
 feed (Ctrl+E — the List <-> Feed navigation key), and asserts: rows render
 (author/preview), the mention row carries the amber " @ " chip (a truecolor bg
 cell), and the F3 mentions-only toggle narrows the list to the mention and widens
-back. Then Ctrl+E toggles back to the dashboard.
+back. Then F12 pulls in completed-ticket activity (a closed task's comment appears
+only while the toggle is on) and toggling it off drops it again, before Ctrl+E
+toggles back to the dashboard.
 
 Usage: feed_check.py <e2e.dll> [out.txt]
 """
@@ -25,6 +27,7 @@ os.close(slave)
 
 CTRL_E = b"\x05"   # List <-> Feed navigation
 F3 = b"\x1bOR"
+F12 = b"\x1b[24~"  # include completed-ticket activity
 ESC = b"\x1b"
 
 def answer(data):
@@ -97,6 +100,21 @@ try:
     os.write(master, F3); pump(1.5)
     v = visible()
     check("Ben Seymour" in v, "toggling back did not restore all comments")
+
+    # F12 → include completed-ticket activity. The closed task's comment ("Dana Closed") is fetched
+    # only when include_closed flips on, so it must be absent before and present after.
+    check("Dana Closed" not in v, "closed-ticket activity showed before F12 was pressed")
+    os.write(master, F12); pump(3.0)
+    v = visible()
+    check("completed" in v.lower(), "title did not reflect the completed toggle (+completed)")
+    check("Dana Closed" in v, "closed-ticket comment did not appear after F12")
+    with open(OUT + ".completed", "w") as f:
+        f.write(v)  # the feed including completed-ticket activity
+
+    # F12 again → hide completed activity; the closed-ticket comment drops back out.
+    os.write(master, F12); pump(3.0)
+    v = visible()
+    check("Dana Closed" not in v, "closed-ticket comment did not drop out after toggling F12 off")
 
     # Ctrl+E → toggle back to the dashboard, cursor intact.
     os.write(master, CTRL_E); pump(1.5)

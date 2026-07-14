@@ -117,6 +117,7 @@ public static class HelpItemSets
         new("Ctrl+PgUp/PgDn", "order activity"),
         new("Ctrl+A", "dispatch to Claude"),
         new("Ctrl+B", "browser"),
+        new("Ctrl+U", "quick update"),
         new("F5", "↻"),
         new("F1", "help"),
         new("Esc", "back"),
@@ -163,14 +164,15 @@ public static class HelpItemSets
     ];
 
     /// <summary>The mentions &amp; comments feed screen (opened with Ctrl+E, #109). Enter opens the
-    /// selected comment's task (#115); F3 toggles the mentions-only filter (#113/#114); Ctrl+E returns
-    /// to the list.</summary>
+    /// selected comment's task (#115); F3 toggles the mentions-only filter (#113/#114); F12 toggles
+    /// whether completed-task activity is included; Ctrl+E returns to the list.</summary>
     public static readonly IReadOnlyList<HelpItem> NotificationsFeed =
     [
         new("↑/↓", "move"),
         new("Enter", "open"),
         new("F3", "mentions only"),
         new("F5", "↻"),
+        new("F12", "completed"),
         new("Ctrl+E", "list"),
         new("F1", "help"),
         new("Esc", "back"),
