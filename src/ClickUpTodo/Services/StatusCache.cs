@@ -43,6 +43,7 @@ public sealed class StatusCache
     private readonly Dictionary<string, Entry> _entries = new();
     private readonly Dictionary<string, Task<IReadOnlyList<StatusOption>>> _inFlight = new();
     private readonly Lock _gate = new();
+    private readonly Lock _persistGate = new();
 
     private readonly record struct Entry(IReadOnlyList<StatusOption> Statuses, DateTimeOffset FetchedAt);
 
@@ -137,10 +138,8 @@ public sealed class StatusCache
         {
             var statuses = await _fetch(listId, ct).ConfigureAwait(false);
             lock (_gate)
-            {
                 _entries[listId] = new Entry(statuses, _clock.GetUtcNow());
-                PersistLocked();
-            }
+            Persist(); // deliberately off _gate — see Persist for why the disk write can't hold it
             return statuses;
         }
         finally
@@ -177,33 +176,40 @@ public sealed class StatusCache
 
         foreach (var entry in doc.Entries)
         {
-            if (!string.IsNullOrEmpty(entry.ListId) && entry.Statuses is not null)
-                _entries[entry.ListId] = new Entry(
-                    entry.Statuses, DateTimeOffset.FromUnixTimeMilliseconds(entry.FetchedAtMs));
+            if (string.IsNullOrEmpty(entry.ListId) || entry.Statuses is null)
+                continue;
+            // A structurally-valid but out-of-range timestamp (a hand-tampered file) makes
+            // FromUnixTimeMilliseconds throw — skip that entry rather than let it crash the launch this
+            // guard exists to protect (our own writes are always in range).
+            DateTimeOffset fetchedAt;
+            try { fetchedAt = DateTimeOffset.FromUnixTimeMilliseconds(entry.FetchedAtMs); }
+            catch (ArgumentOutOfRangeException) { continue; }
+            _entries[entry.ListId] = new Entry(entry.Statuses, fetchedAt);
         }
     }
 
-    // Caller holds _gate. Rewrites the whole snapshot (the list count is tiny). Serialising the write
-    // under the lock satisfies IStateStore's "serialise access per key" contract — concurrent fetches
-    // (prefetch runs several at once) each store under the same lock. Best-effort: a failed write
-    // (read-only / full disk) must never break the picker; the in-memory cache lives on and the next
-    // fetch retries the write.
-    private void PersistLocked()
+    // Rewrites the whole snapshot (the list count is tiny). The disk write runs under a dedicated
+    // _persistGate, NOT _gate: TryGetFresh (the picker's UI fast-path) takes _gate, so a concurrent
+    // prefetch's write must not hold it and stall an interactive picker-open on disk/DB I/O (LiteDB
+    // opens/closes the file per op in shared mode). _persistGate still serialises writes per key
+    // (IStateStore's contract), and the snapshot is copied under _gate — briefly, in memory — so each
+    // serialised write persists the latest state (no lost update). Best-effort: a failed write
+    // (read-only / full disk) leaves the in-memory cache intact and the next fetch retries.
+    private void Persist()
     {
         if (_store is null)
             return;
-        try
+        lock (_persistGate)
         {
-            var doc = new StatusCacheDocument(
-                CurrentSchemaVersion,
-                _workspaceId,
-                _entries.Select(kv => new StatusCacheEntryDto(
-                    kv.Key, kv.Value.Statuses, kv.Value.FetchedAt.ToUnixTimeMilliseconds())).ToList());
-            _store.Save(StateKeys.Statuses, doc);
-        }
-        catch
-        {
-            // Swallowed — see contract note above.
+            StatusCacheDocument doc;
+            lock (_gate)
+                doc = new StatusCacheDocument(
+                    CurrentSchemaVersion,
+                    _workspaceId,
+                    _entries.Select(kv => new StatusCacheEntryDto(
+                        kv.Key, kv.Value.Statuses, kv.Value.FetchedAt.ToUnixTimeMilliseconds())).ToList());
+            try { _store.Save(StateKeys.Statuses, doc); }
+            catch { /* see note above */ }
         }
     }
 }

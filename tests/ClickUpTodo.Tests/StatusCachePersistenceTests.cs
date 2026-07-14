@@ -114,6 +114,20 @@ public sealed class StatusCachePersistenceTests : IDisposable
         Assert.False(cache.TryGetFresh("list-1", out _));
     }
 
+    [Fact]
+    public void OutOfRangeTimestamp_IsSkipped_NotThrow()
+    {
+        // A structurally-valid document with a nonsense (out-of-range) timestamp must not crash the
+        // constructor — the warm-up runs before the UI loop. The bad entry is skipped; nothing is warmed.
+        var store = Store();
+        store.Save(StateKeys.Statuses, new StatusCacheDocument(
+            StatusCache.CurrentSchemaVersion, "ws1",
+            [new StatusCacheEntryDto("list-1", Statuses("to do"), long.MaxValue)]));
+
+        var cache = new StatusCache((_, _) => Task.FromResult(Statuses("x")), NewClock(), store: store, workspaceId: "ws1");
+        Assert.False(cache.TryGetFresh("list-1", out _));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_dir))

@@ -43,6 +43,7 @@ public sealed class ListColorCache
     private readonly TimeSpan _ttl;
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private readonly Lock _gate = new();
+    private readonly Lock _persistGate = new();
 
     private readonly record struct Entry(string? Color, long FetchedAtMs);
 
@@ -94,8 +95,8 @@ public sealed class ListColorCache
                 if (!string.IsNullOrWhiteSpace(listId))
                     _entries[listId] = new Entry(color, nowMs);
             }
-            Persist();
         }
+        Persist(); // off _gate — see Persist
     }
 
     // Warm the in-memory entries from the persisted snapshot, dropping any past their TTL so a stale
@@ -123,29 +124,37 @@ public sealed class ListColorCache
         {
             if (string.IsNullOrWhiteSpace(entry.ListId))
                 continue;
-            if (now - DateTimeOffset.FromUnixTimeMilliseconds(entry.FetchedAtMs) >= _ttl)
+            // A structurally-valid but out-of-range timestamp (a hand-tampered file) makes
+            // FromUnixTimeMilliseconds throw — skip that entry rather than crash the launch this guard
+            // protects (our own writes are always in range).
+            DateTimeOffset fetchedAt;
+            try { fetchedAt = DateTimeOffset.FromUnixTimeMilliseconds(entry.FetchedAtMs); }
+            catch (ArgumentOutOfRangeException) { continue; }
+            if (now - fetchedAt >= _ttl)
                 continue; // stale on load → drop; refetched on demand.
             _entries[entry.ListId] = new Entry(entry.Color, entry.FetchedAtMs);
         }
     }
 
-    // Caller holds _gate. Serialising the write under the lock satisfies IStateStore's "serialise access
-    // per key" contract. Best-effort — a failed write leaves the in-memory cache intact.
+    // Rewrites the whole snapshot. The disk write runs under a dedicated _persistGate, not _gate, so it
+    // never blocks Contains/Snapshot (and stays consistent with StatusCache, whose reads are on the UI
+    // fast-path). _persistGate serialises writes per key (IStateStore's contract); the snapshot is copied
+    // under _gate — briefly, in memory — so each serialised write persists the latest state. Best-effort:
+    // a failed write leaves the in-memory cache intact.
     private void Persist()
     {
         if (_store is null)
             return;
-        try
+        lock (_persistGate)
         {
-            var doc = new ListColorDocument(
-                CurrentSchemaVersion,
-                _workspaceId,
-                _entries.Select(kv => new ListColorEntry(kv.Key, kv.Value.Color, kv.Value.FetchedAtMs)).ToList());
-            _store.Save(StateKeys.ListColors, doc);
-        }
-        catch
-        {
-            // Swallowed — see contract note above.
+            ListColorDocument doc;
+            lock (_gate)
+                doc = new ListColorDocument(
+                    CurrentSchemaVersion,
+                    _workspaceId,
+                    _entries.Select(kv => new ListColorEntry(kv.Key, kv.Value.Color, kv.Value.FetchedAtMs)).ToList());
+            try { _store.Save(StateKeys.ListColors, doc); }
+            catch { /* see note above */ }
         }
     }
 }

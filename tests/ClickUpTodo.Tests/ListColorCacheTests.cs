@@ -132,6 +132,20 @@ public sealed class ListColorCacheTests : IDisposable
         Assert.Empty(new ListColorCache().Snapshot());
     }
 
+    [Fact]
+    public void OutOfRangeTimestamp_IsSkipped_NotThrow()
+    {
+        // A tampered document with a nonsense timestamp must not crash the constructor (warm-up runs
+        // before the UI loop). The bad entry is skipped, not warmed.
+        var store = Store();
+        store.Save(StateKeys.ListColors, new ListColorDocument(
+            ListColorCache.CurrentSchemaVersion, "ws1", [new ListColorEntry("L1", "#111111", long.MaxValue)]));
+
+        var cache = new ListColorCache(store, "ws1", NewClock());
+        Assert.Empty(cache.Snapshot());
+        Assert.False(cache.Contains("L1"));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_dir))
