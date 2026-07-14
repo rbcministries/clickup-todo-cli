@@ -71,6 +71,11 @@ public sealed class NotificationsFeedScreen : Screen
     private readonly Label _emptyLabel;
     private bool _mentionsOnly;
 
+    /// <summary>Whether the feed currently includes activity from completed (closed-type) tasks — the
+    /// F12 toggle. Display-only here: the persisted flag and the re-fetch it needs are owned by the
+    /// host (see <see cref="ToggleCompletedRequested"/>); this drives the title indicator.</summary>
+    private bool _showCompleted;
+
     /// <summary>The rows currently displayed (the feed after the F3 filter), kept so Enter can map the
     /// selected <see cref="ListView"/> index back to its <see cref="CommentItem"/> exactly as shown.</summary>
     private IReadOnlyList<CommentItem> _rows = [];
@@ -94,15 +99,27 @@ public sealed class NotificationsFeedScreen : Screen
     /// </summary>
     public event EventHandler? RefreshRequested;
 
+    /// <summary>
+    /// Raised when the user presses F12 to toggle whether completed (closed-type) tasks' activity is
+    /// included (mirrors the main list's F12). Unlike the F3 mentions filter — a local re-filter of the
+    /// loaded feed — this changes <b>what is fetched</b>, so the host owns it: it flips and persists
+    /// <see cref="AppConfig.FeedShowCompleted"/>, reflects the new state back via
+    /// <see cref="SetShowCompleted"/>, and re-fetches the feed.
+    /// </summary>
+    public event EventHandler? ToggleCompletedRequested;
+
     /// <param name="feed">The already-fetched, mention-stamped feed (newest first).</param>
     /// <param name="autoRefreshSeconds">Background auto-refresh cadence — the feed's own
     /// <see cref="Configuration.AppConfig.FeedRefreshSeconds"/> (#123), independent of the task list.</param>
     /// <param name="mentionsOnly">Whether the mentions-only filter starts on.</param>
-    public NotificationsFeedScreen(IReadOnlyList<CommentItem> feed, int autoRefreshSeconds, bool mentionsOnly = false)
+    /// <param name="showCompleted">Whether the feed starts including completed-task activity (F12).</param>
+    public NotificationsFeedScreen(
+        IReadOnlyList<CommentItem> feed, int autoRefreshSeconds, bool mentionsOnly = false, bool showCompleted = false)
     {
         _feed = feed;
         _autoRefreshSeconds = Math.Max(5, autoRefreshSeconds);
         _mentionsOnly = mentionsOnly;
+        _showCompleted = showCompleted;
 
         // One focusable ListView fills the screen area (the shared footer #103 carries the shortcuts).
         // A single pane keeps the #3 latency model — no second focusable view.
@@ -152,6 +169,13 @@ public sealed class NotificationsFeedScreen : Screen
                 _mentionsOnly = !_mentionsOnly;
                 RenderFeed();
                 RequestFlash(_mentionsOnly ? "Mentions only" : "All comments");
+                break;
+            case KeyCode.F12:
+                key.Handled = true;
+                // Unlike F3 (a local re-filter), completed activity is never in the loaded feed when the
+                // toggle is off — the closed tasks were never fetched — so the host must re-fetch. Ask it
+                // to; it flips/persists the flag, calls back into SetShowCompleted, and refreshes.
+                ToggleCompletedRequested?.Invoke(this, EventArgs.Empty);
                 break;
             case KeyCode.F1:
                 key.Handled = true;
@@ -210,6 +234,18 @@ public sealed class NotificationsFeedScreen : Screen
         return Math.Clamp(previousIndex ?? 0, 0, rows.Count - 1);
     }
 
+    /// <summary>
+    /// Reflects the new completed-inclusion state (F12) in the title after the host has flipped and
+    /// persisted the flag. The row content follows from the host's subsequent re-fetch (which feeds
+    /// back through <see cref="UpdateFeed"/>), so this only updates the indicator — no source rebuild,
+    /// so the cursor isn't disturbed. Must run on the UI thread.
+    /// </summary>
+    public void SetShowCompleted(bool showCompleted)
+    {
+        _showCompleted = showCompleted;
+        Title = TitleFor(_mentionsOnly, _showCompleted);
+    }
+
     /// <summary>Rebuilds the list rows from the (filtered) feed and toggles the empty-state placeholder.
     /// Reassigns <c>_list.Source</c> (which disposes the previous source) — cheap; the feed is small
     /// and bounded (<see cref="FeedService.DefaultMaxEntries"/>).</summary>
@@ -217,7 +253,7 @@ public sealed class NotificationsFeedScreen : Screen
     {
         var rows = Filter(_feed, _mentionsOnly);
         _rows = rows;
-        Title = _mentionsOnly ? "Feed — mentions only" : "Feed — mentions & comments";
+        Title = TitleFor(_mentionsOnly, _showCompleted);
 
         var (text, badges, keys) = BuildRows(rows);
         _list.Source = new StatusBadgeListSource(text, badges, headerAttrs: null, searchKeys: keys);
@@ -255,6 +291,15 @@ public sealed class NotificationsFeedScreen : Screen
     /// (#113). Pure and unit-testable.</summary>
     internal static IReadOnlyList<CommentItem> Filter(IReadOnlyList<CommentItem> feed, bool mentionsOnly)
         => mentionsOnly ? feed.Where(c => c.MentionsMe).ToList() : feed;
+
+    /// <summary>The frame title for the given filter state: the mentions-only vs all-comments base,
+    /// suffixed with <c>(+completed)</c> when completed-task activity is included (F12). Pure and
+    /// unit-testable.</summary>
+    internal static string TitleFor(bool mentionsOnly, bool showCompleted)
+    {
+        var baseTitle = mentionsOnly ? "Feed — mentions only" : "Feed — mentions & comments";
+        return showCompleted ? baseTitle + " (+completed)" : baseTitle;
+    }
 
     /// <summary>Which empty-state copy to show: the mentions-only placeholder when that filter is on
     /// and the feed does have (non-mention) comments, otherwise the no-comments-at-all placeholder.

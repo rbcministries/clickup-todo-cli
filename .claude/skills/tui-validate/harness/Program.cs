@@ -65,11 +65,11 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
         if (path.EndsWith("/user"))
             body = """{"user":{"id":1,"username":"bench","email":"bench@example.com"}}""";
         else if (path.Contains("/task/") && path.EndsWith("/comment"))
-            body = CommentsJson();
+            body = CommentsJson(TaskIdOfComment(path));
         else if (path.Contains("/task/"))
             body = DetailJson(path);
         else if (path.Contains("/team/") && path.EndsWith("/task"))
-            body = TasksJson(page: PageOf(query), taskCount);
+            body = TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
         else if (path.Contains("/list/") && path.EndsWith("/task"))
             body = """{"tasks":[],"last_page":true}""";
         else if (path.Contains("/list/"))
@@ -93,11 +93,24 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
         return 0;
     }
 
-    private static string TasksJson(int page, int total)
+    /// <summary>Whether the request opted into closed tasks (the feed's F12 / the list's #178 toggle
+    /// flips <c>include_closed=true</c>).</summary>
+    private static bool IncludeClosed(string query)
+        => query.Contains("include_closed=true", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The task id from a <c>/v2/task/{id}/comment</c> path.</summary>
+    private static string TaskIdOfComment(string path)
+    {
+        var trimmed = path.EndsWith("/comment") ? path[..^"/comment".Length] : path;
+        return trimmed[(trimmed.LastIndexOf('/') + 1)..];
+    }
+
+    private static string TasksJson(int page, int total, bool includeClosed)
     {
         const int pageSize = 100;
         var start = page * pageSize;
         var count = Math.Clamp(total - start, 0, pageSize);
+        var lastPage = start + count >= total;
         var sb = new StringBuilder();
         sb.Append("{\"tasks\":[");
         for (var i = 0; i < count; i++)
@@ -112,7 +125,18 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
             {"id":"t{{k}}","name":"Task {{k}} — follow up on the {{ListNames[li]}} item with a realistic title 📌","status":{"status":"{{Statuses[k % 4]}}","color":"{{StatusColors[k % 4]}}"},"list":{"id":"{{Lists[li]}}","name":"{{ListNames[li]}}"},"due_date":"{{DateTimeOffset.UtcNow.AddDays(k % 14).ToUnixTimeMilliseconds()}}","date_updated":"1700000000000","url":"https://app.clickup.com/t/t{{k}}"{{parent}}{{(k % 3 == 0 ? ",\"priority\":{\"priority\":\"high\",\"color\":\"#f50000\"}" : "")}}}
             """);
         }
-        sb.Append($"],\"last_page\":{(start + count >= total ? "true" : "false")}}}");
+        // A completed (closed-type) task, returned only when the caller opts into closed tasks. The feed
+        // fans a comment fetch out over it, so its distinctive comment (see CommentsJson) surfaces only
+        // once F12 flips include_closed on — and drops back out when F12 is toggled off. Appended on the
+        // last page so paging stays correct.
+        if (includeClosed && lastPage)
+        {
+            if (count > 0) sb.Append(',');
+            sb.Append("""
+            {"id":"tclosed","name":"Closed ticket — shipped and done ✅","status":{"status":"complete","type":"closed","color":"#6bc950"},"list":{"id":"plist","name":"Personal Tasks"},"date_updated":"1751500000000","url":"https://app.clickup.com/t/tclosed"}
+            """);
+        }
+        sb.Append($"],\"last_page\":{(lastPage ? "true" : "false")}}}");
         return sb.ToString();
     }
 
@@ -132,8 +156,20 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
     // the only way to exercise the detail view's *content-changed* refresh path (scroll preservation).
     private static int _commentFetches;
 
-    private static string CommentsJson()
+    private static string CommentsJson(string taskId)
     {
+        // The completed task's activity (#178-style feed F12): a single distinctive comment, dated
+        // newest so it sorts to the top of the feed when include_closed surfaces its task. Its author
+        // ("Dana Closed") appears in the feed only while F12 is on.
+        if (taskId == "tclosed")
+            return JsonSerializer.Serialize(new
+            {
+                comments = new[]
+                {
+                    new { id = "cclosed", comment_text = "Closing note: deployed to prod, ticket resolved.", user = new { username = "Dana Closed" }, date = "1751495000000", resolved = false },
+                },
+            });
+
         // 🛠️ is U+1F6E0 + U+FE0F (variation selector): ambiguous-width emoji presentation —
         // the worst case for column-model vs terminal disagreement (field-reported trigger).
         var text = "🛠️ Session summary — implementation (“ship now” approach)\n\n" +

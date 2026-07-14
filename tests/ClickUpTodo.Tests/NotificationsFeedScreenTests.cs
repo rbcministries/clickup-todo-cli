@@ -66,6 +66,14 @@ public sealed class NotificationsFeedScreenTests
         Assert.Equal(new[] { "c1", "c3" }, result.Select(c => c.Id));
     }
 
+    [Theory]
+    [InlineData(false, false, "Feed — mentions & comments")]
+    [InlineData(true, false, "Feed — mentions only")]
+    [InlineData(false, true, "Feed — mentions & comments (+completed)")]
+    [InlineData(true, true, "Feed — mentions only (+completed)")]
+    public void TitleFor_ReflectsMentionsAndCompletedState(bool mentionsOnly, bool showCompleted, string expected)
+        => Assert.Equal(expected, NotificationsFeedScreen.TitleFor(mentionsOnly, showCompleted));
+
     [Fact]
     public void EmptyMessage_MentionsOnly_WithComments_UsesNoMentionsCopy()
         => Assert.Equal(

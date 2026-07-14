@@ -193,6 +193,18 @@ public sealed class FeedCacheTests : IDisposable
     }
 
     [Fact]
+    public void KeyFor_ChangesWith_FeedShowCompleted()
+    {
+        // The feed's F12 toggle changes which tasks are fetched (open-only vs open + closed), so a cache
+        // captured under one setting must not instant-paint under the other.
+        var open = Config();
+        var completed = Config();
+        completed.FeedShowCompleted = true;
+
+        Assert.NotEqual(FeedCache.KeyFor(open), FeedCache.KeyFor(completed));
+    }
+
+    [Fact]
     public void KeyFor_IsUnaffectedBy_PersonalList_Sort_Group_AndNonAssigneeFilters()
     {
         // The aggregated feed depends only on the workspace + assignee scope, so it stays valid across

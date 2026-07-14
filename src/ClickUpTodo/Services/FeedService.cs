@@ -41,11 +41,21 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
     /// <see cref="CommentItem.MentionsMe"/> (#113) against the signed-in user; when
     /// <paramref name="mentionsOnly"/> is true the result is filtered to mentions only. Best-effort per
     /// task (a task whose comments can't be fetched is skipped); genuine cancellation propagates.
+    /// <para>
+    /// <paramref name="includeClosed"/> is the feed's F12 "Show Completed" toggle
+    /// (<see cref="AppConfig.FeedShowCompleted"/>): off (default) the assigned-task fetch is open-only,
+    /// so comments on a ticket that has since closed don't appear; on, closed tasks are included so their
+    /// activity surfaces. It's passed in (not read from <c>config</c> here) so the caller captures the
+    /// flag on the UI thread at fetch-start — the flag is toggled at runtime while the feed is open, and
+    /// a worker-thread read could otherwise disagree with the cache key the result is saved under.
+    /// </para>
     /// </summary>
-    public async Task<IReadOnlyList<CommentItem>> LoadFeedAsync(bool mentionsOnly = false, CancellationToken ct = default)
+    public async Task<IReadOnlyList<CommentItem>> LoadFeedAsync(
+        bool includeClosed, bool mentionsOnly = false, CancellationToken ct = default)
     {
         var assigneeIds = await taskService.ResolveAssigneeIdsAsync(config.View, ct);
-        var tasks = await client.GetAssignedTasksAsync(config.WorkspaceId, assigneeIds, ct: ct);
+        var tasks = await client.GetAssignedTasksAsync(
+            config.WorkspaceId, assigneeIds, includeClosed: includeClosed, ct: ct);
 
         var taskIds = tasks
             .Select(t => t.Id)

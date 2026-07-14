@@ -72,6 +72,11 @@ public sealed class TodoApp
     // True while a feed / detail auto- or manual refresh fetch is outstanding, so ticks coalesce
     // instead of piling up when a fan-out outlasts the cadence. UI-thread-only (like _dispatching).
     private bool _refreshingFeed;
+    // Set when a refresh is requested while one is already in flight, so the queued request runs once the
+    // current fetch completes instead of being dropped — a state-changing F12 toggle must not be lost to
+    // coalescing. Bounded to a single pending run (mirrors the list's queue-style RefreshService).
+    // UI-thread-only.
+    private bool _feedRefreshPending;
     private bool _refreshingDetail;
 
     private Window _window = null!;
@@ -503,17 +508,22 @@ public sealed class TodoApp
         }
 
         Flash("Loading feed…");
+        // Capture the completed flag + its cache key at fetch-start so the result is fetched with, and
+        // saved under, one consistent fingerprint (see RefreshFeed). No feed screen exists yet, so the
+        // flag can't be toggled during this cold load, but capturing keeps the two fetch paths uniform.
+        var includeClosed = _config.FeedShowCompleted;
+        var cacheKey = FeedCache.KeyFor(_config);
         _ = Task.Run(async () =>
         {
             try
             {
-                var feed = await _feed.LoadFeedAsync(mentionsOnly: false);
+                var feed = await _feed.LoadFeedAsync(includeClosed, mentionsOnly: false);
                 Application.Invoke(() =>
                 {
                     if (ActiveScreen is not null)
                         return;
                     // Cache the freshly-aggregated feed so the next open paints instantly (#123).
-                    _feedCache.Save(_config, feed);
+                    _feedCache.Save(cacheKey, feed);
                     ShowScreen(CreateFeedScreen(feed), static () => { });
                 });
             }
@@ -526,15 +536,21 @@ public sealed class TodoApp
 
     /// <summary>
     /// Builds a <see cref="NotificationsFeedScreen"/> over <paramref name="feed"/> with the host's
-    /// event wiring: F5 / Ctrl+R and the auto-refresh tick re-fetch via <see cref="RefreshFeed"/>, and
-    /// Enter on a row opens that comment's task detail stacked over the feed (#115, Esc returns here).
-    /// The feed runs on its own longer cadence (<see cref="AppConfig.FeedRefreshSeconds"/>, #123),
-    /// independent of the dashboard task-list poll, because assembling it is far heavier.
+    /// event wiring: F5 / Ctrl+R and the auto-refresh tick re-fetch via <see cref="RefreshFeed"/>, Enter
+    /// on a row opens that comment's task detail stacked over the feed (#115, Esc returns here), and F12
+    /// toggles whether completed-task activity is included (the feed's own "Show Completed", independent
+    /// of the list's #178). The feed runs on its own longer cadence
+    /// (<see cref="AppConfig.FeedRefreshSeconds"/>, #123), independent of the dashboard task-list poll,
+    /// because assembling it is far heavier.
     /// </summary>
     private NotificationsFeedScreen CreateFeedScreen(IReadOnlyList<CommentItem> feed)
     {
-        var screen = new NotificationsFeedScreen(feed, _config.FeedRefreshSeconds);
+        var screen = new NotificationsFeedScreen(
+            feed, _config.FeedRefreshSeconds, showCompleted: _config.FeedShowCompleted);
         screen.RefreshRequested += (_, _) => RefreshFeed(screen);
+        // F12 changes what's fetched (closed tasks were never loaded while off), so unlike the F3 local
+        // filter the host persists the flag and re-fetches — see ToggleFeedShowCompleted.
+        screen.ToggleCompletedRequested += (_, _) => ToggleFeedShowCompleted(screen);
         screen.OpenTaskRequested += (_, taskId) => OpenTaskDetail(taskId);
         return screen;
     }
@@ -555,23 +571,36 @@ public sealed class TodoApp
             return;
 
         // Coalesce: the feed fan-out (a comment fetch per assigned task) can outlast the refresh cadence
-        // on a large workspace. Skip a tick while one is still in flight so ticks don't pile up and
-        // multiply API load — and so an earlier fetch can't land after a later one with stale data. The
-        // flag is only touched on the UI thread (here and the finally's Invoke), so no locking is needed.
+        // on a large workspace. While one is in flight, don't start a second — but remember that another
+        // was asked for and run it once the current one lands, rather than dropping it. This keeps ticks
+        // from piling up (at most one queued) while never losing a state-changing request such as an F12
+        // toggle, which flips a KeyFor-relevant flag and needs the fetch to actually happen. The flags are
+        // only touched on the UI thread (here and the finally's Invoke), so no locking is needed.
         if (_refreshingFeed)
+        {
+            _feedRefreshPending = true;
             return;
+        }
         _refreshingFeed = true;
+
+        // Capture the completed flag and its matching cache key on the UI thread at fetch-start. F12 can
+        // flip the flag while this fetch runs; capturing here means the result is fetched with, and saved
+        // under, one consistent fingerprint — so the cache never files open-only data under the completed
+        // key (or vice-versa), and the pending re-fetch below picks up the new flag on its own pass.
+        var includeClosed = _config.FeedShowCompleted;
+        var cacheKey = FeedCache.KeyFor(_config);
 
         _ = Task.Run(async () =>
         {
             try
             {
-                var feed = await _feed.LoadFeedAsync(mentionsOnly: false);
+                var feed = await _feed.LoadFeedAsync(includeClosed, mentionsOnly: false);
                 Application.Invoke(() =>
                 {
                     // Cache the freshly-aggregated feed regardless of whether the screen is still open —
-                    // the data is valid for the next open either way (#123).
-                    _feedCache.Save(_config, feed);
+                    // the data is valid for the next open either way (#123) — under the fingerprint it was
+                    // fetched with (captured above), not the (possibly since-toggled) live one.
+                    _feedCache.Save(cacheKey, feed);
                     if (_screens.Contains(screen))
                     {
                         screen.UpdateFeed(feed);
@@ -593,9 +622,45 @@ public sealed class TodoApp
             }
             finally
             {
-                Application.Invoke(() => _refreshingFeed = false);
+                Application.Invoke(() =>
+                {
+                    _refreshingFeed = false;
+                    // Run the queued refresh (e.g. an F12 toggle that arrived mid-fetch), on the feed
+                    // that's front-most now, so its new flag actually takes effect.
+                    if (_feedRefreshPending && ActiveScreen is NotificationsFeedScreen pending)
+                    {
+                        _feedRefreshPending = false;
+                        RefreshFeed(pending);
+                    }
+                    else
+                    {
+                        _feedRefreshPending = false;
+                    }
+                });
             }
         });
+    }
+
+    /// <summary>
+    /// Toggles the feed's F12 "Show Completed" — whether the feed includes activity from completed
+    /// (closed-type) tasks — and persists it (<see cref="AppConfig.FeedShowCompleted"/>). Independent of
+    /// the main list's F12 (#178), which owns <see cref="ViewSettings.ShowCompleted"/>. Because the
+    /// closed tasks were never fetched, a client-side re-render can't surface them: this re-fetches via
+    /// <see cref="RefreshFeed"/> after reflecting the new state in the screen's title. If a refresh is
+    /// already in flight the re-fetch is queued (not dropped), so the toggle always takes effect. Runs on
+    /// the UI thread (from the screen's key handler); no-op if that screen isn't front-most.
+    /// </summary>
+    private void ToggleFeedShowCompleted(NotificationsFeedScreen screen)
+    {
+        if (!ReferenceEquals(ActiveScreen, screen))
+            return;
+
+        var on = !_config.FeedShowCompleted;
+        _config.FeedShowCompleted = on;
+        _configStore.Save(_config);
+        screen.SetShowCompleted(on);
+        Flash(on ? "Feed: showing completed tickets (F12)." : "Feed: completed tickets hidden (F12).");
+        RefreshFeed(screen);
     }
 
     /// <summary>
