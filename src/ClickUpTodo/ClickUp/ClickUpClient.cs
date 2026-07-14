@@ -282,6 +282,28 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         });
 
     /// <summary>
+    /// Set a task's <b>plain-text</b> description (ClickUp's <c>description</c> field, not
+    /// <c>markdown_description</c>) so a read → edit → write → re-read round-trip is lossless for the
+    /// plain text the detail view already surfaces (<see cref="MapDetail"/> reads <c>text_content</c>
+    /// → <c>description</c>). Pass <c>""</c> to clear the description — Kiota writes a non-null string,
+    /// so an explicit empty string is sent and ClickUp clears the field; a <c>null</c> argument is
+    /// rejected up front (Kiota would omit a null typed property and the write would silently no-op).
+    /// Returns the <b>server-confirmed</b> description from the <c>PUT /task/{id}</c> response —
+    /// the same return-the-truth contract as <see cref="SetTaskStatusAsync"/>, with the
+    /// <c>text_content</c>-preferred-over-<c>description</c> read-back matching <see cref="MapDetail"/>
+    /// (so a cleared/whitespace description reads back as <c>null</c>, exactly as the detail view sees it).
+    /// </summary>
+    public Task<string?> SetTaskDescriptionAsync(string taskId, string description, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(description);
+        return Guard("UpdateTask", async () =>
+        {
+            var updated = await _client.V2.Task[taskId].PutAsync(new UpdateTaskRequest { Description = description }, cancellationToken: ct);
+            return !string.IsNullOrWhiteSpace(updated?.TextContent) ? updated!.TextContent : updated?.Description;
+        });
+    }
+
+    /// <summary>
     /// Add a user to a task's assignees. ClickUp's <c>PUT /task/{id}</c> takes
     /// <c>assignees: { add: [...] }</c>. Returns the task's <b>reconciled</b> assignee set from the
     /// response so a caller can update the row without a read-after-write.

@@ -40,6 +40,13 @@ public interface IClickUpClient
         => throw new NotSupportedException($"{GetType().Name} does not implement task creation.");
     Task<string?> SetTaskStatusAsync(string taskId, string statusName, CancellationToken ct = default);
     Task<int?> SetTaskPriorityAsync(string taskId, int? priorityLevel, CancellationToken ct = default);
+
+    /// <summary>Set a task's (plain-text) description. Pass <c>""</c> to clear it; <c>null</c> is
+    /// rejected. Returns the server-confirmed description from the write response. Default throwing
+    /// implementation so read-only fakes needn't implement a write path they never call (mirrors the
+    /// delta fetches); <see cref="ClickUpClient"/> overrides it.</summary>
+    Task<string?> SetTaskDescriptionAsync(string taskId, string description, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement the description write.");
     Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskAssignee>> RemoveTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);

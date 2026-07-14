@@ -158,6 +158,35 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task SetTaskDescription_RoundTripsThroughDetailFetch()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        // Preserve the original description so the test is idempotent (restore in finally). The read
+        // model already surfaces plain text (text_content → description); write plain text back.
+        var original = (await client.GetTaskDetailAsync(TaskId!)).Description ?? "";
+        var marker = $"[clickup-todo-cli test] description round-trip — safe to overwrite ({TaskId})";
+        try
+        {
+            var confirmed = await client.SetTaskDescriptionAsync(TaskId!, marker);
+            Assert.Equal(marker, confirmed);
+
+            // The change is reflected on a subsequent detail fetch (read → write → re-read is lossless).
+            var reread = await client.GetTaskDetailAsync(TaskId!);
+            Assert.Equal(marker, reread.Description);
+        }
+        finally
+        {
+            // The restore rewrites the description as *plain text* (that's all the read model exposes),
+            // so if CLICKUP_TASK_ID points at a task whose description was authored in markdown, this
+            // test flattens that formatting. Point CLICKUP_TASK_ID at a throwaway/scratch task.
+            await client.SetTaskDescriptionAsync(TaskId!, original);
+        }
+    }
+
+    [SkippableFact]
     public async Task AddAndRemoveTaskAssignee_ReconcileFromWriteResponse()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
