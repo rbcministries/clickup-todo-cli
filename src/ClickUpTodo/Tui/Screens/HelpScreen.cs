@@ -29,6 +29,7 @@ public sealed class HelpScreen : Screen
                 + "  Ctrl+A      In the detail view: dispatch a Claude session (a one-off run shows its\n"
                 + "              output in the app; press Esc there to cancel a run in progress)\n"
                 + "  Ctrl+B      Open the task in your browser\n"
+                + "  Ctrl+U      In the detail view: Quick Updates for this task (Esc returns to the detail)\n"
                 + "  Ctrl+P      Pin / unpin (pinned tasks group at the top)\n"
                 + "  Ctrl+E      Open the mentions & comments feed (in the feed: Enter opens the task, F3 shows mentions only)\n"
                 + "              Mentions need a per-Space automation — see docs/mention-assignee-automation.md\n"
