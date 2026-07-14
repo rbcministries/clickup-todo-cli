@@ -66,4 +66,54 @@ public sealed class StatusUpdateTests
 
         Assert.Null(updated[0].StatusName);
     }
+
+    // ── ApplyPriorityChange (the priority sibling, #157) ─────────────────────────
+
+    private static TaskItem Pri(string id, int? level) => new()
+    {
+        Id = id,
+        Name = id,
+        PriorityLevel = level,
+        PriorityName = ClickUpPriority.NameFromLevel(level),
+        PriorityColor = ClickUpPriority.ColorFromLevel(level),
+    };
+
+    [Fact]
+    public void ApplyPriorityChange_UpdatesOnlyTheMatchingTask_WithLevelNameAndColor()
+    {
+        TaskItem[] tasks = [Pri("1", 3), Pri("2", 3), Pri("3", 3)];
+
+        var updated = TaskService.ApplyPriorityChange(tasks, "2", 1, "Urgent", "#f50000");
+
+        Assert.Equal(3, updated[0].PriorityLevel);
+        Assert.Equal(1, updated[1].PriorityLevel);
+        Assert.Equal("Urgent", updated[1].PriorityName);
+        Assert.Equal("#f50000", updated[1].PriorityColor);
+        Assert.Equal(3, updated[2].PriorityLevel);
+    }
+
+    [Fact]
+    public void ApplyPriorityChange_PreservesOrderAndCount_AndDoesNotMutateInput()
+    {
+        var original = Pri("b", 2);
+        TaskItem[] tasks = [Pri("a", 1), original, Pri("c", 4)];
+
+        var updated = TaskService.ApplyPriorityChange(tasks, "b", null, null, null);
+
+        Assert.Equal(["a", "b", "c"], updated.Select(t => t.Id));
+        Assert.Equal(2, original.PriorityLevel);   // input record untouched
+        Assert.NotSame(original, updated[1]);
+    }
+
+    [Fact]
+    public void ApplyPriorityChange_CanClearPriorityToNull()
+    {
+        TaskItem[] tasks = [Pri("1", 1)];
+
+        var updated = TaskService.ApplyPriorityChange(tasks, "1", null, null, null);
+
+        Assert.Null(updated[0].PriorityLevel);
+        Assert.Null(updated[0].PriorityName);
+        Assert.Null(updated[0].PriorityColor);
+    }
 }

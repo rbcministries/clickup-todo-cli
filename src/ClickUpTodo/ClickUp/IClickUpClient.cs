@@ -32,6 +32,12 @@ public interface IClickUpClient
     /// <inheritdoc cref="GetAssignedTasksDeltaAsync"/>
     Task<List<TaskItem>> GetListTasksDeltaAsync(string listId, long updatedAfterMs, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement the delta fetch.");
+    /// <summary>Creates a task in a list from the given fields and returns it mapped to the domain
+    /// <see cref="TaskItem"/> (#209). See <see cref="ClickUpClient.CreateTaskAsync"/>. A default
+    /// throwing implementation (mirroring the delta fetches above) spares read-only fakes that never
+    /// create tasks from implementing it; <see cref="ClickUpClient"/> overrides it.</summary>
+    Task<TaskItem> CreateTaskAsync(string listId, NewTaskRequest task, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement task creation.");
     Task<string?> SetTaskStatusAsync(string taskId, string statusName, CancellationToken ct = default);
     Task<int?> SetTaskPriorityAsync(string taskId, int? priorityLevel, CancellationToken ct = default);
     Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
