@@ -16,16 +16,21 @@ public sealed record TaskSnapshotResult(IReadOnlyList<TaskItem> Tasks, bool Chan
 /// Fetches and merges the user's actionable tasks (assigned-to-me ∪ Personal Tasks list),
 /// de-duplicated and stably ordered, and resolves per-list status options on demand (cached).
 /// </summary>
-public sealed class TaskService(IClickUpClient client, AppConfig config, long userId, TimeProvider? timeProvider = null)
+public sealed class TaskService(
+    IClickUpClient client, AppConfig config, long userId, TimeProvider? timeProvider = null, IStateStore? stateStore = null)
 {
     // Per-list status options, cached with a long TTL (statuses rarely change) and warmed by
-    // PrefetchStatusesAsync so the picker opens from cache in the common case.
-    private readonly StatusCache _statusCache = new(client.GetListStatusesAsync, timeProvider);
+    // PrefetchStatusesAsync so the picker opens from cache in the common case. With a state store it
+    // also persists across restarts (#125), warming from the last session so the picker opens without a
+    // first-load round-trip; the TTL still governs a persisted entry.
+    private readonly StatusCache _statusCache = new(
+        client.GetListStatusesAsync, timeProvider, store: stateStore, workspaceId: config.WorkspaceId);
 
-    // Per-list color chips, cached for the process lifetime (a list's color effectively never changes
-    // within a session). A null value means "fetched, but the list has no color set" — cached so it
-    // isn't refetched. Used to tint List-grouped headers (#61).
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _listColors = new(StringComparer.Ordinal);
+    // Per-list color chips (#61), used to tint List-grouped headers. Held for the process lifetime (a
+    // list's color effectively never changes within a session); a null value means "fetched, no color
+    // set" and is cached so it isn't refetched. With a state store it persists across restarts (#125),
+    // warming resolved colors so the first List-grouped render after a restart doesn't re-resolve them.
+    private readonly ListColorCache _colorCache = new(stateStore, config.WorkspaceId, timeProvider);
 
     /// <summary>The signed-in app user's ClickUp id — the target of the default "Assignee IS me" rule.</summary>
     public long UserId { get; } = userId;
@@ -401,9 +406,10 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
         var toFetch = listIds
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .Distinct(StringComparer.Ordinal)
-            .Where(id => !_listColors.ContainsKey(id))
+            .Where(id => !_colorCache.Contains(id))
             .ToList();
 
+        var resolved = new System.Collections.Concurrent.ConcurrentDictionary<string, string?>(StringComparer.Ordinal);
         await Parallel.ForEachAsync(
             toFetch,
             new ParallelOptions { MaxDegreeOfParallelism = MaxFanOutConcurrency, CancellationToken = ct },
@@ -411,15 +417,18 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
             {
                 try
                 {
-                    _listColors[id] = await client.GetListColorAsync(id, token);
+                    resolved[id] = await client.GetListColorAsync(id, token);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _listColors[id] = null; // best-effort: a list we can't fetch just falls back to a hue
+                    resolved[id] = null; // best-effort: a list we can't fetch just falls back to a hue
                 }
             });
 
-        return new Dictionary<string, string?>(_listColors, StringComparer.Ordinal);
+        // Merge the freshly-resolved colors into the cache (and persist them, when a store is present),
+        // then return the full known set so the caller can tint every in-view list, not just the new ones.
+        _colorCache.Save(resolved);
+        return _colorCache.Snapshot();
     }
 
     /// <summary>
