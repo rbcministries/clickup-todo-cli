@@ -163,6 +163,10 @@ public sealed class ClickUpClientIntegrationTests
             "Set CLICKUP_TOKEN and CLICKUP_TASK_ID to run this test.");
         using var client = new ClickUpClient(Token!);
 
+        // NOTE: point CLICKUP_TASK_ID at a throwaway/scratch task. This facade writes the *plain*
+        // `description` field only, and the restore below rewrites that plain text back. If the task
+        // originally had a *markdown* description, the restore flattens its formatting — the price of
+        // the plain-text design. Don't run this against a task whose formatting you care about.
         var before = await client.GetTaskDetailAsync(TaskId!);
         var original = before.Description ?? "";
         // A unique, plainly-visible marker so a leaked description is easy to spot and clean up.
