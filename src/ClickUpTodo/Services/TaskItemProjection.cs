@@ -37,7 +37,9 @@ public static class TaskItemProjection
             UpdatedMs = detail.UpdatedMs,
             PriorityLevel = priorityLevel,
             PriorityName = ClickUpPriority.NameFromLevel(priorityLevel),
-            PriorityColor = detail.PriorityColor,
+            // Only carry the colour when the priority actually resolved, so an unrecognised priority
+            // never yields a coloured-but-nameless priority.
+            PriorityColor = priorityLevel is null ? null : detail.PriorityColor,
             Assignees = [.. detail.Assignees.Select(name => new TaskAssignee(0, name))],
         };
     }

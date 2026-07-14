@@ -427,7 +427,7 @@ public sealed class TaskDetailScreen : Screen
     /// <see cref="UpdateData"/> (in-place; scroll/cursor preserved). The host's off-thread write and the
     /// 30s auto-refresh reconcile the authoritative server value afterward.
     /// </summary>
-    public void ApplyOptimisticStatus(string statusName, string? statusColor)
+    public void ApplyOptimisticStatus(string? statusName, string? statusColor)
         => UpdateData(_task with { StatusName = statusName, StatusColor = statusColor }, _comments);
 
     /// <summary>

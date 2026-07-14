@@ -1430,6 +1430,21 @@ public sealed class TodoApp
 
         var detail = detailScreen.Task;
         var task = _all.FirstOrDefault(t => t.Id == detail.Id) ?? TaskItemProjection.FromDetail(detail);
+        // Mirror the list path's guards so the new entry point can't write a status the sibling path
+        // blocks by design: a context-parent header (#46) or a foreign subtask pulled in under my parent
+        // (#70/#179) is context, not my work. (Lifting this for any selected task is #160.)
+        if (_contextParents.ContainsKey(task.Id))
+        {
+            Flash("This is a parent shown for context (not assigned to you) — status unchanged.");
+            return;
+        }
+        if (_foreignSubtasks.ContainsKey(task.Id))
+        {
+            Flash(SubtaskVisibility.IsUnassigned(task)
+                ? "This subtask isn't assigned to anyone — status unchanged."
+                : "This subtask isn't assigned to you — status unchanged.");
+            return;
+        }
         if (string.IsNullOrWhiteSpace(task.ListId))
         {
             Flash("This task has no list, so its statuses can't be loaded.");
@@ -1478,7 +1493,7 @@ public sealed class TodoApp
         // One screen is focused at a time (#3/#38): the list origin opens over nothing; the detail origin
         // stacks over exactly the screen that requested it. A stale off-thread status load whose origin is
         // no longer front-most is dropped here.
-        if (!ReferenceEquals(ActiveScreen, detailOrigin as Screen))
+        if (!ReferenceEquals(ActiveScreen, detailOrigin))
             return;
 
         var screen = new QuickUpdatesScreen(
@@ -1492,20 +1507,35 @@ public sealed class TodoApp
                 return;
             }
 
-            ApplyStatus(task, chosen);
+            if (detailOrigin is null)
+            {
+                ApplyStatus(task, chosen);
+                return;
+            }
+
             // Launched over the detail view: reflect the new status there too so the popped-back detail
-            // shows it immediately (the list row is handled by ApplyStatus). #159.
-            detailOrigin?.ApplyOptimisticStatus(
-                chosen,
-                statuses.FirstOrDefault(s => string.Equals(s.Name, chosen, StringComparison.OrdinalIgnoreCase))?.Color);
+            // shows it immediately (the list row is handled by ApplyStatus). Capture the detail's current
+            // status/colour first so a failed write reverts the detail as well as the list row. #159.
+            var prevStatus = detailOrigin.Task.StatusName;
+            var prevColor = detailOrigin.Task.StatusColor;
+            var newColor = statuses.FirstOrDefault(s => string.Equals(s.Name, chosen, StringComparison.OrdinalIgnoreCase))?.Color;
+            ApplyStatus(task, chosen, onFailed: () =>
+            {
+                if (_screens.Contains(detailOrigin))
+                    detailOrigin.ApplyOptimisticStatus(prevStatus, prevColor);
+            });
+            detailOrigin.ApplyOptimisticStatus(chosen, newColor);
         });
     }
 
-    private void ApplyStatus(TaskItem task, string status)
+    /// <summary>
+    /// Applies a status change optimistically (updates the list row + <see cref="_all"/> immediately),
+    /// writes off the UI thread, confirms with the server's returned value on success, and reverts the
+    /// row on failure. <paramref name="onFailed"/> lets a caller undo any extra optimistic surface it
+    /// painted (e.g. the detail view's status on the #159 detail-origin path); it runs on the UI thread.
+    /// </summary>
+    private void ApplyStatus(TaskItem task, string status, Action? onFailed = null)
     {
-        // Optimistic: show the new status immediately (no wait, no full reload). The actual write
-        // happens off the UI thread; on success we confirm with the server's returned status, on
-        // failure we revert this one row.
         UpdateTaskRow(task with { StatusName = status }, sending: true);
         Flash($"Setting '{status}'…");
 
@@ -1526,6 +1556,7 @@ public sealed class TodoApp
                 Application.Invoke(() =>
                 {
                     UpdateTaskRow(task, sending: false); // revert the optimistic change
+                    onFailed?.Invoke();
                     Flash($"Could not set status: {Short(ex)}");
                 });
             }

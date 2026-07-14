@@ -42,7 +42,7 @@ public sealed class TaskItemProjectionTests
         Assert.Equal("#4194f6", item.StatusColor);
         Assert.Equal("list-9", item.ListId);
         Assert.Equal("Personal", item.ListName);
-        Assert.Equal("#f50000", item.PriorityColor);
+        Assert.Equal("#f50000", item.PriorityColor); // High resolves, so its colour is carried
         Assert.Equal(1_700_000_000_000, item.DueDateMs);
         Assert.Equal(1_600_000_000_000, item.CreatedMs);
         Assert.Equal(1_650_000_000_000, item.UpdatedMs);
@@ -71,6 +71,7 @@ public sealed class TaskItemProjectionTests
 
         Assert.Null(item.PriorityLevel);
         Assert.Null(item.PriorityName);
+        Assert.Null(item.PriorityColor); // no coloured-but-nameless priority
     }
 
     [Fact]
