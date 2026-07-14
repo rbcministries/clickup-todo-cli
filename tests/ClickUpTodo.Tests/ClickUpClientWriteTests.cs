@@ -124,6 +124,8 @@ public sealed class ClickUpClientWriteTests
         Assert.False(handler.Body.RootElement.TryGetProperty("status", out _), "a description write must not touch status.");
         Assert.False(handler.Body.RootElement.TryGetProperty("priority", out _), "a description write must not touch priority.");
         Assert.False(handler.Body.RootElement.TryGetProperty("assignees", out _), "a description write must not touch assignees.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("markdown_description", out _), "we write the plain 'description' field, never markdown_description.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("text_content", out _), "text_content is a read-only response field and must not be echoed into the write body.");
         Assert.Equal("server plain text", confirmed);
     }
 

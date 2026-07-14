@@ -156,6 +156,9 @@ public sealed class ClickUpClientIntegrationTests
         }
         finally
         {
+            // The restore rewrites the description as *plain text* (that's all the read model exposes),
+            // so if CLICKUP_TASK_ID points at a task whose description was authored in markdown, this
+            // test flattens that formatting. Point CLICKUP_TASK_ID at a throwaway/scratch task.
             await client.SetTaskDescriptionAsync(TaskId!, original);
         }
     }
