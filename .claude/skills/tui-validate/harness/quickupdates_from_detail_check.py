@@ -68,8 +68,11 @@ try:
     os.write(master, b"\x1b[B"); pump(0.6)
     os.write(master, b"\r"); pump(2.5)    # Enter → set status, pop back to origin
     v = visible()
-    # Return-to-origin: we must be back on the DETAIL view, not the main list.
-    assert "Description" in v, "Esc/select did not return to the detail view:\n" + v
+    # Return-to-origin: selecting a status closes Quick Updates and we must be back on the DETAIL
+    # view (this task's detail), not the main list. (The status re-fetch onto the detail is
+    # best-effort/front-most and timing-dependent, so this check asserts the navigation target, not
+    # the status text; the feed-origin synthetic-item path is out of the fake backend's scope here.)
+    assert "Description" in v, "select did not return to the detail view:\n" + v
     assert "Quick Updates" not in v, "Quick Updates still showing after select:\n" + v
 
     # ── Esc from the detail returns to the LIST (confirms the stack order) ────

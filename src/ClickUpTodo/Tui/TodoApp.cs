@@ -1497,9 +1497,12 @@ public sealed class TodoApp
                     var final = confirmed ?? status;
                     UpdateTaskRow(task with { StatusName = final }, sending: false);
                     Flash($"Set '{task.Name}' to '{final}'.");
-                    // Launched from the detail view (#159) and it's still mounted beneath Quick Updates:
-                    // refresh it so the new status shows when Esc pops back to it. Sequenced after the
-                    // confirmed write (this continuation) so the re-fetch can't race ahead of the write.
+                    // Launched from the detail view (#159) and it's still mounted: re-fetch it so the
+                    // new status shows on it. Sequenced after the confirmed write (this continuation) so
+                    // the re-fetch can't race ahead of the write. Best-effort — RefreshDetail no-ops
+                    // unless the detail is front-most (e.g. skipped if Help is stacked over it mid-write);
+                    // the detail's own 30s tick / F5 then reconciles it. The list row is already updated
+                    // optimistically above regardless of origin.
                     if (detailOrigin is not null && _screens.Contains(detailOrigin))
                         RefreshDetail(detailOrigin, task.Id);
                 });

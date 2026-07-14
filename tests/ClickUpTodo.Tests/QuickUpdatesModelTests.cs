@@ -78,7 +78,7 @@ public sealed class QuickUpdatesModelTests
             StatusColor = "#00ff00",
             ListId = "list-1",
             ListName = "Sprint",
-            Priority = "High",
+            Priority = "high", // ClickUp returns the raw priority lowercase
             PriorityColor = "#ffcc00",
             DueDateMs = 111,
             CreatedMs = 222,
@@ -96,8 +96,8 @@ public sealed class QuickUpdatesModelTests
         Assert.Equal("#00ff00", item.StatusColor);
         Assert.Equal("list-1", item.ListId);
         Assert.Equal("Sprint", item.ListName);
-        Assert.Equal(2, item.PriorityLevel); // "High" → level 2
-        Assert.Equal("High", item.PriorityName);
+        Assert.Equal(2, item.PriorityLevel); // "high" → level 2
+        Assert.Equal("High", item.PriorityName); // derived canonical name, not the raw lowercase input
         Assert.Equal("#ffcc00", item.PriorityColor);
         Assert.Equal(111, item.DueDateMs);
         Assert.Equal(222, item.CreatedMs);
