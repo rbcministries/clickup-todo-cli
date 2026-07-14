@@ -137,6 +137,10 @@ public sealed class TaskDetailScreen : Screen
     /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>
     public bool OpenBrowserRequested { get; private set; }
 
+    /// <summary>The task currently shown, reflecting any refresh since the screen opened (#159 reads it to
+    /// launch Quick Updates for the up-to-date task).</summary>
+    public TaskDetail Task => _task;
+
     /// <summary>
     /// Raised when the user submits a non-empty prompt in the Dispatch pane (Ctrl+A). The argument
     /// carries the typed prompt and the chosen session mode (#94; #95/#97 add the remaining options as
@@ -151,6 +155,14 @@ public sealed class TaskDetailScreen : Screen
     /// via <see cref="UpdateData"/>; the view stays open on its current tab and scroll position.
     /// </summary>
     public event EventHandler? RefreshRequested;
+
+    /// <summary>
+    /// Raised when the user asks to open Quick Updates (Ctrl+U, #159) for this task. The host stacks the
+    /// Quick Updates screen over the detail view; on exit the screen seam pops back here, and
+    /// <see cref="ApplyOptimisticStatus"/> reflects a status change made there so the returned-to detail
+    /// shows it immediately.
+    /// </summary>
+    public event EventHandler? QuickUpdatesRequested;
 
     /// <param name="defaultSessionMode">
     /// Seeds the pane's one-off/interactive toggle (#94) from the persisted default (#101); the user
@@ -410,6 +422,15 @@ public sealed class TaskDetailScreen : Screen
     }
 
     /// <summary>
+    /// Optimistically reflects a status change applied via Quick Updates stacked over this screen (#159),
+    /// so the detail shows the new status the moment it pops back into view. Re-renders through
+    /// <see cref="UpdateData"/> (in-place; scroll/cursor preserved). The host's off-thread write and the
+    /// 30s auto-refresh reconcile the authoritative server value afterward.
+    /// </summary>
+    public void ApplyOptimisticStatus(string statusName, string? statusColor)
+        => UpdateData(_task with { StatusName = statusName, StatusColor = statusColor }, _comments);
+
+    /// <summary>
     /// Re-renders the Stream tab on refresh. If the reader was parked at the auto-scroll edge (i.e.
     /// following the newest — or oldest — entry, per the #107 preference), keep following it as new
     /// entries arrive; otherwise keep their scroll position so a fresh comment doesn't yank the view.
@@ -483,6 +504,16 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             ShowPrompt();
+            return;
+        }
+
+        // Ctrl+U opens Quick Updates for this task (#159), stacked over the detail view; Esc there pops
+        // back here. Same chord shape as Ctrl+A/B above and inert while the Dispatch prompt is open, so
+        // it never interferes with typing a prompt or a read-only pane.
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.U && !_promptBox.Visible)
+        {
+            key.Handled = true;
+            QuickUpdatesRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 

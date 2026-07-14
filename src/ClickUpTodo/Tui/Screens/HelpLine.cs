@@ -117,6 +117,7 @@ public static class HelpItemSets
         new("Ctrl+PgUp/PgDn", "order activity"),
         new("Ctrl+A", "dispatch to Claude"),
         new("Ctrl+B", "browser"),
+        new("Ctrl+U", "quick update"),
         new("F5", "↻"),
         new("F1", "help"),
         new("Esc", "back"),

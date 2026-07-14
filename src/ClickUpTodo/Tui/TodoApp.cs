@@ -1162,6 +1162,9 @@ public sealed class TodoApp
                     // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data; re-fetch off the UI
                     // thread and feed it back into the still-open screen (its tab/scroll stay put).
                     screen.RefreshRequested += (_, _) => RefreshDetail(screen, taskId);
+                    // Ctrl+U opens Quick Updates for the detail's task, stacked over it; Esc pops back
+                    // here (#159). Reads the screen's current task so a mid-view refresh is reflected.
+                    screen.QuickUpdatesRequested += (_, _) => OpenQuickUpdatesForDetail(screen);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -1413,10 +1416,58 @@ public sealed class TodoApp
         });
     }
 
+    /// <summary>
+    /// Opens Quick Updates for the task shown in a <see cref="TaskDetailScreen"/> (#159), stacked over
+    /// it. Prefers the richer list <see cref="TaskItem"/> from the snapshot (fuller fidelity — assignee
+    /// ids, the status <c>type</c>); when the task isn't in the snapshot (e.g. opened from the feed) it
+    /// projects one from the detail. Mirrors <see cref="OpenQuickUpdates"/>'s cached-fast-path /
+    /// off-thread status load; only opens while the detail is still front-most.
+    /// </summary>
+    private void OpenQuickUpdatesForDetail(TaskDetailScreen detailScreen)
+    {
+        if (!ReferenceEquals(ActiveScreen, detailScreen))
+            return;
+
+        var detail = detailScreen.Task;
+        var task = _all.FirstOrDefault(t => t.Id == detail.Id) ?? TaskItemProjection.FromDetail(detail);
+        if (string.IsNullOrWhiteSpace(task.ListId))
+        {
+            Flash("This task has no list, so its statuses can't be loaded.");
+            return;
+        }
+
+        if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
+        {
+            ShowQuickUpdates(task, cached, detailScreen);
+            return;
+        }
+
+        Flash("Loading statuses…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
+                Application.Invoke(() => ShowQuickUpdates(task, statuses, detailScreen));
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not load statuses: {Short(ex)}"));
+            }
+        });
+    }
+
     /// <summary>Shows the Quick Updates screen for a task and applies the status choice. Must run on the
     /// UI thread. Priority/assignee application lands in #157/#158; here the Status pane preserves the
-    /// old picker behaviour so nothing regresses.</summary>
-    private void ShowQuickUpdates(TaskItem task, IReadOnlyList<StatusOption> statuses)
+    /// old picker behaviour so nothing regresses.
+    /// <para>
+    /// <paramref name="detailOrigin"/> is the <see cref="TaskDetailScreen"/> Quick Updates was launched
+    /// from (#159), or null for the list origin. It governs both the stacking guard (list opens over
+    /// nothing; a detail launch stacks over exactly that screen) and where a status change is reflected:
+    /// the list row always via <see cref="ApplyStatus"/>, and the detail view too when it was the origin.
+    /// </para>
+    /// </summary>
+    private void ShowQuickUpdates(TaskItem task, IReadOnlyList<StatusOption> statuses, TaskDetailScreen? detailOrigin = null)
     {
         if (statuses.Count == 0)
         {
@@ -1424,7 +1475,10 @@ public sealed class TodoApp
             return;
         }
 
-        if (ActiveScreen is not null)
+        // One screen is focused at a time (#3/#38): the list origin opens over nothing; the detail origin
+        // stacks over exactly the screen that requested it. A stale off-thread status load whose origin is
+        // no longer front-most is dropped here.
+        if (!ReferenceEquals(ActiveScreen, detailOrigin as Screen))
             return;
 
         var screen = new QuickUpdatesScreen(
@@ -1439,6 +1493,11 @@ public sealed class TodoApp
             }
 
             ApplyStatus(task, chosen);
+            // Launched over the detail view: reflect the new status there too so the popped-back detail
+            // shows it immediately (the list row is handled by ApplyStatus). #159.
+            detailOrigin?.ApplyOptimisticStatus(
+                chosen,
+                statuses.FirstOrDefault(s => string.Equals(s.Name, chosen, StringComparison.OrdinalIgnoreCase))?.Color);
         });
     }
 
