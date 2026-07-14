@@ -256,9 +256,10 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// → <c>description</c>). Pass <c>""</c> to clear the description — Kiota writes a non-null string,
     /// so an explicit empty string is sent and ClickUp clears the field; a <c>null</c> argument is
     /// rejected up front (Kiota would omit a null typed property and the write would silently no-op).
-    /// Returns the <b>server-confirmed</b> description from the <c>PUT /task/{id}</c> response
-    /// (<c>text_content</c> preferred, falling back to <c>description</c>), mirroring
-    /// <see cref="SetTaskStatusAsync"/>'s return-the-truth shape.
+    /// Returns the <b>server-confirmed</b> description from the <c>PUT /task/{id}</c> response —
+    /// the same return-the-truth contract as <see cref="SetTaskStatusAsync"/>, with the
+    /// <c>text_content</c>-preferred-over-<c>description</c> read-back matching <see cref="MapDetail"/>
+    /// (so a cleared/whitespace description reads back as <c>null</c>, exactly as the detail view sees it).
     /// </summary>
     public Task<string?> SetTaskDescriptionAsync(string taskId, string description, CancellationToken ct = default)
     {
