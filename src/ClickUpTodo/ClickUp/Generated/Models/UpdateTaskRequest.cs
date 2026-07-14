@@ -22,6 +22,22 @@ namespace ClickUpTodo.ClickUp.Generated.Models
 #else
         public global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate Assignees { get; set; }
 #endif
+        /// <summary>The description property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public string? Description { get; set; }
+#nullable restore
+#else
+        public string Description { get; set; }
+#endif
+        /// <summary>The name property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public string? Name { get; set; }
+#nullable restore
+#else
+        public string Name { get; set; }
+#endif
         /// <summary>The priority property</summary>
         public int? Priority { get; set; }
         /// <summary>The status property</summary>
@@ -58,6 +74,8 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             return new Dictionary<string, Action<IParseNode>>
             {
                 { "assignees", n => { Assignees = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate>(global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate.CreateFromDiscriminatorValue); } },
+                { "description", n => { Description = n.GetStringValue(); } },
+                { "name", n => { Name = n.GetStringValue(); } },
                 { "priority", n => { Priority = n.GetIntValue(); } },
                 { "status", n => { Status = n.GetStringValue(); } },
             };
@@ -70,6 +88,8 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
             writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.AssigneeUpdate>("assignees", Assignees);
+            writer.WriteStringValue("description", Description);
+            writer.WriteStringValue("name", Name);
             writer.WriteIntValue("priority", Priority);
             writer.WriteStringValue("status", Status);
             writer.WriteAdditionalData(AdditionalData);

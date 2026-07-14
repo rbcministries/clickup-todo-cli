@@ -105,6 +105,66 @@ public sealed class ClickUpClientWriteTests
         Assert.Empty(assignees);
     }
 
+    [Fact]
+    public async Task SetTaskDescription_SendsStringDescription_AndReturnsServerConfirmedText()
+    {
+        // Distinct request text vs response text_content proves the return is read back from the
+        // response, not an echo of the argument — and that text_content is preferred over description.
+        var handler = new CapturingHandler(
+            """{ "id": "t1", "text_content": "server plain text", "description": "server raw" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var confirmed = await client.SetTaskDescriptionAsync("t1", "new description");
+
+        Assert.Equal(HttpMethod.Put, handler.Method);
+        Assert.Contains("/v2/task/t1", handler.RequestUri);
+        var description = handler.Body!.RootElement.GetProperty("description");
+        Assert.Equal(JsonValueKind.String, description.ValueKind);
+        Assert.Equal("new description", description.GetString());
+        Assert.False(handler.Body.RootElement.TryGetProperty("status", out _), "a description write must not touch status.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("priority", out _), "a description write must not touch priority.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("assignees", out _), "a description write must not touch assignees.");
+        Assert.Equal("server plain text", confirmed);
+    }
+
+    [Fact]
+    public async Task SetTaskDescription_FallsBackToDescription_WhenNoTextContent()
+    {
+        var handler = new CapturingHandler("""{ "id": "t1", "description": "server raw only" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var confirmed = await client.SetTaskDescriptionAsync("t1", "x");
+
+        Assert.Equal("server raw only", confirmed);
+    }
+
+    [Fact]
+    public async Task SetTaskDescription_Empty_SendsExplicitEmptyString_ToClear()
+    {
+        // Clearing a description means sending "description": "" — a *missing* key would leave it
+        // untouched. Kiota writes a non-null string, so the empty string round-trips as a real clear.
+        var handler = new CapturingHandler("""{ "id": "t1", "text_content": "" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var confirmed = await client.SetTaskDescriptionAsync("t1", "");
+
+        var description = handler.Body!.RootElement.GetProperty("description");
+        Assert.Equal(JsonValueKind.String, description.ValueKind);
+        Assert.Equal("", description.GetString());
+        Assert.Null(confirmed); // whitespace/empty text_content and no description → null
+    }
+
+    [Fact]
+    public async Task SetTaskDescription_NullArgument_Throws_BeforeAnyRequest()
+    {
+        var handler = new CapturingHandler("""{ "id": "t1" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() => client.SetTaskDescriptionAsync("t1", null!));
+
+        Assert.Null(handler.Method); // never hit the transport
+    }
+
     /// <summary>Records the outgoing request (method, URI, parsed JSON body) and returns a canned body.</summary>
     private sealed class CapturingHandler(string responseBody) : HttpMessageHandler
     {
