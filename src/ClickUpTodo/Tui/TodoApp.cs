@@ -1162,6 +1162,9 @@ public sealed class TodoApp
                     // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data; re-fetch off the UI
                     // thread and feed it back into the still-open screen (its tab/scroll stay put).
                     screen.RefreshRequested += (_, _) => RefreshDetail(screen, taskId);
+                    // Ctrl+U (#159) stacks Quick Updates over this detail for its current task; Esc pops
+                    // back here via the screen seam and any status change refreshes the detail in place.
+                    screen.QuickUpdatesRequested += (_, _) => OpenQuickUpdatesFromDetail(screen);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -1364,11 +1367,30 @@ public sealed class TodoApp
     }
 
 
+    /// <summary>Space on the list — open Quick Updates for the focused task (list origin).</summary>
     private void OpenQuickUpdates()
     {
         var task = CurrentTask();
         if (task is null)
             return;
+        OpenQuickUpdatesFor(task, detailOrigin: null);
+    }
+
+    /// <summary>
+    /// Ctrl+U in the detail view (#159) — open Quick Updates for the detail's current task, stacked over
+    /// it. Prefers the live snapshot row (real assignee ids etc.); falls back to a synthetic item built
+    /// from the <see cref="TaskDetail"/> when the task isn't in the current list view (e.g. a detail
+    /// opened from the feed, #115).
+    /// </summary>
+    private void OpenQuickUpdatesFromDetail(TaskDetailScreen origin)
+    {
+        var detail = origin.Task;
+        var task = _all.FirstOrDefault(t => t.Id == detail.Id) ?? QuickUpdatesModel.TaskItemFromDetail(detail);
+        OpenQuickUpdatesFor(task, detailOrigin: origin);
+    }
+
+    private void OpenQuickUpdatesFor(TaskItem task, TaskDetailScreen? detailOrigin)
+    {
         // A context-parent header (a parent not assigned to me, shown only so its subtask can nest
         // beneath it) is context, not my work — don't change it. (#46)
         if (_contextParents.ContainsKey(task.Id))
@@ -1393,7 +1415,7 @@ public sealed class TodoApp
         // Fast path: statuses were warmed by the background prefetch — open instantly, no round-trip.
         if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
         {
-            ShowQuickUpdates(task, cached);
+            ShowQuickUpdates(task, cached, detailOrigin);
             return;
         }
 
@@ -1404,7 +1426,7 @@ public sealed class TodoApp
             try
             {
                 var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
-                Application.Invoke(() => ShowQuickUpdates(task, statuses));
+                Application.Invoke(() => ShowQuickUpdates(task, statuses, detailOrigin));
             }
             catch (Exception ex)
             {
@@ -1415,8 +1437,16 @@ public sealed class TodoApp
 
     /// <summary>Shows the Quick Updates screen for a task and applies the status choice. Must run on the
     /// UI thread. Priority/assignee application lands in #157/#158; here the Status pane preserves the
-    /// old picker behaviour so nothing regresses.</summary>
-    private void ShowQuickUpdates(TaskItem task, IReadOnlyList<StatusOption> statuses)
+    /// old picker behaviour so nothing regresses.
+    /// <para>
+    /// When <paramref name="detailOrigin"/> is null the launch is from the list: open only when idle
+    /// (today's guard) and Esc pops back to the list. When it's a <see cref="TaskDetailScreen"/> the
+    /// launch is from that detail (#159): stack over it — open only while it's still the active layer
+    /// (mirrors <see cref="OpenTaskDetail"/>'s requester check, so a second Ctrl+U or a torn-down
+    /// screen can't double-stack) — and Esc pops back to the detail via the screen seam.
+    /// </para></summary>
+    private void ShowQuickUpdates(
+        TaskItem task, IReadOnlyList<StatusOption> statuses, TaskDetailScreen? detailOrigin)
     {
         if (statuses.Count == 0)
         {
@@ -1424,8 +1454,15 @@ public sealed class TodoApp
             return;
         }
 
-        if (ActiveScreen is not null)
+        if (detailOrigin is null)
+        {
+            if (ActiveScreen is not null)
+                return;
+        }
+        else if (!ReferenceEquals(ActiveScreen, detailOrigin))
+        {
             return;
+        }
 
         var screen = new QuickUpdatesScreen(
             task.Name, statuses, task.StatusName, task.PriorityLevel, task.Assignees);
@@ -1438,11 +1475,11 @@ public sealed class TodoApp
                 return;
             }
 
-            ApplyStatus(task, chosen);
+            ApplyStatus(task, chosen, detailOrigin);
         });
     }
 
-    private void ApplyStatus(TaskItem task, string status)
+    private void ApplyStatus(TaskItem task, string status, TaskDetailScreen? detailOrigin = null)
     {
         // Optimistic: show the new status immediately (no wait, no full reload). The actual write
         // happens off the UI thread; on success we confirm with the server's returned status, on
@@ -1460,6 +1497,11 @@ public sealed class TodoApp
                     var final = confirmed ?? status;
                     UpdateTaskRow(task with { StatusName = final }, sending: false);
                     Flash($"Set '{task.Name}' to '{final}'.");
+                    // Launched from the detail view (#159) and it's still mounted beneath Quick Updates:
+                    // refresh it so the new status shows when Esc pops back to it. Sequenced after the
+                    // confirmed write (this continuation) so the re-fetch can't race ahead of the write.
+                    if (detailOrigin is not null && _screens.Contains(detailOrigin))
+                        RefreshDetail(detailOrigin, task.Id);
                 });
             }
             catch (Exception ex)

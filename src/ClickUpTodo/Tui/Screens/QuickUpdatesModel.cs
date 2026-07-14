@@ -56,4 +56,33 @@ public static class QuickUpdatesModel
         => assignees.Count == 0
             ? ["  (no assignees)"]
             : [.. assignees.Select(a => $"  {a.Name}")];
+
+    /// <summary>
+    /// Builds a <see cref="TaskItem"/> that seeds the Quick Updates screen from a <see cref="TaskDetail"/>
+    /// — the fallback used when Quick Updates is launched from the detail view (#159) for a task that
+    /// isn't in the live list snapshot (e.g. a detail opened from the feed, #115). The importance
+    /// <c>PriorityLevel</c> is derived from the detail's priority <em>name</em> (which is all a
+    /// <see cref="TaskDetail"/> carries), and assignees keep their display names with a placeholder id
+    /// (<c>0</c>) since the detail exposes names only — enough for the Priority/Assignees panes'
+    /// display and the Status apply, which is the only pane that writes on <c>main</c>. Callers should
+    /// prefer the live <see cref="TaskItem"/> from the snapshot (real ids) when present.
+    /// </summary>
+    public static TaskItem TaskItemFromDetail(TaskDetail detail) => new()
+    {
+        Id = detail.Id,
+        CustomId = detail.CustomId,
+        Name = detail.Name,
+        Url = detail.Url,
+        StatusName = detail.StatusName,
+        StatusColor = detail.StatusColor,
+        ListId = detail.ListId,
+        ListName = detail.ListName,
+        PriorityLevel = ClickUpPriority.LevelFromName(detail.Priority),
+        PriorityName = detail.Priority,
+        PriorityColor = detail.PriorityColor,
+        DueDateMs = detail.DueDateMs,
+        CreatedMs = detail.CreatedMs,
+        UpdatedMs = detail.UpdatedMs,
+        Assignees = [.. detail.Assignees.Select(name => new TaskAssignee(0, name))],
+    };
 }

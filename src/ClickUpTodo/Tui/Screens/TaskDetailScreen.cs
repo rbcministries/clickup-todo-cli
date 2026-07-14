@@ -152,6 +152,18 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     public event EventHandler? RefreshRequested;
 
+    /// <summary>
+    /// Raised on <c>Ctrl+U</c> — the user wants to open the Quick Updates screen (#153/#156) for this
+    /// task, stacked over the detail view (#159). The host opens it and, on <c>Esc</c>, the screen seam
+    /// pops back here (the layer beneath); any status change is reflected via a follow-up refresh.
+    /// Inert while the Dispatch pane is open (mirrors <c>Ctrl+A</c>).
+    /// </summary>
+    public event EventHandler? QuickUpdatesRequested;
+
+    /// <summary>The task this view currently shows, reflecting any in-place refresh (#114 follow-up).
+    /// The host reads it to launch Quick Updates against the up-to-date task (#159).</summary>
+    public TaskDetail Task => _task;
+
     /// <param name="defaultSessionMode">
     /// Seeds the pane's one-off/interactive toggle (#94) from the persisted default (#101); the user
     /// can flip it per dispatch. Defaults to <see cref="AgentSessionMode.Interactive"/>.
@@ -483,6 +495,16 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             ShowPrompt();
+            return;
+        }
+
+        // Ctrl+U opens Quick Updates (#159) stacked over this detail view, operating on the current
+        // task. Same chord shape as Ctrl+A/B above; inert while the Dispatch pane is open so it can't
+        // fire mid-compose. The host stacks the screen and pops back here on Esc.
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.U && !_promptBox.Visible)
+        {
+            key.Handled = true;
+            QuickUpdatesRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 

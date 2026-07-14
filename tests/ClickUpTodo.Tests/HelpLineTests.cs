@@ -40,6 +40,11 @@ public sealed class HelpLineTests
             "↑/↓ move · Enter open · F3 mentions only · F5 ↻ · Ctrl+E list · F1 help · Esc back",
             HelpLine.Format(HelpItemSets.NotificationsFeed));
 
+    // #159: the detail view offers Ctrl+U to open Quick Updates for the current task.
+    [Fact]
+    public void Detail_OffersCtrlUQuickUpdates()
+        => Assert.Contains(HelpItemSets.Detail, i => i.Key == "Ctrl+U" && i.Label == "quick updates");
+
     [Fact]
     public void ForActiveScreen_PrefersScreenItems_WhenPresent()
     {
