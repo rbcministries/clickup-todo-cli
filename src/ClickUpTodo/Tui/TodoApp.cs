@@ -1208,6 +1208,9 @@ public sealed class TodoApp
                     // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data; re-fetch off the UI
                     // thread and feed it back into the still-open screen (its tab/scroll stay put).
                     screen.RefreshRequested += (_, _) => RefreshDetail(screen, taskId);
+                    // Ctrl+U opens Quick Updates for the detail's task, stacked over it; Esc pops back
+                    // here (#159). Reads the screen's current task so a mid-view refresh is reflected.
+                    screen.QuickUpdatesRequested += (_, _) => OpenQuickUpdatesForDetail(screen);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -1463,10 +1466,73 @@ public sealed class TodoApp
         });
     }
 
+    /// <summary>
+    /// Opens Quick Updates for the task shown in a <see cref="TaskDetailScreen"/> (#159), stacked over
+    /// it. Prefers the richer list <see cref="TaskItem"/> from the snapshot (fuller fidelity — assignee
+    /// ids, the status <c>type</c>); when the task isn't in the snapshot (e.g. opened from the feed) it
+    /// projects one from the detail. Mirrors <see cref="OpenQuickUpdates"/>'s cached-fast-path /
+    /// off-thread status load; only opens while the detail is still front-most.
+    /// </summary>
+    private void OpenQuickUpdatesForDetail(TaskDetailScreen detailScreen)
+    {
+        if (!ReferenceEquals(ActiveScreen, detailScreen))
+            return;
+
+        var detail = detailScreen.Task;
+        var task = _all.FirstOrDefault(t => t.Id == detail.Id) ?? TaskItemProjection.FromDetail(detail);
+        // Mirror the list path's guards so the new entry point can't write a status the sibling path
+        // blocks by design: a context-parent header (#46) or a foreign subtask pulled in under my parent
+        // (#70/#179) is context, not my work. (Lifting this for any selected task is #160.)
+        if (_contextParents.ContainsKey(task.Id))
+        {
+            Flash("This is a parent shown for context (not assigned to you) — status unchanged.");
+            return;
+        }
+        if (_foreignSubtasks.ContainsKey(task.Id))
+        {
+            Flash(SubtaskVisibility.IsUnassigned(task)
+                ? "This subtask isn't assigned to anyone — status unchanged."
+                : "This subtask isn't assigned to you — status unchanged.");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(task.ListId))
+        {
+            Flash("This task has no list, so its statuses can't be loaded.");
+            return;
+        }
+
+        if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
+        {
+            ShowQuickUpdates(task, cached, detailScreen);
+            return;
+        }
+
+        Flash("Loading statuses…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
+                Application.Invoke(() => ShowQuickUpdates(task, statuses, detailScreen));
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not load statuses: {Short(ex)}"));
+            }
+        });
+    }
+
     /// <summary>Shows the Quick Updates screen for a task and wires its Status/Priority commits. Must
     /// run on the UI thread. Status and Priority apply on Enter (#157) — the screen stays open (Esc
-    /// exits); the Assignees pane's apply lands in #158.</summary>
-    private void ShowQuickUpdates(TaskItem task, IReadOnlyList<StatusOption> statuses)
+    /// exits); the Assignees pane's apply lands in #158.
+    /// <para>
+    /// <paramref name="detailOrigin"/> is the <see cref="TaskDetailScreen"/> Quick Updates was launched
+    /// from (#159), or null for the list origin. It governs the stacking guard (the list opens over
+    /// nothing; a detail launch stacks over exactly that screen) and receives an optimistic reflection of
+    /// each committed status/priority so the popped-back detail shows the change.
+    /// </para>
+    /// </summary>
+    private void ShowQuickUpdates(TaskItem task, IReadOnlyList<StatusOption> statuses, TaskDetailScreen? detailOrigin = null)
     {
         if (statuses.Count == 0)
         {
@@ -1474,14 +1540,19 @@ public sealed class TodoApp
             return;
         }
 
-        if (ActiveScreen is not null)
+        // One screen is focused at a time (#3/#38): the list origin opens over nothing; the detail origin
+        // stacks over exactly the screen that requested it. A stale off-thread status load whose origin is
+        // no longer front-most is dropped here.
+        if (!ReferenceEquals(ActiveScreen, detailOrigin))
             return;
 
         var screen = new QuickUpdatesScreen(
             task.Name, statuses, task.StatusName, task.PriorityLevel, task.Assignees);
         // Both panes apply optimistically and reconcile the screen's ✓ from the server-confirmed value.
-        screen.StatusCommitted += status => ApplyStatus(task.Id, status, screen);
-        screen.PriorityCommitted += level => ApplyPriority(task.Id, level, screen);
+        // A detail-origin launch (#159) also reflects each committed value onto the detail so the
+        // popped-back detail shows it; `statuses` supplies the colour for a reflected status.
+        screen.StatusCommitted += status => ApplyStatus(task.Id, status, screen, detailOrigin, statuses);
+        screen.PriorityCommitted += level => ApplyPriority(task.Id, level, screen, detailOrigin);
         ShowScreen(screen, static () => { });
     }
 
@@ -1502,8 +1573,14 @@ public sealed class TodoApp
     /// success and reverting the one row on failure. The task is looked up fresh from the snapshot so
     /// consecutive edits compose; a superseded (out-of-order) continuation is dropped; the screen's ✓ is
     /// reconciled to the confirmed/reverted value while it's still mounted.
+    /// <para>
+    /// When launched from the Task Detail view (#159), <paramref name="detailOrigin"/> is that screen and
+    /// <paramref name="statuses"/> its list's status options; the committed/confirmed/reverted status is
+    /// reflected onto the detail (with the matching colour) so it stays in sync with the list row.
+    /// </para>
     /// </summary>
-    private void ApplyStatus(string taskId, string status, QuickUpdatesScreen screen)
+    private void ApplyStatus(string taskId, string status, QuickUpdatesScreen screen,
+        TaskDetailScreen? detailOrigin = null, IReadOnlyList<StatusOption>? statuses = null)
     {
         var task = TaskById(taskId);
         if (task is null)
@@ -1514,8 +1591,10 @@ public sealed class TodoApp
         }
         var gen = ++_statusCommitGen;
         var previousStatus = task.StatusName;
+        var previousColor = task.StatusColor;
 
         ReconcileScreenStatus(screen, status); // optimistic ✓
+        ReflectDetailStatus(detailOrigin, status, ColorForStatus(statuses, status));
         UpdateTaskRow(task with { StatusName = status }, sending: true);
         Flash($"Setting '{status}'…");
 
@@ -1532,6 +1611,7 @@ public sealed class TodoApp
                     if (TaskById(taskId) is { } t)
                         UpdateTaskRow(t with { StatusName = final }, sending: false);
                     ReconcileScreenStatus(screen, final);
+                    ReflectDetailStatus(detailOrigin, final, ColorForStatus(statuses, final));
                     Flash($"Set status to '{final}'.");
                 });
             }
@@ -1544,6 +1624,7 @@ public sealed class TodoApp
                     if (TaskById(taskId) is { } t)
                         UpdateTaskRow(t with { StatusName = previousStatus }, sending: false); // revert
                     ReconcileScreenStatus(screen, previousStatus);
+                    ReflectDetailStatus(detailOrigin, previousStatus, previousColor);
                     Flash($"Could not set status: {Short(ex)}");
                 });
             }
@@ -1555,7 +1636,8 @@ public sealed class TodoApp
     /// null = clear), mirroring <see cref="ApplyStatus"/>: optimistic ✓ + row update, off-thread write,
     /// confirm-from-server on success, revert-the-row on failure, drop a superseded continuation.
     /// </summary>
-    private void ApplyPriority(string taskId, int? level, QuickUpdatesScreen screen)
+    private void ApplyPriority(string taskId, int? level, QuickUpdatesScreen screen,
+        TaskDetailScreen? detailOrigin = null)
     {
         var task = TaskById(taskId);
         if (task is null)
@@ -1567,6 +1649,7 @@ public sealed class TodoApp
         var previousLevel = task.PriorityLevel;
 
         ReconcileScreenPriority(screen, level); // optimistic ✓
+        ReflectDetailPriority(detailOrigin, level);
         UpdateTaskRow(WithPriority(task, level), sending: true);
         Flash($"Setting priority '{ClickUpPriority.NameFromLevel(level) ?? "none"}'…");
 
@@ -1582,6 +1665,7 @@ public sealed class TodoApp
                     if (TaskById(taskId) is { } t)
                         UpdateTaskRow(WithPriority(t, confirmed), sending: false);
                     ReconcileScreenPriority(screen, confirmed);
+                    ReflectDetailPriority(detailOrigin, confirmed);
                     Flash($"Set priority to '{ClickUpPriority.NameFromLevel(confirmed) ?? "none"}'.");
                 });
             }
@@ -1594,6 +1678,7 @@ public sealed class TodoApp
                     if (TaskById(taskId) is { } t)
                         UpdateTaskRow(WithPriority(t, previousLevel), sending: false); // revert
                     ReconcileScreenPriority(screen, previousLevel);
+                    ReflectDetailPriority(detailOrigin, previousLevel);
                     Flash($"Could not set priority: {Short(ex)}");
                 });
             }
@@ -1621,6 +1706,30 @@ public sealed class TodoApp
     {
         if (_screens.Contains(screen))
             screen.SetEffectivePriority(level);
+    }
+
+    /// <summary>The colour of the status option named <paramref name="status"/> in
+    /// <paramref name="statuses"/> (case-insensitive), or null when unknown — used to colour the status
+    /// reflected onto the detail view (#159).</summary>
+    private static string? ColorForStatus(IReadOnlyList<StatusOption>? statuses, string? status)
+        => status is null
+            ? null
+            : statuses?.FirstOrDefault(s => string.Equals(s.Name, status, StringComparison.OrdinalIgnoreCase))?.Color;
+
+    // Reflect a committed status/priority onto the Task Detail view Quick Updates was launched over (#159),
+    // guarded on that screen still being mounted, so the popped-back detail shows the change. A null
+    // detailOrigin (the list origin) is a no-op. Priority uses the canonical name/colour for the level,
+    // matching the list row's WithPriority.
+    private void ReflectDetailStatus(TaskDetailScreen? detailOrigin, string? status, string? color)
+    {
+        if (detailOrigin is not null && _screens.Contains(detailOrigin))
+            detailOrigin.ApplyOptimisticStatus(status, color);
+    }
+
+    private void ReflectDetailPriority(TaskDetailScreen? detailOrigin, int? level)
+    {
+        if (detailOrigin is not null && _screens.Contains(detailOrigin))
+            detailOrigin.ApplyOptimisticPriority(ClickUpPriority.NameFromLevel(level), ClickUpPriority.ColorFromLevel(level));
     }
 
     /// <summary>
