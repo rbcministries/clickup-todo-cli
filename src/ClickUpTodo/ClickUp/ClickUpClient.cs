@@ -250,6 +250,22 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         });
 
     /// <summary>
+    /// Set a task's description. Writes ClickUp's <b>plain</b> <c>description</c> field (not
+    /// <c>markdown_description</c>), matching how the detail view reads it (<see cref="MapDetail"/>
+    /// prefers <c>text_content</c>, falls back to <c>description</c>) so a read→edit→write→re-read
+    /// round-trip is lossless for plain text. Pass an empty string to clear the description. Returns
+    /// the <b>server-confirmed</b> description from the <c>PUT /task/{id}</c> response — mapped the same
+    /// way as the detail view — so a caller can reflect the confirmed value without a read-after-write.
+    /// </summary>
+    public Task<string?> SetTaskDescriptionAsync(string taskId, string description, CancellationToken ct = default)
+        => Guard("UpdateTask", async () =>
+        {
+            ArgumentNullException.ThrowIfNull(description);
+            var updated = await _client.V2.Task[taskId].PutAsync(new UpdateTaskRequest { Description = description }, cancellationToken: ct);
+            return !string.IsNullOrWhiteSpace(updated?.TextContent) ? updated!.TextContent : updated?.Description;
+        });
+
+    /// <summary>
     /// Add a user to a task's assignees. ClickUp's <c>PUT /task/{id}</c> takes
     /// <c>assignees: { add: [...] }</c>. Returns the task's <b>reconciled</b> assignee set from the
     /// response so a caller can update the row without a read-after-write.

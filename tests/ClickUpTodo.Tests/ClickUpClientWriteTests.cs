@@ -105,6 +105,70 @@ public sealed class ClickUpClientWriteTests
         Assert.Empty(assignees);
     }
 
+    [Fact]
+    public async Task SetTaskDescription_SendsPlainDescriptionString_AndReturnsServerConfirmedText()
+    {
+        // Distinct request text vs response text_content proves the return comes from the response,
+        // not an echo of the argument. text_content (plain) is preferred over description, matching MapDetail.
+        var handler = new CapturingHandler("""{ "id": "t1", "text_content": "confirmed body", "description": "raw body" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var confirmed = await client.SetTaskDescriptionAsync("t1", "new body");
+
+        Assert.Equal(HttpMethod.Put, handler.Method);
+        Assert.Contains("/v2/task/t1", handler.RequestUri);
+        var description = handler.Body!.RootElement.GetProperty("description");
+        Assert.Equal(JsonValueKind.String, description.ValueKind);
+        Assert.Equal("new body", description.GetString());
+        // A description write writes the plain `description` field only — never markdown_description
+        // nor the read-only text_content, and never touches the other update fields.
+        Assert.False(handler.Body.RootElement.TryGetProperty("markdown_description", out _), "must write plain description, not markdown.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("text_content", out _), "text_content is read-only; must not be sent.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("status", out _), "a description write must not touch status.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("priority", out _), "a description write must not touch priority.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("assignees", out _), "a description write must not touch assignees.");
+        Assert.Equal("confirmed body", confirmed);
+    }
+
+    [Fact]
+    public async Task SetTaskDescription_FallsBackToDescription_WhenTextContentAbsent()
+    {
+        // When the response omits text_content, the confirmed value comes from `description` — same
+        // preference order as the detail view's MapDetail.
+        var handler = new CapturingHandler("""{ "id": "t1", "description": "raw only" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var confirmed = await client.SetTaskDescriptionAsync("t1", "whatever");
+
+        Assert.Equal("raw only", confirmed);
+    }
+
+    [Fact]
+    public async Task SetTaskDescription_EmptyString_ClearsDescription()
+    {
+        // ClickUp clears a description when the body carries an explicit empty `"description": ""`.
+        var handler = new CapturingHandler("""{ "id": "t1", "description": "" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var confirmed = await client.SetTaskDescriptionAsync("t1", "");
+
+        var description = handler.Body!.RootElement.GetProperty("description");
+        Assert.Equal(JsonValueKind.String, description.ValueKind);
+        Assert.Equal("", description.GetString());
+        // The response echoes the now-empty description, which maps back faithfully to "".
+        Assert.Equal("", confirmed);
+    }
+
+    [Fact]
+    public async Task SetTaskDescription_NullArgument_Throws()
+    {
+        var handler = new CapturingHandler("{}");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() => client.SetTaskDescriptionAsync("t1", null!));
+        Assert.Null(handler.Method); // never hit the transport
+    }
+
     /// <summary>Records the outgoing request (method, URI, parsed JSON body) and returns a canned body.</summary>
     private sealed class CapturingHandler(string responseBody) : HttpMessageHandler
     {

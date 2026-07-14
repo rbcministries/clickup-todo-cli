@@ -157,6 +157,34 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task SetTaskDescription_RoundTripsThroughDetailFetch()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var before = await client.GetTaskDetailAsync(TaskId!);
+        var original = before.Description ?? "";
+        // A unique, plainly-visible marker so a leaked description is easy to spot and clean up.
+        var marker = $"[clickup-todo-cli test] description round-trip {Guid.NewGuid():N}";
+        try
+        {
+            // The write response should carry the new plain description — no read-after-write needed.
+            var confirmed = await client.SetTaskDescriptionAsync(TaskId!, marker);
+            Assert.Equal(marker, confirmed);
+
+            // And a fresh detail fetch reflects it (lossless plain-text round-trip).
+            var after = await client.GetTaskDetailAsync(TaskId!);
+            Assert.Equal(marker, after.Description);
+        }
+        finally
+        {
+            // Restore the original description for idempotency.
+            await client.SetTaskDescriptionAsync(TaskId!, original);
+        }
+    }
+
+    [SkippableFact]
     public async Task GetTaskDetail_ReturnsRichTask()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),

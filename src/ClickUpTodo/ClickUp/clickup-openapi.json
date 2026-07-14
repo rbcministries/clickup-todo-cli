@@ -385,6 +385,8 @@
       "UpdateTaskRequest": {
         "type": "object",
         "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string", "nullable": true },
           "status": { "type": "string" },
           "priority": { "type": "integer", "format": "int32", "nullable": true },
           "assignees": { "$ref": "#/components/schemas/AssigneeUpdate" }

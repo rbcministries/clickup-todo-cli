@@ -34,6 +34,7 @@ public interface IClickUpClient
         => throw new NotSupportedException($"{GetType().Name} does not implement the delta fetch.");
     Task<string?> SetTaskStatusAsync(string taskId, string statusName, CancellationToken ct = default);
     Task<int?> SetTaskPriorityAsync(string taskId, int? priorityLevel, CancellationToken ct = default);
+    Task<string?> SetTaskDescriptionAsync(string taskId, string description, CancellationToken ct = default);
     Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskAssignee>> RemoveTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
