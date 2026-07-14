@@ -81,6 +81,29 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task CreateTask_CreatesTaskInList_AndReturnsItMapped()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(ListId),
+            "Set CLICKUP_TOKEN and CLICKUP_LIST_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        // ClickUp v2 has no task-delete in this facade, so this leaves a clearly-labelled throwaway task
+        // on the target list. The name flags it as a test artifact for easy manual cleanup.
+        var name = "[clickup-todo-cli test] create-task smoke — safe to delete";
+
+        var created = await client.CreateTaskAsync(ListId!, new NewTaskRequest
+        {
+            Name = name,
+            Description = "Created by the CreateTask integration test.",
+            PriorityLevel = 3,
+        });
+
+        Assert.False(string.IsNullOrWhiteSpace(created.Id));
+        Assert.Equal(name, created.Name);
+        Assert.Equal(3, created.PriorityLevel);
+    }
+
+    [SkippableFact]
     public async Task SetTaskStatus_ReturnsConfirmedStatusFromWriteResponse()
     {
         Skip.If(

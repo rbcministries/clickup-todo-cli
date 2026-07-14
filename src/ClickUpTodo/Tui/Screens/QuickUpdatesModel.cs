@@ -13,14 +13,22 @@ public enum QuickUpdatesPane
 /// <summary>
 /// Pure presentation/navigation logic for the Quick Updates screen, factored out of the Terminal.Gui
 /// glue so it can be unit-tested without a terminal (mirrors <see cref="StatusPickerModel"/>). Covers
-/// the pane cycle order + wrap and the Priority/Assignees stub panes' row rendering + preselection.
-/// The Status pane reuses <see cref="StatusPickerModel"/>; Status/Priority apply-on-Enter (#157) and
-/// the Assignees search/apply (#158) build on this shell.
+/// the pane cycle order + wrap, the Status/Priority rows with their leading <c>✓</c> current-value
+/// marker + preselection (#157), and the Assignees stub rows (#158 fills in search/apply).
 /// </summary>
 public static class QuickUpdatesModel
 {
     /// <summary>The number of panes (Status, Priority, Assignees).</summary>
     public const int PaneCount = 3;
+
+    /// <summary>The 2-column prefix on the currently-effective row: a check mark then a space.</summary>
+    public const string CurrentMarker = "✓ ";
+
+    /// <summary>The 2-column prefix on a non-current row, keeping every label left-aligned under the mark.</summary>
+    public const string NoMarker = "  ";
+
+    /// <summary>The label of the Priority pane's "clear priority" row (commits a <c>null</c> level).</summary>
+    public const string NoPriorityLabel = "(no priority)";
 
     /// <summary>
     /// The pane focus lands on when Tab (<paramref name="forward"/> = true) or Shift+Tab
@@ -33,20 +41,40 @@ public static class QuickUpdatesModel
         return (QuickUpdatesPane)next;
     }
 
-    /// <summary>The display text for a single priority row (indented like the status rows).</summary>
-    public static string FormatPriority(string name) => $"  {name}";
+    /// <summary>A selector row: the label prefixed with <see cref="CurrentMarker"/> when it is the
+    /// task's current effective value, else <see cref="NoMarker"/> so the two align.</summary>
+    public static string Mark(string label, bool current) => (current ? CurrentMarker : NoMarker) + label;
 
-    /// <summary>The priority rows in canonical order (Urgent → High → Normal → Low).</summary>
-    public static IReadOnlyList<string> PriorityRows()
-        => [.. ClickUpPriority.Names.Select(FormatPriority)];
+    /// <summary>The Status pane rows, with a leading <c>✓</c> on the row whose name matches
+    /// <paramref name="effectiveStatus"/> (case-insensitive; none marked when it isn't in the workflow).</summary>
+    public static IReadOnlyList<string> StatusRows(IReadOnlyList<StatusOption> statuses, string? effectiveStatus)
+        => [.. statuses.Select(s => Mark(s.Name, string.Equals(s.Name, effectiveStatus, StringComparison.OrdinalIgnoreCase)))];
+
+    /// <summary>The Priority pane row labels: the four canonical priorities (Urgent → Low) then the
+    /// "(no priority)" clear row.</summary>
+    public static IReadOnlyList<string> PriorityLabels { get; } = [.. ClickUpPriority.Names, NoPriorityLabel];
+
+    /// <summary>The row index of the "(no priority)" clear option — always the last row.</summary>
+    public static int NoPriorityRow => ClickUpPriority.Names.Count;
 
     /// <summary>
-    /// The index of the row matching the task's current importance <paramref name="level"/> (1=Urgent …
-    /// 4=Low), or -1 when the task has no priority (or an out-of-range level). Rows run most-urgent
-    /// first, so level <c>n</c> is row <c>n-1</c>.
+    /// The importance level a Priority row commits: 1..4 for the four priority rows, or <c>null</c> for
+    /// the "(no priority)" clear row (and any out-of-range index).
     /// </summary>
-    public static int PreselectedPriorityIndex(int? level)
-        => level is >= 1 and <= 4 ? level.Value - 1 : -1;
+    public static int? PriorityLevelForRow(int index)
+        => index >= 0 && index < ClickUpPriority.Names.Count ? index + 1 : null;
+
+    /// <summary>
+    /// The Priority row to preselect / mark for a task's current importance <paramref name="level"/>:
+    /// row <c>level-1</c> for 1..4, else the "(no priority)" clear row (unset or out-of-range).
+    /// </summary>
+    public static int PriorityRowForLevel(int? level)
+        => level is >= 1 and <= 4 ? level.Value - 1 : NoPriorityRow;
+
+    /// <summary>The Priority pane rows, with a leading <c>✓</c> on the row matching the task's current
+    /// effective <paramref name="effectiveLevel"/> (the clear row when it has no priority).</summary>
+    public static IReadOnlyList<string> PriorityRows(int? effectiveLevel)
+        => [.. PriorityLabels.Select((label, i) => Mark(label, PriorityLevelForRow(i) == effectiveLevel))];
 
     /// <summary>
     /// The rows for the (stubbed) Assignees pane: the task's current assignees, or a single
@@ -54,6 +82,6 @@ public static class QuickUpdatesModel
     /// </summary>
     public static IReadOnlyList<string> AssigneeRows(IReadOnlyList<TaskAssignee> assignees)
         => assignees.Count == 0
-            ? ["  (no assignees)"]
-            : [.. assignees.Select(a => $"  {a.Name}")];
+            ? [NoMarker + "(no assignees)"]
+            : [.. assignees.Select(a => NoMarker + a.Name)];
 }

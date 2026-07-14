@@ -1,26 +1,73 @@
+using System.Text.Json;
 using ClickUpTodo.ClickUp;
+using ClickUpTodo.Configuration;
 
 namespace ClickUpTodo.Services;
+
+/// <summary>The persisted per-list status-options snapshot (#125), written under
+/// <see cref="StateKeys.Statuses"/>. Carries the <see cref="WorkspaceId"/> it was captured for — a
+/// mismatch on load is a clean miss, so switching workspace never warms foreign lists' statuses — and
+/// a <see cref="SchemaVersion"/> guarding an incompatible future shape. Each entry keeps its capture
+/// timestamp so the cache's TTL applies unchanged to a persisted entry (a stale one is refetched, never
+/// served past expiry).</summary>
+public sealed record StatusCacheDocument(
+    int SchemaVersion, string WorkspaceId, IReadOnlyList<StatusCacheEntryDto> Entries);
+
+/// <summary>One persisted list's status options plus the epoch-ms UTC time they were fetched.</summary>
+public sealed record StatusCacheEntryDto(string ListId, IReadOnlyList<StatusOption> Statuses, long FetchedAtMs);
 
 /// <summary>
 /// A thread-safe, TTL'd cache of per-list status options, decoupled from the ClickUp client so it
 /// can be exercised without the network. A list's statuses almost never change, so an entry stays
-/// fresh for <paramref name="ttl"/> (default 10 minutes) before the next access refetches it.
-/// Concurrent fetches for the same list are de-duplicated, so a prefetch already in flight is
-/// awaited rather than duplicated when the user opens the picker.
+/// fresh for <c>ttl</c> (default 10 minutes) before the next access refetches it. Concurrent fetches
+/// for the same list are de-duplicated, so a prefetch already in flight is awaited rather than
+/// duplicated when the user opens the picker.
+/// <para>
+/// When an <see cref="IStateStore"/> is supplied (#125), the cache warms from the persisted snapshot on
+/// construction — seeding each entry with its <em>persisted</em> fetch time so the TTL still governs it
+/// (a persisted entry older than the TTL is a miss and gets refetched) — and rewrites the snapshot after
+/// each successful fetch. With no store it is purely in-memory, exactly as before.
+/// </para>
 /// </summary>
-public sealed class StatusCache(
-    Func<string, CancellationToken, Task<IReadOnlyList<StatusOption>>> fetch,
-    TimeProvider? timeProvider = null,
-    TimeSpan? ttl = null)
+public sealed class StatusCache
 {
-    private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
-    private readonly TimeSpan _ttl = ttl ?? TimeSpan.FromMinutes(10);
+    /// <summary>The persisted-shape version; bump when <see cref="StatusCacheDocument"/> changes
+    /// incompatibly so an old document is discarded rather than mis-read.</summary>
+    public const int CurrentSchemaVersion = 1;
+
+    private readonly Func<string, CancellationToken, Task<IReadOnlyList<StatusOption>>> _fetch;
+    private readonly TimeProvider _clock;
+    private readonly TimeSpan _ttl;
+    private readonly IStateStore? _store;
+    private readonly string _workspaceId;
     private readonly Dictionary<string, Entry> _entries = new();
     private readonly Dictionary<string, Task<IReadOnlyList<StatusOption>>> _inFlight = new();
     private readonly Lock _gate = new();
+    private readonly Lock _persistGate = new();
 
     private readonly record struct Entry(IReadOnlyList<StatusOption> Statuses, DateTimeOffset FetchedAt);
+
+    /// <param name="fetch">Fetches a list's statuses when the cache misses.</param>
+    /// <param name="timeProvider">Clock for TTL comparisons (defaults to the system clock).</param>
+    /// <param name="ttl">How long an entry stays fresh (default 10 minutes).</param>
+    /// <param name="store">Optional persistence backend; when supplied the cache warms from and writes
+    /// back to <see cref="StateKeys.Statuses"/>. Omit for a purely in-memory cache.</param>
+    /// <param name="workspaceId">The workspace the persisted snapshot is scoped to; a document for a
+    /// different workspace is ignored on load.</param>
+    public StatusCache(
+        Func<string, CancellationToken, Task<IReadOnlyList<StatusOption>>> fetch,
+        TimeProvider? timeProvider = null,
+        TimeSpan? ttl = null,
+        IStateStore? store = null,
+        string workspaceId = "")
+    {
+        _fetch = fetch;
+        _clock = timeProvider ?? TimeProvider.System;
+        _ttl = ttl ?? TimeSpan.FromMinutes(10);
+        _store = store;
+        _workspaceId = workspaceId ?? "";
+        WarmFromStore();
+    }
 
     /// <summary>
     /// Returns a cached value synchronously when present and still fresh (within the TTL); false for
@@ -89,15 +136,80 @@ public sealed class StatusCache(
         await Task.Yield();
         try
         {
-            var statuses = await fetch(listId, ct).ConfigureAwait(false);
+            var statuses = await _fetch(listId, ct).ConfigureAwait(false);
             lock (_gate)
                 _entries[listId] = new Entry(statuses, _clock.GetUtcNow());
+            Persist(); // deliberately off _gate — see Persist for why the disk write can't hold it
             return statuses;
         }
         finally
         {
             lock (_gate)
                 _inFlight.Remove(listId);
+        }
+    }
+
+    // Warm the in-memory entries from the persisted snapshot, keeping each entry's captured fetch time
+    // so TryGetFreshLocked's TTL check still applies (a persisted entry past its TTL is simply a miss).
+    private void WarmFromStore()
+    {
+        if (_store is null)
+            return;
+
+        StatusCacheDocument? doc;
+        try
+        {
+            doc = _store.Load<StatusCacheDocument>(StateKeys.Statuses);
+        }
+        catch (JsonException)
+        {
+            // A corrupt/truncated snapshot (quit or crash mid-write) is a miss, never a crash — this runs
+            // before the UI loop, so a throw would brick launch. On-demand fetches repopulate it.
+            return;
+        }
+
+        // Missing document, a different workspace, or an incompatible schema all mean "no warm cache".
+        if (doc is null
+            || doc.SchemaVersion != CurrentSchemaVersion
+            || !string.Equals(doc.WorkspaceId, _workspaceId, StringComparison.Ordinal))
+            return;
+
+        foreach (var entry in doc.Entries)
+        {
+            if (string.IsNullOrEmpty(entry.ListId) || entry.Statuses is null)
+                continue;
+            // A structurally-valid but out-of-range timestamp (a hand-tampered file) makes
+            // FromUnixTimeMilliseconds throw — skip that entry rather than let it crash the launch this
+            // guard exists to protect (our own writes are always in range).
+            DateTimeOffset fetchedAt;
+            try { fetchedAt = DateTimeOffset.FromUnixTimeMilliseconds(entry.FetchedAtMs); }
+            catch (ArgumentOutOfRangeException) { continue; }
+            _entries[entry.ListId] = new Entry(entry.Statuses, fetchedAt);
+        }
+    }
+
+    // Rewrites the whole snapshot (the list count is tiny). The disk write runs under a dedicated
+    // _persistGate, NOT _gate: TryGetFresh (the picker's UI fast-path) takes _gate, so a concurrent
+    // prefetch's write must not hold it and stall an interactive picker-open on disk/DB I/O (LiteDB
+    // opens/closes the file per op in shared mode). _persistGate still serialises writes per key
+    // (IStateStore's contract), and the snapshot is copied under _gate — briefly, in memory — so each
+    // serialised write persists the latest state (no lost update). Best-effort: a failed write
+    // (read-only / full disk) leaves the in-memory cache intact and the next fetch retries.
+    private void Persist()
+    {
+        if (_store is null)
+            return;
+        lock (_persistGate)
+        {
+            StatusCacheDocument doc;
+            lock (_gate)
+                doc = new StatusCacheDocument(
+                    CurrentSchemaVersion,
+                    _workspaceId,
+                    _entries.Select(kv => new StatusCacheEntryDto(
+                        kv.Key, kv.Value.Statuses, kv.Value.FetchedAt.ToUnixTimeMilliseconds())).ToList());
+            try { _store.Save(StateKeys.Statuses, doc); }
+            catch { /* see note above */ }
         }
     }
 }

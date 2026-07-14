@@ -168,6 +168,23 @@
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TasksResponse" } } }
           }
         }
+      },
+      "post": {
+        "operationId": "CreateTask",
+        "summary": "Create a task in a List.",
+        "parameters": [
+          { "name": "list_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateTaskRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The created task.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } }
+          }
+        }
       }
     },
     "/v2/task/{task_id}": {
@@ -430,6 +447,17 @@
         "properties": {
           "add": { "type": "array", "items": { "type": "integer", "format": "int64" } },
           "rem": { "type": "array", "items": { "type": "integer", "format": "int64" } }
+        }
+      },
+      "CreateTaskRequest": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string", "nullable": true },
+          "assignees": { "type": "array", "items": { "type": "integer", "format": "int64" } },
+          "priority": { "type": "integer", "format": "int32", "nullable": true },
+          "due_date": { "type": "integer", "format": "int64", "nullable": true }
         }
       }
     }

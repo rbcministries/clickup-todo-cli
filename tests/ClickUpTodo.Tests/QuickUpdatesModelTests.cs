@@ -5,6 +5,8 @@ namespace ClickUpTodo.Tests;
 
 public sealed class QuickUpdatesModelTests
 {
+    private static StatusOption Status(string name) => new(name, "#fff");
+
     [Theory]
     [InlineData(QuickUpdatesPane.Status, QuickUpdatesPane.Priority)]
     [InlineData(QuickUpdatesPane.Priority, QuickUpdatesPane.Assignees)]
@@ -25,30 +27,110 @@ public sealed class QuickUpdatesModelTests
     public void PaneCount_MatchesTheEnum()
         => Assert.Equal(QuickUpdatesModel.PaneCount, Enum.GetValues<QuickUpdatesPane>().Length);
 
-    [Fact]
-    public void FormatPriority_IndentsTheName()
-        => Assert.Equal("  Urgent", QuickUpdatesModel.FormatPriority("Urgent"));
+    // ── Mark (the shared ✓ prefix) ───────────────────────────────────────────────
 
     [Fact]
-    public void PriorityRows_AreTheCanonicalOrderUrgentToLow()
+    public void Mark_Current_PrefixesACheckAndAligns()
+    {
+        Assert.Equal("✓ Urgent", QuickUpdatesModel.Mark("Urgent", current: true));
+        Assert.Equal("  Urgent", QuickUpdatesModel.Mark("Urgent", current: false));
+        // Both prefixes are the same width so labels stay left-aligned under the mark.
+        Assert.Equal(QuickUpdatesModel.CurrentMarker.Length, QuickUpdatesModel.NoMarker.Length);
+    }
+
+    // ── Status rows ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void StatusRows_MarkOnlyTheEffectiveStatus_CaseInsensitive()
+    {
+        var rows = QuickUpdatesModel.StatusRows(
+            [Status("open"), Status("in progress"), Status("done")], effectiveStatus: "IN PROGRESS");
+
+        Assert.Equal(["  open", "✓ in progress", "  done"], rows);
+    }
+
+    [Fact]
+    public void StatusRows_MarkNothing_WhenCurrentNotInWorkflow()
+    {
+        var rows = QuickUpdatesModel.StatusRows([Status("open"), Status("done")], effectiveStatus: "archived");
+
+        Assert.Equal(["  open", "  done"], rows);
+    }
+
+    [Fact]
+    public void StatusRows_MarkNothing_WhenNoCurrentStatus()
+    {
+        var rows = QuickUpdatesModel.StatusRows([Status("open"), Status("done")], effectiveStatus: null);
+
+        Assert.Equal(["  open", "  done"], rows);
+    }
+
+    // ── Priority rows ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void PriorityLabels_AreTheFourPrioritiesThenTheClearRow()
         => Assert.Equal(
-            ["  Urgent", "  High", "  Normal", "  Low"],
-            QuickUpdatesModel.PriorityRows());
+            ["Urgent", "High", "Normal", "Low", QuickUpdatesModel.NoPriorityLabel],
+            QuickUpdatesModel.PriorityLabels);
+
+    [Fact]
+    public void NoPriorityRow_IsTheLastRow()
+        => Assert.Equal(4, QuickUpdatesModel.NoPriorityRow);
+
+    [Theory]
+    [InlineData(0, 1)] // Urgent
+    [InlineData(1, 2)] // High
+    [InlineData(2, 3)] // Normal
+    [InlineData(3, 4)] // Low
+    public void PriorityLevelForRow_MapsThePriorityRowsToLevels(int index, int? expected)
+        => Assert.Equal(expected, QuickUpdatesModel.PriorityLevelForRow(index));
+
+    [Theory]
+    [InlineData(4)]  // the "(no priority)" clear row
+    [InlineData(-1)] // out of range
+    [InlineData(9)]
+    public void PriorityLevelForRow_ClearRowAndOutOfRange_AreNull(int index)
+        => Assert.Null(QuickUpdatesModel.PriorityLevelForRow(index));
 
     [Theory]
     [InlineData(1, 0)] // Urgent
     [InlineData(2, 1)] // High
     [InlineData(3, 2)] // Normal
     [InlineData(4, 3)] // Low
-    public void PreselectedPriorityIndex_MapsLevelToRow(int level, int expected)
-        => Assert.Equal(expected, QuickUpdatesModel.PreselectedPriorityIndex(level));
+    public void PriorityRowForLevel_MapsLevelToRow(int level, int expected)
+        => Assert.Equal(expected, QuickUpdatesModel.PriorityRowForLevel(level));
 
     [Theory]
     [InlineData(null)]
     [InlineData(0)]
     [InlineData(5)]
-    public void PreselectedPriorityIndex_ReturnsMinusOne_WhenUnsetOrOutOfRange(int? level)
-        => Assert.Equal(-1, QuickUpdatesModel.PreselectedPriorityIndex(level));
+    public void PriorityRowForLevel_UnsetOrOutOfRange_SelectsTheClearRow(int? level)
+        => Assert.Equal(QuickUpdatesModel.NoPriorityRow, QuickUpdatesModel.PriorityRowForLevel(level));
+
+    [Theory]
+    [InlineData(1, "✓ Urgent")]
+    [InlineData(2, "✓ High")]
+    [InlineData(3, "✓ Normal")]
+    [InlineData(4, "✓ Low")]
+    public void PriorityRows_MarkTheEffectiveLevel(int level, string markedRow)
+    {
+        var rows = QuickUpdatesModel.PriorityRows(level);
+
+        Assert.Equal(markedRow, rows[QuickUpdatesModel.PriorityRowForLevel(level)]);
+        Assert.Single(rows, r => r.StartsWith(QuickUpdatesModel.CurrentMarker, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void PriorityRows_MarkTheClearRow_WhenNoPriority()
+    {
+        var rows = QuickUpdatesModel.PriorityRows(null);
+
+        Assert.Equal(
+            ["  Urgent", "  High", "  Normal", "  Low", "✓ " + QuickUpdatesModel.NoPriorityLabel],
+            rows);
+    }
+
+    // ── Assignee stub rows ───────────────────────────────────────────────────────
 
     [Fact]
     public void AssigneeRows_ListsCurrentAssignees()
