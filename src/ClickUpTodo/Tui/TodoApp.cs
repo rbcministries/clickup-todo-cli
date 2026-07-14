@@ -46,6 +46,9 @@ public sealed class TodoApp
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
+    // Persists the last loaded working set for an instant first paint on the next launch (#122). Read
+    // once at startup (TryPaintCachedTasks) and written after each changed live load (OnTasksLoaded).
+    private readonly TaskCache _taskCache;
     // Candidate-people pool for the future Quick Updates Assignees pane (#155/#158): tallied from each
     // loaded working set and topped up (once, off-thread) from the workspace members. Never touches
     // rendering or input — no #3/#12 impact.
@@ -138,13 +141,14 @@ public sealed class TodoApp
     private string _signature = "";
 
     public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
-        IFocusStore focus, AssigneeFrequencyCache assignees)
+        IFocusStore focus, TaskCache taskCache, AssigneeFrequencyCache assignees)
     {
         _tasks = tasks;
         _feed = feed;
         _config = config;
         _configStore = configStore;
         _focus = focus;
+        _taskCache = taskCache;
         _assignees = assignees;
         _agent = BuildAgentDispatcher();
     }
@@ -174,6 +178,12 @@ public sealed class TodoApp
         {
             _status = $"Loading… (driver: {driverName ?? "default (ansi)"}{(diffing ? ", diffed output" : "")})";
             Build();
+            // Instant first paint from the persisted working set (#122): render the last snapshot now,
+            // synchronously on the UI thread, before Application.Run starts pumping — so the first live
+            // refresh (marshalled in via Application.Invoke) can only ever arrive after this. When the
+            // live set matches, OnTasksLoaded's signature fast-path skips the re-render (no flicker);
+            // when it differs, the cursor is kept by task id.
+            TryPaintCachedTasks();
             _refresh = new RefreshService(
                 fetch: FetchAsync,
                 intervalSeconds: _config.RefreshSeconds,
@@ -431,6 +441,10 @@ public sealed class TodoApp
                 key.Handled = true;
                 CycleBadgeDisplay();
                 break;
+            case KeyCode.F12:
+                key.Handled = true;
+                ToggleShowCompleted();
+                break;
         }
     }
 
@@ -572,6 +586,29 @@ public sealed class TodoApp
         // Only Hidden -> on needs a fetch; between the two on-states the full set is already resolved and
         // the render filter alone changes what's shown.
         if (previous == SubtaskView.Hidden)
+            _refresh.RequestRefresh();
+    }
+
+    /// <summary>
+    /// Toggles the F12 "Show Completed" view (#178) — completed (closed-type) tasks and subtasks shown
+    /// vs. hidden — and persists it. Off (default) hides them; the display gate in <see cref="TaskView"/>
+    /// re-renders immediately from the current snapshot. Turning it on additionally requests a refresh so
+    /// the server returns the closed-type tasks it drops while off (a client-side re-render can't surface
+    /// tasks never fetched — mirrors <see cref="CycleSubtaskView"/>; a Manual refresh is a full fetch).
+    /// </summary>
+    private void ToggleShowCompleted()
+    {
+        if (ActiveScreen is not null)
+            return;
+
+        var on = !_config.View.ShowCompleted;
+        _config.View.ShowCompleted = on;
+        _configStore.Save(_config);
+        Flash(on ? "Showing completed tasks (F12)." : "Completed tasks hidden (F12).");
+
+        Render(keepTaskId: CurrentTask()?.Id);
+        _signature = CurrentSignature(_all);
+        if (on)
             _refresh.RequestRefresh();
     }
 
@@ -1303,6 +1340,10 @@ public sealed class TodoApp
             cts.Dispose();
         });
 
+        // Stream the parsed output into the run screen as it arrives (#187): the runner reports display
+        // chunks off the UI thread, marshalled here onto the UI thread before appending.
+        var progress = new DelegateProgress<string>(chunk => Application.Invoke(() => screen.AppendOutput(chunk)));
+
         _ = Task.Run(async () =>
         {
             try
@@ -1312,7 +1353,7 @@ public sealed class TodoApp
                 if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
                     Directory.CreateDirectory(workingDir);
 
-                var run = await agent.DispatchBackgroundAsync(detail, comments, prompt, workingDir, template, outputSubdir, postToComments, cts.Token);
+                var run = await agent.DispatchBackgroundAsync(detail, comments, prompt, workingDir, template, outputSubdir, postToComments, progress, cts.Token);
                 Application.Invoke(() => { _dispatching = false; screen.ShowResult(AgentRunModel.FormatOutput(run), run.Success); });
             }
             catch (OperationCanceledException)
@@ -1577,6 +1618,29 @@ public sealed class TodoApp
 
     // ── Rendering ────────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Paints the persisted working set (#122) before the first network load, so a warm cache shows
+    /// the task list on the first frame. A miss (nothing cached, or the cache belongs to a different
+    /// workspace/list/assignee context) leaves the "Loading…" state untouched for the live load to
+    /// replace. Seeds <see cref="_signature"/> from the cached set so an identical live load hits the
+    /// OnTasksLoaded fast-path with no re-render. That no-op holds in the default (subtasks-off) view;
+    /// with the F4 subtasks view persisted on, the first live load resolves context parents / foreign
+    /// subtasks that <see cref="CurrentSignature"/> folds in (empty here), so it re-renders once — but
+    /// the cursor is preserved by task id, so there's no selection loss either way. Runs on the UI
+    /// thread during <see cref="Run"/>, before the run loop starts.
+    /// </summary>
+    private void TryPaintCachedTasks()
+    {
+        var cached = _taskCache.Load(_config);
+        if (cached is not { Count: > 0 })
+            return;
+
+        _all = cached;
+        _status = $"Showing cached tasks · {cached.Count} task(s) · refreshing…";
+        _signature = CurrentSignature(cached);
+        Render(keepTaskId: null);
+    }
+
     private void OnTasksLoaded(IReadOnlyList<TaskItem> tasks)
     {
         _all = tasks;
@@ -1613,6 +1677,14 @@ public sealed class TodoApp
         }
         _signature = signature;
         Render(keepTaskId: CurrentTask()?.Id);
+
+        // Persist the freshly-rendered working set for the next launch's instant first paint (#122).
+        // Only on a real change — the signature fast-path above already returned for a no-op poll, so
+        // the cache isn't rewritten every interval. The bounded payload keeps this off-critical-path;
+        // it rides the UI thread like the config save. The optimistic status path (UpdateTaskRow) is
+        // intentionally not cached here: the next authoritative load saves the confirmed set, and
+        // persisting an as-yet-unconfirmed value could outlive a server rejection.
+        _taskCache.Save(_config, tasks);
     }
 
     /// <summary>
@@ -1622,6 +1694,9 @@ public sealed class TodoApp
     private string CurrentSignature(IReadOnlyList<TaskItem> tasks)
     {
         var sb = new System.Text.StringBuilder(BuildSignature(tasks));
+        // Fold in "Show Completed" (#178) so toggling F12 is treated as a render change, not a no-op
+        // refresh, even when the underlying task set is byte-identical.
+        sb.Append("#done=").Append(_config.View.ShowCompleted);
         // Fold in the F4 state (not just on/off) so switching between the two on-states — a pure re-render
         // over the same fetched set — is treated as a change rather than a no-op (#179).
         sb.Append("#sub=").Append(_config.View.Subtasks);
@@ -1665,6 +1740,8 @@ public sealed class TodoApp
             flags.Add($"grouped by {TaskFieldInfo.DisplayName(gf)}");
         if (view.Subtasks.TitleFlag() is { } subtaskFlag)
             flags.Add(subtaskFlag);
+        if (view.ShowCompleted)
+            flags.Add("+completed");
         return flags.Count > 0 ? $"{title} · {string.Join(" · ", flags)}" : title;
     }
 
@@ -1689,7 +1766,10 @@ public sealed class TodoApp
         // a pinned parent nests under it in Focus rather than vanishing (#85). NestedSubtaskIds then covers
         // both in-snapshot and foreign rows pulled into Focus — the exact set to keep out of the to-do list.
         var foreignList = nest && visibleForeign.Count > 0 ? visibleForeign.Values.ToList() : null;
-        var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection, _expanded, foreignList);
+        // Pass Show Completed (#178) so FocusSectionLayout gates completed descendants (in-snapshot and
+        // foreign alike) in one place — a completed subtask never nests under a pinned ancestor when off,
+        // matching TaskView.Apply's gate on the to-do section; explicit pins stay visible regardless.
+        var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection, _expanded, foreignList, includeCompleted: view.ShowCompleted);
         _focusNestedIds = focus.NestedSubtaskIds;
 
         // The non-pinned set feeds the F3 view. Drop pinned tasks and (when nesting) any subtask pulled

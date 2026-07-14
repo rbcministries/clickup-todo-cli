@@ -57,6 +57,29 @@ public sealed class ClickUpClientMapTests
     }
 
     [Fact]
+    public void Map_CarriesStatusType_ForTheShowCompletedToggle()
+    {
+        // The F12 "Show Completed" toggle (#178) keys off ClickUp's status.type; Map must carry it.
+        var mapped = ClickUpClient.Map(new TaskObject
+        {
+            Id = "abc",
+            Name = "A task",
+            Status = new Status { StatusProp = "complete", Color = "#008844", Type = "closed" },
+        });
+
+        Assert.Equal("complete", mapped.StatusName);
+        Assert.Equal("closed", mapped.StatusType);
+    }
+
+    [Fact]
+    public void Map_NullStatus_LeavesStatusTypeNull()
+    {
+        var mapped = ClickUpClient.Map(new TaskObject { Id = "abc", Name = "A task" });
+
+        Assert.Null(mapped.StatusType);
+    }
+
+    [Fact]
     public void MapDetail_CarriesStatusAndPriorityColors()
     {
         // The detail Other tab colours the Status/Priority values (#66), so MapDetail must carry both

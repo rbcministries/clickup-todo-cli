@@ -16,16 +16,21 @@ public sealed record TaskSnapshotResult(IReadOnlyList<TaskItem> Tasks, bool Chan
 /// Fetches and merges the user's actionable tasks (assigned-to-me ∪ Personal Tasks list),
 /// de-duplicated and stably ordered, and resolves per-list status options on demand (cached).
 /// </summary>
-public sealed class TaskService(IClickUpClient client, AppConfig config, long userId, TimeProvider? timeProvider = null)
+public sealed class TaskService(
+    IClickUpClient client, AppConfig config, long userId, TimeProvider? timeProvider = null, IStateStore? stateStore = null)
 {
     // Per-list status options, cached with a long TTL (statuses rarely change) and warmed by
-    // PrefetchStatusesAsync so the picker opens from cache in the common case.
-    private readonly StatusCache _statusCache = new(client.GetListStatusesAsync, timeProvider);
+    // PrefetchStatusesAsync so the picker opens from cache in the common case. With a state store it
+    // also persists across restarts (#125), warming from the last session so the picker opens without a
+    // first-load round-trip; the TTL still governs a persisted entry.
+    private readonly StatusCache _statusCache = new(
+        client.GetListStatusesAsync, timeProvider, store: stateStore, workspaceId: config.WorkspaceId);
 
-    // Per-list color chips, cached for the process lifetime (a list's color effectively never changes
-    // within a session). A null value means "fetched, but the list has no color set" — cached so it
-    // isn't refetched. Used to tint List-grouped headers (#61).
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _listColors = new(StringComparer.Ordinal);
+    // Per-list color chips (#61), used to tint List-grouped headers. Held for the process lifetime (a
+    // list's color effectively never changes within a session); a null value means "fetched, no color
+    // set" and is cached so it isn't refetched. With a state store it persists across restarts (#125),
+    // warming resolved colors so the first List-grouped render after a restart doesn't re-resolve them.
+    private readonly ListColorCache _colorCache = new(stateStore, config.WorkspaceId, timeProvider);
 
     /// <summary>The signed-in app user's ClickUp id — the target of the default "Assignee IS me" rule.</summary>
     public long UserId { get; } = userId;
@@ -84,7 +89,7 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
                 if (!string.IsNullOrEmpty(task.Id))
                     delta[task.Id] = task;
             }
-            var (merged, changed) = MergeDelta(previous, delta.Values.ToList());
+            var (merged, changed) = MergeDelta(previous, delta.Values.ToList(), keepClosed: config.View.ShowCompleted);
             _watermarkMs = MaxUpdatedMs(delta.Values) is { } newest ? Math.Max(watermark, newest) : watermark;
             _lastSnapshot = merged;
             return new TaskSnapshotResult(merged, changed, WasDelta: true);
@@ -105,9 +110,15 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
     /// with the standard <see cref="TaskOrder"/>. Returns <c>Changed=false</c> — previous list
     /// instance included, so no re-render churn — when the delta was empty or only "removed" tasks
     /// that were never present. Pure and unit-testable.
+    /// <para>
+    /// When <paramref name="keepClosed"/> is true (the F12 "Show Completed" toggle on, #178), a closed
+    /// delta task is upserted like any other rather than removed — matching the full load, which fetches
+    /// with <c>include_closed=true</c> in that mode — so a task that closes since the last snapshot stays
+    /// visible instead of vanishing on the next delta.
+    /// </para>
     /// </summary>
     internal static (IReadOnlyList<TaskItem> Tasks, bool Changed) MergeDelta(
-        IReadOnlyList<TaskItem> previous, IReadOnlyList<TaskItem> delta)
+        IReadOnlyList<TaskItem> previous, IReadOnlyList<TaskItem> delta, bool keepClosed = false)
     {
         if (delta.Count == 0)
             return (previous, false);
@@ -121,7 +132,7 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
         {
             if (string.IsNullOrEmpty(task.Id))
                 continue;
-            if (IsClosed(task))
+            if (!keepClosed && IsClosed(task))
             {
                 changed |= byId.Remove(task.Id);
             }
@@ -168,8 +179,12 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
         // The two source fetches are independent, so the personal-list fetch overlaps assignee-id
         // resolution + the assigned fetch (#192): wall-clock is the slower of the two, not their sum.
         // WhenAll (rather than awaiting in turn) so a fault in one still observes the other.
-        var personalFetch = client.GetListTasksAsync(config.PersonalTasksListId, ct: ct);
-        var assignedFetch = LoadAssignedAsync(ct);
+        // The F12 "Show Completed" toggle (#178) widens both fetches to include closed-type tasks; when
+        // off (the default) closed-type tasks are dropped server-side and TaskView hides any that still
+        // arrive (e.g. subtask anchors), so hiding is consistent at every level.
+        var includeClosed = config.View.ShowCompleted;
+        var personalFetch = client.GetListTasksAsync(config.PersonalTasksListId, includeClosed, ct);
+        var assignedFetch = LoadAssignedAsync(includeClosed, ct);
         await Task.WhenAll(assignedFetch, personalFetch);
         var assigned = await assignedFetch;
         var personal = await personalFetch;
@@ -200,8 +215,8 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
     // Assignee IS rules scope the assigned fetch server-side (#68). The default view's "Assignee IS
     // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone. A
     // username/email rule is resolved to an id via the workspace-members lookup (#73).
-    private async Task<List<TaskItem>> LoadAssignedAsync(CancellationToken ct)
-        => await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), ct);
+    private async Task<List<TaskItem>> LoadAssignedAsync(bool includeClosed, CancellationToken ct)
+        => await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), includeClosed, ct);
 
     /// <summary>
     /// Cap on concurrent round-trips per fan-out (context parents, list colors). Small and fixed:
@@ -411,9 +426,10 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
         var toFetch = listIds
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .Distinct(StringComparer.Ordinal)
-            .Where(id => !_listColors.ContainsKey(id))
+            .Where(id => !_colorCache.Contains(id))
             .ToList();
 
+        var resolved = new System.Collections.Concurrent.ConcurrentDictionary<string, string?>(StringComparer.Ordinal);
         await Parallel.ForEachAsync(
             toFetch,
             new ParallelOptions { MaxDegreeOfParallelism = MaxFanOutConcurrency, CancellationToken = ct },
@@ -421,15 +437,18 @@ public sealed class TaskService(IClickUpClient client, AppConfig config, long us
             {
                 try
                 {
-                    _listColors[id] = await client.GetListColorAsync(id, token);
+                    resolved[id] = await client.GetListColorAsync(id, token);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _listColors[id] = null; // best-effort: a list we can't fetch just falls back to a hue
+                    resolved[id] = null; // best-effort: a list we can't fetch just falls back to a hue
                 }
             });
 
-        return new Dictionary<string, string?>(_listColors, StringComparer.Ordinal);
+        // Merge the freshly-resolved colors into the cache (and persist them, when a store is present),
+        // then return the full known set so the caller can tint every in-view list, not just the new ones.
+        _colorCache.Save(resolved);
+        return _colorCache.Snapshot();
     }
 
     /// <summary>

@@ -96,6 +96,23 @@ public sealed record StatusOption(string Name, string? Color);
 /// a display name (for labels and grouping).</summary>
 public sealed record TaskAssignee(long Id, string Name);
 
+/// <summary>
+/// The fields for creating a task via <see cref="IClickUpClient.CreateTaskAsync"/> (#209) — the stable,
+/// domain-facing input to the create-task facade, so callers (the New Task screen, #213/#215) never touch
+/// the generated request type. Only <see cref="Name"/> is required; the rest are omitted from the request
+/// when unset (null / empty assignees). Shaped forward-compatibly so the later Tags epic can add tags
+/// without reshaping. <see cref="PriorityLevel"/> is ClickUp's importance level (1=Urgent … 4=Low; see
+/// <see cref="ClickUpPriority"/>); <see cref="DueDateMs"/> is Unix epoch milliseconds.
+/// </summary>
+public sealed record NewTaskRequest
+{
+    public required string Name { get; init; }
+    public string? Description { get; init; }
+    public IReadOnlyList<long> Assignees { get; init; } = [];
+    public int? PriorityLevel { get; init; }
+    public long? DueDateMs { get; init; }
+}
+
 /// <summary>A unified task as shown in the to-do list, merged from either source endpoint.</summary>
 public sealed record TaskItem
 {
@@ -116,10 +133,11 @@ public sealed record TaskItem
 
     /// <summary>
     /// The workflow category of the status (ClickUp <c>status.type</c>: <c>open</c>, <c>custom</c>,
-    /// <c>done</c>, or <c>closed</c>), or null when the API omits it. The delta refresh (#194) needs it
-    /// to recognise a task that closed since the last snapshot: the delta fetch includes closed tasks
-    /// precisely so the merge can drop them, mirroring the full fetch's server-side
-    /// <c>include_closed=false</c> filter.
+    /// <c>done</c>, or <c>closed</c>), or null when the API omits it. <c>closed</c> is ClickUp's terminal
+    /// closed type — exactly what a task fetch with <c>include_closed=false</c> drops server-side. Used by
+    /// the delta refresh (#194) to recognise a task that closed since the last snapshot (the delta fetch
+    /// includes closed tasks precisely so the merge can drop them) and by the F12 "Show Completed" toggle
+    /// (#178) to hide completed tasks/subtasks consistently at every level (see <c>TaskView.IsCompleted</c>).
     /// </summary>
     public string? StatusType { get; init; }
 

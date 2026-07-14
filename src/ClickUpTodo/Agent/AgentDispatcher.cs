@@ -73,6 +73,9 @@ public sealed class AgentDispatcher
     /// interactive terminal path would have produced. The composed prompt file is fed to the child on
     /// stdin and then <b>deleted</b> once the run finishes (or is cancelled) — the background path owns the
     /// file, unlike the interactive path which retains it for the launched terminal to read.
+    /// <paramref name="progress"/> (#187) receives the incremental display chunks the runner parses from
+    /// the stream as it runs, so the caller can paint progress live; its concatenation equals the returned
+    /// <see cref="BackgroundRunResult.Output"/>.
     /// </summary>
     public async Task<BackgroundRunResult> DispatchBackgroundAsync(
         TaskDetail task,
@@ -82,6 +85,7 @@ public sealed class AgentDispatcher
         string? template = null,
         string? outputSubdirectory = null,
         bool postToComments = false,
+        IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
@@ -89,7 +93,7 @@ public sealed class AgentDispatcher
         var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, outputSubdirectory, postToComments);
         try
         {
-            return await _backgroundRunner.RunAsync(promptFile, workingDir, _options, ct).ConfigureAwait(false);
+            return await _backgroundRunner.RunAsync(promptFile, workingDir, _options, progress, ct).ConfigureAwait(false);
         }
         finally
         {

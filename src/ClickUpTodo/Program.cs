@@ -13,6 +13,7 @@ using var liteStore = new LiteDbStateStore(Path.Combine(dataDirectory, "state.db
 var legacyStore = new JsonFileStateStore(dataDirectory);
 IStateStore stateStore = liteStore;
 var configStore = new ConfigStore(stateStore);
+var taskCache = new TaskCache(stateStore);
 var tokenStore = new TokenStore();
 
 // `clickup-todo --reset` / `--logout`: forget the saved token and settings, then exit. Runs before
@@ -24,6 +25,14 @@ if (args.Any(a => a is "--reset" or "--logout"))
     tokenStore.Delete();
     configStore.Delete();
     legacyStore.Delete(StateKeys.Config);
+    // Drop the cached working set too, so a reset leaves no stale snapshot behind (a fresh workspace
+    // would miss on the fingerprint anyway; this just doesn't orphan the document). #124 owns the
+    // broader token/workspace-change invalidation.
+    taskCache.Clear();
+    // Likewise the per-list status/color metadata caches (#125), deleted by key so nothing is orphaned
+    // (workspace-agnostic — a fresh workspace would miss on the fingerprint regardless).
+    stateStore.Delete(StateKeys.Statuses);
+    stateStore.Delete(StateKeys.ListColors);
     Console.WriteLine("Cleared saved ClickUp token and settings. Run `clickup-todo` to sign in again.");
     return 0;
 }
@@ -91,14 +100,14 @@ catch (Exception ex)
     return 1;
 }
 
-var taskService = new TaskService(client, config, userId);
+var taskService = new TaskService(client, config, userId, stateStore: stateStore);
 var feedService = new FeedService(client, taskService, config);
 var focusStore = new LocalFocusStore(config, configStore);
 // The assignee-frequency candidate pool (#155) — warmed from the loaded tasks and topped up from
 // the workspace members — rides the same state store, scoped to the active workspace.
 var assigneeCache = new AssigneeFrequencyCache(
     stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
-new TodoApp(taskService, feedService, config, configStore, focusStore, assigneeCache).Run(driverName);
+new TodoApp(taskService, feedService, config, configStore, focusStore, taskCache, assigneeCache).Run(driverName);
 return 0;
 
 // Reads "--opt value" or "--opt=value" from args.

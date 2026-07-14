@@ -45,7 +45,7 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
     public async Task<IReadOnlyList<CommentItem>> LoadFeedAsync(bool mentionsOnly = false, CancellationToken ct = default)
     {
         var assigneeIds = await taskService.ResolveAssigneeIdsAsync(config.View, ct);
-        var tasks = await client.GetAssignedTasksAsync(config.WorkspaceId, assigneeIds, ct);
+        var tasks = await client.GetAssignedTasksAsync(config.WorkspaceId, assigneeIds, ct: ct);
 
         var taskIds = tasks
             .Select(t => t.Id)

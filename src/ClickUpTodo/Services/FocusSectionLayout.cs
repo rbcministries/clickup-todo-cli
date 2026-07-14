@@ -45,6 +45,13 @@ public static class FocusSectionLayout
     /// is returned in <see cref="FocusSection.NestedSubtaskIds"/> — the exact set the caller must exclude
     /// from the to-do list to avoid a double render (#85). <c>null</c>/empty ⇒ pre-#85 behaviour.
     /// </param>
+    /// <param name="includeCompleted">
+    /// When false (the F12 "Show Completed" toggle off, #178), completed (<see cref="TaskView.IsCompleted"/>,
+    /// closed-type) descendants are not pulled into Focus and are not descended through — mirroring
+    /// <see cref="TaskView.Apply"/>'s gate on the to-do section, so a completed subtask never nests under a
+    /// pinned ancestor. Pinned anchors ride in via the pin set and stay visible regardless ("explicit pins
+    /// shouldn't vanish"). Defaults to true (no gating).
+    /// </param>
     public static FocusSection Build(
         IReadOnlyList<TaskItem> allTasks,
         IReadOnlySet<string> pinnedIds,
@@ -52,7 +59,8 @@ public static class FocusSectionLayout
         TaskField? sortField,
         SortDirection sortDirection,
         IReadOnlySet<string>? expanded = null,
-        IReadOnlyList<TaskItem>? foreignSubtasks = null)
+        IReadOnlyList<TaskItem>? foreignSubtasks = null,
+        bool includeCompleted = true)
     {
         var pinned = allTasks.Where(t => pinnedIds.Contains(t.Id));
 
@@ -98,6 +106,12 @@ public static class FocusSectionLayout
             foreach (var child in children)
             {
                 if (!walked.Add(child.Id)) // guard against cycles / a task reachable by two paths
+                    continue;
+                // Hide completed (closed-type) descendants when Show Completed is off (#178): they must
+                // not nest under a pinned ancestor in Focus, matching TaskView.Apply's gate on the to-do
+                // section. Skip descending through a hidden node too — its descendants would have no
+                // visible parent in Focus. A pinned task is never gated (rides in via `pinned`).
+                if (!includeCompleted && !pinnedIds.Contains(child.Id) && TaskView.IsCompleted(child))
                     continue;
                 if (!pinnedIds.Contains(child.Id))
                 {

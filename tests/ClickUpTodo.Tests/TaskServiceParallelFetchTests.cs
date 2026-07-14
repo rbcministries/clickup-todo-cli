@@ -36,7 +36,7 @@ public sealed class TaskServiceParallelFetchTests
         public Func<Task>? OnDetail { get; set; }
         public Func<Task>? OnListColor { get; set; }
 
-        public async Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, CancellationToken ct = default)
+        public async Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, CancellationToken ct = default)
         {
             await (OnAssigned?.Invoke() ?? Task.CompletedTask);
             return Assigned;
@@ -211,6 +211,42 @@ public sealed class TaskServiceParallelFetchTests
         Assert.Equal(12, colors.Count);
         Assert.All(colors.Values, c => Assert.Equal("#123456", c));
         Assert.True(peak <= TaskService.MaxFanOutConcurrency, $"peak in-flight {peak} exceeded the cap");
+    }
+
+    [Fact]
+    public async Task ResolveListColors_PersistsAndWarmsAcrossServices()
+    {
+        // Wiring check (#125): a TaskService given a state store persists resolved colors, so a new
+        // service over the same store warms them and doesn't re-resolve the same lists.
+        var dir = Path.Combine(Path.GetTempPath(), "clickup-todo-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var store = new JsonFileStateStore(dir);
+            var config = new AppConfig { WorkspaceId = "ws", PersonalTasksListId = "pl" };
+
+            var fake1 = new FakeClient();
+            var calls1 = 0;
+            fake1.OnListColor = () => { Interlocked.Increment(ref calls1); return Task.CompletedTask; };
+            var colors1 = await new TaskService(fake1, config, userId: 1, stateStore: store)
+                .ResolveListColorsAsync(["L1", "L2"]);
+            Assert.Equal(2, calls1);
+            Assert.Equal(2, colors1.Count);
+
+            var fake2 = new FakeClient();
+            var calls2 = 0;
+            fake2.OnListColor = () => { Interlocked.Increment(ref calls2); return Task.CompletedTask; };
+            var colors2 = await new TaskService(fake2, config, userId: 1, stateStore: store)
+                .ResolveListColorsAsync(["L1", "L2"]);
+
+            Assert.Equal(0, calls2); // warmed from the persisted snapshot — no refetch
+            Assert.Equal(2, colors2.Count);
+            Assert.All(colors2.Values, c => Assert.Equal("#123456", c));
+        }
+        finally
+        {
+            if (Directory.Exists(dir))
+                Directory.Delete(dir, recursive: true);
+        }
     }
 
     /// <summary>Lock-free max: raises <paramref name="target"/> to <paramref name="value"/> if higher.</summary>

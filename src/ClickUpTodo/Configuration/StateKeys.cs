@@ -14,9 +14,34 @@ public static class StateKeys
     public const string Config = "config";
 
     /// <summary>
+    /// The persisted task working-set cache (#122) — the last successfully-loaded snapshot, so the app
+    /// can paint instantly on launch while the live refresh runs. Maps to <c>tasks.json</c> in the file
+    /// backend. One document; the stored payload carries the workspace/list/assignee fingerprint it was
+    /// written for, so a context switch is a clean cache miss rather than a stale paint.
+    /// </summary>
+    public const string Tasks = "tasks";
+
+    /// <summary>
     /// The assignee-frequency candidate pool (#155) — most-frequent assignees across the loaded task
     /// lists, plus a deferred workspace-members top-up, scoped to one workspace. Maps to
     /// <c>assignees.json</c> in the file backend.
     /// </summary>
     public const string Assignees = "assignees";
+
+    /// <summary>
+    /// The per-list status-options cache (#125) — the statuses <see cref="Services.StatusCache"/> warms
+    /// from on launch so the picker opens without a first-load round-trip. Each entry carries its capture
+    /// timestamp, so the cache's TTL still applies to a persisted entry (nothing stale is served past
+    /// expiry). Scoped to one workspace; a mismatch is a clean miss. Maps to <c>statuses.json</c>.
+    /// </summary>
+    public const string Statuses = "statuses";
+
+    /// <summary>
+    /// The per-list color-chip cache (#125) — the resolved list colors <see cref="Services.TaskService"/>
+    /// uses to tint List-grouped headers, warmed on launch to avoid re-resolving every color at first
+    /// render. Each entry carries its capture timestamp, so a persisted color expires after the color TTL
+    /// even though colors are held for the process lifetime in memory. Scoped to one workspace. Maps to
+    /// <c>listColors.json</c>.
+    /// </summary>
+    public const string ListColors = "listColors";
 }
