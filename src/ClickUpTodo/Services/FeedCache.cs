@@ -77,7 +77,17 @@ public sealed class FeedCache(IStateStore store)
     /// <summary>Persist <paramref name="items"/> as the feed cache for <paramref name="config"/>'s
     /// context, replacing any prior document.</summary>
     public void Save(AppConfig config, IReadOnlyList<CommentItem> items)
-        => store.Save(StateKeys.Feed, new FeedCacheDocument { Key = KeyFor(config), Items = items });
+        => Save(KeyFor(config), items);
+
+    /// <summary>
+    /// Persist <paramref name="items"/> under an explicit context <paramref name="key"/> (from
+    /// <see cref="KeyFor"/>), replacing any prior document. Used when the key must be captured at
+    /// fetch-start rather than at save-time — the feed's F12 toggle can flip a
+    /// <see cref="KeyFor"/>-relevant flag mid-fetch, so saving under the live config's key could file the
+    /// just-fetched data under the wrong fingerprint.
+    /// </summary>
+    public void Save(string key, IReadOnlyList<CommentItem> items)
+        => store.Save(StateKeys.Feed, new FeedCacheDocument { Key = key, Items = items });
 
     /// <summary>Forget the cached feed (used by <c>--reset</c>). A no-op when nothing is cached.</summary>
     public void Clear() => store.Delete(StateKeys.Feed);
