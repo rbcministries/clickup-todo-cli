@@ -73,6 +73,12 @@ public sealed class AssigneeSelectorView : View
     private long _searchStamp;
     private ITimer? _debounceTimer;
 
+    // Monotonic immediate-apply generation: bumped per optimistic add/remove that fires a server write,
+    // captured by that write, and re-checked on the UI thread before its reconcile/revert runs — so an
+    // out-of-order older write can't clobber the state a newer one already established. Touched on the
+    // UI thread only. (Deeper serialisation of overlapping writes is the host's job — see #158.)
+    private long _applyGeneration;
+
     /// <param name="match">Substring match over the candidate pool, excluding the given ids — i.e.
     /// <c>AssigneeFrequencyCache.Match</c>.</param>
     /// <param name="topFrequent">Top-N most-frequent candidates excluding the given ids — i.e.
@@ -122,6 +128,10 @@ public sealed class AssigneeSelectorView : View
 
         _search = new TextField { X = 0, Y = 0, Width = Dim.Fill(), Height = 1 };
         _list = new ListView { X = 0, Y = 1, Width = Dim.Fill(), Height = Dim.Fill() };
+        // The composite is a single tab stop: the search box. The list stays focusable (Cursor Down
+        // moves into it) but is not in the Tab order, so Tab/Shift+Tab pass straight through to the host
+        // screen's pane cycle instead of toggling between the box and the list inside the component.
+        _list.TabStop = TabBehavior.NoStop;
 
         _search.TextChanged += (_, _) => OnSearchChanged();
         _search.KeyDown += OnSearchKey;
@@ -204,8 +214,10 @@ public sealed class AssigneeSelectorView : View
     private void ApplyAdd(TaskAssignee person)
     {
         AddToSelection(person);
-        ClearSearch();
-        RenderEmptyState();
+        // Clearing a non-empty search box already re-rendered the empty state; only render again when
+        // the box was already empty (added from the empty-state top-frequent list).
+        if (!ClearSearch())
+            RenderEmptyState();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
         if (_mode == AssigneeSelectorMode.ImmediateApply)
             RunApply(ToggleKind.Added, person, revert: () => { RemoveFromSelection(person.Id); RenderCurrent(); });
@@ -226,6 +238,7 @@ public sealed class AssigneeSelectorView : View
     private void RunApply(ToggleKind kind, TaskAssignee person, Action revert)
     {
         var token = _cts.Token;
+        var generation = ++_applyGeneration;
         _ = Task.Run(async () =>
         {
             try
@@ -233,7 +246,9 @@ public sealed class AssigneeSelectorView : View
                 var confirmed = await _applyAsync!(kind, person, token).ConfigureAwait(false);
                 Application.Invoke(() =>
                 {
-                    if (token.IsCancellationRequested)
+                    // Ignore a write that a newer add/remove has already superseded, so an out-of-order
+                    // response can't reconcile stale server truth over the current optimistic state.
+                    if (token.IsCancellationRequested || generation != _applyGeneration)
                         return;
                     Reconcile(confirmed);
                 });
@@ -242,7 +257,7 @@ public sealed class AssigneeSelectorView : View
             {
                 Application.Invoke(() =>
                 {
-                    if (token.IsCancellationRequested)
+                    if (token.IsCancellationRequested || generation != _applyGeneration)
                         return;
                     revert();
                     SelectionChanged?.Invoke(this, EventArgs.Empty);
@@ -347,12 +362,16 @@ public sealed class AssigneeSelectorView : View
         });
     }
 
-    private void ClearSearch()
+    // Clears the search box. Returns true when it actually cleared a non-empty box — which synchronously
+    // fires OnSearchChanged → RenderEmptyState — so the caller can skip a redundant render.
+    private bool ClearSearch()
     {
         DisposeTimer();
         _searchStamp++;
-        if (!string.IsNullOrEmpty(_search.Text))
-            _search.Text = string.Empty; // fires OnSearchChanged → RenderEmptyState (harmless duplicate)
+        if (string.IsNullOrEmpty(_search.Text))
+            return false;
+        _search.Text = string.Empty;
+        return true;
     }
 
     // ── Rendering ─────────────────────────────────────────────────────────────
@@ -375,10 +394,13 @@ public sealed class AssigneeSelectorView : View
 
     private void SetRows(IReadOnlyList<AssigneeRow> rows)
     {
+        var previous = _list.SelectedItem ?? 0;
         _rowPeople = rows.Select(r => new TaskAssignee(r.Id, r.Name)).ToList();
         _list.SetSource(new ObservableCollection<string>(rows.Select(AssigneeSelectorModel.Format)));
+        // Keep the highlight where it was when the row still exists (e.g. after removing a ✓ row in the
+        // empty state), clamping into range rather than snapping back to the top on every re-render.
         if (_rowPeople.Count > 0)
-            _list.SelectedItem = 0;
+            _list.SelectedItem = Math.Clamp(previous, 0, _rowPeople.Count - 1);
     }
 
     private IReadOnlyList<TaskAssignee> SafeTopFrequent(int n, ISet<long> exclude)

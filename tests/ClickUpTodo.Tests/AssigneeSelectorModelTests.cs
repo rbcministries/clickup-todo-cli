@@ -106,6 +106,18 @@ public sealed class AssigneeSelectorModelTests
     public void EmptyState_NothingSelectedNorPooled_YieldsEmpty()
         => Assert.Empty(AssigneeSelectorModel.EmptyStateRows([], Ids(), [], 10));
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-3)]
+    public void EmptyState_NonPositiveCapacity_ShowsSelectedButNoTopUp(int capacity)
+    {
+        // The model itself doesn't clamp capacity (the View guards it); a non-positive budget yields no
+        // top-up, but selected assignees are always shown regardless.
+        var rows = AssigneeSelectorModel.EmptyStateRows(
+            selected: [A(1, "Ada")], lockedIds: Ids(), topFrequent: [A(2, "Babbage")], capacity: capacity);
+        Assert.Equal(["Ada"], rows.Select(r => r.Name));
+    }
+
     // ── SearchResultRows ────────────────────────────────────────────────────────
 
     [Fact]
