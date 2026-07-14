@@ -41,18 +41,21 @@ in-memory behavior, so existing tests and any storeless caller are unchanged):
 Document: `StatusCacheDocument(int SchemaVersion, string WorkspaceId, IReadOnlyList<StatusCacheEntryDto> Entries)`,
 `StatusCacheEntryDto(string ListId, IReadOnlyList<StatusOption> Statuses, long FetchedAtMs)`.
 
-### Colors — new `ListColorCache`, layered onto the existing dict
+### Colors — new `ListColorCache` (owns the color map)
 
-`TaskService` keeps its in-memory `_listColors` `ConcurrentDictionary` as the hot read path
-(unchanged). An optional `ListColorCache` (present only when a store is supplied) sits alongside it:
+A new `ListColorCache` owns the `listId -> color` map that was a raw `ConcurrentDictionary` in
+`TaskService` (folding the map and its persistence into one guarded object avoids a two-field
+warm-up dance in a primary constructor). Its `IStateStore` is **optional** — with no store it is the
+pure in-memory cache `TaskService` uses in tests, identical to the dictionary it replaced.
 
-- Warm on construct: seed `_listColors` from the cache's fresh entries (within a color TTL of
-  7 days — colors change even more rarely than statuses; long enough to be worthwhile, short enough
-  that a recolored list self-corrects within a week). Expiry is applied on load; within a session
-  colors stay for the process lifetime (today's behavior).
-- Persist after a fetch: `ResolveListColorsAsync` already fetches only not-yet-cached lists; after
-  that batch it hands the newly-resolved `(listId -> color)` to `ListColorCache.Save`, which stamps
-  them "now", merges into the persisted set (accumulating across sessions), and rewrites once.
+- Warm on construct (store present): load the fresh persisted entries (within a color TTL of 7 days
+  — colors change even more rarely than statuses; long enough to be worthwhile, short enough that a
+  recolored list self-corrects within a week). Expiry is applied on load: a stale entry is dropped,
+  so it is neither warmed nor carried into the next write. Within a session colors stay for the
+  process lifetime (today's behavior).
+- Persist after a fetch: `ResolveListColorsAsync` resolves only the lists the cache doesn't yet
+  `Contains`, hands the newly-resolved `(listId -> color)` to `ListColorCache.Save` (stamps them
+  "now", merges into the set, rewrites once when a store is present), and returns `Snapshot()`.
 
 Document: `ListColorDocument(int SchemaVersion, string WorkspaceId, IReadOnlyList<ListColorEntry> Entries)`,
 `ListColorEntry(string ListId, string? Color, long FetchedAtMs)`.
