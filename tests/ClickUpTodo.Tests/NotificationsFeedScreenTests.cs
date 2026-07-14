@@ -187,4 +187,42 @@ public sealed class NotificationsFeedScreenTests
         Assert.Equal("mention-task", NotificationsFeedScreen.SelectedTaskId(filtered, 0));
         Assert.Null(NotificationsFeedScreen.SelectedTaskId(filtered, 1)); // only one mention row
     }
+
+    // --- ResolveSelection: selection follows the same comment across a feed swap (#123) ----------
+
+    [Fact]
+    public void ResolveSelection_FollowsTheSameComment_WhenNewerCommentsArePrepended()
+    {
+        // A refresh prepends "c0" (newest-first), pushing the selected "c2" down a row. The selection
+        // must follow the comment, not stay on the old index (which would slide onto "c1").
+        var rows = new[] { Comment("c0", "t1"), Comment("c1", "t1"), Comment("c2", "t1") };
+
+        Assert.Equal(2, NotificationsFeedScreen.ResolveSelection(rows, selectedId: "c2", previousIndex: 1));
+    }
+
+    [Fact]
+    public void ResolveSelection_FallsBackToClampedPriorIndex_WhenSelectedCommentIsGone()
+    {
+        // The selected comment resolved/vanished; keep the cursor near where it was (clamped in-range).
+        var rows = new[] { Comment("a", "t1"), Comment("b", "t1") };
+
+        Assert.Equal(1, NotificationsFeedScreen.ResolveSelection(rows, selectedId: "gone", previousIndex: 5));
+        Assert.Equal(0, NotificationsFeedScreen.ResolveSelection(rows, selectedId: "gone", previousIndex: null));
+    }
+
+    [Fact]
+    public void ResolveSelection_EmptyFeed_ReturnsNegativeOne()
+        => Assert.Equal(-1, NotificationsFeedScreen.ResolveSelection([], selectedId: "c1", previousIndex: 0));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void ResolveSelection_EmptyOrAbsentSelectedId_NeverMatches_FallsBackToIndex(string? selectedId)
+    {
+        // Empty-id comments are kept distinct by FeedService.Aggregate, so an empty/absent selection id
+        // must not collapse onto the first empty-id row — fall back to the clamped prior index instead.
+        var rows = new[] { Comment("", "t1"), Comment("c2", "t1") };
+
+        Assert.Equal(1, NotificationsFeedScreen.ResolveSelection(rows, selectedId, previousIndex: 1));
+    }
 }
