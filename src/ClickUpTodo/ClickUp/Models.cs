@@ -35,6 +35,22 @@ public static class ClickUpPriority
     };
 
     /// <summary>
+    /// The canonical ClickUp priority colour (hex) for an importance <paramref name="level"/>
+    /// (1=Urgent…4=Low), or null when the level is unset/out-of-range. These are ClickUp's fixed
+    /// per-priority colours; centralised here as the single source of truth so an optimistic priority
+    /// change can show the right badge colour without a read-back, and the group-header palette can
+    /// fall back to them (see <c>GroupHeaderPalette</c>).
+    /// </summary>
+    public static string? ColorFromLevel(int? level) => level switch
+    {
+        1 => "#f50000", // Urgent — red
+        2 => "#ffcc00", // High — yellow
+        3 => "#6fddff", // Normal — light blue
+        4 => "#d8d8d8", // Low — gray
+        _ => null,
+    };
+
+    /// <summary>
     /// Derives the importance level from a ClickUp priority object's <c>id</c> (the canonical "1".."4"
     /// string), falling back to the priority name when the id is absent/unexpected. Null when neither
     /// yields a level (no priority set, or an unrecognised custom priority).
