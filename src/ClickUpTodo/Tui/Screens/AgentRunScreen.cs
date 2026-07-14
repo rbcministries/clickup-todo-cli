@@ -1,3 +1,4 @@
+using System.Text;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
@@ -34,6 +35,7 @@ public sealed class AgentRunScreen : Screen
     private readonly AgentRunModel _model;
     private readonly Label _header;
     private readonly TextView _output;
+    private readonly StringBuilder _streamBuffer = new();
     private object? _spinnerToken;
 
     /// <summary>Raised when the user asks to cancel an in-flight run (Esc while running). The host
@@ -81,6 +83,29 @@ public sealed class AgentRunScreen : Screen
     {
         _output.SetFocus();
         StartSpinner();
+    }
+
+    /// <summary>
+    /// Appends a parsed display <paramref name="chunk"/> to the output pane while the run is in flight
+    /// (#187), so the user sees progress instead of a blank spinner. The first chunk replaces the
+    /// "Working…" hint; each append follows the tail so the newest output stays visible. Called on the UI
+    /// thread (via <see cref="Application.Invoke"/>) by the host as the runner reports chunks. A chunk
+    /// arriving after the run has finished (a late marshalled report) is ignored so it can't clobber the
+    /// authoritative final render.
+    /// </summary>
+    public void AppendOutput(string chunk)
+    {
+        if (string.IsNullOrEmpty(chunk) || !_model.IsActive)
+            return;
+
+        // Accumulate in our own buffer and assign once, rather than reading TextView.Text back and
+        // re-concatenating each chunk (which would re-materialize the whole rune buffer per append — the
+        // #3/#38 latency class). The first assignment overwrites the initial "Working…" hint.
+        _streamBuffer.Append(chunk);
+        _output.Text = _streamBuffer.ToString();
+        // Follow the tail so the latest streamed output is on screen.
+        _output.MoveEnd();
+        _output.SetNeedsDraw();
     }
 
     /// <summary>

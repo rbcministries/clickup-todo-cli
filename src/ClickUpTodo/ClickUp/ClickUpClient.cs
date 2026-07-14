@@ -214,6 +214,38 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             }, ct), ct));
 
     /// <summary>
+    /// Create a task in the list <paramref name="listId"/> from <paramref name="task"/> and return it
+    /// mapped to the stable <see cref="TaskItem"/> (from ClickUp's created-task response — same shape as
+    /// a list row) so the caller can insert it without a read-after-write. Only <c>name</c> is required;
+    /// the optional fields are sent only when set — Kiota omits a null typed property (and a null
+    /// collection), so an unset description/priority/due-date and an empty assignee set send no key,
+    /// leaving ClickUp to apply its list defaults. <paramref name="task"/>'s <c>PriorityLevel</c> is
+    /// ClickUp's importance level (1=Urgent … 4=Low); assignees are sent as a flat id array (the create
+    /// endpoint's shape, unlike the add/rem of an update).
+    /// </summary>
+    public Task<TaskItem> CreateTaskAsync(string listId, NewTaskRequest task, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        if (string.IsNullOrWhiteSpace(task.Name))
+            throw new ArgumentException("A task name is required to create a task.", nameof(task));
+
+        return Guard("CreateTask", async () =>
+        {
+            var request = new CreateTaskRequest
+            {
+                Name = task.Name,
+                Description = string.IsNullOrEmpty(task.Description) ? null : task.Description,
+                Assignees = task.Assignees is { Count: > 0 } ids ? ids.Select(id => (long?)id).ToList() : null,
+                Priority = task.PriorityLevel,
+                DueDate = task.DueDateMs,
+            };
+            var created = await _client.V2.List[listId].Task.PostAsync(request, cancellationToken: ct)
+                ?? throw new InvalidOperationException($"ClickUp returned no task for the create in list '{listId}'.");
+            return Map(created);
+        });
+    }
+
+    /// <summary>
     /// Set a task's status. <paramref name="statusName"/> must be one of its list's statuses.
     /// Returns the <b>confirmed</b> status name from the write response (ClickUp's
     /// <c>PUT /task/{id}</c> returns the updated task), or null if the response omits it — so the
@@ -360,6 +392,39 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 ct);
             return (IReadOnlyList<CommentItem>)comments.Select(c => MapComment(c, taskId)).ToList();
         });
+
+    /// <summary>
+    /// Post a <b>plain-text</b> comment to a task (<c>POST /task/{id}/comment</c>, #210) and return it
+    /// as a <see cref="CommentItem"/> so a caller (the #216 composer) can append it optimistically.
+    /// Rich content — @-mentions, task links, other entity tagging — is out of scope (a later epic);
+    /// only <c>comment_text</c> is sent. <c>notify_all</c> is sent as <c>false</c>.
+    /// <para>
+    /// ClickUp's create-comment response is <b>minimal</b> — it returns only the new comment's
+    /// <c>id</c>, a <c>hist_id</c>, and the server <c>date</c> (epoch ms); it does <b>not</b> echo the
+    /// text, author, or structured blocks. So <see cref="MapComment"/> (which reads those off a full
+    /// <see cref="Comment"/>) can't recover them here. The returned <see cref="CommentItem"/> is built
+    /// from the response <c>id</c>/<c>date</c> plus the <paramref name="text"/> we just posted (lossless
+    /// for plain text); <see cref="CommentItem.Author"/> is left empty for the caller's optimistic row
+    /// to stamp (it knows the current user) and is reconciled on the next comment fetch.
+    /// </para>
+    /// </summary>
+    public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default)
+    {
+        // ClickUp rejects an empty comment_text with a 400; fail faster and clearer at the boundary.
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        return Guard("CreateTaskComment", async () =>
+        {
+            var request = new CreateCommentRequest { CommentText = text, NotifyAll = false };
+            var created = await _client.V2.Task[taskId].Comment.PostAsync(request, cancellationToken: ct);
+            return new CommentItem(
+                Id: created?.Id ?? "",
+                Author: "",
+                DateMs: created?.Date,
+                Text: text,
+                Resolved: false,
+                TaskId: taskId);
+        });
+    }
 
     // ── Mapping & plumbing ──────────────────────────────────────────────────
 

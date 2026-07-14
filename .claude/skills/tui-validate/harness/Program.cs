@@ -38,11 +38,15 @@ var focus = new LocalFocusStore(config, configStore);
 // Isolated per-process state dir for the persistent task cache (#122), so the harness never touches
 // the developer's real data dir and every run starts with a cold cache — a deterministic no-op first
 // paint, which keeps the A/B renders byte-identical to the stock renderer.
-var taskCache = new TaskCache(new JsonFileStateStore(
-    Path.Combine(Path.GetTempPath(), "clickup-todo-e2e", Guid.NewGuid().ToString("N"))));
+var cacheStore = new JsonFileStateStore(
+    Path.Combine(Path.GetTempPath(), "clickup-todo-e2e", Guid.NewGuid().ToString("N")));
+var taskCache = new TaskCache(cacheStore);
+// Same isolated, cold-on-each-run store for the persistent feed cache (#123) — a deterministic
+// cold first open keeps the A/B renders byte-identical to the stock renderer.
+var feedCache = new FeedCache(cacheStore);
 var assignees = new AssigneeFrequencyCache(
     stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
-new TodoApp(tasks, feed, config, configStore, focus, taskCache, assignees).Run("ansi");
+new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees).Run("ansi");
 return;
 
 sealed class FakeClickUp(int taskCount) : HttpMessageHandler

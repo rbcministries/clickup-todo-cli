@@ -32,6 +32,12 @@ public interface IClickUpClient
     /// <inheritdoc cref="GetAssignedTasksDeltaAsync"/>
     Task<List<TaskItem>> GetListTasksDeltaAsync(string listId, long updatedAfterMs, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement the delta fetch.");
+    /// <summary>Creates a task in a list from the given fields and returns it mapped to the domain
+    /// <see cref="TaskItem"/> (#209). See <see cref="ClickUpClient.CreateTaskAsync"/>. A default
+    /// throwing implementation (mirroring the delta fetches above) spares read-only fakes that never
+    /// create tasks from implementing it; <see cref="ClickUpClient"/> overrides it.</summary>
+    Task<TaskItem> CreateTaskAsync(string listId, NewTaskRequest task, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement task creation.");
     Task<string?> SetTaskStatusAsync(string taskId, string statusName, CancellationToken ct = default);
     Task<int?> SetTaskPriorityAsync(string taskId, int? priorityLevel, CancellationToken ct = default);
 
@@ -46,4 +52,9 @@ public interface IClickUpClient
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default);
+
+    /// <summary>Post a plain-text comment to a task (#210) and return it as a <see cref="CommentItem"/>
+    /// for optimistic append. Rich content (@-mentions, task links) is out of scope. See
+    /// <see cref="ClickUpClient.CreateTaskCommentAsync"/> for the minimal-response mapping contract.</summary>
+    Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default);
 }

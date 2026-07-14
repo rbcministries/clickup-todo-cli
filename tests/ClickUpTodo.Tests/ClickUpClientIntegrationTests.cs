@@ -81,6 +81,29 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task CreateTask_CreatesTaskInList_AndReturnsItMapped()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(ListId),
+            "Set CLICKUP_TOKEN and CLICKUP_LIST_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        // ClickUp v2 has no task-delete in this facade, so this leaves a clearly-labelled throwaway task
+        // on the target list. The name flags it as a test artifact for easy manual cleanup.
+        var name = "[clickup-todo-cli test] create-task smoke — safe to delete";
+
+        var created = await client.CreateTaskAsync(ListId!, new NewTaskRequest
+        {
+            Name = name,
+            Description = "Created by the CreateTask integration test.",
+            PriorityLevel = 3,
+        });
+
+        Assert.False(string.IsNullOrWhiteSpace(created.Id));
+        Assert.Equal(name, created.Name);
+        Assert.Equal(3, created.PriorityLevel);
+    }
+
+    [SkippableFact]
     public async Task SetTaskStatus_ReturnsConfirmedStatusFromWriteResponse()
     {
         Skip.If(
@@ -213,6 +236,25 @@ public sealed class ClickUpClientIntegrationTests
 
         // May legitimately be empty, but every returned comment must have an id.
         Assert.All(comments, c => Assert.False(string.IsNullOrWhiteSpace(c.Id)));
+    }
+
+    [SkippableFact]
+    public async Task CreateTaskComment_PostsPlainText_AndAppearsOnRefetch()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+        // Unique marker so the re-fetch assertion can find exactly this comment (it posts real data).
+        var text = $"clickup-todo integration test comment {Guid.NewGuid():N}";
+
+        var created = await client.CreateTaskCommentAsync(TaskId!, text);
+
+        Assert.False(string.IsNullOrWhiteSpace(created.Id));
+        Assert.Equal(text, created.Text);
+        Assert.Equal(TaskId, created.TaskId);
+
+        var comments = await client.GetTaskCommentsAsync(TaskId!);
+        Assert.Contains(comments, c => c.Id == created.Id && c.Text == text);
     }
 
     [SkippableFact]

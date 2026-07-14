@@ -50,18 +50,27 @@ public sealed class AgentDispatcherTests : IDisposable
         public bool PromptFileExistedDuringRun { get; private set; }
         public string? WorkingDir { get; private set; }
         public TerminalLauncherOptions? Options { get; private set; }
+        public IProgress<string>? Progress { get; private set; }
         public BackgroundRunResult Result { get; init; } = BackgroundRunResult.Exited(0, "done", null);
         public Func<CancellationToken, Task>? OnRun { get; init; }
 
+        /// <summary>Scripted display chunks the runner reports to <paramref name="progress"/> before
+        /// returning, mirroring how the real runner streams parsed stream-json lines (#187).</summary>
+        public IReadOnlyList<string> Chunks { get; init; } = [];
+
         public async Task<BackgroundRunResult> RunAsync(
-            string promptFilePath, string? workingDir, TerminalLauncherOptions options, CancellationToken ct = default)
+            string promptFilePath, string? workingDir, TerminalLauncherOptions options,
+            IProgress<string>? progress = null, CancellationToken ct = default)
         {
             PromptFilePath = promptFilePath;
             WorkingDir = workingDir;
             Options = options;
+            Progress = progress;
             PromptFileExistedDuringRun = File.Exists(promptFilePath);
             if (File.Exists(promptFilePath))
                 PromptContent = File.ReadAllText(promptFilePath);
+            foreach (var chunk in Chunks)
+                progress?.Report(chunk);
             if (OnRun is not null)
                 await OnRun(ct).ConfigureAwait(false);
             return Result;
@@ -435,6 +444,28 @@ public sealed class AgentDispatcherTests : IDisposable
     }
 
     [Fact]
+    public async Task DispatchBackgroundAsync_ForwardsProgress_ToRunner_AndStreamsChunks()
+    {
+        var chunks = new List<string>();
+        var progress = new SynchronousProgress(chunks.Add);
+        var runner = new FakeBackgroundRunner { Chunks = ["⚙ Bash\n", "Done.\n"] };
+        var dispatcher = new AgentDispatcher(new FakeLauncher(), promptDirectory: _dir, backgroundRunner: runner);
+
+        await dispatcher.DispatchBackgroundAsync(Detail(), Comments(), "go", progress: progress);
+
+        Assert.Same(progress, runner.Progress);
+        // The runner forwarded each scripted chunk verbatim (incl. the trailing newline the real runner adds).
+        Assert.Equal(["⚙ Bash\n", "Done.\n"], chunks);
+    }
+
+    /// <summary>An <see cref="IProgress{T}"/> that invokes the sink inline (no SynchronizationContext
+    /// hop), so a unit test observes reported chunks deterministically.</summary>
+    private sealed class SynchronousProgress(Action<string> sink) : IProgress<string>
+    {
+        public void Report(string value) => sink(value);
+    }
+
+    [Fact]
     public async Task DispatchBackgroundAsync_SurfacesNonZeroExit_AsFailure()
     {
         var runner = new FakeBackgroundRunner { Result = BackgroundRunResult.Exited(2, "partial", "boom") };
@@ -473,15 +504,19 @@ public sealed class AgentDispatcherTests : IDisposable
     }
 
     [Fact]
-    public void BuildArguments_IsDashP_ThenExtraArgs_DroppingBlanks()
+    public void BuildArguments_IsStreamJsonPrintMode_ThenExtraArgs_DroppingBlanks()
     {
         var options = new TerminalLauncherOptions { ExtraArgs = ["--model", "  ", "opus"] };
-        Assert.Equal(["-p", "--model", "opus"], BackgroundAgentRunner.BuildArguments(options));
+        Assert.Equal(
+            ["-p", "--output-format", "stream-json", "--verbose", "--model", "opus"],
+            BackgroundAgentRunner.BuildArguments(options));
     }
 
     [Fact]
-    public void BuildArguments_NoExtraArgs_IsJustDashP() =>
-        Assert.Equal(["-p"], BackgroundAgentRunner.BuildArguments(new TerminalLauncherOptions()));
+    public void BuildArguments_NoExtraArgs_IsStreamJsonPrintMode() =>
+        Assert.Equal(
+            ["-p", "--output-format", "stream-json", "--verbose"],
+            BackgroundAgentRunner.BuildArguments(new TerminalLauncherOptions()));
 
     [Fact]
     public void Ctor_NullLauncher_Throws() =>

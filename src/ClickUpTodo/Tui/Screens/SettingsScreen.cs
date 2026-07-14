@@ -13,7 +13,7 @@ using Terminal.Gui.Views;
 namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>The result of editing settings, or null when the user cancels.</summary>
-public sealed record SettingsResult(int RefreshSeconds, string DefaultWorkingDirectory, AgentDispatchSettings AgentDispatch, DetailViewSettings DetailView);
+public sealed record SettingsResult(int RefreshSeconds, int FeedRefreshSeconds, string DefaultWorkingDirectory, AgentDispatchSettings AgentDispatch, DetailViewSettings DetailView);
 
 /// <summary>
 /// Carries a prompt-template edit request from the settings screen to the host (#100): the current
@@ -42,6 +42,7 @@ public sealed class SettingsScreen : Screen
         [AgentWorkingDirectory.TaskDerived, AgentWorkingDirectory.Home, AgentWorkingDirectory.Fixed];
 
     private readonly TextField _refreshField;
+    private readonly TextField _feedRefreshField;
 
     /// <summary>
     /// The dispatch prompt template (#100), carried through this screen unchanged and edited on the
@@ -60,7 +61,7 @@ public sealed class SettingsScreen : Screen
     /// </summary>
     public event EventHandler<PromptTemplateEditRequest>? EditPromptTemplateRequested;
 
-    public SettingsScreen(int refreshSeconds, string defaultWorkingDirectory, AgentDispatchSettings dispatch, DetailViewSettings detailView)
+    public SettingsScreen(int refreshSeconds, int feedRefreshSeconds, string defaultWorkingDirectory, AgentDispatchSettings dispatch, DetailViewSettings detailView)
     {
         Title = "Settings";
         _promptTemplate = dispatch.PromptTemplate;
@@ -68,7 +69,7 @@ public sealed class SettingsScreen : Screen
         // Home directory used to expand a leading `~` in the working-dir field on Save.
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
-        // ── Left column: refresh interval ──────────────────────────────────────
+        // ── Left column: refresh intervals ─────────────────────────────────────
         var refreshLabel = new Label { X = 1, Y = 1, Text = "Refresh interval (seconds):" };
         _refreshField = new TextField
         {
@@ -76,6 +77,17 @@ public sealed class SettingsScreen : Screen
             Y = 1,
             Width = 8,
             Text = refreshSeconds.ToString(CultureInfo.InvariantCulture),
+        };
+
+        // The feed (Ctrl+E) polls on its own, longer cadence (#123) — assembling it fans a comment
+        // fetch out across every assigned task, so it's far heavier than the task-list poll above.
+        var feedRefreshLabel = new Label { X = 1, Y = 2, Text = "Feed refresh (seconds):" };
+        _feedRefreshField = new TextField
+        {
+            X = Pos.Right(feedRefreshLabel) + 1,
+            Y = 2,
+            Width = 8,
+            Text = feedRefreshSeconds.ToString(CultureInfo.InvariantCulture),
         };
 
         // Status hiding moved to F3 filter rules (#69) — point the user there rather than a control here.
@@ -189,6 +201,7 @@ public sealed class SettingsScreen : Screen
         {
             Result = new SettingsResult(
                 SettingsForm.ParseRefreshSeconds(_refreshField.Text, refreshSeconds),
+                SettingsForm.ParseRefreshSeconds(_feedRefreshField.Text, feedRefreshSeconds),
                 SettingsForm.ExpandHomePath(workingDirField.Text, home),
                 new AgentDispatchSettings
                 {
@@ -228,7 +241,7 @@ public sealed class SettingsScreen : Screen
         };
 
         Add([
-            refreshLabel, _refreshField, excludedNote,
+            refreshLabel, _refreshField, feedRefreshLabel, _feedRefreshField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
             detailHeader, defaultTabButton, activityOrderButton, autoScrollButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
