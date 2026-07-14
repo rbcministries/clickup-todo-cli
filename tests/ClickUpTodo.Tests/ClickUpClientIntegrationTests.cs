@@ -210,6 +210,25 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task CreateTaskComment_PostsPlainText_AndAppearsOnRefetch()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+        // Unique marker so the re-fetch assertion can find exactly this comment (it posts real data).
+        var text = $"clickup-todo integration test comment {Guid.NewGuid():N}";
+
+        var created = await client.CreateTaskCommentAsync(TaskId!, text);
+
+        Assert.False(string.IsNullOrWhiteSpace(created.Id));
+        Assert.Equal(text, created.Text);
+        Assert.Equal(TaskId, created.TaskId);
+
+        var comments = await client.GetTaskCommentsAsync(TaskId!);
+        Assert.Contains(comments, c => c.Id == created.Id && c.Text == text);
+    }
+
+    [SkippableFact]
     public async Task BadToken_IsReportedAsAuthFailure()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token), "Set CLICKUP_TOKEN to run ClickUp integration tests.");
