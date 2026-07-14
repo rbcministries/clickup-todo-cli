@@ -214,6 +214,38 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             }, ct), ct));
 
     /// <summary>
+    /// Create a task in the list <paramref name="listId"/> from <paramref name="task"/> and return it
+    /// mapped to the stable <see cref="TaskItem"/> (from ClickUp's created-task response — same shape as
+    /// a list row) so the caller can insert it without a read-after-write. Only <c>name</c> is required;
+    /// the optional fields are sent only when set — Kiota omits a null typed property (and a null
+    /// collection), so an unset description/priority/due-date and an empty assignee set send no key,
+    /// leaving ClickUp to apply its list defaults. <paramref name="task"/>'s <c>PriorityLevel</c> is
+    /// ClickUp's importance level (1=Urgent … 4=Low); assignees are sent as a flat id array (the create
+    /// endpoint's shape, unlike the add/rem of an update).
+    /// </summary>
+    public Task<TaskItem> CreateTaskAsync(string listId, NewTaskRequest task, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        if (string.IsNullOrWhiteSpace(task.Name))
+            throw new ArgumentException("A task name is required to create a task.", nameof(task));
+
+        return Guard("CreateTask", async () =>
+        {
+            var request = new CreateTaskRequest
+            {
+                Name = task.Name,
+                Description = string.IsNullOrEmpty(task.Description) ? null : task.Description,
+                Assignees = task.Assignees is { Count: > 0 } ids ? ids.Select(id => (long?)id).ToList() : null,
+                Priority = task.PriorityLevel,
+                DueDate = task.DueDateMs,
+            };
+            var created = await _client.V2.List[listId].Task.PostAsync(request, cancellationToken: ct)
+                ?? throw new InvalidOperationException($"ClickUp returned no task for the create in list '{listId}'.");
+            return Map(created);
+        });
+    }
+
+    /// <summary>
     /// Set a task's status. <paramref name="statusName"/> must be one of its list's statuses.
     /// Returns the <b>confirmed</b> status name from the write response (ClickUp's
     /// <c>PUT /task/{id}</c> returns the updated task), or null if the response omits it — so the
