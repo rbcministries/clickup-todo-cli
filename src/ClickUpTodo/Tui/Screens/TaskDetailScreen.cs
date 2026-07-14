@@ -431,6 +431,14 @@ public sealed class TaskDetailScreen : Screen
         => UpdateData(_task with { StatusName = statusName, StatusColor = statusColor }, _comments);
 
     /// <summary>
+    /// Optimistically reflects a priority change applied via Quick Updates stacked over this screen (#159),
+    /// mirroring <see cref="ApplyOptimisticStatus"/> (in-place re-render; the server write + 30s
+    /// auto-refresh reconcile afterward). <paramref name="priorityName"/> null clears the priority.
+    /// </summary>
+    public void ApplyOptimisticPriority(string? priorityName, string? priorityColor)
+        => UpdateData(_task with { Priority = priorityName, PriorityColor = priorityColor }, _comments);
+
+    /// <summary>
     /// Re-renders the Stream tab on refresh. If the reader was parked at the auto-scroll edge (i.e.
     /// following the newest — or oldest — entry, per the #107 preference), keep following it as new
     /// entries arrive; otherwise keep their scroll position so a fresh comment doesn't yank the view.
