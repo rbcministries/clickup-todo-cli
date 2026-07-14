@@ -235,6 +235,23 @@
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommentsResponse" } } }
           }
         }
+      },
+      "post": {
+        "operationId": "CreateTaskComment",
+        "summary": "Post a plain-text comment to a task.",
+        "parameters": [
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCommentRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The created comment (ClickUp returns only its id, hist_id, and date — not the text/author/blocks).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCommentResponse" } } }
+          }
+        }
       }
     }
   },
@@ -391,6 +408,24 @@
       "CommentsResponse": {
         "type": "object",
         "properties": { "comments": { "type": "array", "items": { "$ref": "#/components/schemas/Comment" } } }
+      },
+      "CreateCommentRequest": {
+        "type": "object",
+        "description": "Body for POST /task/{task_id}/comment. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.",
+        "required": ["comment_text"],
+        "properties": {
+          "comment_text": { "type": "string" },
+          "notify_all": { "type": "boolean", "nullable": true }
+        }
+      },
+      "CreateCommentResponse": {
+        "type": "object",
+        "description": "ClickUp's create-comment response is minimal: it returns the new comment's id, a hist_id, and the server date (epoch ms). It does NOT echo the text, author, or structured blocks.",
+        "properties": {
+          "id": { "type": "string" },
+          "hist_id": { "type": "string", "nullable": true },
+          "date": { "type": "integer", "format": "int64", "nullable": true }
+        }
       },
       "TasksResponse": {
         "type": "object",
