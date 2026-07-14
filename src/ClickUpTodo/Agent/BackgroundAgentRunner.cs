@@ -1,17 +1,25 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text;
 
 namespace ClickUpTodo.Agent;
 
 /// <summary>
 /// Default <see cref="IBackgroundAgentRunner"/>. Runs a one-off <c>claude -p</c> (#99) as a background
 /// child <see cref="Process"/> with redirected stdin/stdout/stderr — no terminal window — feeding the
-/// composed prompt in on stdin and capturing the output. Cancellation kills the child process tree.
+/// composed prompt in on stdin and <b>streaming</b> the parsed output as it arrives (#187). Cancellation
+/// kills the child process tree.
+/// <para>
+/// The run uses <c>--output-format stream-json --verbose</c> so stdout is a newline-delimited JSON event
+/// stream; each line is parsed by <see cref="AgentStreamJson"/> into display text that is both reported
+/// to <c>progress</c> live and accumulated into the returned <see cref="BackgroundRunResult.Output"/>
+/// (so the final render matches what streamed).
+/// </para>
 /// <para>
 /// The prompt is fed via <b>stdin</b> (not a positional argument) so an arbitrarily large composed
-/// prompt — task description + comments — can't hit the OS command-line length limit. Only the
-/// <c>-p</c> flag and any configured extra args ever reach the argument vector, and it is built as an
-/// array (never a shell string), so nothing in the prompt is ever interpreted by a shell.
+/// prompt — task description + comments — can't hit the OS command-line length limit. Only the flags and
+/// any configured extra args ever reach the argument vector, and it is built as an array (never a shell
+/// string), so nothing in the prompt is ever interpreted by a shell.
 /// </para>
 /// </summary>
 public sealed class BackgroundAgentRunner : IBackgroundAgentRunner
@@ -20,6 +28,7 @@ public sealed class BackgroundAgentRunner : IBackgroundAgentRunner
         string promptFilePath,
         string? workingDir,
         TerminalLauncherOptions options,
+        IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -54,51 +63,74 @@ public sealed class BackgroundAgentRunner : IBackgroundAgentRunner
                 $"Could not start '{options.ClaudeExecutable}': {ex.Message} (is it installed and on PATH?)");
         }
 
-        // Read both streams concurrently (draining them avoids a deadlock if the child fills a pipe
-        // buffer), then feed the prompt in and close stdin so `claude -p` reads it to completion.
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(ct);
+        // Feed stdin and drain stderr on their own tasks so they run concurrently with the stdout read
+        // loop below — a child that fills the stdout pipe before consuming all of stdin can't deadlock.
+        var stdinTask = FeedStdinAsync(process, prompt, ct);
         var stderrTask = process.StandardError.ReadToEndAsync(ct);
+
+        var assembled = new StringBuilder();
         try
         {
-            // Both the stdin write and the exit wait honour `ct`, so a cancel at *any* point lands in the
-            // single catch below and kills the child — an OperationCanceledException from WriteAsync must
-            // not slip past (it isn't an IOException) and orphan the process.
-            try
+            // Read stdout line by line: each line is one stream-json event. Parse it into display lines,
+            // report each live (progress), and accumulate the identical text so the final Output matches
+            // what streamed. ReadLineAsync honours `ct`, so a cancel lands in the catch and kills the child.
+            string? line;
+            while ((line = await process.StandardOutput.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
             {
-                await process.StandardInput.WriteAsync(prompt.AsMemory(), ct).ConfigureAwait(false);
-                process.StandardInput.Close();
-            }
-            catch (IOException)
-            {
-                // The child may have exited before reading all of stdin (broken pipe); the output/exit
-                // code below still reflect what it did, so this is not itself a failure.
+                foreach (var display in AgentStreamJson.ParseLine(line))
+                {
+                    var piece = display + "\n";
+                    assembled.Append(piece);
+                    progress?.Report(piece);
+                }
             }
 
+            await stdinTask.ConfigureAwait(false);
             await process.WaitForExitAsync(ct).ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
+        catch (Exception)
         {
+            // Any abnormal exit — cancellation, or a pipe/read fault surfacing from the stdout loop —
+            // kills the child so it can't be orphaned, and observes the in-flight stdin/stderr tasks so
+            // their cancellation/pipe faults aren't left unobserved. The original exception rethrows.
             KillTree(process);
-            // Observe the in-flight read tasks so their cancellation/pipe faults aren't left unobserved.
-            await ObserveAsync(stdoutTask).ConfigureAwait(false);
+            await ObserveAsync(stdinTask).ConfigureAwait(false);
             await ObserveAsync(stderrTask).ConfigureAwait(false);
             throw;
         }
 
-        var stdout = await stdoutTask.ConfigureAwait(false);
         var stderr = await stderrTask.ConfigureAwait(false);
-        return BackgroundRunResult.Exited(process.ExitCode, stdout, string.IsNullOrWhiteSpace(stderr) ? null : stderr);
+        return BackgroundRunResult.Exited(
+            process.ExitCode, assembled.ToString(), string.IsNullOrWhiteSpace(stderr) ? null : stderr);
+    }
+
+    /// <summary>Writes the prompt to the child's stdin and closes it so <c>claude -p</c> reads it to
+    /// completion. A broken pipe (the child exited before consuming all input) is not itself a failure —
+    /// the captured output/exit code still reflect what it did — so it is swallowed.</summary>
+    private static async Task FeedStdinAsync(Process process, string prompt, CancellationToken ct)
+    {
+        try
+        {
+            await process.StandardInput.WriteAsync(prompt.AsMemory(), ct).ConfigureAwait(false);
+            process.StandardInput.Close();
+        }
+        catch (IOException)
+        {
+            // Broken pipe: the child stopped reading stdin early. Not a failure on its own.
+        }
     }
 
     /// <summary>
-    /// The argument vector for a background one-off run: <c>-p</c> (headless print mode) followed by any
-    /// configured extra args (e.g. a model flag). The prompt is <b>not</b> here — it is fed on stdin.
-    /// Pure, so the composition is unit-tested.
+    /// The argument vector for a background one-off run: <c>-p</c> (headless print mode) with
+    /// <c>--output-format stream-json --verbose</c> so the run emits a parseable JSON event stream to
+    /// stdout (stream-json print mode requires <c>--verbose</c>), followed by any configured extra args
+    /// (e.g. a model flag). The prompt is <b>not</b> here — it is fed on stdin. Pure, so the composition
+    /// is unit-tested.
     /// </summary>
     public static IReadOnlyList<string> BuildArguments(TerminalLauncherOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        var args = new List<string> { "-p" };
+        var args = new List<string> { "-p", "--output-format", "stream-json", "--verbose" };
         args.AddRange(options.ExtraArgs.Where(a => !string.IsNullOrWhiteSpace(a)));
         return args;
     }
