@@ -80,9 +80,10 @@ public sealed class NotificationsFeedScreen : Screen
     /// stacked over the feed and Esc returns here with the selection intact.</summary>
     public event EventHandler<string>? OpenTaskRequested;
 
-    // Auto-refresh cadence (seconds), tied to the list's RefreshSeconds so the feed and dashboard poll
-    // in step (#114 follow-up). Floored like RefreshService. The repeating timeout token is removed on
-    // dispose; null until OnShown arms it.
+    // Auto-refresh cadence (seconds) — the feed's own, longer interval (FeedRefreshSeconds, #123),
+    // independent of the dashboard list's RefreshSeconds because assembling the feed is far heavier.
+    // Floored like RefreshService. The repeating timeout token is removed on dispose; null until
+    // OnShown arms it.
     private readonly int _autoRefreshSeconds;
     private object? _autoRefreshToken;
 
@@ -94,7 +95,8 @@ public sealed class NotificationsFeedScreen : Screen
     public event EventHandler? RefreshRequested;
 
     /// <param name="feed">The already-fetched, mention-stamped feed (newest first).</param>
-    /// <param name="autoRefreshSeconds">Background auto-refresh cadence, tied to the list's RefreshSeconds.</param>
+    /// <param name="autoRefreshSeconds">Background auto-refresh cadence — the feed's own
+    /// <see cref="Configuration.AppConfig.FeedRefreshSeconds"/> (#123), independent of the task list.</param>
     /// <param name="mentionsOnly">Whether the mentions-only filter starts on.</param>
     public NotificationsFeedScreen(IReadOnlyList<CommentItem> feed, int autoRefreshSeconds, bool mentionsOnly = false)
     {
@@ -171,17 +173,41 @@ public sealed class NotificationsFeedScreen : Screen
 
     /// <summary>
     /// Swaps in a freshly-fetched feed (F5 / Ctrl+R or the auto-refresh tick) and re-renders. Must run
-    /// on the UI thread. The mentions-only filter is preserved (it filters locally), and the selected
-    /// row index is kept where it still fits so a background refresh doesn't jump the cursor.
+    /// on the UI thread. The mentions-only filter is preserved (it filters locally), and the selection
+    /// follows the same <em>comment</em> across the swap — so a refresh that prepends newer comments
+    /// (or the warm-cache instant-paint→live swap, #123) doesn't slide the cursor onto a different row.
+    /// Falls back to the clamped prior index when the selected comment is gone.
     /// </summary>
     public void UpdateFeed(IReadOnlyList<CommentItem> feed)
     {
-        var selected = _list.SelectedItem;
+        var prevIndex = _list.SelectedItem;
+        var selectedId = prevIndex is int p && p >= 0 && p < _rows.Count ? _rows[p].Id : null;
         _feed = feed;
-        RenderFeed();
-        var rowCount = Filter(_feed, _mentionsOnly).Count;
-        if (rowCount > 0 && selected is int i)
-            _list.SelectedItem = Math.Clamp(i, 0, rowCount - 1);
+        RenderFeed(); // updates _rows to the new (filtered) rows
+        var target = ResolveSelection(_rows, selectedId, prevIndex);
+        if (target >= 0)
+            _list.SelectedItem = target;
+    }
+
+    /// <summary>
+    /// The row index a swapped-in feed should select: the row whose <see cref="CommentItem.Id"/> matches
+    /// <paramref name="selectedId"/> (so the selection follows the same comment across a refresh), else
+    /// the clamped <paramref name="previousIndex"/> (keep the cursor position when the comment is gone),
+    /// or <c>-1</c> for an empty feed. An empty/absent id never matches (empty-id comments are kept
+    /// distinct by <see cref="FeedService.Aggregate"/>, so they must not collapse onto each other). Pure
+    /// and unit-testable.
+    /// </summary>
+    internal static int ResolveSelection(IReadOnlyList<CommentItem> rows, string? selectedId, int? previousIndex)
+    {
+        if (rows.Count == 0)
+            return -1;
+        if (!string.IsNullOrEmpty(selectedId))
+        {
+            for (var i = 0; i < rows.Count; i++)
+                if (string.Equals(rows[i].Id, selectedId, StringComparison.Ordinal))
+                    return i;
+        }
+        return Math.Clamp(previousIndex ?? 0, 0, rows.Count - 1);
     }
 
     /// <summary>Rebuilds the list rows from the (filtered) feed and toggles the empty-state placeholder.
@@ -271,7 +297,7 @@ public sealed class NotificationsFeedScreen : Screen
     public override void OnShown()
     {
         _list.SetFocus();
-        // Auto-refresh on the list's cadence (#114 follow-up). The callback fires on the UI thread;
+        // Auto-refresh on the feed's own longer cadence (#123). The callback fires on the UI thread;
         // returning true keeps it repeating. Armed once here, torn down in Dispose.
         _autoRefreshToken ??= Application.AddTimeout(TimeSpan.FromSeconds(_autoRefreshSeconds), () =>
         {

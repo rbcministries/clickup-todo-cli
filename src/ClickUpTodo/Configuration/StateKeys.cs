@@ -29,6 +29,14 @@ public static class StateKeys
     public const string Assignees = "assignees";
 
     /// <summary>
+    /// The persisted mentions/comments feed cache (#123) — the last successfully-aggregated feed, so
+    /// opening the feed screen paints instantly while the live refresh runs. Maps to <c>feed.json</c>
+    /// in the file backend. One document; the stored payload carries the workspace/assignee fingerprint
+    /// it was written for, so a context switch is a clean cache miss rather than a stale paint.
+    /// </summary>
+    public const string Feed = "feed";
+
+    /// <summary>
     /// The per-list status-options cache (#125) — the statuses <see cref="Services.StatusCache"/> warms
     /// from on launch so the picker opens without a first-load round-trip. Each entry carries its capture
     /// timestamp, so the cache's TTL still applies to a persisted entry (nothing stale is served past
