@@ -665,10 +665,12 @@ public sealed class TaskDetailScreen : Screen
 
     /// <summary>
     /// Selection-follows-cursor: whenever the browser's highlight moves, mirror the highlighted
-    /// directory into the working-dir field so it — not a stale field value — is what dispatches. The
-    /// ".." row resolves to the directory currently being browsed (see
-    /// <see cref="DirectoryBrowserModel.SelectionPathAt"/>). Suppressed while the pane is (re)opening so
-    /// the pre-filled per-task cached dir (#96) survives the browser's reset.
+    /// directory into the working-dir field so it — not a stale field value — is what dispatches. A
+    /// highlighted subdirectory is an explicit pick; the ".." row resolves via
+    /// <see cref="DirectoryBrowserModel.SelectionPathAt"/> to the directory being browsed, or to blank
+    /// at the root (so grazing the list doesn't turn the configured default dir into an explicit pick
+    /// and drop task-derived per-task output #98). Suppressed while the pane is (re)opening so the
+    /// pre-filled per-task cached dir (#96) survives the browser's reset.
     /// </summary>
     private void OnBrowserSelectionChanged(object? sender, ValueChangedEventArgs<int?> e)
     {

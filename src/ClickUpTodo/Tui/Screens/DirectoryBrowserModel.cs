@@ -51,15 +51,26 @@ public sealed class DirectoryBrowserModel
     }
 
     /// <summary>
-    /// The working-directory path a highlighted list row represents when the selection cursor drives
-    /// the Dispatch pane's path field (so a merely-highlighted directory is the one that dispatches,
-    /// with no separate confirm step): the directory currently being browsed for the ".." row, and
-    /// the highlighted subdirectory's full path otherwise. Unlike <see cref="PathAt"/> — which
-    /// resolves ".." to the <em>parent</em> for up-navigation — this never points above
-    /// <see cref="CurrentDirectory"/>, so highlighting ".." yields the current directory itself (which,
-    /// after descending into a directory, is exactly the directory just entered).
+    /// The working-directory value a highlighted list row contributes to the Dispatch pane's path
+    /// field when the selection cursor drives it (so a merely-highlighted directory is the one that
+    /// dispatches, with no separate confirm step). A highlighted subdirectory is its full path. The
+    /// ".." row is the directory currently being browsed — <b>except at the browser root</b>, where
+    /// that directory is the configured base/default working dir (#92): returning it verbatim would
+    /// read as an <em>explicit pick</em> and silently suppress the task-derived per-task output subdir
+    /// (#98) in the default mode, so the root's ".." yields the empty string (⇒ "no explicit pick",
+    /// the field's blank default). After descending, ".." is a real below-root directory and is
+    /// returned as an explicit pick — exactly the directory just entered. Unlike <see cref="PathAt"/>
+    /// (which resolves ".." to the <em>parent</em> for up-navigation), this never points above
+    /// <see cref="CurrentDirectory"/>.
     /// </summary>
-    public string SelectionPathAt(int index) => IsParent(index) ? CurrentDirectory : PathAt(index);
+    public string SelectionPathAt(int index)
+    {
+        if (!IsParent(index))
+            return PathAt(index);
+        // ".." → the directory being browsed, unless that's the root (i.e. the default dir), which the
+        // field represents as blank so "use the configured default" behaviour survives a stray graze.
+        return string.Equals(CurrentDirectory, _root, StringComparison.Ordinal) ? string.Empty : CurrentDirectory;
+    }
 
     /// <summary>Moves up one level (a no-op at a filesystem root) and repopulates <see cref="Entries"/>.</summary>
     public void NavigateUp() => MoveTo(Parent(CurrentDirectory));
