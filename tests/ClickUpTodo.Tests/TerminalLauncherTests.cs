@@ -392,6 +392,137 @@ public sealed class TerminalLauncherTests
         Assert.All(specs, s => Assert.Equal("/work/dir", s.WorkingDirectory)); // … and carries the cwd too
     }
 
+    // ── working directory baked into the command ───────────────────────────────
+    //
+    // The emulators we prefer (wt, gnome-terminal, konsole, Terminal.app) ignore the launcher's
+    // process cwd and open in $HOME, so the command itself must change directory. These pin that the
+    // cd/Set-Location is present, correctly escaped, and ordered so claude runs *in* the directory.
+
+    private static IReadOnlyList<LaunchSpec> PlanCwd(
+        OSPlatformKind os, Func<string, bool> exists, string? cwd, bool oneOff = false, TerminalLauncherOptions? options = null, Func<string, string?>? env = null)
+        => TerminalCommandPlanner.Plan(os, exists, env ?? NoEnv, PromptFile, cwd, options ?? Defaults, oneOff);
+
+    [Fact]
+    public void Posix_Interactive_PrependsCdIntoWorkingDirectory()
+    {
+        var inner = PlanCwd(OSPlatformKind.Linux, Present("konsole"), "/work/dir")[0].Arguments[3];
+
+        Assert.Equal(
+            "cd '/work/dir' && 'claude' \"$(cat '/tmp/clickup-todo/agent-prompt.txt')\"",
+            inner);
+    }
+
+    [Fact]
+    public void Posix_OneOff_CdRunsBeforeClaude_KeepAliveStaysAfter()
+    {
+        var inner = PlanCwd(OSPlatformKind.Linux, Present("konsole"), "/work/dir", oneOff: true)[0].Arguments[3];
+
+        // cd guards claude with `&&`, but the keep-alive is joined with `;` so the window stays open
+        // to show a cd failure too.
+        Assert.StartsWith("cd '/work/dir' && 'claude' -p ", inner);
+        Assert.Contains("$(cat '/tmp/clickup-todo/agent-prompt.txt')", inner);
+        Assert.Contains("read -r _", inner);
+        Assert.True(inner.IndexOf("cd '/work/dir'", StringComparison.Ordinal)
+            < inner.IndexOf("read -r _", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Posix_NoWorkingDirectory_OmitsCd()
+    {
+        var inner = PlanCwd(OSPlatformKind.Linux, Present("konsole"), null)[0].Arguments[3];
+
+        Assert.DoesNotContain("cd ", inner);
+    }
+
+    [Fact]
+    public void Posix_EscapesSingleQuoteInWorkingDirectory()
+    {
+        var inner = PlanCwd(OSPlatformKind.Linux, Present("konsole"), "/work/o'brien")[0].Arguments[3];
+
+        Assert.StartsWith("cd '/work/o'\\''brien' &&", inner); // POSIX '\'' escaping on the dir too
+    }
+
+    [Fact]
+    public void MacOS_BakesCdIntoTheDoScript()
+    {
+        var script = PlanCwd(OSPlatformKind.MacOS, Present("osascript"), "/work/dir")[0].Arguments[1];
+
+        Assert.Contains("cd '/work/dir' && 'claude'", script);
+    }
+
+    [Fact]
+    public void Windows_PrependsSetLocationIntoWorkingDirectory()
+    {
+        var command = PlanCwd(OSPlatformKind.Windows, Present("pwsh"), "C:/work/dir")[0].Arguments[^1];
+
+        Assert.Equal(
+            "Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop; & 'claude' (Get-Content -Raw '/tmp/clickup-todo/agent-prompt.txt')",
+            command);
+    }
+
+    [Fact]
+    public void Windows_WindowsTerminal_BakesSetLocationIntoTheTab()
+    {
+        // wt is the emulator that most visibly ignores the process cwd, so the Set-Location must reach
+        // the command it runs in the new tab.
+        var command = PlanCwd(OSPlatformKind.Windows, Present("wt"), "C:/work/dir")[0].Arguments[^1];
+
+        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop;", command);
+    }
+
+    [Fact]
+    public void Windows_Cmd_EncodedCommand_CarriesSetLocation()
+    {
+        // The cmd fallback base64-encodes the same pwsh command, so the Set-Location rides along by
+        // construction; decode it back to prove the cwd survives the EncodedCommand hop.
+        var encoded = PlanCwd(OSPlatformKind.Windows, Present("cmd", "pwsh"), "C:/work/dir")
+            .Single(s => s.FileName == "cmd").Arguments[^1];
+
+        var decoded = System.Text.Encoding.Unicode.GetString(Convert.FromBase64String(encoded));
+        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop;", decoded);
+    }
+
+    [Fact]
+    public void Linux_GnomeTerminal_BakesCdIntoWorkingDirectory()
+    {
+        // gnome-terminal uses the `--` separator (not `-e`); confirm the cwd reaches its command too.
+        var inner = PlanCwd(OSPlatformKind.Linux, Present("gnome-terminal"), "/work/dir")[0].Arguments[3];
+
+        Assert.StartsWith("cd '/work/dir' && 'claude'", inner);
+    }
+
+    [Fact]
+    public void Windows_NoWorkingDirectory_OmitsSetLocation()
+    {
+        var command = PlanCwd(OSPlatformKind.Windows, Present("pwsh"), null)[0].Arguments[^1];
+
+        Assert.DoesNotContain("Set-Location", command);
+    }
+
+    [Fact]
+    public void Windows_EscapesSingleQuoteInWorkingDirectory_ForPowerShell()
+    {
+        var command = PlanCwd(OSPlatformKind.Windows, Present("pwsh"), "C:/work/o'brien")[0].Arguments[^1];
+
+        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/o''brien' -ErrorAction Stop;", command); // PowerShell doubles the quote
+    }
+
+    [Fact]
+    public void WorkingDirectoryInCommand_KeepsPromptFileIndirected_NeverInlineContent()
+    {
+        foreach (var (os, exists) in new (OSPlatformKind, Func<string, bool>)[]
+        {
+            (OSPlatformKind.Windows, Present("pwsh")),
+            (OSPlatformKind.MacOS, Present("osascript")),
+            (OSPlatformKind.Linux, Present("gnome-terminal")),
+        })
+        {
+            var command = string.Join(" ", PlanCwd(os, exists, "/work/dir")[0].Arguments);
+            Assert.Contains(PromptFile, command);
+            Assert.Matches("Get-Content -Raw|cat ", command);
+        }
+    }
+
     [Fact]
     public void Unknown_OS_NoCandidates()
         => Assert.Empty(Plan(OSPlatformKind.Unknown, Present("wt", "pwsh", "bash", "osascript")));
