@@ -1614,13 +1614,49 @@ public sealed class TodoApp
             return;
 
         var screen = new QuickUpdatesScreen(
-            task.Name, statuses, task.StatusName, task.PriorityLevel, task.Assignees);
-        // Both panes apply optimistically and reconcile the screen's ✓ from the server-confirmed value.
+            task.Name, statuses, task.StatusName, task.PriorityLevel, task.Assignees,
+            // Assignees pane (#158): candidate pool from the frequency cache (#155); add/remove apply
+            // immediately via ApplyAssigneeAsync (the selector owns the optimistic update + revert).
+            _assignees.Match, _assignees.TopMostFrequent,
+            (kind, person, ct) => ApplyAssigneeAsync(task.Id, kind, person, ct));
+        // Status/Priority apply on Enter and reconcile the screen's ✓ from the server-confirmed value.
         // A detail-origin launch (#159) also reflects each committed value onto the detail so the
         // popped-back detail shows it; `statuses` supplies the colour for a reflected status.
         screen.StatusCommitted += status => ApplyStatus(task.Id, status, screen, detailOrigin, statuses);
         screen.PriorityCommitted += level => ApplyPriority(task.Id, level, screen, detailOrigin);
         ShowScreen(screen, static () => { });
+    }
+
+    /// <summary>
+    /// Performs a Quick Updates Assignees-pane add/remove (#158): writes the change to ClickUp off the
+    /// UI thread and returns the <b>server-confirmed</b> assignee set so the embedded
+    /// <see cref="AssigneeSelectorView"/> can reconcile its own pane display. On success it also
+    /// reconciles the task's row in the canonical snapshot + visible list (mirroring
+    /// <see cref="ApplyStatus"/>) so the main list — hidden behind the modal — and its assignee badge
+    /// (#F6) reflect the change once the screen is dismissed. The selector owns the optimistic pane
+    /// update and the revert-on-failure; a throw here propagates to it. The host row only ever moves to
+    /// a confirmed set, so a failed write leaves it untouched (nothing to revert host-side); overlapping
+    /// same-task writes settle on the last-returning confirmed set and self-heal on the next refresh.
+    /// </summary>
+    private async Task<IReadOnlyList<TaskAssignee>> ApplyAssigneeAsync(
+        string taskId, ToggleKind kind, TaskAssignee person, CancellationToken ct)
+    {
+        // Deliberately do NOT thread the selector's cancellation token into the write: that token is
+        // cancelled when the screen is disposed (Esc), so forwarding it would cancel an in-flight
+        // add/remove the user has already seen applied — silently dropping it until the next refresh.
+        // Status/Priority commits (ApplyStatus/ApplyPriority) issue their writes untokened for the same
+        // reason; assignees match that. The token still guards the *view's* own reconcile/revert (it
+        // re-checks IsCancellationRequested), and our row reconcile below is guarded by TaskById.
+        _ = ct;
+        var confirmed = kind == ToggleKind.Added
+            ? await _tasks.AddAssigneeAsync(taskId, person.Id).ConfigureAwait(false)
+            : await _tasks.RemoveAssigneeAsync(taskId, person.Id).ConfigureAwait(false);
+        Application.Invoke(() =>
+        {
+            if (TaskById(taskId) is { } t)
+                UpdateTaskRow(t with { Assignees = confirmed }, sending: false);
+        });
+        return confirmed;
     }
 
     /// <summary>The current record for <paramref name="taskId"/> in the canonical snapshot, or null if
@@ -1810,6 +1846,11 @@ public sealed class TodoApp
         _all = TaskService.ApplyStatusChange(_all, updated.Id, updated.StatusName);
         _all = TaskService.ApplyPriorityChange(
             _all, updated.Id, updated.PriorityLevel, updated.PriorityName, updated.PriorityColor);
+        // Per-field sync (#158): the `updated` record always carries the current value for the fields a
+        // given caller didn't touch, so applying all three never clobbers — a status/priority commit
+        // re-applies the task's existing assignees (a no-op) and an assignee change re-applies its
+        // existing status/priority.
+        _all = TaskService.ApplyAssigneesChange(_all, updated.Id, updated.Assignees);
         _signature = CurrentSignature(_all);
 
         var index = _rows.FindIndex(r => r?.Id == updated.Id);

@@ -5,6 +5,9 @@ using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
+// AssigneeSelectorView / AssigneeSelectorMode / ToggleKind live in the parent ClickUpTodo.Tui
+// namespace and are visible here without an extra using (this is the nested Screens namespace).
+
 // See TodoApp.cs: the static `Application` API is deprecated in Terminal.Gui 2.4 but remains the
 // supported v2 pattern; silence the deprecation until the instance-based API stabilizes.
 #pragma warning disable CS0618
@@ -22,19 +25,27 @@ namespace ClickUpTodo.Tui.Screens;
 /// leading <c>✓</c>. On Enter the screen moves the <c>✓</c> optimistically and raises
 /// <see cref="StatusCommitted"/> / <see cref="PriorityCommitted"/>; the host performs the optimistic
 /// row update + off-thread write + revert-on-failure and then calls <see cref="SetEffectiveStatus"/> /
-/// <see cref="SetEffectivePriority"/> so the <c>✓</c> always reflects the server-confirmed value. The
-/// Assignees search box + immediate apply (drawing on the frequency cache #155) lands in #158.
+/// <see cref="SetEffectivePriority"/> so the <c>✓</c> always reflects the server-confirmed value.
+/// </para>
+/// <para>
+/// The Assignees pane (#158) is an embedded <see cref="AssigneeSelectorView"/> in
+/// <see cref="AssigneeSelectorMode.ImmediateApply"/> mode: a search box over a type-ahead list, drawing
+/// its candidate pool from the assignee-frequency cache (#155). Add/remove apply to ClickUp immediately
+/// (optimistic + revert-on-failure) via the injected apply callback; unlike Status/Priority there is no
+/// <c>Enter</c> commit gate. The selector owns its own display + optimistic state; the host owns the
+/// server write and reconciling the task's row.
 /// </para>
 /// </summary>
 public sealed class QuickUpdatesScreen : Screen
 {
     private readonly ListView _statusList;
     private readonly ListView _priorityList;
-    private readonly ListView _assigneesList;
+    private readonly AssigneeSelectorView _assignees;
     private readonly IReadOnlyList<StatusOption> _statuses;
 
-    // The panes in focus (Tab) order — index maps to QuickUpdatesPane.
-    private readonly ListView[] _panes;
+    // The panes in focus (Tab) order — index maps to QuickUpdatesPane. The Assignees pane is a single
+    // focusable composite (search box over a list), so it is one entry here, not two.
+    private readonly View[] _panes;
 
     // The task's current effective values, mirrored so the ✓ marker (and the "unchanged" guard) track
     // the latest confirmed value. Seeded from the task; updated optimistically on Enter and reconciled
@@ -49,12 +60,27 @@ public sealed class QuickUpdatesScreen : Screen
     /// the host applies it.</summary>
     public event Action<int?>? PriorityCommitted;
 
+    /// <param name="assigneeMatch">Case-insensitive substring match over the candidate pool excluding
+    /// the given ids — i.e. <c>AssigneeFrequencyCache.Match</c> (#155).</param>
+    /// <param name="assigneeTopFrequent">Top-N most-frequent candidates excluding the given ids — i.e.
+    /// <c>AssigneeFrequencyCache.TopMostFrequent</c> (#155).</param>
+    /// <param name="applyAssignee">Performs the immediate server add/remove for a person and returns the
+    /// server-confirmed assignee set. Runs off the UI thread (the selector owns the optimistic update +
+    /// revert around it).</param>
+    /// <param name="timeProvider">Debounce clock for the type-ahead search (test seam); defaults to
+    /// <see cref="TimeProvider.System"/>.</param>
+    /// <param name="assigneeDebounce">Type-ahead debounce interval; defaults to the selector's ~1s.</param>
     public QuickUpdatesScreen(
         string taskName,
         IReadOnlyList<StatusOption> statuses,
         string? currentStatus,
         int? currentPriorityLevel,
-        IReadOnlyList<TaskAssignee> currentAssignees)
+        IReadOnlyList<TaskAssignee> currentAssignees,
+        Func<string, ISet<long>, IReadOnlyList<TaskAssignee>> assigneeMatch,
+        Func<int, ISet<long>, IReadOnlyList<TaskAssignee>> assigneeTopFrequent,
+        Func<ToggleKind, TaskAssignee, CancellationToken, Task<IReadOnlyList<TaskAssignee>>> applyAssignee,
+        TimeProvider? timeProvider = null,
+        TimeSpan? assigneeDebounce = null)
     {
         _statuses = statuses;
         _effectiveStatus = currentStatus;
@@ -63,9 +89,10 @@ public sealed class QuickUpdatesScreen : Screen
         var title = taskName.Length > 40 ? taskName[..39] + "…" : taskName;
         Title = $"Quick Updates — {title}";
 
-        // Three bordered sections, top-to-bottom in focus order. Priority (5 fixed rows) and Assignees
-        // get a compact frame each at the bottom; Status takes the remaining top space. The shared
-        // footer (#103) carries the shortcuts, so no per-pane hint labels are needed.
+        // Three bordered sections, top-to-bottom in focus order. Priority is a fixed 5-row list; the
+        // Assignees pane (a search box over a scrolling list) gets the taller bottom frame; Status takes
+        // the remaining top space. The shared footer (#103) carries the shortcuts, so no per-pane hint
+        // labels are needed.
         _statusList = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
         _statusList.SetSource(new ObservableCollection<string>(QuickUpdatesModel.StatusRows(statuses, _effectiveStatus)));
         var preselectedStatus = StatusPickerModel.PreselectedIndex(statuses, currentStatus);
@@ -76,19 +103,29 @@ public sealed class QuickUpdatesScreen : Screen
         _priorityList.SetSource(new ObservableCollection<string>(QuickUpdatesModel.PriorityRows(_effectivePriorityLevel)));
         _priorityList.SelectedItem = QuickUpdatesModel.PriorityRowForLevel(currentPriorityLevel);
 
-        _assigneesList = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
-        _assigneesList.SetSource(new ObservableCollection<string>(QuickUpdatesModel.AssigneeRows(currentAssignees)));
+        _assignees = new AssigneeSelectorView(
+            assigneeMatch,
+            assigneeTopFrequent,
+            initialSelected: currentAssignees,
+            lockedDefault: null, // Quick Updates has no self-lock (that's the New Task rule, #213)
+            mode: AssigneeSelectorMode.ImmediateApply,
+            applyAsync: applyAssignee,
+            timeProvider: timeProvider,
+            debounce: assigneeDebounce)
+        { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
+        // Surface the selector's locked-no-op / write-failure messages on the shared status line.
+        _assignees.Flash += (_, message) => RequestFlash(message);
 
-        var statusFrame = new FrameView { Title = "Status", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(13) };
+        var statusFrame = new FrameView { Title = "Status", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(17) };
         statusFrame.Add(_statusList);
 
-        var priorityFrame = new FrameView { Title = "Priority", X = 0, Y = Pos.AnchorEnd(13), Width = Dim.Fill(), Height = 7 };
+        var priorityFrame = new FrameView { Title = "Priority", X = 0, Y = Pos.AnchorEnd(17), Width = Dim.Fill(), Height = 7 };
         priorityFrame.Add(_priorityList);
 
-        var assigneesFrame = new FrameView { Title = "Assignees", X = 0, Y = Pos.AnchorEnd(6), Width = Dim.Fill(), Height = 6 };
-        assigneesFrame.Add(_assigneesList);
+        var assigneesFrame = new FrameView { Title = "Assignees", X = 0, Y = Pos.AnchorEnd(10), Width = Dim.Fill(), Height = 10 };
+        assigneesFrame.Add(_assignees);
 
-        _panes = [_statusList, _priorityList, _assigneesList];
+        _panes = [_statusList, _priorityList, _assignees];
         foreach (var pane in _panes)
             pane.KeyDown += OnPaneKey;
 
@@ -115,8 +152,11 @@ public sealed class QuickUpdatesScreen : Screen
 
     /// <summary>
     /// Screen-wide keys shared by all three panes. Tab/Shift+Tab cycle focus (wrapping); Esc exits;
-    /// F1 opens Help; Enter commits the highlighted Status/Priority value (Assignees apply is #158).
-    /// ↑/↓ fall through so each ListView moves its own selection.
+    /// F1 opens Help; Enter commits the highlighted Status/Priority value. ↑/↓ fall through so each
+    /// Status/Priority ListView moves its own selection. The Assignees pane is a single focusable
+    /// <see cref="AssigneeSelectorView"/> composite: it handles Enter (add/remove) and ↑/↓ (search
+    /// box ↔ list) internally and marks them handled, so only its bubbled Tab/Shift+Tab/Esc/F1 reach
+    /// here — the Enter-commit branch below stays keyed to the Status/Priority lists by identity.
     /// </summary>
     private void OnPaneKey(object? sender, Key key)
     {
