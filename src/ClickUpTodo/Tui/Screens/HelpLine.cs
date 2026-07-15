@@ -93,6 +93,7 @@ public static class HelpItemSets
         new("→|", "next section"),
         new("␣", "status"),
         new("↩", "detail"),
+        new("Ctrl+N", "new task"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+P", "📌"),
         new("Ctrl+E", "feed"),
@@ -152,6 +153,16 @@ public static class HelpItemSets
         new("Enter", "apply status/priority"),
         new("F1", "help"),
         new("Esc", "exit"),
+    ];
+
+    /// <summary>The New Task compose screen (Ctrl+N, #213): Tab moves between Name/Description/Assignees
+    /// and the buttons, Enter (or the default Save button) files the task, Esc cancels, F1 help.</summary>
+    public static readonly IReadOnlyList<HelpItem> NewTask =
+    [
+        new("Tab", "moves"),
+        new("Enter/Save", "saves"),
+        new("Esc", "cancels"),
+        new("F1", "help"),
     ];
 
     /// <summary>The dispatch prompt-template editor (#100), reached from F2.</summary>

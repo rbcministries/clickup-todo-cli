@@ -148,6 +148,10 @@ public sealed class TodoApp
     private string _status = "Loading…";
     private string _signature = "";
 
+    // A task id to land the cursor on at the next render (#213): set when a New Task is created so the
+    // refreshed list selects it, honoured once by OnTasksLoaded then cleared. Touched on the UI thread.
+    private string? _pendingSelectId;
+
     public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
         IFocusStore focus, TaskCache taskCache, FeedCache feedCache, AssigneeFrequencyCache assignees)
     {
@@ -355,6 +359,12 @@ public sealed class TodoApp
                     // Ctrl+R is the (undisplayed) alias for the F5 refresh key.
                     key.Handled = true;
                     RequestRefresh();
+                    break;
+                case KeyCode.N:
+                    // Ctrl+N opens the New Task compose screen (#213). A chord, since bare letters are
+                    // reserved for the ListView type-ahead (#12).
+                    key.Handled = true;
+                    OpenNewTask();
                     break;
                 case KeyCode.E:
                     // Ctrl+E toggles to the mentions & comments feed — List ↔ Feed navigation.
@@ -825,6 +835,45 @@ public sealed class TodoApp
             Flash($"Settings saved · refresh {result.RefreshSeconds}s");
             _refresh.RequestRefresh();
         });
+    }
+
+    /// <summary>
+    /// Ctrl+N — opens the New Task compose screen (#213) over the list. Guarded on
+    /// <see cref="ActiveScreen"/> like the other list-initiated opens (only Help stacks). Requires a
+    /// configured Personal Tasks list (the create target); flashes and no-ops when unset. The embedded
+    /// assignee selector draws its candidate pool from the #155 frequency cache and seeds the current
+    /// user as a locked default. On success the list refreshes and the cursor lands on the new task.
+    /// </summary>
+    private void OpenNewTask()
+    {
+        if (ActiveScreen is not null)
+            return;
+
+        var listId = _config.PersonalTasksListId;
+        if (string.IsNullOrWhiteSpace(listId))
+        {
+            Flash("No Personal Tasks list is configured — run setup to choose one.");
+            return;
+        }
+
+        // The locked-self default needs a non-blank name, else the selector drops it silently.
+        var selfName = string.IsNullOrWhiteSpace(_tasks.UserName) ? "Me" : _tasks.UserName;
+        var self = new TaskAssignee(_tasks.UserId, selfName);
+
+        var screen = new NewTaskScreen(
+            match: (query, exclude) => _assignees.Match(query, exclude),
+            topFrequent: (n, exclude) => _assignees.TopMostFrequent(n, exclude),
+            lockedSelf: self,
+            createAsync: (request, ct) => _tasks.CreateTaskAsync(listId, request, ct));
+        screen.Created += (_, created) =>
+        {
+            // Land the next refresh on the new task, then kick that refresh directly (RequestRefresh's
+            // own "Refreshing…" flash would clobber this confirmation).
+            _pendingSelectId = created.Id;
+            Flash($"Created “{created.Name}” · refreshing…");
+            _refresh.RequestRefresh();
+        };
+        ShowScreen(screen, static () => { });
     }
 
     // ── Screen navigation seam ─────────────────────────────────────────────────
@@ -1919,6 +1968,14 @@ public sealed class TodoApp
         var visibleLists = tasks.Where(t => !string.IsNullOrWhiteSpace(t.ListId)).Select(t => t.ListId!);
         _ = _tasks.PrefetchStatusesAsync(visibleLists);
 
+        // Consume any pending post-create selection (#213) up front — cleared here regardless of the
+        // fast-path below, so it's honoured exactly once and can never leak onto a later unrelated
+        // refresh. A just-created task that lands in this set changes the signature (BuildSignature folds
+        // in every task id), so the fast-path below can't swallow it: when the task is present we always
+        // reach Render; when it isn't, the cursor is correctly left untouched.
+        var pendingSelect = _pendingSelectId;
+        _pendingSelectId = null;
+
         // Rebuilding the ListView (SetSource) forces a full reset + redraw. Skip it when the visible
         // task set is unchanged and just update the (cheap) status line.
         var signature = CurrentSignature(tasks);
@@ -1928,7 +1985,9 @@ public sealed class TodoApp
             return;
         }
         _signature = signature;
-        Render(keepTaskId: CurrentTask()?.Id);
+        // Prefer landing on the just-created task when present; otherwise keep the cursor on the current
+        // task (Render falls back to the first row when the id isn't found).
+        Render(keepTaskId: pendingSelect ?? CurrentTask()?.Id);
 
         // Persist the freshly-rendered working set for the next launch's instant first paint (#122).
         // Only on a real change — the signature fast-path above already returned for a no-op poll, so

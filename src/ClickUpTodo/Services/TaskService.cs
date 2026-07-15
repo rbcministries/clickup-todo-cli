@@ -17,7 +17,7 @@ public sealed record TaskSnapshotResult(IReadOnlyList<TaskItem> Tasks, bool Chan
 /// de-duplicated and stably ordered, and resolves per-list status options on demand (cached).
 /// </summary>
 public sealed class TaskService(
-    IClickUpClient client, AppConfig config, long userId, TimeProvider? timeProvider = null, IStateStore? stateStore = null)
+    IClickUpClient client, AppConfig config, long userId, TimeProvider? timeProvider = null, IStateStore? stateStore = null, string userName = "")
 {
     // Per-list status options, cached with a long TTL (statuses rarely change) and warmed by
     // PrefetchStatusesAsync so the picker opens from cache in the common case. With a state store it
@@ -34,6 +34,11 @@ public sealed class TaskService(
 
     /// <summary>The signed-in app user's ClickUp id — the target of the default "Assignee IS me" rule.</summary>
     public long UserId { get; } = userId;
+
+    /// <summary>The signed-in app user's display name (empty if unknown). Used to seed the current user
+    /// as the locked default assignee on the New Task screen (#213), where a blank name would be
+    /// silently dropped by the assignee selector.</summary>
+    public string UserName { get; } = userName;
 
     /// <summary>
     /// Overlap allowance subtracted from the watermark on every delta query (#194). The watermark is
@@ -375,6 +380,14 @@ public sealed class TaskService(
     /// the remove sibling of <see cref="AddAssigneeAsync"/>.</summary>
     public Task<IReadOnlyList<TaskAssignee>> RemoveAssigneeAsync(string taskId, long userId, CancellationToken ct = default)
         => client.RemoveTaskAssigneeAsync(taskId, userId, ct);
+
+    /// <summary>
+    /// Creates a task in <paramref name="listId"/> from the given fields and returns it mapped to the
+    /// domain <see cref="TaskItem"/> (#209/#213). A thin passthrough to the facade, the create sibling of
+    /// <see cref="SetStatusAsync"/>/<see cref="SetPriorityAsync"/>.
+    /// </summary>
+    public Task<TaskItem> CreateTaskAsync(string listId, NewTaskRequest task, CancellationToken ct = default)
+        => client.CreateTaskAsync(listId, task, ct);
 
     /// <summary>Full detail for a single task, fetched on demand for the detail view (#17).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)

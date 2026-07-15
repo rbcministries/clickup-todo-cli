@@ -84,9 +84,12 @@ if (string.IsNullOrWhiteSpace(token) || !config.IsConfigured)
 using var client = ClickUpClientFactory.Create(config, token!);
 
 long userId;
+string userName;
 try
 {
-    userId = (await client.GetMeAsync()).Id;
+    var me = await client.GetMeAsync();
+    userId = me.Id;
+    userName = me.DisplayName;
 }
 catch (ClickUpApiException ex) when (ex.IsAuthFailure)
 {
@@ -99,7 +102,7 @@ catch (Exception ex)
     return 1;
 }
 
-var taskService = new TaskService(client, config, userId, stateStore: stateStore);
+var taskService = new TaskService(client, config, userId, stateStore: stateStore, userName: userName);
 var feedService = new FeedService(client, taskService, config);
 var focusStore = new LocalFocusStore(config, configStore);
 // The assignee-frequency candidate pool (#155) — warmed from the loaded tasks and topped up from

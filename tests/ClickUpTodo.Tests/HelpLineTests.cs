@@ -27,12 +27,22 @@ public sealed class HelpLineTests
     public void Format_MainList_RendersTheFullFooter()
     {
         const string expected =
-            "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
+            "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+N new task · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
             + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 ↻ · F6 badges · F12 completed · "
             + "→/← expand/collapse · Ctrl+→/← all · Ctrl+Q quit · type to search";
 
         Assert.Equal(expected, HelpLine.Format(HelpItemSets.MainList));
     }
+
+    [Fact]
+    public void MainList_CarriesCtrlNNewTask()
+        => Assert.Contains(new HelpItem("Ctrl+N", "new task"), HelpItemSets.MainList);
+
+    [Fact]
+    public void Format_NewTask_RendersMoveSaveCancelHelp()
+        => Assert.Equal(
+            "Tab moves · Enter/Save saves · Esc cancels · F1 help",
+            HelpLine.Format(HelpItemSets.NewTask));
 
     [Fact]
     public void Format_NotificationsFeed_RendersMoveMentionsHelpAndBack()
