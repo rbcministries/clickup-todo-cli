@@ -26,18 +26,12 @@ if (args.Any(a => a is "--reset" or "--logout"))
     tokenStore.Delete();
     configStore.Delete();
     legacyStore.Delete(StateKeys.Config);
-    // Drop every cached payload too, so logout leaves no stale snapshot behind (a fresh workspace would
-    // miss on the fingerprint anyway; this just doesn't orphan the documents). #124 completes this so
-    // --reset clears *all* cache keys, not only tasks/feed: the working set and feed (#122/#123)…
-    taskCache.Clear();
-    feedCache.Clear();
-    // …the per-list status/color metadata caches (#125), deleted by key so nothing is orphaned
-    // (workspace-agnostic — a fresh workspace would miss on the fingerprint regardless)…
-    stateStore.Delete(StateKeys.Statuses);
-    stateStore.Delete(StateKeys.ListColors);
-    // …and the assignee-frequency candidate pool (#155), which is scoped to the signed-in workspace and
-    // must not survive a logout into a different account/workspace (#124).
-    stateStore.Delete(StateKeys.Assignees);
+    // Drop every cached payload too, so logout leaves no stale snapshot behind for a different account
+    // or workspace (a fresh workspace would miss on the fingerprint anyway; this just doesn't orphan the
+    // documents). #124 completes this so --reset clears *all* cache keys — the working set + feed
+    // (#122/#123), the status/color metadata (#125), and the assignee-frequency pool (#155) — via the
+    // centralised, key-listed CacheReset so the cleared set stays verifiable in one place.
+    CacheReset.ClearAll(stateStore);
     Console.WriteLine("Cleared saved ClickUp token and settings. Run `clickup-todo` to sign in again.");
     return 0;
 }

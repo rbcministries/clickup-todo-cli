@@ -207,6 +207,20 @@ public sealed class FeedCacheTests : IDisposable
     }
 
     [Fact]
+    public void Load_WhenExactlyAtMaxAge_IsStale()
+    {
+        // The boundary is exclusive (age == maxAge is a miss), matching StatusCache's age < ttl.
+        var clock = NewClock();
+        var store = Store();
+        var config = Config();
+        var maxAge = TimeSpan.FromDays(14);
+        new FeedCache(store, clock, maxAge).Save(config, [Comment("c1")]);
+
+        clock.Advance(maxAge); // exactly on the boundary
+        Assert.Null(new FeedCache(store, clock, maxAge).Load(config));
+    }
+
+    [Fact]
     public void Load_WhenOlderThanMaxAge_ReturnsNullAndPrunesTheStaleDocument()
     {
         var clock = NewClock();

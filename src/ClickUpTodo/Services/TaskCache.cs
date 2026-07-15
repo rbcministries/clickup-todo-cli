@@ -116,12 +116,13 @@ public sealed class TaskCache
             return null;
 
         // Age-based eviction (#124): a structurally-invalid timestamp (hand-tampered file) or a snapshot
-        // older than the max age is a miss, and the stale document is pruned so it doesn't linger. Our
-        // own writes are always in range and, in practice, minutes old.
+        // at or beyond the max age is a miss, and the stale document is pruned so it doesn't linger. The
+        // boundary is exclusive (age == maxAge is stale), matching StatusCache's freshness check
+        // (age < ttl). Our own writes are always in range and, in practice, minutes old.
         DateTimeOffset capturedAt;
         try { capturedAt = DateTimeOffset.FromUnixTimeMilliseconds(doc.CapturedAtMs); }
         catch (ArgumentOutOfRangeException) { _store.Delete(StateKeys.Tasks); return null; }
-        if (_clock.GetUtcNow() - capturedAt > _maxAge)
+        if (_clock.GetUtcNow() - capturedAt >= _maxAge)
         {
             _store.Delete(StateKeys.Tasks);
             return null;

@@ -36,8 +36,9 @@ Mirror the StatusCache timestamp pattern.
 2. **Age / TTL / eviction.** Add a `TimeProvider` seam + a `maxAge` (default **14 days**)
    to both caches (ctor-overridable for tests). On load, after the version + key checks:
    - compute `age = now - capturedAt`;
-   - if `age > maxAge` (or the timestamp is structurally invalid), it's a **miss** and the
-     doc is **deleted** (age-based self-prune of a genuinely-stale snapshot);
+   - if `age >= maxAge` (or the timestamp is structurally invalid), it's a **miss** and the
+     doc is **deleted** (age-based self-prune of a genuinely-stale snapshot). The boundary is
+     exclusive (`age == maxAge` is stale), matching `StatusCache`'s `age < ttl` freshness;
    - otherwise return the payload **plus** its `CapturedAt`.
 
    The single-doc-per-key design already bounds the store to one task doc + one feed doc
