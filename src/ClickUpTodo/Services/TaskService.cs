@@ -397,6 +397,11 @@ public sealed class TaskService(
     public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskCommentsAsync(taskId, ct);
 
+    /// <summary>Posts a plain-text comment to a task (#216, over the #210 facade) and returns it as a
+    /// <see cref="CommentItem"/> so the detail view can append it optimistically.</summary>
+    public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default)
+        => client.CreateTaskCommentAsync(taskId, text, ct);
+
     /// <summary>
     /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying
     /// <paramref name="newStatus"/>, leaving every other task and the overall order untouched. Pure

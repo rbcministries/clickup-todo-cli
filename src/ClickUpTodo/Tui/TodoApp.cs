@@ -1314,7 +1314,10 @@ public sealed class TodoApp
                         // Pre-fill the Dispatch working-dir field from the per-task cache (#96) — the
                         // last explicit dir dispatched from this task, or blank if none. Read live on
                         // each pane open so a dispatch within this same open screen is reflected on reopen.
-                        workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, detail.Id));
+                        workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, detail.Id),
+                        // Ctrl+N (#216) composes + posts a plain-text comment; the screen owns the
+                        // optimistic append/revert, the host owns the off-thread ClickUp write.
+                        postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(taskId, text, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), and the
