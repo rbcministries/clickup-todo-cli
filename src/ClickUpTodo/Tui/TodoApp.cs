@@ -1968,6 +1968,14 @@ public sealed class TodoApp
         var visibleLists = tasks.Where(t => !string.IsNullOrWhiteSpace(t.ListId)).Select(t => t.ListId!);
         _ = _tasks.PrefetchStatusesAsync(visibleLists);
 
+        // Consume any pending post-create selection (#213) up front — cleared here regardless of the
+        // fast-path below, so it's honoured exactly once and can never leak onto a later unrelated
+        // refresh. A just-created task that lands in this set changes the signature (BuildSignature folds
+        // in every task id), so the fast-path below can't swallow it: when the task is present we always
+        // reach Render; when it isn't, the cursor is correctly left untouched.
+        var pendingSelect = _pendingSelectId;
+        _pendingSelectId = null;
+
         // Rebuilding the ListView (SetSource) forces a full reset + redraw. Skip it when the visible
         // task set is unchanged and just update the (cheap) status line.
         var signature = CurrentSignature(tasks);
@@ -1977,12 +1985,9 @@ public sealed class TodoApp
             return;
         }
         _signature = signature;
-        // Prefer landing on a just-created task (#213) when it's present in this load; otherwise keep the
-        // cursor on the current task. Honoured once — cleared whether or not the row turned up (Render
-        // falls back to the first row when the id isn't found).
-        var keepTaskId = _pendingSelectId ?? CurrentTask()?.Id;
-        _pendingSelectId = null;
-        Render(keepTaskId);
+        // Prefer landing on the just-created task when present; otherwise keep the cursor on the current
+        // task (Render falls back to the first row when the id isn't found).
+        Render(keepTaskId: pendingSelect ?? CurrentTask()?.Id);
 
         // Persist the freshly-rendered working set for the next launch's instant first paint (#122).
         // Only on a real change — the signature fast-path above already returned for a no-op poll, so
