@@ -156,6 +156,87 @@ public sealed class FeedRowFormatterTests
         Assert.Contains(FeedRowFormatter.EmptyComment, row.Text);
     }
 
+    // ── Recent-activity rows (#117) ──────────────────────────────────────────
+
+    private static ActivityItem Activity(
+        string taskName = "Ship the thing", string? statusName = "in progress", long? updatedMs = null)
+        => new("activity:t9", "t9", taskName, statusName, StatusColor: "#4194f6", updatedMs);
+
+    [Fact]
+    public void Activity_LeadsWithTheActivityChip_AndReportsItsSpan()
+    {
+        var row = FeedRowFormatter.Format(Activity());
+
+        Assert.StartsWith(FeedRowFormatter.ActivityChip, row.Text);
+        Assert.Equal(0, row.MentionStart);
+        Assert.Equal(FeedRowFormatter.ActivityChip.Length, row.MentionLength);
+        Assert.Equal(
+            FeedRowFormatter.ActivityChip,
+            row.Text.Substring(row.MentionStart, row.MentionLength));
+    }
+
+    [Fact]
+    public void ActivityChip_IsTheSameWidthAsTheMentionChip_SoRowsLineUp()
+        => Assert.Equal(FeedRowFormatter.MentionChip.Length, FeedRowFormatter.ActivityChip.Length);
+
+    [Fact]
+    public void Activity_ShowsTaskName_StatusAndSearchKey()
+    {
+        var row = FeedRowFormatter.Format(Activity(taskName: "Ship the thing", statusName: "in review"));
+
+        Assert.Contains("Ship the thing", row.Text);
+        Assert.Contains("in review", row.Text);
+        Assert.Equal("Ship the thing", row.SearchKey);
+    }
+
+    [Fact]
+    public void Activity_TaskNameIsTrimmed()
+        => Assert.Equal("Trimmed", FeedRowFormatter.Format(Activity(taskName: "  Trimmed  ")).SearchKey);
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void Activity_BlankTaskName_FallsBackToPlaceholder(string? name)
+    {
+        var row = FeedRowFormatter.Format(Activity(taskName: name!));
+
+        Assert.Contains(FeedRowFormatter.UntitledTask, row.Text);
+        Assert.Equal(FeedRowFormatter.UntitledTask, row.SearchKey);
+    }
+
+    [Fact]
+    public void Activity_Date_WhenPresent_IsRendered()
+    {
+        const long ms = 1_751_476_320_000;
+        var expected = DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime.ToString("MMM d, HH:mm");
+
+        Assert.Contains(expected, FeedRowFormatter.Format(Activity(updatedMs: ms)).Text);
+    }
+
+    [Fact]
+    public void Activity_Date_WhenAbsent_IsOmittedWithItsSeparator()
+    {
+        var withDate = FeedRowFormatter.Format(Activity(updatedMs: 1_751_476_320_000, statusName: "in progress"));
+        var without = FeedRowFormatter.Format(Activity(updatedMs: null, statusName: "in progress"));
+
+        // name · date · status  →  name · status: one fewer separator when there's no date.
+        Assert.Equal(2, CountOccurrences(withDate.Text, FeedRowFormatter.Separator));
+        Assert.Equal(1, CountOccurrences(without.Text, FeedRowFormatter.Separator));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void Activity_BlankStatus_IsOmitted(string? status)
+    {
+        // No date and no status: only the chip + name, so no field separators at all.
+        var row = FeedRowFormatter.Format(Activity(statusName: status, updatedMs: null));
+
+        Assert.Equal(0, CountOccurrences(row.Text, FeedRowFormatter.Separator));
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         var count = 0;

@@ -13,12 +13,14 @@ namespace ClickUpTodo.Tui;
 public static class FeedRowFormatter
 {
     /// <summary>
-    /// The display line plus the char span of the leading mention badge and the decoupled type-ahead
-    /// search key. When the comment doesn't mention the current user the badge is absent — its
-    /// <see cref="MentionLength"/> is 0 and its <see cref="MentionStart"/> is -1, the "no badge"
-    /// sentinel <see cref="StatusBadgeListSource.TryCreate"/> reads. <see cref="SearchKey"/> is the
-    /// author only (the title analog), so type-ahead jumps by author even though the rendered line
-    /// leads with the gutter (same decoupling task rows use for titles, #76).
+    /// The display line plus the char span of the leading gutter chip and the decoupled type-ahead
+    /// search key. The chip is a comment's mention badge (#113) or an activity row's chip (#117); both
+    /// use the same span fields, coloured per row-kind by the renderer. When there is no chip (a
+    /// non-mention comment) the span is absent — its <see cref="MentionLength"/> is 0 and its
+    /// <see cref="MentionStart"/> is -1, the "no badge" sentinel <see cref="StatusBadgeListSource.TryCreate"/>
+    /// reads. <see cref="SearchKey"/> is the row's primary text (comment author / task name), so
+    /// type-ahead jumps by it even though the rendered line leads with the gutter (same decoupling task
+    /// rows use for titles, #76).
     /// </summary>
     public readonly record struct Row(string Text, int MentionStart, int MentionLength, string SearchKey);
 
@@ -31,6 +33,21 @@ public static class FeedRowFormatter
     /// <summary>The blank gutter shown on a non-mention row — same width as <see cref="MentionChip"/>
     /// so titles still line up.</summary>
     public const string BlankGutter = "   ";
+
+    /// <summary>The recent-activity chip (#117): a <c>~</c> glyph flanked by a space on each side,
+    /// coloured with <see cref="ActivityBadgeColor"/> by the renderer. Three display columns — the same
+    /// width as <see cref="MentionChip"/> / <see cref="BlankGutter"/> — so task-activity rows align with
+    /// comment rows in the merged feed.</summary>
+    public const string ActivityChip = " ~ ";
+
+    /// <summary>The fixed colour of the recent-activity chip: a cool blue accent, deliberately distinct
+    /// from the amber <see cref="MentionBadgeColor"/> so an activity row reads as "a task changed" rather
+    /// than a mention or a status/priority badge. Passed to
+    /// <see cref="StatusBadgeListSource.TryCreate"/> by the view layer.</summary>
+    public const string ActivityBadgeColor = "#4aa3df";
+
+    /// <summary>Placeholder shown for an activity entry whose task has no name.</summary>
+    public const string UntitledTask = "(untitled task)";
 
     /// <summary>Separator between the row's fields (author · date · preview), matching the detail
     /// view's comment-header separator.</summary>
@@ -80,6 +97,30 @@ public static class FeedRowFormatter
         text += Separator + Preview(comment.Text);
 
         return new Row(text, mentionStart, mentionLength, author);
+    }
+
+    /// <summary>
+    /// Formats one recent-activity row (#117). The activity chip always leads the line (unlike a comment
+    /// row's conditional mention chip) and is the only coloured span — reported the same way as the
+    /// mention chip so the renderer colours exactly that gutter (with <see cref="ActivityBadgeColor"/>).
+    /// The chip is followed by the task name, its last-updated date, and its current status.
+    /// <see cref="Row.SearchKey"/> is the task name, so type-ahead jumps by task title.
+    /// </summary>
+    public static Row Format(ActivityItem activity)
+    {
+        var text = ActivityChip; // always leads — the chip start is 0, its length the chip width
+        var (chipStart, chipLength) = (0, ActivityChip.Length);
+
+        var name = string.IsNullOrWhiteSpace(activity.TaskName) ? UntitledTask : activity.TaskName.Trim();
+        text += name;
+
+        if (activity.UpdatedMs is { } ms)
+            text += Separator + FormatDate(ms);
+
+        if (!string.IsNullOrWhiteSpace(activity.StatusName))
+            text += Separator + activity.StatusName.Trim();
+
+        return new Row(text, chipStart, chipLength, name);
     }
 
     /// <summary>Flattens a comment's (possibly multi-line) text to a single line — runs of whitespace

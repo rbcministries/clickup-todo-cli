@@ -4,6 +4,20 @@ using ClickUpTodo.Configuration;
 namespace ClickUpTodo.Services;
 
 /// <summary>
+/// The result of a feed load (#117): the aggregated <see cref="Comments"/> feed (mentions &amp; comments,
+/// #109) plus the recent-<see cref="Activity"/> projection of the same assigned tasks. Both are already
+/// newest-first. The feed screen shows <see cref="Comments"/> always and merges <see cref="Activity"/>
+/// in only when its <c>F6</c> "show activity" display state is on — a client-side re-render, since both
+/// sets come from one fetch.
+/// </summary>
+public sealed record FeedResult(
+    IReadOnlyList<CommentItem> Comments, IReadOnlyList<ActivityItem> Activity)
+{
+    /// <summary>An empty result (no comments, no activity) — a convenient default.</summary>
+    public static readonly FeedResult Empty = new([], []);
+}
+
+/// <summary>
 /// Assembles the mentions/comments feed (#109): fans out per-task comment fetches across the user's
 /// actionable tasks and merges them into a single, newest-first list, de-duplicated by comment id and
 /// capped to a bounded size. This is the aggregation layer only (#112) — no mention detection (#113)
@@ -50,7 +64,7 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
     /// a worker-thread read could otherwise disagree with the cache key the result is saved under.
     /// </para>
     /// </summary>
-    public async Task<IReadOnlyList<CommentItem>> LoadFeedAsync(
+    public async Task<FeedResult> LoadFeedAsync(
         bool includeClosed, bool mentionsOnly = false, CancellationToken ct = default)
     {
         var assigneeIds = await taskService.ResolveAssigneeIdsAsync(config.View, ct);
@@ -66,8 +80,29 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
         var feed = await GatherAsync(taskIds, client.GetTaskCommentsAsync, DefaultMaxConcurrency, DefaultMaxEntries, ct);
 
         var me = _currentUser ??= await client.GetMeAsync(ct);
-        return StampMentions(feed, MentionSpec.ForUser(me), mentionsOnly);
+        var comments = StampMentions(feed, MentionSpec.ForUser(me), mentionsOnly);
+
+        // The recent-activity source (#117) is a pure projection of the tasks we already fetched above —
+        // no extra endpoint. F12 (includeClosed) transitively bounds it, exactly as it does the comments.
+        var activity = BuildActivity(tasks, DefaultMaxEntries);
+        return new FeedResult(comments, activity);
     }
+
+    /// <summary>
+    /// Projects the assigned tasks into the recent-activity feed (#117): each task with a non-empty id
+    /// becomes an <see cref="ActivityItem"/>, ordered newest-first by <see cref="TaskItem.UpdatedMs"/>
+    /// (an undated task sorts last, ties broken by task id for a deterministic order), and capped to
+    /// <paramref name="maxEntries"/> — the same bound the comment feed uses. Pure and unit-testable.
+    /// </summary>
+    internal static IReadOnlyList<ActivityItem> BuildActivity(
+        IReadOnlyList<TaskItem> tasks, int maxEntries)
+        => tasks
+            .Where(t => !string.IsNullOrEmpty(t.Id))
+            .Select(ActivityItem.FromTask)
+            .OrderByDescending(a => a.UpdatedMs ?? long.MinValue)
+            .ThenBy(a => a.TaskId, StringComparer.Ordinal)
+            .Take(Math.Max(0, maxEntries))
+            .ToList();
 
     /// <summary>
     /// Stamps <see cref="CommentItem.MentionsMe"/> on each feed entry via <see cref="MentionDetector"/>

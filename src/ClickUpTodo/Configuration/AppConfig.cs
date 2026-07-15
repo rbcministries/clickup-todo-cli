@@ -56,6 +56,19 @@ public sealed class AppConfig
     public bool FeedShowCompleted { get; set; }
 
     /// <summary>
+    /// Whether the mentions &amp; comments feed (Ctrl+E) also shows a recent-activity source (#117) —
+    /// recently-updated assigned tasks, newest-first, merged into the feed — the feed's own <c>F6</c>
+    /// "show/hide activity" display state. Off by default: the feed shows comments only until the user
+    /// turns it on. Unlike <see cref="FeedShowCompleted"/> (F12), this changes <b>only what is
+    /// displayed</b>, not what is fetched — the activity is projected from the same assigned tasks the
+    /// feed already loads for comments — so it is deliberately <b>excluded</b> from
+    /// <see cref="Services.FeedCache.KeyFor"/> and toggling it is a client-side re-render, not a
+    /// re-fetch. Named apart from the main list's F6 (<see cref="BadgeDisplay"/>), which it is unrelated
+    /// to. A new bool defaults to false for existing configs, so no migration is needed.
+    /// </summary>
+    public bool FeedShowActivity { get; set; }
+
+    /// <summary>
     /// How the task list renders each row's Status/Priority badges (F6 cycles Icons → Text → Hidden).
     /// A cosmetic display preference, deliberately kept out of <see cref="ViewSettings"/> so it's
     /// independent of the F3 filter/sort/group view (and its <see cref="ViewSettings.IsDefault"/>).

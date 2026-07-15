@@ -500,7 +500,10 @@ public sealed class TodoApp
         // cold path below. Load runs on the UI thread, matching the store's single-threaded contract.
         if (_feedCache.LoadSnapshot(_config) is { Items.Count: > 0 } cached)
         {
-            var screen = CreateFeedScreen(cached.Items);
+            // The cache stores only the aggregated comments (#123); the recent-activity source (#117) is
+            // re-derived by the near-immediate RefreshFeed below, so the instant paint opens comments-only
+            // and activity fills in a moment later when F6 is on.
+            var screen = CreateFeedScreen(new FeedResult(cached.Items, []));
             ShowScreen(screen, static () => { });
             // Mark how stale the painted feed is (#124); the live refresh replaces it moments later.
             var age = RelativeTime.Format(DateTimeOffset.UtcNow - cached.CapturedAt);
@@ -524,8 +527,9 @@ public sealed class TodoApp
                 {
                     if (ActiveScreen is not null)
                         return;
-                    // Cache the freshly-aggregated feed so the next open paints instantly (#123).
-                    _feedCache.Save(cacheKey, feed);
+                    // Cache the freshly-aggregated comments so the next open paints instantly (#123); the
+                    // activity source (#117) is display-only and re-derived on refresh, so it isn't cached.
+                    _feedCache.Save(cacheKey, feed.Comments);
                     ShowScreen(CreateFeedScreen(feed), static () => { });
                 });
             }
@@ -545,14 +549,18 @@ public sealed class TodoApp
     /// (<see cref="AppConfig.FeedRefreshSeconds"/>, #123), independent of the dashboard task-list poll,
     /// because assembling it is far heavier.
     /// </summary>
-    private NotificationsFeedScreen CreateFeedScreen(IReadOnlyList<CommentItem> feed)
+    private NotificationsFeedScreen CreateFeedScreen(FeedResult feed)
     {
         var screen = new NotificationsFeedScreen(
-            feed, _config.FeedRefreshSeconds, showCompleted: _config.FeedShowCompleted);
+            feed.Comments, feed.Activity, _config.FeedRefreshSeconds,
+            showCompleted: _config.FeedShowCompleted, showActivity: _config.FeedShowActivity);
         screen.RefreshRequested += (_, _) => RefreshFeed(screen);
         // F12 changes what's fetched (closed tasks were never loaded while off), so unlike the F3 local
         // filter the host persists the flag and re-fetches — see ToggleFeedShowCompleted.
         screen.ToggleCompletedRequested += (_, _) => ToggleFeedShowCompleted(screen);
+        // F6 (#117) is a pure display toggle — the activity is already loaded — so the host only persists
+        // the flag and reflects it back; no re-fetch. See ToggleFeedShowActivity.
+        screen.ToggleActivityRequested += (_, _) => ToggleFeedShowActivity(screen);
         screen.OpenTaskRequested += (_, taskId) => OpenTaskDetail(taskId);
         return screen;
     }
@@ -599,10 +607,11 @@ public sealed class TodoApp
                 var feed = await _feed.LoadFeedAsync(includeClosed, mentionsOnly: false);
                 Application.Invoke(() =>
                 {
-                    // Cache the freshly-aggregated feed regardless of whether the screen is still open —
+                    // Cache the freshly-aggregated comments regardless of whether the screen is still open —
                     // the data is valid for the next open either way (#123) — under the fingerprint it was
-                    // fetched with (captured above), not the (possibly since-toggled) live one.
-                    _feedCache.Save(cacheKey, feed);
+                    // fetched with (captured above), not the (possibly since-toggled) live one. The activity
+                    // source (#117) rides along on the in-memory result but isn't persisted (display-only).
+                    _feedCache.Save(cacheKey, feed.Comments);
                     if (_screens.Contains(screen))
                     {
                         screen.UpdateFeed(feed);
@@ -663,6 +672,27 @@ public sealed class TodoApp
         screen.SetShowCompleted(on);
         Flash(on ? "Feed: showing completed tickets (F12)." : "Feed: completed tickets hidden (F12).");
         RefreshFeed(screen);
+    }
+
+    /// <summary>
+    /// Toggles the feed's F6 "show activity" — whether the recent-activity source (#117), the user's
+    /// recently-updated assigned tasks, is merged into the feed — and persists it
+    /// (<see cref="AppConfig.FeedShowActivity"/>). Unlike F12 (<see cref="ToggleFeedShowCompleted"/>) the
+    /// activity is already loaded alongside the comments, so this is a pure client-side re-render:
+    /// <see cref="NotificationsFeedScreen.SetShowActivity"/> rebuilds the rows locally with <b>no
+    /// re-fetch</b>. Runs on the UI thread (from the screen's key handler); no-op if that screen isn't
+    /// front-most.
+    /// </summary>
+    private void ToggleFeedShowActivity(NotificationsFeedScreen screen)
+    {
+        if (!ReferenceEquals(ActiveScreen, screen))
+            return;
+
+        var on = !_config.FeedShowActivity;
+        _config.FeedShowActivity = on;
+        _configStore.Save(_config);
+        screen.SetShowActivity(on);
+        Flash(on ? "Feed: showing recent activity (F6)." : "Feed: recent activity hidden (F6).");
     }
 
     /// <summary>

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using ClickUpTodo.ClickUp;
+using ClickUpTodo.Services;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
@@ -16,10 +17,12 @@ namespace ClickUpTodo.Tui.Screens;
 /// The Mentions &amp; Comments feed screen (#109). Renders the live feed (#114): recent comments and
 /// @-mentions across the user's assigned tasks, newest first, as rows in a single focusable
 /// <see cref="ListView"/> backed by a <see cref="StatusBadgeListSource"/> — mentions carry a coloured
-/// ` @ ` chip so they stand out. <c>F3</c> toggles the mentions-only filter (#113) in place; the feed
-/// is loaded once (all entries stamped) so the toggle filters locally with no re-fetch. Built on the
-/// shared screen-navigation seam (#38), not a nested <c>Dialog</c>/<c>Application.Run</c> loop, and
-/// hosts exactly one focusable pane so the #3/#38 latency invariants hold.
+/// ` @ ` chip so they stand out. <c>F3</c> toggles the mentions-only filter (#113) in place; <c>F6</c>
+/// merges in the recent-activity source (#117) — recently-updated assigned tasks, carrying a cool-blue
+/// ` ~ ` chip — which is already loaded alongside the comments, so both toggles filter locally with no
+/// re-fetch. Built on the shared screen-navigation seam (#38), not a nested
+/// <c>Dialog</c>/<c>Application.Run</c> loop, and hosts exactly one focusable pane so the #3/#38 latency
+/// invariants hold.
 /// <para>
 /// Loading and error states live on the host's status line (the feed is fetched off the UI thread
 /// before the screen is constructed, like <c>OpenDetail()</c>); this screen owns the <b>empty</b>
@@ -66,7 +69,8 @@ public sealed class NotificationsFeedScreen : Screen
         + "\n"
         + MentionCoverageNote;
 
-    private IReadOnlyList<CommentItem> _feed;
+    private IReadOnlyList<CommentItem> _comments;
+    private IReadOnlyList<ActivityItem> _activity;
     private readonly ListView _list;
     private readonly Label _emptyLabel;
     private bool _mentionsOnly;
@@ -76,9 +80,16 @@ public sealed class NotificationsFeedScreen : Screen
     /// host (see <see cref="ToggleCompletedRequested"/>); this drives the title indicator.</summary>
     private bool _showCompleted;
 
-    /// <summary>The rows currently displayed (the feed after the F3 filter), kept so Enter can map the
-    /// selected <see cref="ListView"/> index back to its <see cref="CommentItem"/> exactly as shown.</summary>
-    private IReadOnlyList<CommentItem> _rows = [];
+    /// <summary>Whether the recent-activity source (#117) is merged into the feed — the F6 toggle.
+    /// Unlike F12 this is a pure display state: the activity is already loaded alongside the comments,
+    /// so toggling it re-renders locally with no re-fetch. The host owns the persisted flag
+    /// (see <see cref="ToggleActivityRequested"/>) and reflects it back via <see cref="SetShowActivity"/>.</summary>
+    private bool _showActivity;
+
+    /// <summary>The rows currently displayed (the comments after the F3 filter, plus activity when F6 is
+    /// on), kept so Enter can map the selected <see cref="ListView"/> index back to its
+    /// <see cref="FeedEntry"/> exactly as shown.</summary>
+    private IReadOnlyList<FeedEntry> _rows = [];
 
     /// <summary>Raised when the user presses Enter on a feed row that is attributed to a task (#115).
     /// The payload is the row's <see cref="CommentItem.TaskId"/>; the host opens that task's detail
@@ -108,18 +119,32 @@ public sealed class NotificationsFeedScreen : Screen
     /// </summary>
     public event EventHandler? ToggleCompletedRequested;
 
-    /// <param name="feed">The already-fetched, mention-stamped feed (newest first).</param>
+    /// <summary>
+    /// Raised when the user presses F6 to toggle whether the recent-activity source is merged into the
+    /// feed (#117). A pure display state — the activity is already loaded — so the host only flips and
+    /// persists <see cref="Configuration.AppConfig.FeedShowActivity"/> and reflects it back via
+    /// <see cref="SetShowActivity"/>; no re-fetch, unlike <see cref="ToggleCompletedRequested"/> (F12).
+    /// </summary>
+    public event EventHandler? ToggleActivityRequested;
+
+    /// <param name="feed">The already-fetched, mention-stamped comment feed (newest first).</param>
+    /// <param name="activity">The recent-activity source — recently-updated assigned tasks, newest
+    /// first (#117). Shown only while <paramref name="showActivity"/> (F6) is on.</param>
     /// <param name="autoRefreshSeconds">Background auto-refresh cadence — the feed's own
     /// <see cref="Configuration.AppConfig.FeedRefreshSeconds"/> (#123), independent of the task list.</param>
     /// <param name="mentionsOnly">Whether the mentions-only filter starts on.</param>
     /// <param name="showCompleted">Whether the feed starts including completed-task activity (F12).</param>
+    /// <param name="showActivity">Whether the feed starts with the recent-activity source shown (F6).</param>
     public NotificationsFeedScreen(
-        IReadOnlyList<CommentItem> feed, int autoRefreshSeconds, bool mentionsOnly = false, bool showCompleted = false)
+        IReadOnlyList<CommentItem> feed, IReadOnlyList<ActivityItem> activity, int autoRefreshSeconds,
+        bool mentionsOnly = false, bool showCompleted = false, bool showActivity = false)
     {
-        _feed = feed;
+        _comments = feed;
+        _activity = activity;
         _autoRefreshSeconds = Math.Max(5, autoRefreshSeconds);
         _mentionsOnly = mentionsOnly;
         _showCompleted = showCompleted;
+        _showActivity = showActivity;
 
         // One focusable ListView fills the screen area (the shared footer #103 carries the shortcuts).
         // A single pane keeps the #3 latency model — no second focusable view.
@@ -170,6 +195,13 @@ public sealed class NotificationsFeedScreen : Screen
                 RenderFeed();
                 RequestFlash(_mentionsOnly ? "Mentions only" : "All comments");
                 break;
+            case KeyCode.F6:
+                key.Handled = true;
+                // The recent-activity source (#117) is already loaded alongside the comments, so unlike
+                // F12 this is a pure local re-filter. Ask the host to flip/persist the flag; it calls
+                // back into SetShowActivity, which re-renders — no re-fetch.
+                ToggleActivityRequested?.Invoke(this, EventArgs.Empty);
+                break;
             case KeyCode.F12:
                 key.Handled = true;
                 // Unlike F3 (a local re-filter), completed activity is never in the loaded feed when the
@@ -202,11 +234,12 @@ public sealed class NotificationsFeedScreen : Screen
     /// (or the warm-cache instant-paint→live swap, #123) doesn't slide the cursor onto a different row.
     /// Falls back to the clamped prior index when the selected comment is gone.
     /// </summary>
-    public void UpdateFeed(IReadOnlyList<CommentItem> feed)
+    public void UpdateFeed(FeedResult result)
     {
         var prevIndex = _list.SelectedItem;
         var selectedId = prevIndex is int p && p >= 0 && p < _rows.Count ? _rows[p].Id : null;
-        _feed = feed;
+        _comments = result.Comments;
+        _activity = result.Activity;
         RenderFeed(); // updates _rows to the new (filtered) rows
         var target = ResolveSelection(_rows, selectedId, prevIndex);
         if (target >= 0)
@@ -221,7 +254,7 @@ public sealed class NotificationsFeedScreen : Screen
     /// distinct by <see cref="FeedService.Aggregate"/>, so they must not collapse onto each other). Pure
     /// and unit-testable.
     /// </summary>
-    internal static int ResolveSelection(IReadOnlyList<CommentItem> rows, string? selectedId, int? previousIndex)
+    internal static int ResolveSelection(IReadOnlyList<FeedEntry> rows, string? selectedId, int? previousIndex)
     {
         if (rows.Count == 0)
             return -1;
@@ -243,7 +276,27 @@ public sealed class NotificationsFeedScreen : Screen
     public void SetShowCompleted(bool showCompleted)
     {
         _showCompleted = showCompleted;
-        Title = TitleFor(_mentionsOnly, _showCompleted);
+        Title = TitleFor(_mentionsOnly, _showCompleted, _showActivity);
+    }
+
+    /// <summary>
+    /// Reflects the new show-activity state (F6, #117) after the host has flipped and persisted the flag,
+    /// then re-renders. Unlike <see cref="SetShowCompleted"/>, this <b>does</b> rebuild the rows: the
+    /// activity is already loaded, so merging it in (or dropping it) is a pure client-side re-render with
+    /// no re-fetch. The selection follows the same entry across the rebuild. Must run on the UI thread.
+    /// </summary>
+    public void SetShowActivity(bool showActivity)
+    {
+        if (_showActivity == showActivity)
+            return;
+        _showActivity = showActivity;
+
+        var prevIndex = _list.SelectedItem;
+        var selectedId = prevIndex is int p && p >= 0 && p < _rows.Count ? _rows[p].Id : null;
+        RenderFeed();
+        var target = ResolveSelection(_rows, selectedId, prevIndex);
+        if (target >= 0)
+            _list.SelectedItem = target;
     }
 
     /// <summary>Rebuilds the list rows from the (filtered) feed and toggles the empty-state placeholder.
@@ -251,16 +304,16 @@ public sealed class NotificationsFeedScreen : Screen
     /// and bounded (<see cref="FeedService.DefaultMaxEntries"/>).</summary>
     private void RenderFeed()
     {
-        var rows = Filter(_feed, _mentionsOnly);
+        var rows = BuildEntries(_comments, _activity, _mentionsOnly, _showActivity);
         _rows = rows;
-        Title = TitleFor(_mentionsOnly, _showCompleted);
+        Title = TitleFor(_mentionsOnly, _showCompleted, _showActivity);
 
         var (text, badges, keys) = BuildRows(rows);
         _list.Source = new StatusBadgeListSource(text, badges, headerAttrs: null, searchKeys: keys);
 
         var empty = rows.Count == 0;
         _emptyLabel.Visible = empty;
-        _emptyLabel.Text = empty ? "\n" + EmptyMessage(_mentionsOnly, _feed.Count > 0) : "";
+        _emptyLabel.Text = empty ? "\n" + EmptyMessage(_mentionsOnly, _comments.Count > 0) : "";
     }
 
     /// <summary>Enter on a feed row (#115): opens the selected comment's task, or — when the selected
@@ -282,23 +335,47 @@ public sealed class NotificationsFeedScreen : Screen
     /// <summary>The task id of the row at <paramref name="index"/> in <paramref name="rows"/>, or null
     /// when the index is out of range or the row's <see cref="CommentItem.TaskId"/> is missing. Pure and
     /// unit-testable — the mapping Enter uses to decide which task (if any) to open.</summary>
-    internal static string? SelectedTaskId(IReadOnlyList<CommentItem> rows, int index)
+    internal static string? SelectedTaskId(IReadOnlyList<FeedEntry> rows, int index)
         => index >= 0 && index < rows.Count && !string.IsNullOrEmpty(rows[index].TaskId)
             ? rows[index].TaskId
             : null;
 
-    /// <summary>The feed rows to show: all of it, or only the entries that mention the current user
-    /// (#113). Pure and unit-testable.</summary>
-    internal static IReadOnlyList<CommentItem> Filter(IReadOnlyList<CommentItem> feed, bool mentionsOnly)
-        => mentionsOnly ? feed.Where(c => c.MentionsMe).ToList() : feed;
+    /// <summary>
+    /// The unified, newest-first rows to display: the comments (all of them, or — under the F3
+    /// mentions-only filter, #113 — only those that mention the current user), with the recent-activity
+    /// source (#117) merged in when <paramref name="showActivity"/> (F6) is on. Activity appears only in
+    /// the widest view: never under mentions-only (a task update isn't a mention). Sorted by
+    /// <see cref="FeedEntry.DateMs"/> descending (null last), ties broken by <see cref="FeedEntry.Id"/>
+    /// ordinal — so comment-only rendering matches the pre-#117 order exactly. Pure and unit-testable.
+    /// </summary>
+    internal static IReadOnlyList<FeedEntry> BuildEntries(
+        IReadOnlyList<CommentItem> comments, IReadOnlyList<ActivityItem> activity,
+        bool mentionsOnly, bool showActivity)
+    {
+        IEnumerable<FeedEntry> entries =
+            comments.Where(c => !mentionsOnly || c.MentionsMe).Select(FeedEntry.Of);
 
-    /// <summary>The frame title for the given filter state: the mentions-only vs all-comments base,
-    /// suffixed with <c>(+completed)</c> when completed-task activity is included (F12). Pure and
-    /// unit-testable.</summary>
-    internal static string TitleFor(bool mentionsOnly, bool showCompleted)
+        if (showActivity && !mentionsOnly)
+            entries = entries.Concat(activity.Select(FeedEntry.Of));
+
+        return entries
+            .OrderByDescending(e => e.DateMs ?? long.MinValue)
+            .ThenBy(e => e.Id, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>The frame title for the given display state: the mentions-only vs all-comments base,
+    /// suffixed with <c>(+completed)</c> when completed-task activity is included (F12) and
+    /// <c>(+activity)</c> when the recent-activity source is shown (F6) — the latter only when it's
+    /// actually visible (never under mentions-only). Pure and unit-testable.</summary>
+    internal static string TitleFor(bool mentionsOnly, bool showCompleted, bool showActivity)
     {
         var baseTitle = mentionsOnly ? "Feed — mentions only" : "Feed — mentions & comments";
-        return showCompleted ? baseTitle + " (+completed)" : baseTitle;
+        if (showCompleted)
+            baseTitle += " (+completed)";
+        if (showActivity && !mentionsOnly)
+            baseTitle += " (+activity)";
+        return baseTitle;
     }
 
     /// <summary>Which empty-state copy to show: the mentions-only placeholder when that filter is on
@@ -308,26 +385,29 @@ public sealed class NotificationsFeedScreen : Screen
         => mentionsOnly && feedHasAnyComments ? NoMentionsPlaceholder : EmptyStatePlaceholder;
 
     /// <summary>Builds the parallel arrays a <see cref="StatusBadgeListSource"/> consumes: the display
-    /// text, the per-row badge spans (a mention row carries the amber ` @ ` chip; a plain row carries
-    /// none), and the type-ahead search keys (author only). The mention colour is fixed (not a ClickUp
-    /// field colour), built here in the view layer via <see cref="StatusBadgeListSource.TryCreate"/> —
+    /// text, the per-row badge spans (a mention comment carries the amber ` @ ` chip; a recent-activity
+    /// row carries the cool-blue ` ~ ` chip; a plain comment carries none), and the type-ahead search
+    /// keys (comment author / task name). The chip colour is fixed per row-kind (not a ClickUp field
+    /// colour), built here in the view layer via <see cref="StatusBadgeListSource.TryCreate"/> —
     /// mirroring how <c>TodoApp.BuildRow</c> colours task badges from a hex string.</summary>
     internal static (ObservableCollection<string> Text,
                      IReadOnlyList<IReadOnlyList<StatusBadgeListSource.Badge>> Badges,
                      IReadOnlyList<string> Keys)
-        BuildRows(IReadOnlyList<CommentItem> comments)
+        BuildRows(IReadOnlyList<FeedEntry> entries)
     {
         var text = new ObservableCollection<string>();
-        var badges = new List<IReadOnlyList<StatusBadgeListSource.Badge>>(comments.Count);
-        var keys = new List<string>(comments.Count);
+        var badges = new List<IReadOnlyList<StatusBadgeListSource.Badge>>(entries.Count);
+        var keys = new List<string>(entries.Count);
 
-        foreach (var comment in comments)
+        foreach (var entry in entries)
         {
-            var row = FeedRowFormatter.Format(comment);
+            var (row, color) = entry.IsActivity
+                ? (FeedRowFormatter.Format(entry.Activity!), FeedRowFormatter.ActivityBadgeColor)
+                : (FeedRowFormatter.Format(entry.Comment!), FeedRowFormatter.MentionBadgeColor);
             text.Add(row.Text);
 
             var rowBadges = new List<StatusBadgeListSource.Badge>(1);
-            if (StatusBadgeListSource.TryCreate(row.MentionStart, row.MentionLength, FeedRowFormatter.MentionBadgeColor) is { } chip)
+            if (StatusBadgeListSource.TryCreate(row.MentionStart, row.MentionLength, color) is { } chip)
                 rowBadges.Add(chip);
             badges.Add(rowBadges);
 
