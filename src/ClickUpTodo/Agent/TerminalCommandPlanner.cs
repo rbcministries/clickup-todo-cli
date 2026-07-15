@@ -12,6 +12,14 @@ namespace ClickUpTodo.Agent;
 /// (<c>Get-Content -Raw</c> on Windows, <c>$(cat …)</c> on POSIX); only the file <b>path</b> ever
 /// enters a command string, never the prompt content. Argument vectors are built as arrays.
 ///
+/// The working directory is baked <b>into the command</b> (<c>Set-Location</c> on Windows,
+/// <c>cd … &amp;&amp;</c> on POSIX) as well as onto <see cref="LaunchSpec.WorkingDirectory"/>.
+/// The spec's directory only takes effect for hosts we start in-process (a direct <c>pwsh</c>); the
+/// emulators we prefer — Windows Terminal, gnome-terminal, konsole, Terminal.app via <c>osascript</c>
+/// — hand off to a pre-existing server/new login shell that ignores the launcher's cwd and would
+/// otherwise open in <c>$HOME</c>. Changing directory inside the command is what actually lands the
+/// session in the chosen directory (and lets Claude pick up that project's MCP config).
+///
 /// <paramref name="oneOff"/> selects the session mode (#94): interactive (default,
 /// <c>claude "…"</c>) or a one-off <c>claude -p "…"</c> run that executes and exits. One-off adds the
 /// <c>-p</c> flag and, on POSIX/macOS, a keep-alive so the terminal doesn't vanish before the user
@@ -48,7 +56,7 @@ public static class TerminalCommandPlanner
     private static IReadOnlyList<LaunchSpec> PlanWindows(
         Func<string, bool> exists, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
-        var command = PwshCommand(file, options, oneOff); // `& 'claude' [-p] … (Get-Content -Raw '<file>')`
+        var command = PwshCommand(file, cwd, options, oneOff); // `Set-Location …; & 'claude' [-p] … (Get-Content -Raw '<file>')`
 
         // Candidate builders keyed by the terminal they represent, in default fallback order.
         var order = new[]
@@ -100,7 +108,7 @@ public static class TerminalCommandPlanner
         if (!exists("osascript"))
             return [];
 
-        var inner = PosixCommand(file, options, oneOff); // `'claude' [-p] … "$(cat '<file>')"`
+        var inner = PosixCommand(file, cwd, options, oneOff); // `cd …; 'claude' [-p] … "$(cat '<file>')"`
         var script = $"tell application \"Terminal\" to do script \"{AppleScriptEscape(inner)}\"";
         return [new LaunchSpec("osascript", ["-e", script], cwd, "Terminal (osascript)")];
     }
@@ -110,7 +118,7 @@ public static class TerminalCommandPlanner
     private static IReadOnlyList<LaunchSpec> PlanLinux(
         Func<string, bool> exists, Func<string, string?> getEnv, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
-        var inner = PosixCommand(file, options, oneOff);
+        var inner = PosixCommand(file, cwd, options, oneOff);
         var specs = new List<LaunchSpec>();
 
         var configured = getEnv("TERMINAL");
@@ -141,25 +149,34 @@ public static class TerminalCommandPlanner
     /// <summary>
     /// PowerShell command that runs claude with the prompt read from the file via Get-Content -Raw.
     /// One-off (#94) inserts <c>-p</c> right after the executable; the PowerShell hosts already launch
-    /// with <c>-NoExit</c>, so the window stays open after a one-off run finishes.
+    /// with <c>-NoExit</c>, so the window stays open after a one-off run finishes. A non-blank
+    /// <paramref name="cwd"/> is prepended as a <c>Set-Location -LiteralPath …;</c> so the session
+    /// starts there even when the host (e.g. a <c>wt</c> tab) ignores the process working directory.
     /// </summary>
-    private static string PwshCommand(string file, TerminalLauncherOptions options, bool oneOff)
+    private static string PwshCommand(string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
         var parts = new List<string> { "&", PwshQuote(options.ClaudeExecutable) };
         if (oneOff)
             parts.Add(PwshQuote("-p"));
         parts.AddRange(options.ExtraArgs.Select(PwshQuote));
         parts.Add($"(Get-Content -Raw {PwshQuote(file)})");
-        return string.Join(" ", parts);
+        var command = string.Join(" ", parts);
+        return string.IsNullOrWhiteSpace(cwd)
+            ? command
+            : $"Set-Location -LiteralPath {PwshQuote(cwd)}; {command}";
     }
 
     /// <summary>
     /// POSIX shell command that runs claude with the prompt read from the file via $(cat …). One-off
     /// (#94) inserts <c>-p</c> right after the executable and appends a keep-alive so the terminal
     /// (Linux <c>bash -lc</c> / macOS <c>do script</c>) doesn't close before the user reads the
-    /// output — the interim terminal path until the background-run experience (#99) lands.
+    /// output — the interim terminal path until the background-run experience (#99) lands. A non-blank
+    /// <paramref name="cwd"/> is prepended as <c>cd '<dir>' &amp;&amp;</c> so the session starts there
+    /// even when the emulator opens its new shell in <c>$HOME</c> rather than the launcher's cwd;
+    /// the <c>&amp;&amp;</c> means claude only runs once the directory change succeeds, while a one-off's
+    /// keep-alive is joined with <c>;</c> so the window still stays open to show a <c>cd</c> failure.
     /// </summary>
-    private static string PosixCommand(string file, TerminalLauncherOptions options, bool oneOff)
+    private static string PosixCommand(string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
         var parts = new List<string> { PosixQuote(options.ClaudeExecutable) };
         if (oneOff)
@@ -167,6 +184,8 @@ public static class TerminalCommandPlanner
         parts.AddRange(options.ExtraArgs.Select(PosixQuote));
         parts.Add($"\"$(cat {PosixQuote(file)})\"");
         var command = string.Join(" ", parts);
+        if (!string.IsNullOrWhiteSpace(cwd))
+            command = $"cd {PosixQuote(cwd)} && {command}";
         return oneOff ? command + PosixKeepAlive : command;
     }
 
