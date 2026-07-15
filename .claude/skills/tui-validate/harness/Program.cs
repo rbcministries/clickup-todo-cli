@@ -32,7 +32,7 @@ if (Environment.GetEnvironmentVariable("E2E_VIEW") == "rich")
 var client = new ClickUpClient("fake-token", new HttpClient(new FakeClickUp(taskCount)));
 IStateStore stateStore = new JsonFileStateStore();
 var configStore = new ConfigStore(stateStore);
-var tasks = new TaskService(client, config, 1);
+var tasks = new TaskService(client, config, 1, userName: "Ben Seymour");
 var feed = new FeedService(client, tasks, config);
 var focus = new LocalFocusStore(config, configStore);
 // Isolated per-process state dir for the persistent task cache (#122), so the harness never touches
@@ -97,6 +97,10 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
             lock (_gate) body = DetailJson(path, _assignees);
         else if (path.Contains("/team/") && path.EndsWith("/task"))
             body = TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
+        else if (request.Method == HttpMethod.Post && path.Contains("/list/") && path.EndsWith("/task"))
+            // Create-task (#209/#213): echo a created task so the New Task screen's Save round-trips
+            // through the facade and closes back to the list. (Not persisted into the team-tasks list.)
+            body = """{"id":"tnew","name":"New task from Ctrl+N","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/tnew"}""";
         else if (path.Contains("/list/") && path.EndsWith("/task"))
             body = """{"tasks":[],"last_page":true}""";
         else if (path.Contains("/list/"))
