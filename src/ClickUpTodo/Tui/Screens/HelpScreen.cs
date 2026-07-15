@@ -40,7 +40,7 @@ public sealed class HelpScreen : Screen
                 + "  F4          Cycle subtasks: mine + unassigned → all → hidden (nested under their parent)\n"
                 + "  F5          Refresh now (also Ctrl+R; the detail & feed views also auto-refresh)\n"
                 + "  F6          Cycle status/priority badges (icons ○ ⚑, text, hidden)\n"
-                + "  F12         Show / hide completed tasks (closed-type; applies to subtasks too)\n"
+                + "  F12         Cycle completed: active only → + done → + done & closed (applies to subtasks too)\n"
                 + "  → / ←       Expand / collapse the selected parent's subtasks (▶ collapsed, ▼ expanded)\n"
                 + "  Ctrl+→ / ←  Expand / collapse all parents at once\n"
                 + "              (F4's 'all' state also nests subtasks not assigned to you)\n"

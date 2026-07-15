@@ -403,6 +403,62 @@ public sealed class ConfigMigrationsTests : IDisposable
         Assert.Contains("\"All\"", json); // the enum persists by name
     }
 
+    // ── v5 (#191): ShowCompleted boolean → CompletedView enum ─────────────────────────────────────────
+
+    [Theory]
+    [InlineData(null, CompletedView.Active)]     // fresh install / never carried the key → new default
+    [InlineData(false, CompletedView.WithDone)]  // pre-tri-state off preserved the historical done-visible view
+    [InlineData(true, CompletedView.All)]        // pre-tri-state on → show everything
+    public void Apply_MapsLegacyShowCompleted_OntoEnum(bool? legacy, CompletedView expected)
+    {
+        var config = new AppConfig
+        {
+            View = new ViewSettings { LegacyShowCompleted = legacy },
+        };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(expected, config.View.Completed);
+        Assert.Null(config.View.LegacyShowCompleted); // shim dropped after the one-shot migration
+    }
+
+    [Fact]
+    public void Apply_AlreadyV5_WithStrayShowCompleted_DropsIt_WithoutMigrating()
+    {
+        // A hand-added showCompleted on an already-v5 config isn't migrated (version-gated), but the
+        // deserialize-only shim is still nulled so it stops being persisted.
+        var config = new AppConfig
+        {
+            SchemaVersion = 5,
+            View = new ViewSettings { Completed = CompletedView.Active, LegacyShowCompleted = true },
+        };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(CompletedView.Active, config.View.Completed); // not migrated (already current)
+        Assert.Null(config.View.LegacyShowCompleted);
+    }
+
+    [Fact]
+    public void Load_LegacyConfigWithShowCompleted_MigratesOnDisk_AndDropsTheKey()
+    {
+        var store = new ConfigStore(_dir);
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(store.ConfigPath,
+            """{ "schemaVersion": 4, "workspaceId": "1", "personalTasksListId": "2", "view": { "filters": [], "showCompleted": false } }""");
+
+        var loaded = store.Load();
+
+        Assert.Equal(ConfigMigrations.CurrentVersion, loaded.SchemaVersion);
+        Assert.Equal(CompletedView.WithDone, loaded.View.Completed); // false preserved as done-visible
+        Assert.Null(loaded.View.LegacyShowCompleted);
+
+        store.Save(loaded);
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.DoesNotContain("showCompleted", json);
+        Assert.Contains("\"WithDone\"", json); // the enum persists by name
+    }
+
     [Fact]
     public void Load_FreshConfig_SeedsDefaultsAndIsDefault()
     {
@@ -410,6 +466,7 @@ public sealed class ConfigMigrationsTests : IDisposable
         var loaded = new ConfigStore(_dir).Load();
 
         Assert.True(loaded.View.IsDefault);
+        Assert.Equal(CompletedView.Active, loaded.View.Completed); // #191 default: hide done + closed
         Assert.Equal(["won't do", "cancelled"], StatusIsNotRules(loaded.View).Select(r => r.Value));
     }
 

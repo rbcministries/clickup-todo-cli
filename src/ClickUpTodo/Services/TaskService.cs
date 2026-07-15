@@ -102,7 +102,7 @@ public sealed class TaskService(
                 if (!string.IsNullOrEmpty(task.Id))
                     delta[task.Id] = task;
             }
-            var (merged, changed) = MergeDelta(previous, delta.Values.ToList(), keepClosed: config.View.ShowCompleted);
+            var (merged, changed) = MergeDelta(previous, delta.Values.ToList(), keepClosed: config.View.IncludesClosedTasks);
             _watermarkMs = MaxUpdatedMs(delta.Values) is { } newest ? Math.Max(watermark, newest) : watermark;
             _lastSnapshot = merged;
             return new TaskSnapshotResult(merged, changed, WasDelta: true);
@@ -192,10 +192,12 @@ public sealed class TaskService(
         // The two source fetches are independent, so the personal-list fetch overlaps assignee-id
         // resolution + the assigned fetch (#192): wall-clock is the slower of the two, not their sum.
         // WhenAll (rather than awaiting in turn) so a fault in one still observes the other.
-        // The F12 "Show Completed" toggle (#178) widens both fetches to include closed-type tasks; when
-        // off (the default) closed-type tasks are dropped server-side and TaskView hides any that still
-        // arrive (e.g. subtask anchors), so hiding is consistent at every level.
-        var includeClosed = config.View.ShowCompleted;
+        // The F12 completed view (#178/#191) widens both fetches to include closed-type tasks only in
+        // its All state; when narrower, closed-type tasks are dropped server-side and TaskView hides any
+        // that still arrive (e.g. subtask anchors) — plus done-type when in Active — so hiding is
+        // consistent at every level. done-type tasks arrive regardless of this flag, so WithDone needs no
+        // wider fetch than Active.
+        var includeClosed = config.View.IncludesClosedTasks;
         var personalFetch = client.GetListTasksAsync(config.PersonalTasksListId, includeClosed, ct);
         var assignedFetch = LoadAssignedAsync(includeClosed, ct);
         await Task.WhenAll(assignedFetch, personalFetch);
