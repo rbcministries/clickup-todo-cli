@@ -1489,21 +1489,10 @@ public sealed class TodoApp
         var task = CurrentTask();
         if (task is null)
             return;
-        // A context-parent header (a parent not assigned to me, shown only so its subtask can nest
-        // beneath it) is context, not my work — don't change it. (#46)
-        if (_contextParents.ContainsKey(task.Id))
-        {
-            Flash("This is a parent shown for context (not assigned to you) — status unchanged.");
-            return;
-        }
-        // A subtask pulled in under my parent (not in my snapshot) is context, not my work (#70/#179).
-        if (_foreignSubtasks.ContainsKey(task.Id))
-        {
-            Flash(SubtaskVisibility.IsUnassigned(task)
-                ? "This subtask isn't assigned to anyone — status unchanged."
-                : "This subtask isn't assigned to you — status unchanged.");
-            return;
-        }
+        // Quick Updates applies to any selected task, including one that isn't my own work — a context
+        // parent (#46) or a foreign subtask pulled in under my parent (#70/#179). The former ownership
+        // guards that blocked those rows were lifted in #160; only the no-list data constraint remains.
+        // The trailing "(not assigned to you)" row markers still convey the context.
         if (string.IsNullOrWhiteSpace(task.ListId))
         {
             Flash("This task has no list, so its statuses can't be loaded.");
@@ -1547,21 +1536,8 @@ public sealed class TodoApp
 
         var detail = detailScreen.Task;
         var task = _all.FirstOrDefault(t => t.Id == detail.Id) ?? TaskItemProjection.FromDetail(detail);
-        // Mirror the list path's guards so the new entry point can't write a status the sibling path
-        // blocks by design: a context-parent header (#46) or a foreign subtask pulled in under my parent
-        // (#70/#179) is context, not my work. (Lifting this for any selected task is #160.)
-        if (_contextParents.ContainsKey(task.Id))
-        {
-            Flash("This is a parent shown for context (not assigned to you) — status unchanged.");
-            return;
-        }
-        if (_foreignSubtasks.ContainsKey(task.Id))
-        {
-            Flash(SubtaskVisibility.IsUnassigned(task)
-                ? "This subtask isn't assigned to anyone — status unchanged."
-                : "This subtask isn't assigned to you — status unchanged.");
-            return;
-        }
+        // Mirror the list path (#160): Quick Updates applies to any task, including a context parent
+        // (#46) or foreign subtask (#70/#179) that isn't my own work; only the no-list guard remains.
         if (string.IsNullOrWhiteSpace(task.ListId))
         {
             Flash("This task has no list, so its statuses can't be loaded.");
@@ -1646,14 +1622,17 @@ public sealed class TodoApp
         // add/remove the user has already seen applied — silently dropping it until the next refresh.
         // Status/Priority commits (ApplyStatus/ApplyPriority) issue their writes untokened for the same
         // reason; assignees match that. The token still guards the *view's* own reconcile/revert (it
-        // re-checks IsCancellationRequested), and our row reconcile below is guarded by TaskById.
+        // re-checks IsCancellationRequested), and our row reconcile below is guarded by
+        // QuickUpdatesTaskById.
         _ = ct;
         var confirmed = kind == ToggleKind.Added
             ? await _tasks.AddAssigneeAsync(taskId, person.Id).ConfigureAwait(false)
             : await _tasks.RemoveAssigneeAsync(taskId, person.Id).ConfigureAwait(false);
         Application.Invoke(() =>
         {
-            if (TaskById(taskId) is { } t)
+            // QuickUpdatesTaskById (not TaskById) so an assignee edit on a foreign subtask / context
+            // parent — now editable (#160) — reconciles its row in place too, not just tasks in _all.
+            if (QuickUpdatesTaskById(taskId) is { } t)
                 UpdateTaskRow(t with { Assignees = confirmed }, sending: false);
         });
         return confirmed;
@@ -1662,6 +1641,13 @@ public sealed class TodoApp
     /// <summary>The current record for <paramref name="taskId"/> in the canonical snapshot, or null if
     /// it has fallen out of the working set (e.g. a background refresh dropped it).</summary>
     private TaskItem? TaskById(string taskId) => _all.FirstOrDefault(t => t.Id == taskId);
+
+    /// <summary>The current record for a Quick Updates commit: the canonical snapshot, then the visible
+    /// rows so a foreign subtask (#70/#179) or context parent (#46) — which live in <see cref="_rows"/>
+    /// but not <see cref="_all"/> — resolves too, letting Quick Updates apply to a task that isn't the
+    /// user's own work (#160). <see cref="UpdateTaskRow"/> keeps both in sync, so consecutive edits
+    /// compose regardless of which side holds the row.</summary>
+    private TaskItem? QuickUpdatesTaskById(string taskId) => TaskService.FindById(_all, _rows, taskId);
 
     // Monotonic per-field commit counters. The Quick Updates screen stays open, so the user can fire a
     // second write for the same field before the first returns; each commit stamps its generation and a
@@ -1685,7 +1671,7 @@ public sealed class TodoApp
     private void ApplyStatus(string taskId, string status, QuickUpdatesScreen screen,
         TaskDetailScreen? detailOrigin = null, IReadOnlyList<StatusOption>? statuses = null)
     {
-        var task = TaskById(taskId);
+        var task = QuickUpdatesTaskById(taskId);
         if (task is null)
         {
             // The screen hasn't moved its ✓ yet (it defers that to us), so just report and bail.
@@ -1711,7 +1697,7 @@ public sealed class TodoApp
                     if (gen != _statusCommitGen)
                         return; // a newer status commit superseded this one
                     var final = confirmed ?? status;
-                    if (TaskById(taskId) is { } t)
+                    if (QuickUpdatesTaskById(taskId) is { } t)
                         UpdateTaskRow(t with { StatusName = final }, sending: false);
                     ReconcileScreenStatus(screen, final);
                     ReflectDetailStatus(detailOrigin, final, ColorForStatus(statuses, final));
@@ -1724,7 +1710,7 @@ public sealed class TodoApp
                 {
                     if (gen != _statusCommitGen)
                         return;
-                    if (TaskById(taskId) is { } t)
+                    if (QuickUpdatesTaskById(taskId) is { } t)
                         UpdateTaskRow(t with { StatusName = previousStatus }, sending: false); // revert
                     ReconcileScreenStatus(screen, previousStatus);
                     ReflectDetailStatus(detailOrigin, previousStatus, previousColor);
@@ -1742,7 +1728,7 @@ public sealed class TodoApp
     private void ApplyPriority(string taskId, int? level, QuickUpdatesScreen screen,
         TaskDetailScreen? detailOrigin = null)
     {
-        var task = TaskById(taskId);
+        var task = QuickUpdatesTaskById(taskId);
         if (task is null)
         {
             Flash("This task is no longer in the list — priority unchanged.");
@@ -1765,7 +1751,7 @@ public sealed class TodoApp
                 {
                     if (gen != _priorityCommitGen)
                         return; // a newer priority commit superseded this one
-                    if (TaskById(taskId) is { } t)
+                    if (QuickUpdatesTaskById(taskId) is { } t)
                         UpdateTaskRow(WithPriority(t, confirmed), sending: false);
                     ReconcileScreenPriority(screen, confirmed);
                     ReflectDetailPriority(detailOrigin, confirmed);
@@ -1778,7 +1764,7 @@ public sealed class TodoApp
                 {
                     if (gen != _priorityCommitGen)
                         return;
-                    if (TaskById(taskId) is { } t)
+                    if (QuickUpdatesTaskById(taskId) is { } t)
                         UpdateTaskRow(WithPriority(t, previousLevel), sending: false); // revert
                     ReconcileScreenPriority(screen, previousLevel);
                     ReflectDetailPriority(detailOrigin, previousLevel);

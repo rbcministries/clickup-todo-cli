@@ -117,6 +117,19 @@ public sealed class StatusUpdateTests
         Assert.Null(updated[0].PriorityColor);
     }
 
+    [Fact]
+    public void ApplyPriorityChange_NoMatch_ReturnsEquivalentSnapshot()
+    {
+        // Editing a task that isn't in the canonical snapshot — a foreign subtask / context parent
+        // (#160) — must leave the snapshot untouched (the priority sibling of the status no-match test).
+        TaskItem[] tasks = [Pri("1", 2), Pri("2", 4)];
+
+        var updated = TaskService.ApplyPriorityChange(tasks, "missing", 1, "Urgent", "#f50000");
+
+        Assert.Equal(["1", "2"], updated.Select(t => t.Id));
+        Assert.Equal([2, 4], updated.Select(t => t.PriorityLevel));
+    }
+
     // ── ApplyAssigneesChange (the assignee sibling, #158) ────────────────────────
 
     private static TaskItem Asg(string id, params TaskAssignee[] assignees) => new()

@@ -405,6 +405,28 @@ public sealed class TaskService(
             : t).ToList();
 
     /// <summary>
+    /// Resolves the current record for <paramref name="taskId"/>, preferring the canonical snapshot
+    /// <paramref name="primary"/> and falling back to the visible <paramref name="rows"/> — which
+    /// include the context rows that live outside the snapshot (foreign subtasks #70/#179 and context
+    /// parents #46). Null (header) row entries are skipped; returns null when the id is in neither.
+    /// Pure and side-effect free so the Quick Updates edit-target resolution (#160) — applying an edit
+    /// to a task that isn't the user's own work — is unit-testable without a TUI. Preferring
+    /// <paramref name="primary"/> is safe because the caller keeps the snapshot and the visible rows in
+    /// sync for any edited task, so whichever side holds it carries the current (optimistic) value.
+    /// </summary>
+    public static TaskItem? FindById(
+        IReadOnlyList<TaskItem> primary, IEnumerable<TaskItem?> rows, string taskId)
+    {
+        foreach (var t in primary)
+            if (t.Id == taskId)
+                return t;
+        foreach (var r in rows)
+            if (r is not null && r.Id == taskId)
+                return r;
+        return null;
+    }
+
+    /// <summary>
     /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying
     /// <paramref name="assignees"/>, leaving every other task and the overall order untouched. Pure
     /// (the input list is not mutated), the assignee sibling of <see cref="ApplyStatusChange"/> /
