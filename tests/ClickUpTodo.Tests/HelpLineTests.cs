@@ -47,7 +47,7 @@ public sealed class HelpLineTests
     [Fact]
     public void Format_NotificationsFeed_RendersMoveMentionsHelpAndBack()
         => Assert.Equal(
-            "↑/↓ move · Enter open · F3 mentions only · F5 ↻ · F12 completed · Ctrl+E list · F1 help · Esc back",
+            "↑/↓ move · Enter open · F3 mentions only · F5 ↻ · F6 activity · F12 completed · Ctrl+E list · F1 help · Esc back",
             HelpLine.Format(HelpItemSets.NotificationsFeed));
 
     [Fact]

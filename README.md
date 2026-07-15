@@ -115,6 +115,11 @@ Press `Ctrl+E` to open a feed of recent comments and `@`-mentions across the tas
 from the comments on your **assigned** tasks — which means a mention on a task you aren't assigned to
 won't appear unless a small **per-Space ClickUp Automation** turns mentions into assignments.
 
+`F6` toggles a **recent-activity** source: your recently-updated assigned tasks (by ClickUp
+`date_updated`), merged into the feed newest-first so "what changed on my tasks" sits alongside the
+comments. It's off by default and, because ClickUp has no task-activity-history API, approximates
+activity via the last-updated time only.
+
 That automation is an optional user prerequisite the app can't set up or verify for you. See
 [docs/mention-assignee-automation.md](docs/mention-assignee-automation.md) for the exact
 trigger/condition/action, setup steps, and the caveats (per-Space, paid, not retroactive, and its

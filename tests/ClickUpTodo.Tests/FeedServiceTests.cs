@@ -191,6 +191,92 @@ public sealed class FeedServiceTests
         Assert.Equal(10, feed.Count);
     }
 
+    // ── BuildActivity (#117) ──────────────────────────────────────────────────
+
+    private static TaskItem T(string id, long? updatedMs, string name = "Task", string? statusType = "open")
+        => new() { Id = id, Name = name, StatusName = "in progress", StatusType = statusType, UpdatedMs = updatedMs };
+
+    [Fact]
+    public void BuildActivity_ProjectsTasksNewestFirst()
+    {
+        var activity = FeedService.BuildActivity(
+            new[] { T("a", 100), T("b", 300), T("c", 200) }, maxEntries: 100);
+
+        Assert.Equal(new[] { "b", "c", "a" }, activity.Select(a => a.TaskId));
+        // Ids are namespaced apart from comment ids so the merged feed can't collide.
+        Assert.All(activity, a => Assert.StartsWith(ActivityItem.IdPrefix, a.Id));
+    }
+
+    [Fact]
+    public void BuildActivity_CarriesTheTaskFieldsTheRowNeeds()
+    {
+        var activity = FeedService.BuildActivity(
+            new[] { T("t9", 100, name: "Ship it") }, maxEntries: 100);
+
+        var only = Assert.Single(activity);
+        Assert.Equal("t9", only.TaskId);
+        Assert.Equal("Ship it", only.TaskName);
+        Assert.Equal("in progress", only.StatusName);
+        Assert.Equal(100, only.UpdatedMs);
+    }
+
+    [Fact]
+    public void BuildActivity_UndatedTasksSortLast_TiesBrokenByTaskId()
+    {
+        var activity = FeedService.BuildActivity(
+            new[] { T("z", null), T("m", 100), T("a", 100), T("n", null) }, maxEntries: 100);
+
+        // Dated first (100 tie → task-id ordinal a, m), then undated (id ordinal n, z).
+        Assert.Equal(new[] { "a", "m", "n", "z" }, activity.Select(a => a.TaskId));
+    }
+
+    [Fact]
+    public void BuildActivity_CapsToTheNewestEntries()
+    {
+        var activity = FeedService.BuildActivity(
+            new[] { T("old", 1), T("mid", 2), T("new", 3) }, maxEntries: 2);
+
+        Assert.Equal(new[] { "new", "mid" }, activity.Select(a => a.TaskId));
+    }
+
+    [Fact]
+    public void BuildActivity_SkipsIdlessTasks_AndHandlesEmptyOrNonPositiveCap()
+    {
+        var withBlank = new[] { T("a", 1), T("", 2) };
+        Assert.Equal(new[] { "a" }, FeedService.BuildActivity(withBlank, maxEntries: 100).Select(a => a.TaskId));
+
+        Assert.Empty(FeedService.BuildActivity(Array.Empty<TaskItem>(), maxEntries: 100));
+        Assert.Empty(FeedService.BuildActivity(new[] { T("a", 1) }, maxEntries: 0));
+        Assert.Empty(FeedService.BuildActivity(new[] { T("a", 1) }, maxEntries: -3));
+    }
+
+    [Fact]
+    public void BuildActivity_DeDupesByTaskId_KeepingOne()
+    {
+        // Paging with subtasks=true can return the same task twice; the resulting activity ids
+        // ("activity:" + taskId) would otherwise collide and produce duplicate rows.
+        var activity = FeedService.BuildActivity(
+            new[] { T("a", 100), T("a", 100), T("b", 50) }, maxEntries: 100);
+
+        Assert.Equal(new[] { "a", "b" }, activity.Select(a => a.TaskId));
+        Assert.Single(activity, a => a.TaskId == "a");
+    }
+
+    [Fact]
+    public void BuildActivity_ExcludesCompletedTasks_WhenCompletedNotIncluded()
+    {
+        // A closed-type task can arrive as a subtask anchor even with include_closed=false; when the F12
+        // completed bound is off (includeCompleted:false) it must be dropped, mirroring TaskView.Apply.
+        var tasks = new[] { T("open", 100, statusType: "open"), T("closed", 200, statusType: "closed") };
+
+        var hidden = FeedService.BuildActivity(tasks, maxEntries: 100, includeCompleted: false);
+        Assert.Equal(new[] { "open" }, hidden.Select(a => a.TaskId));
+
+        // With the bound on (F12), the closed task's activity is included (newest-first).
+        var shown = FeedService.BuildActivity(tasks, maxEntries: 100, includeCompleted: true);
+        Assert.Equal(new[] { "closed", "open" }, shown.Select(a => a.TaskId));
+    }
+
     // ── StampMentions (#113) ──────────────────────────────────────────────────
 
     private static readonly MentionSpec BenSpec = MentionSpec.ForUser(new ClickUpUser(7, "Ben"));

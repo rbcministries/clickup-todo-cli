@@ -220,6 +220,28 @@ public sealed record CommentItem(
 }
 
 /// <summary>
+/// A "recent activity" feed entry (#117): a recently-updated assigned task, surfaced alongside the
+/// comment feed (#109) when the feed's <c>F6</c> "show activity" display state is on. Approximates
+/// per-task activity via ClickUp <c>date_updated</c> (<see cref="UpdatedMs"/>) — ClickUp has no
+/// task-activity-history endpoint — projected from the assigned tasks the feed already fetches, so it
+/// needs no new API surface. <see cref="Id"/> is prefixed (<c>"activity:" + TaskId</c>) so it can never
+/// collide with a <see cref="CommentItem.Id"/> in the merged feed's de-dup / selection tracking, and
+/// <see cref="TaskId"/> lets a feed row open the task exactly like a comment row (#115).
+/// </summary>
+public sealed record ActivityItem(
+    string Id, string TaskId, string TaskName, string? StatusName, long? UpdatedMs)
+{
+    /// <summary>The <see cref="Id"/> prefix that namespaces an activity entry apart from comment ids in
+    /// the merged feed. A comment id is a bare ClickUp id, so this prefix guarantees disjoint id spaces.</summary>
+    public const string IdPrefix = "activity:";
+
+    /// <summary>Projects a recently-updated <see cref="TaskItem"/> into an activity feed entry. The
+    /// resulting <see cref="Id"/> is <see cref="IdPrefix"/> + the task id.</summary>
+    public static ActivityItem FromTask(TaskItem task) => new(
+        IdPrefix + task.Id, task.Id, task.Name, task.StatusName, task.UpdatedMs);
+}
+
+/// <summary>
 /// The full detail of a single task, fetched on demand for the detail view (issue #17). Richer than
 /// <see cref="TaskItem"/>: it carries the description, tags, assignees, dates, priority and custom
 /// fields. Shaped to also seed the agent-dispatch prompt composer (#24).
