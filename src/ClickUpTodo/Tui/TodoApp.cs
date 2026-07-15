@@ -244,6 +244,18 @@ public sealed class TodoApp
     // loop runs fetches strictly one at a time).
     private int _deltaPollsSinceFullLoad;
 
+    /// <summary>Minimum age between workspace list-walk passes (#236): the hierarchy changes on human
+    /// timescales, so ~30 min bounds staleness without spending the walk's round-trips every poll.
+    /// A minimum age, not an exact period — the walk runs on the first refresh cycle at or after it
+    /// (see <see cref="FetchCadenceGate"/>).</summary>
+    internal static readonly TimeSpan WorkspaceListWalkMinAge = TimeSpan.FromMinutes(30);
+
+    private const string WorkspaceListWalkGroup = "workspace-lists";
+
+    // Per-group cadence gate (#246 ADR): lets slow-cadence work ride the existing refresh loop
+    // instead of adding timers or a scheduler. Today's only group is the workspace list walk.
+    private readonly FetchCadenceGate _cadence = new();
+
     /// <summary>
     /// Background fetch for the refresh loop: loads the task snapshot — incrementally on background
     /// polls, in full on the initial load, a manual refresh, or the periodic resync (#194) — and, when
@@ -259,12 +271,26 @@ public sealed class TodoApp
         var snapshot = await _tasks.LoadSnapshotAsync(preferDelta, ct);
         _deltaPollsSinceFullLoad = snapshot.WasDelta ? _deltaPollsSinceFullLoad + 1 : 0;
 
+        // Snapshot-INDEPENDENT work first (#246 ADR): the workspace list walk (#236) is gated on its
+        // own minimum age, never on the snapshot — and is decided before the empty-delta early
+        // return below (which only skips snapshot-DERIVED resolvers), so a quiet workspace can't
+        // starve it. Initial/Manual force it due, matching "manual is always full" (#194). Mid-pass
+        // the walk stays due every cycle (MarkRan fires only on pass completion), which is what
+        // spreads a large workspace's walk across cycles instead of bursting it.
+        var walkFetch = kind != RefreshKind.Poll || _cadence.IsDue(WorkspaceListWalkGroup, WorkspaceListWalkMinAge)
+            ? RunWorkspaceListWalkStepAsync(ct)
+            : Task.FromResult(false);
+
         // A provably-empty delta means the world hasn't changed: keep the previous resolver results
         // (context parents / foreign subtasks / list colors) instead of re-spending their round-trips.
         // Anything that changes what the resolvers should see (F3/F4/grouping edits) triggers a manual
         // refresh, which is never a delta.
         if (snapshot is { WasDelta: true, Changed: false })
+        {
+            if (await walkFetch)
+                _cadence.MarkRan(WorkspaceListWalkGroup);
             return snapshot.Tasks;
+        }
 
         var tasks = snapshot.Tasks;
 
@@ -288,8 +314,9 @@ public sealed class TodoApp
             ? _tasks.ResolveListColorsAsync(tasks.Select(t => t.ListId ?? ""), ct)
             : Task.FromResult(EmptyListColors);
 
-        // WhenAll (rather than awaiting in turn) so a fault in one resolver still observes the others.
-        await Task.WhenAll(parentsFetch, foreignFetch, colorsFetch);
+        // WhenAll (rather than awaiting in turn) so a fault in one resolver still observes the others;
+        // the walk step joins the batch (#246 ADR), so a due walk costs the cycle max, not sum.
+        await Task.WhenAll(parentsFetch, foreignFetch, colorsFetch, walkFetch);
 
         _contextParents = await parentsFetch;
         var foreign = await foreignFetch;
@@ -299,7 +326,37 @@ public sealed class TodoApp
             : foreign.Subtasks.ToDictionary(t => t.Id, StringComparer.Ordinal);
         _foreignSubtasksTruncated = foreign.Truncated;
         _listColors = await colorsFetch;
+        if (await walkFetch)
+            _cadence.MarkRan(WorkspaceListWalkGroup);
         return tasks;
+    }
+
+    /// <summary>
+    /// One bounded step of the workspace list walk (#236), wrapped best-effort: the walk only feeds
+    /// a lookaside cache, so its failure must not surface as "Refresh failed" when the task rows and
+    /// resolvers were fine. A failed step reports the pass complete so the gate is stamped — per-group
+    /// error backoff (#246 ADR): the next attempt waits the walk's full minimum age instead of
+    /// retrying at poll cadence. Returns whether to stamp the cadence gate.
+    /// </summary>
+    private async Task<bool> RunWorkspaceListWalkStepAsync(CancellationToken ct)
+    {
+        try
+        {
+            return (await _tasks.ResolveWorkspaceListsAsync(ct)).PassComplete;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // genuine shutdown — let the refresh loop's own handling see it
+        }
+        catch (Exception ex)
+        {
+            // Everything else backs off — including an HttpClient timeout, which surfaces as a
+            // (Task)CanceledException with our ct UNSIGNALLED (the same trap RefreshService.RunAsync
+            // filters for): rethrown, it would fail the whole cycle as "Refresh failed" even though
+            // the snapshot and resolvers succeeded.
+            Debug.WriteLine($"Workspace list walk failed (backing off to its next window): {ex}");
+            return true;
+        }
     }
 
     // Shared "feature off / nothing found" result for the foreign-subtask resolver above.
