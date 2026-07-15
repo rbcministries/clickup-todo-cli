@@ -402,6 +402,12 @@ public sealed class TaskService(
     public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default)
         => client.CreateTaskCommentAsync(taskId, text, ct);
 
+    /// <summary>Writes a task's plain-text description (#217, over the #211 facade) and returns the
+    /// server-confirmed value so the detail view can reflect it without a manual refresh. Pass <c>""</c>
+    /// to clear the description.</summary>
+    public Task<string?> SetTaskDescriptionAsync(string taskId, string description, CancellationToken ct = default)
+        => client.SetTaskDescriptionAsync(taskId, description, ct);
+
     /// <summary>
     /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying
     /// <paramref name="newStatus"/>, leaving every other task and the overall order untouched. Pure
