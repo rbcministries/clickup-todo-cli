@@ -54,6 +54,62 @@ public static class SubtaskViewExtensions
     };
 }
 
+/// <summary>
+/// The three-state "Show Completed" view cycled by F12 (#191), superseding the earlier
+/// <c>ShowCompleted</c> boolean (#178). F12 advances <see cref="Active"/> -> <see cref="WithDone"/>
+/// -> <see cref="All"/> -> … (see <see cref="CompletedViewExtensions.Next"/>). "Completed" is scoped
+/// strictly to ClickUp's status <c>type</c> (<c>done</c>/<c>closed</c>), not user-named statuses.
+/// </summary>
+public enum CompletedView
+{
+    /// <summary>Only active work: both <c>done</c>-type and <c>closed</c>-type tasks are hidden (the
+    /// default, #191). This hides more than the pre-#178 top-level view did — <c>done</c>-type tasks
+    /// were previously visible — because the server returns <c>done</c>-type tasks regardless of
+    /// <c>include_closed</c>, so the extra hiding is client-side.</summary>
+    Active,
+
+    /// <summary>Include <c>done</c>-type tasks; still hide <c>closed</c>-type. Matches the app's
+    /// historical top-level default (closed dropped server-side, done shown) — the migration target for
+    /// a pre-tri-state <c>ShowCompleted == false</c> config.</summary>
+    WithDone,
+
+    /// <summary>Include everything: both <c>done</c>-type and <c>closed</c>-type. The only state whose
+    /// fetch must widen to <c>include_closed=true</c> (see <see cref="ViewSettings.IncludesClosedTasks"/>);
+    /// the migration target for <c>ShowCompleted == true</c>.</summary>
+    All,
+}
+
+/// <summary>Cycle order and display text for <see cref="CompletedView"/> (F12, #191). Pure and
+/// unit-testable, mirroring <see cref="SubtaskViewExtensions"/>.</summary>
+public static class CompletedViewExtensions
+{
+    /// <summary>The next state in the F12 cycle: Active -> WithDone -> All -> Active, so pressing F12
+    /// walks default → + done → + done &amp; closed and wraps.</summary>
+    public static CompletedView Next(this CompletedView state) => state switch
+    {
+        CompletedView.Active => CompletedView.WithDone,
+        CompletedView.WithDone => CompletedView.All,
+        _ => CompletedView.Active,
+    };
+
+    /// <summary>The transient status-line description shown when F12 lands on <paramref name="state"/>.</summary>
+    public static string Describe(this CompletedView state) => state switch
+    {
+        CompletedView.Active => "Completed: active only — done & closed hidden (F12).",
+        CompletedView.WithDone => "Completed: showing done (F12).",
+        _ => "Completed: showing done & closed (F12).",
+    };
+
+    /// <summary>A compact frame-title flag for the active completed view, or null in the default
+    /// (<see cref="CompletedView.Active"/>) state.</summary>
+    public static string? TitleFlag(this CompletedView state) => state switch
+    {
+        CompletedView.WithDone => "+done",
+        CompletedView.All => "+done & closed",
+        _ => null,
+    };
+}
+
 /// <summary>A task attribute usable for filtering, sorting, and grouping the list (F3).</summary>
 public enum TaskField
 {
@@ -167,14 +223,35 @@ public sealed class ViewSettings
     public bool? LegacyShowAllSubtasks { get; set; }
 
     /// <summary>
-    /// When true, completed (ClickUp <c>closed</c>-type) tasks are fetched and shown; when false (the
-    /// default) they're hidden — the explicit F12 "Show Completed" toggle (#178). Off matches the app's
-    /// historical behaviour (closed-type tasks dropped server-side via <c>IncludeClosed=false</c>) and
-    /// additionally hides completed <em>subtasks</em> that were fetched as chain-integrity anchors. The
-    /// toggle applies consistently to top-level tasks and subtasks and composes with the F3 status
-    /// filters. A new field defaults to false for existing configs, so no migration is needed.
+    /// The three-state "Show Completed" view cycled by F12 (#191): <see cref="CompletedView.Active"/>
+    /// (hide done + closed — the default), <see cref="CompletedView.WithDone"/> (show done, hide
+    /// closed), or <see cref="CompletedView.All"/> (show everything). The single source of truth,
+    /// superseding the pre-#178 <c>ShowCompleted</c> boolean (kept below as a deserialize-only migration
+    /// shim). Scoped strictly to ClickUp's status <c>type</c>, so it composes with — rather than
+    /// duplicating — the F3 <c>Status IS NOT</c> filters, and applies consistently to top-level tasks
+    /// and pulled-in subtasks. Persisted by name via the enum-as-string converter.
     /// </summary>
-    public bool ShowCompleted { get; set; }
+    public CompletedView Completed { get; set; } = CompletedView.Active;
+
+    /// <summary>
+    /// True only in <see cref="CompletedView.All"/> — the one state whose fetch must widen to
+    /// <c>include_closed=true</c>. <c>done</c>-type tasks are returned regardless of that flag, so the
+    /// Active↔WithDone difference is a pure client-side re-filter with no fetch impact; only reaching
+    /// <see cref="CompletedView.All"/> needs the server to return <c>closed</c>-type tasks. Drives both
+    /// the full-load fetch flag and the delta merge's keep-closed (#191). Read-only; not persisted.
+    /// </summary>
+    [JsonIgnore]
+    public bool IncludesClosedTasks => Completed == CompletedView.All;
+
+    /// <summary>Legacy boolean "Show Completed" setting (#178, pre-#191 tri-state), retained only as a
+    /// <b>deserialize-only</b> migration shim (like <see cref="LegacyShowSubtasks"/>):
+    /// <see cref="ConfigMigrations"/> reads a saved <c>showCompleted</c> on load, folds it into
+    /// <see cref="Completed"/> (<c>false</c> → <see cref="CompletedView.WithDone"/> to preserve the
+    /// historical done-visible view, <c>true</c> → <see cref="CompletedView.All"/>), then nulls it so
+    /// it's never written again.</summary>
+    [JsonPropertyName("showCompleted")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacyShowCompleted { get; set; }
 
     /// <summary>
     /// The literal filter value that means "the current app user" for an <see cref="TaskField.Assignee"/>
@@ -212,7 +289,8 @@ public sealed class ViewSettings
     {
         get
         {
-            if (SortField is not null || GroupField is not null || Subtasks != SubtaskView.Hidden || ShowCompleted)
+            if (SortField is not null || GroupField is not null || Subtasks != SubtaskView.Hidden
+                || Completed != CompletedView.Active)
                 return false;
             if (Filters.Count != 1 + DefaultExcludedStatuses.Count)
                 return false;

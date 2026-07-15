@@ -125,24 +125,47 @@ public static class TaskFieldInfo
 public static class TaskView
 {
     /// <summary>
-    /// The ClickUp status <c>type</c> that marks a task completed for the F12 "Show Completed" toggle
-    /// (#178): ClickUp's terminal <c>closed</c> type — exactly what a task fetch with
-    /// <c>IncludeClosed=false</c> drops server-side. Scoped to <c>closed</c> so the toggle's off state
-    /// matches the app's historical behaviour; a broader "done"/custom-complete definition is a
-    /// follow-up. Case-insensitive; a task with no mapped status type is never treated as completed.
+    /// ClickUp's terminal <c>closed</c> status <c>type</c> — exactly what a task fetch with
+    /// <c>IncludeClosed=false</c> drops server-side. The narrowest "completed" definition; the feed's
+    /// own (bi-state) F12 treats this as completed, and the list's tri-state F12 builds on it via
+    /// <see cref="IsHiddenByCompletedView"/>. Case-insensitive; a task with no mapped status type is
+    /// never treated as closed.
     /// </summary>
     public static bool IsCompleted(TaskItem task)
         => string.Equals(task.StatusType, "closed", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// ClickUp's <c>done</c> status <c>type</c> — a "finished but not archived" state the server returns
+    /// <em>regardless</em> of <c>include_closed</c>. Distinct from <see cref="IsCompleted"/> (closed):
+    /// the list's tri-state F12 (#191) hides done in <see cref="CompletedView.Active"/> but reveals it in
+    /// <see cref="CompletedView.WithDone"/>. Case-insensitive.
+    /// </summary>
+    public static bool IsDone(TaskItem task)
+        => string.Equals(task.StatusType, "done", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The list's tri-state F12 hide predicate (#191): in <see cref="CompletedView.All"/> nothing is
+    /// hidden; in <see cref="CompletedView.WithDone"/> only <c>closed</c>-type is hidden; in the default
+    /// <see cref="CompletedView.Active"/> both <c>done</c>- and <c>closed</c>-type are hidden. The single
+    /// completion gate, so top-level tasks and pulled-in subtasks hide consistently.
+    /// </summary>
+    public static bool IsHiddenByCompletedView(TaskItem task, CompletedView view) => view switch
+    {
+        CompletedView.All => false,
+        CompletedView.WithDone => IsCompleted(task),
+        _ => IsCompleted(task) || IsDone(task),
+    };
+
     /// <summary>Filters, sorts, then groups <paramref name="tasks"/> per <paramref name="settings"/>.
-    /// When <see cref="ViewSettings.ShowCompleted"/> is off (the default), completed
-    /// (<see cref="IsCompleted"/>) tasks are dropped after the F3 filters — the single place list
-    /// visibility is decided, so both top-level tasks and pulled-in subtasks are hidden consistently (#178).</summary>
+    /// Unless <see cref="ViewSettings.Completed"/> is <see cref="CompletedView.All"/>, tasks hidden by
+    /// the active completed view (<see cref="IsHiddenByCompletedView"/>) are dropped after the F3
+    /// filters — the single place list visibility is decided, so both top-level tasks and pulled-in
+    /// subtasks are hidden consistently (#178/#191).</summary>
     public static IReadOnlyList<TaskGroup> Apply(IEnumerable<TaskItem> tasks, ViewSettings settings)
     {
         var filtered = Filter(tasks, settings.Filters);
-        if (!settings.ShowCompleted)
-            filtered = filtered.Where(t => !IsCompleted(t)).ToList();
+        if (settings.Completed != CompletedView.All)
+            filtered = filtered.Where(t => !IsHiddenByCompletedView(t, settings.Completed)).ToList();
         var sorted = Sort(filtered, settings.SortField, settings.SortDirection);
         return Group(sorted, settings.GroupField);
     }

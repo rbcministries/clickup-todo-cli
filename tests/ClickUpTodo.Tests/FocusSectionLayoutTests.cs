@@ -265,54 +265,78 @@ public sealed class FocusSectionLayoutTests
         Assert.Equal(Pins("fp"), s.NestedSubtaskIds);
     }
 
-    // ── Show Completed toggle (F12, #178) ────────────────────────────────────
+    // ── Completed view (F12, #178/#191) ──────────────────────────────────────
 
     private static TaskItem Sub(string id, string parent, string? statusType = null)
         => new() { Id = id, Name = id, ParentId = parent, StatusType = statusType };
 
     [Fact]
-    public void ShowCompletedOff_CompletedInSnapshotSubtask_NotNestedUnderPin()
+    public void ActiveView_CompletedInSnapshotSubtask_NotNestedUnderPin()
     {
         // The leak this guards: a closed-type subtask (kept server-side for chain integrity) that is
-        // in-snapshot and whose parent is pinned must not nest under the pin when Show Completed is off.
+        // in-snapshot and whose parent is pinned must not nest under the pin in the Active view.
         TaskItem[] all = [Task("p"), Sub("c", parent: "p", statusType: "closed"), Sub("o", parent: "p", statusType: "open")];
 
-        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, includeCompleted: false);
+        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, completed: CompletedView.Active);
 
         Assert.Equal(["p", "o"], Ids(s));           // completed "c" dropped; open "o" still nests
         Assert.Equal(Pins("o"), s.NestedSubtaskIds);
     }
 
     [Fact]
-    public void ShowCompletedOn_CompletedInSnapshotSubtask_NestsUnderPin()
+    public void ActiveView_DoneInSnapshotSubtask_NotNestedUnderPin()
+    {
+        // #191: the Active view also gates done-type subtasks, not just closed.
+        TaskItem[] all = [Task("p"), Sub("d", parent: "p", statusType: "done"), Sub("o", parent: "p", statusType: "open")];
+
+        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, completed: CompletedView.Active);
+
+        Assert.Equal(["p", "o"], Ids(s));           // done "d" dropped in Active
+        Assert.Equal(Pins("o"), s.NestedSubtaskIds);
+    }
+
+    [Fact]
+    public void WithDoneView_DoneNests_ClosedDropped()
+    {
+        // #191: WithDone reveals done-type subtasks but still gates closed-type.
+        TaskItem[] all = [Task("p"), Sub("d", parent: "p", statusType: "done"), Sub("c", parent: "p", statusType: "closed")];
+
+        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, completed: CompletedView.WithDone);
+
+        Assert.Equal(["p", "d"], Ids(s));           // done "d" nests; closed "c" dropped
+        Assert.Equal(Pins("d"), s.NestedSubtaskIds);
+    }
+
+    [Fact]
+    public void AllView_CompletedInSnapshotSubtask_NestsUnderPin()
     {
         TaskItem[] all = [Task("p"), Sub("c", parent: "p", statusType: "closed")];
 
-        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, includeCompleted: true);
+        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, completed: CompletedView.All);
 
         Assert.Equal(["p", "c"], Ids(s));
         Assert.Equal(Pins("c"), s.NestedSubtaskIds);
     }
 
     [Fact]
-    public void ShowCompletedOff_CompletedForeignSubtask_NotNestedUnderPin()
+    public void ActiveView_CompletedForeignSubtask_NotNestedUnderPin()
     {
         TaskItem[] all = [Task("p")];
         TaskItem[] foreign = [Sub("fc", parent: "p", statusType: "closed")];
 
-        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, foreignSubtasks: foreign, includeCompleted: false);
+        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, foreignSubtasks: foreign, completed: CompletedView.Active);
 
         Assert.Equal(["p"], Ids(s));
         Assert.Empty(s.NestedSubtaskIds);
     }
 
     [Fact]
-    public void ShowCompletedOff_PinnedCompletedTask_StillShows()
+    public void ActiveView_PinnedCompletedTask_StillShows()
     {
-        // Explicit pins don't vanish: a pinned task that is itself completed stays visible even when off.
+        // Explicit pins don't vanish: a pinned task that is itself completed stays visible even in Active.
         TaskItem[] all = [new() { Id = "p", Name = "p", StatusType = "closed" }];
 
-        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, includeCompleted: false);
+        var s = FocusSectionLayout.Build(all, Pins("p"), nest: true, sortField: null, SortDirection.Ascending, completed: CompletedView.Active);
 
         Assert.Equal(["p"], Ids(s));
     }

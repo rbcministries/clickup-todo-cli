@@ -142,6 +142,9 @@ public sealed class FilterSortGroupScreen : Screen
                 // Preserve the F4 subtasks view, which this screen doesn't edit (#179) — otherwise saving
                 // the F3 view would silently reset subtasks to Hidden (and, since #68, flip IsDefault).
                 Subtasks = current.Subtasks,
+                // Likewise preserve the F12 completed view (#191): this screen doesn't edit it, and
+                // reconstructing ViewSettings without it would silently reset it to Active on any F3 save.
+                Completed = current.Completed,
             };
             Close();
         };

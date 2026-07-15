@@ -142,6 +142,8 @@ public sealed class ViewSettingsConfigTests : IDisposable
         Assert.False(new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()] }.IsDefault); // assignee alone (missing exclusions)
         Assert.False(new ViewSettings { Filters = DefaultFilters(), Subtasks = SubtaskView.MineAndUnassigned }.IsDefault);
         Assert.False(new ViewSettings { Filters = DefaultFilters(), Subtasks = SubtaskView.All }.IsDefault); // #179 F4 states
+        Assert.False(new ViewSettings { Filters = DefaultFilters(), Completed = CompletedView.WithDone }.IsDefault); // #191 F12 states
+        Assert.False(new ViewSettings { Filters = DefaultFilters(), Completed = CompletedView.All }.IsDefault);
         Assert.False(new ViewSettings { Filters = DefaultFilters(), GroupField = TaskField.List }.IsDefault);
         // An extra rule beyond the default set.
         Assert.False(new ViewSettings
@@ -161,7 +163,12 @@ public sealed class ViewSettingsConfigTests : IDisposable
         var store = new ConfigStore(_dir);
         store.Save(new AppConfig
         {
-            View = new ViewSettings { SortField = TaskField.LastActivity, GroupField = TaskField.List },
+            View = new ViewSettings
+            {
+                SortField = TaskField.LastActivity,
+                GroupField = TaskField.List,
+                Completed = CompletedView.WithDone,
+            },
         });
 
         var json = File.ReadAllText(store.ConfigPath);
@@ -170,6 +177,9 @@ public sealed class ViewSettingsConfigTests : IDisposable
 
         Assert.Equal("LastActivity", view.GetProperty("sortField").GetString());
         Assert.Equal("List", view.GetProperty("groupField").GetString());
+        Assert.Equal("WithDone", view.GetProperty("completed").GetString());
+        // The legacy showCompleted shim is deserialize-only — never written back.
+        Assert.False(view.TryGetProperty("showCompleted", out _));
     }
 
     public void Dispose()

@@ -10,7 +10,7 @@ namespace ClickUpTodo.Configuration;
 public static class ConfigMigrations
 {
     /// <summary>The version an up-to-date config carries once all migrations have run.</summary>
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 
     /// <summary>Applies any migrations the config hasn't seen yet, then stamps it current.</summary>
     public static void Apply(AppConfig config)
@@ -62,6 +62,16 @@ public static class ConfigMigrations
         config.View.LegacyShowSubtasks = null;
         config.View.LegacyShowAllSubtasks = null;
 
+        // v5 (#191): the ShowCompleted boolean (#178) became the three-state CompletedView (F12 cycle).
+        // Fold a saved value onto the enum so an existing user's completed view is preserved;
+        // version-gated so a user who later returns to Active isn't re-seeded.
+        if (config.SchemaVersion < 5)
+            MigrateCompletedView(config.View);
+
+        // The ShowCompleted shim is deserialize-only: null it regardless of version so a stray
+        // showCompleted key (e.g. hand-added to an already-v5 config) is dropped rather than re-persisted.
+        config.View.LegacyShowCompleted = null;
+
         config.SchemaVersion = CurrentVersion;
     }
 
@@ -78,6 +88,22 @@ public static class ConfigMigrations
             view.Subtasks = view.LegacyShowAllSubtasks == true
                 ? SubtaskView.All
                 : SubtaskView.MineAndUnassigned;
+    }
+
+    /// <summary>
+    /// Maps the legacy boolean "Show Completed" (#178) onto <see cref="ViewSettings.Completed"/> (#191).
+    /// The pre-tri-state toggle off (the saved default) hid only <c>closed</c>-type and left
+    /// <c>done</c>-type visible — exactly <see cref="CompletedView.WithDone"/>; on showed everything —
+    /// <see cref="CompletedView.All"/>. Only the boolean's presence drives the mapping: a saved
+    /// <c>false</c> (written by any post-#178 run) preserves that user's done-visible view, and a saved
+    /// <c>true</c> preserves the show-all view. An <b>absent</b> value (a fresh install, or a config that
+    /// never carried the key) leaves the enum at its <see cref="CompletedView.Active"/> default — the new
+    /// default that hides done + closed. The shim is nulled by the caller.
+    /// </summary>
+    private static void MigrateCompletedView(ViewSettings view)
+    {
+        if (view.LegacyShowCompleted is { } legacy)
+            view.Completed = legacy ? CompletedView.All : CompletedView.WithDone;
     }
 
     private static void MigratePromptPreamble(AgentDispatchSettings dispatch)
