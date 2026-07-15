@@ -16,6 +16,16 @@ public sealed class TaskCacheTests : IDisposable
 
     private JsonFileStateStore Store() => new(_dir);
 
+    /// <summary>A TimeProvider whose clock only advances when the test moves it.</summary>
+    private sealed class FakeClock(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    private static FakeClock NewClock() => new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static AppConfig Config(string workspace = "ws-1", string list = "list-1", ViewSettings? view = null)
         => new()
         {
@@ -132,6 +142,93 @@ public sealed class TaskCacheTests : IDisposable
         });
 
         Assert.Null(new TaskCache(store).Load(config));
+    }
+
+    [Fact]
+    public void Load_WhenPriorSchemaVersion_ReturnsNull()
+    {
+        // The #124 bump (1 → 2, adding the capture timestamp) must discard a pre-#124 v1 document rather
+        // than paint it with a fabricated (zero) age.
+        var store = Store();
+        var config = Config();
+        store.Save(StateKeys.Tasks, new TaskCacheDocument
+        {
+            SchemaVersion = 1,
+            Key = TaskCache.KeyFor(config),
+            Tasks = [Task("t1", "First")],
+        });
+
+        Assert.Null(new TaskCache(store).Load(config));
+    }
+
+    // --- staleness / TTL / eviction (#124) -------------------------------------------------------
+
+    [Fact]
+    public void LoadSnapshot_ReturnsTheCaptureTime()
+    {
+        var clock = NewClock();
+        var store = Store();
+        var config = Config();
+        new TaskCache(store, clock).Save(config, [Task("t1", "First")]);
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+        var snapshot = new TaskCache(store, clock).LoadSnapshot(config);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("t1", snapshot!.Items.Single().Id);
+        // Captured at the clock's start; five minutes have since elapsed.
+        Assert.Equal(TimeSpan.FromMinutes(5), clock.GetUtcNow() - snapshot.CapturedAt);
+    }
+
+    [Fact]
+    public void Load_WhenWithinMaxAge_Hits()
+    {
+        var clock = NewClock();
+        var store = Store();
+        var config = Config();
+        var maxAge = TimeSpan.FromDays(14);
+        new TaskCache(store, clock, maxAge).Save(config, [Task("t1", "First")]);
+
+        clock.Advance(maxAge - TimeSpan.FromSeconds(1)); // just inside the window
+        var loaded = new TaskCache(store, clock, maxAge).Load(config);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("t1", loaded!.Single().Id);
+    }
+
+    [Fact]
+    public void Load_WhenOlderThanMaxAge_ReturnsNullAndPrunesTheStaleDocument()
+    {
+        var clock = NewClock();
+        var store = Store();
+        var config = Config();
+        var maxAge = TimeSpan.FromDays(14);
+        new TaskCache(store, clock, maxAge).Save(config, [Task("t1", "First")]);
+
+        clock.Advance(maxAge + TimeSpan.FromSeconds(1)); // just past the window
+        var loaded = new TaskCache(store, clock, maxAge).Load(config);
+
+        Assert.Null(loaded);
+        Assert.False(store.Exists(StateKeys.Tasks)); // self-pruned, not left to linger
+    }
+
+    [Fact]
+    public void Load_WhenTimestampIsOutOfRange_ReturnsNullAndPrunes()
+    {
+        // A hand-tampered file with a nonsense timestamp must degrade to a miss (and get pruned), never
+        // throw on the pre-UI-loop load path.
+        var store = Store();
+        var config = Config();
+        store.Save(StateKeys.Tasks, new TaskCacheDocument
+        {
+            SchemaVersion = TaskCache.CurrentSchemaVersion,
+            Key = TaskCache.KeyFor(config),
+            CapturedAtMs = long.MaxValue,
+            Tasks = [Task("t1", "First")],
+        });
+
+        Assert.Null(new TaskCache(store).Load(config));
+        Assert.False(store.Exists(StateKeys.Tasks));
     }
 
     // --- supersede / clear -----------------------------------------------------------------------
