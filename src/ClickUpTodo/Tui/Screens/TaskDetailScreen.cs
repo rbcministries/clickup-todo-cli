@@ -684,11 +684,12 @@ public sealed class TaskDetailScreen : Screen
         }
 
         // Ctrl+E opens the description editor (#217), stacked as a bottom-anchored overlay like the
-        // comment composer. Same chord shape; inert while the Dispatch prompt is open or when no write
-        // callback was supplied (a non-interactive host). The read-only panes never need Ctrl+E, so
-        // pre-empting it is safe. The editor owns the keyboard once shown (the guard at the top of this
-        // handler), so a second Ctrl+E inside it is a no-op.
-        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.E && !_promptBox.Visible && _setDescriptionAsync is not null)
+        // comment composer. Same chord shape; inert while the Dispatch prompt is open, while a prior
+        // save is still in flight (so a completing save can't force-close a freshly reopened editor and
+        // lose its draft), or when no write callback was supplied (a non-interactive host). The
+        // read-only panes never need Ctrl+E, so pre-empting it is safe. The editor owns the keyboard
+        // once shown (the guard at the top of this handler), so a second Ctrl+E inside it is a no-op.
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.E && !_promptBox.Visible && !_savingDescription && _setDescriptionAsync is not null)
         {
             key.Handled = true;
             ShowDescriptionEditor();
@@ -1230,7 +1231,9 @@ public sealed class TaskDetailScreen : Screen
     /// reusing the Dispatch pane's clamp), shows it and focuses the editor.</summary>
     private void ShowDescriptionEditor()
     {
-        if (_descriptionBox.Visible)
+        // Don't reopen over an in-flight save: its continuation would close this editor and discard the
+        // draft. The Ctrl+E opener guards this too; this is defence in depth for any future caller.
+        if (_descriptionBox.Visible || _savingDescription)
             return;
         _descriptionEditor.Text = DescriptionEditorModel.Seed(_task.Description);
         _descriptionPendingDiscard = false;
@@ -1277,8 +1280,15 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     private void SaveDescription()
     {
-        if (_savingDescription || _setDescriptionAsync is null)
+        if (_setDescriptionAsync is null)
             return;
+        if (_savingDescription)
+        {
+            // A save is already in flight; ignore the re-press but acknowledge it rather than silently
+            // no-op'ing, so a user mashing Save/Ctrl+Enter gets feedback.
+            RequestFlash("Still saving…");
+            return;
+        }
         var raw = _descriptionEditor.Text?.ToString();
         if (!DescriptionEditorModel.IsDirty(_task.Description, raw))
         {
