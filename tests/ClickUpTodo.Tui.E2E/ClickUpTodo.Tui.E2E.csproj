@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Not an xunit project: this is the PTY harness host driven by the tui-validate skill's
+         Python checks, not by `dotnet test`. It builds with the solution so main-project API
+         drift breaks the build here instead of surfacing later as a confusing PTY symptom. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Relative to this file: repo root is two levels up (tests/ClickUpTodo.Tui.E2E). -->
+    <ProjectReference Include="../../src/ClickUpTodo/ClickUpTodo.csproj" />
+  </ItemGroup>
+</Project>
