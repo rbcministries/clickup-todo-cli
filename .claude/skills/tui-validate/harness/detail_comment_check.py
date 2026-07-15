@@ -118,6 +118,25 @@ try:
     # The one posted comment is still there; nothing else was added.
     assert POSTED in after_empty, "earlier posted comment vanished:\n" + after_empty
 
+    # ── F1 opens Help while composing without swallowing it, and the draft survives ────
+    DRAFT = "Draft kept across the help screen"
+    os.write(master, b"\x0e")         # Ctrl+N
+    pump(1.0)
+    assert "New comment" in visible(), "composer did not reopen for F1 check:\n" + visible()
+    os.write(master, DRAFT.encode())
+    pump(0.6)
+    os.write(master, b"\x1bOP")       # F1
+    pump(1.2)
+    help_view = visible()
+    assert "Keyboard shortcuts" in help_view, "F1 did not open Help while composing:\n" + help_view
+    os.write(master, b"\x1b")         # Esc → close Help, back to the composer
+    pump(1.2)
+    back = visible()
+    assert "New comment" in back, "composer did not survive the Help screen:\n" + back
+    assert DRAFT in back, "draft was lost across the Help screen:\n" + back
+    os.write(master, b"\x1b")         # Esc → cancel the composer (leave the app clean)
+    pump(0.8)
+
     print("ok")
 finally:
     try:

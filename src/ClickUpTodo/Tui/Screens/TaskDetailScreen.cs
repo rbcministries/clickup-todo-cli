@@ -144,6 +144,12 @@ public sealed class TaskDetailScreen : Screen
     // OnShown arms it.
     private object? _autoRefreshToken;
 
+    // Set in Dispose so a still-in-flight comment post (#216) that completes after the user closed the
+    // detail screen doesn't touch the now torn-down tab views. Both this flag and the post continuations
+    // run on the UI thread, so there's no race — the continuation either sees it set and bails, or ran
+    // before teardown. Mirrors the host's `_screens.Contains(screen)` guard on the refresh path.
+    private bool _disposed;
+
     // Where the Stream tab is scrolled to on open (#107), from the persisted detail-view settings (#108).
     // Content-relative (newest/oldest) so it stays correct across both sort directions; the concrete edge
     // is resolved by DetailScrollModel.
@@ -919,6 +925,16 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // F1 opens Help even while composing (the #216 criterion: the editor must not swallow F1).
+        // Handled here because the top-of-OnKey composer guard would otherwise eat it; the draft stays
+        // intact under the stacked Help screen. Esc is handled below as cancel.
+        if (key.KeyCode == KeyCode.F1)
+        {
+            key.Handled = true;
+            RequestHelp();
+            return;
+        }
+
         var action = CommentComposerModel.Route(ClassifyComposer(key));
         if (action == CommentComposerModel.ComposerAction.PassThrough)
             return;
@@ -1020,6 +1036,8 @@ public sealed class TaskDetailScreen : Screen
                 var confirmed = await _postCommentAsync(text, CancellationToken.None).ConfigureAwait(false);
                 Application.Invoke(() =>
                 {
+                    if (_disposed)
+                        return; // the detail screen was closed mid-post — don't touch torn-down views
                     UpdateData(_task, CommentComposerModel.Reconcile(_comments, pendingId, confirmed));
                     RequestFlash("Comment posted.");
                 });
@@ -1028,6 +1046,8 @@ public sealed class TaskDetailScreen : Screen
             {
                 Application.Invoke(() =>
                 {
+                    if (_disposed)
+                        return;
                     UpdateData(_task, CommentComposerModel.Revert(_comments, pendingId));
                     RequestFlash($"Could not post comment: {ShortError(ex)}");
                 });
@@ -1122,11 +1142,17 @@ public sealed class TaskDetailScreen : Screen
     /// <inheritdoc/>
     protected override void Dispose(bool disposing)
     {
-        // Stop the 30s auto-refresh tick so it can't fire against a torn-down view (#114 follow-up).
-        if (disposing && _autoRefreshToken is { } token)
+        if (disposing)
         {
-            Application.RemoveTimeout(token);
-            _autoRefreshToken = null;
+            // Mark torn-down so a late comment-post continuation (#216) bails instead of updating
+            // disposed tab views.
+            _disposed = true;
+            // Stop the 30s auto-refresh tick so it can't fire against a torn-down view (#114 follow-up).
+            if (_autoRefreshToken is { } token)
+            {
+                Application.RemoveTimeout(token);
+                _autoRefreshToken = null;
+            }
         }
         base.Dispose(disposing);
     }
