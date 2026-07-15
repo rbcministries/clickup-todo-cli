@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using ClickUpTodo.ClickUp;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
@@ -14,8 +15,10 @@ namespace ClickUpTodo.Tui.Screens;
 /// <summary>
 /// A full-window compose screen for filing a new task from the main list (#213, sub-issue E of the
 /// Writing New Content epic #208): a required <b>Name</b>, an optional multi-line <b>Description</b>,
-/// and an <b>Assignees</b> selector (the reusable <see cref="AssigneeSelectorView"/> #212 in
-/// collect-selection mode, seeded with the current user as a locked default). Save builds a
+/// an <b>Assignees</b> selector (the reusable <see cref="AssigneeSelectorView"/> #212 in
+/// collect-selection mode, seeded with the current user as a locked default), and the two optional
+/// basic fields (#215): a <b>Priority</b> selector (the four canonical priorities + a "no priority"
+/// clear row, mirroring the Quick Updates pane #157) and a <b>Due date</b> field. Save builds a
 /// <see cref="NewTaskRequest"/> via the pure <see cref="NewTaskForm"/> and creates the task through the
 /// injected <paramref name="createAsync"/> callback (the create facade #209, wired by the host to the
 /// configured Personal Tasks list).
@@ -33,6 +36,8 @@ public sealed class NewTaskScreen : Screen
     private readonly TextField _name;
     private readonly TextView _description;
     private readonly AssigneeSelectorView _assignees;
+    private readonly ListView _priority;
+    private readonly TextField _due;
     private readonly Button _save;
     private readonly Func<NewTaskRequest, CancellationToken, Task<TaskItem>> _createAsync;
     private readonly CancellationTokenSource _cts = new();
@@ -85,8 +90,8 @@ public sealed class NewTaskScreen : Screen
             X = 1,
             Y = Pos.Bottom(assigneesLabel),
             Width = Dim.Fill(2),
-            // Leave the bottom two rows for the button line (AnchorEnd(1)) plus a blank gap above it.
-            Height = Dim.Fill(2),
+            // Reserve the bottom rows for the button line, a blank gap, and the Priority/Due block below.
+            Height = Dim.Fill(9),
         };
         _assignees.Flash += (_, message) => RequestFlash(message);
 
@@ -95,14 +100,31 @@ public sealed class NewTaskScreen : Screen
         _save.Accepting += (_, _) => TrySave();
         cancel.Accepting += (_, _) => Close();
 
-        // Esc cancels, F1 opens Help (#103). Wire the handler to the screen and the two text editors so
-        // they're intercepted before the TextField/TextView consume them; the selector already lets
-        // Esc/F1 fall through to the host.
+        // ── Optional fields (#215): Priority + Due date, sitting just above the button line. Positioned
+        // relative to Save so the block lands on fixed rows regardless of window height (rows Save-6…Save-2
+        // for the 5-row selector, with a blank gap at Save-1's neighbour). Priority mirrors the Quick
+        // Updates pane's canonical row set (#157) and defaults to the "(no priority)" clear row.
+        var priorityLabel = new Label { X = 1, Y = Pos.Top(_save) - 7, Text = "Priority:" };
+        _priority = new ListView { X = 1, Y = Pos.Top(_save) - 6, Width = 22, Height = 5 };
+        _priority.SetSource(new ObservableCollection<string>(QuickUpdatesModel.PriorityLabels));
+        _priority.SelectedItem = QuickUpdatesModel.NoPriorityRow;
+
+        var dueLabel = new Label { X = Pos.Right(_priority) + 4, Y = Pos.Top(_save) - 7, Text = "Due date (yyyy-MM-dd):" };
+        _due = new TextField { X = Pos.Right(_priority) + 4, Y = Pos.Top(_save) - 6, Width = 24, Height = 1 };
+
+        // Esc cancels, F1 opens Help (#103). Wire the handler to the screen and the text/list editors so
+        // they're intercepted before the TextField/TextView/ListView consume them; the selector already
+        // lets Esc/F1 fall through to the host.
         KeyDown += OnKey;
         _name.KeyDown += OnKey;
         _description.KeyDown += OnKey;
+        _priority.KeyDown += OnKey;
+        _due.KeyDown += OnKey;
 
-        Add(nameLabel, _name, descriptionLabel, _description, assigneesLabel, _assignees, _save, cancel);
+        // Add in Tab order: Name → Description → Assignees → Priority → Due date → Save/Cancel. Labels are
+        // not focusable, so their position here doesn't affect the tab cycle.
+        Add(nameLabel, _name, descriptionLabel, _description, assigneesLabel, _assignees,
+            priorityLabel, _priority, dueLabel, _due, _save, cancel);
     }
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.NewTask;
@@ -132,10 +154,17 @@ public sealed class NewTaskScreen : Screen
             return;
 
         var assigneeIds = _assignees.Selection.Select(a => a.Id).ToList();
-        if (!NewTaskForm.TryBuild(_name.Text?.ToString(), _description.Text?.ToString(), assigneeIds, out var request, out var error))
+        var priorityLevel = QuickUpdatesModel.PriorityLevelForRow(_priority.SelectedItem ?? QuickUpdatesModel.NoPriorityRow);
+        if (!NewTaskForm.TryBuild(
+                _name.Text?.ToString(), _description.Text?.ToString(), assigneeIds,
+                priorityLevel, _due.Text?.ToString(), out var request, out var error))
         {
             RequestFlash(error!);
-            _name.SetFocus();
+            // Land the cursor on the field the error is about so the user can fix it in place.
+            if (error == NewTaskForm.DueDateInvalidError)
+                _due.SetFocus();
+            else
+                _name.SetFocus();
             return;
         }
 

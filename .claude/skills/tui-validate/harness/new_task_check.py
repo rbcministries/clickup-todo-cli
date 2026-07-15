@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Boots the TUI under a PTY and exercises the New Task screen (#213):
-Ctrl+N opens it → the three fields render with the current user seeded as a locked ✓
-default → the locked default refuses removal → typing a name + Save creates (round-trips
-through the create facade) and returns to the list. Asserts each step on the pyte screen."""
+"""Boots the TUI under a PTY and exercises the New Task screen (#213 + #215):
+Ctrl+N opens it → the fields render with the current user seeded as a locked ✓
+default → the locked default refuses removal → the optional Priority selector (four
+canonical priorities + "(no priority)") and Due-date field (#215) render and accept
+input → typing a name + setting priority/due + Save creates (round-trips through the
+create facade) and returns to the list. Asserts each step on the pyte screen."""
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte
 
@@ -79,10 +81,22 @@ try:
     assert "✓ Ben Seymour" in v, f"locked self was removed (should be refused):\n{v}"
     print("LOCKED ok — removing the default assignee is refused")
 
-    # Back up to the selector's search box (its single tab stop), then Tab out to the Save button and
-    # activate it with Space -> the create round-trips and the screen closes.
+    # The optional Priority selector and Due-date field render (#215).
+    v = visible()
+    for token in ("Priority", "Urgent", "(no priority)", "Due date"):
+        assert token in v, f"missing optional field {token!r} (#215):\n{v}"
+    print("OPTIONAL ok — Priority selector + Due-date field render")
+
+    # Back up to the selector's search box (its single tab stop), then Tab through the two optional
+    # fields to the Save button. Tab order is Assignees -> Priority -> Due date -> Save (#215).
     send(b"\x1b[A", 0.6)  # Up: list -> search box
-    send(b"\t", 0.6)      # search box -> Save button (Tab bubbles out of the composite)
+    send(b"\t", 0.6)      # search box -> Priority list (Tab bubbles out of the composite)
+    send(b"\x1b[A", 0.6)  # Up: move off "(no priority)" onto a real priority (Low)
+    send(b"\t", 0.6)      # Priority -> Due date field
+    send(b"2026-12-31", 0.8)  # type a valid due date
+    assert "2026-12-31" in visible(), f"typed due date not shown:\n{visible()}"
+    print("DUE ok — due date entered")
+    send(b"\t", 0.6)      # Due date -> Save button
     send(b" ", 3.0)       # Space activates the focused Save button
     v = visible()
     assert "New task" not in v, f"Save did not close the New Task screen:\n{v}"
