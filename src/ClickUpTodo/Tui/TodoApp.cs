@@ -498,11 +498,13 @@ public sealed class TodoApp
         // Warm cache (#123): paint the last aggregated feed instantly, then refresh live in the
         // background. An empty cached feed is treated as a miss (nothing to instant-paint) and takes the
         // cold path below. Load runs on the UI thread, matching the store's single-threaded contract.
-        if (_feedCache.Load(_config) is { Count: > 0 } cached)
+        if (_feedCache.LoadSnapshot(_config) is { Items.Count: > 0 } cached)
         {
-            var screen = CreateFeedScreen(cached);
+            var screen = CreateFeedScreen(cached.Items);
             ShowScreen(screen, static () => { });
-            Flash("Showing cached feed · refreshing…");
+            // Mark how stale the painted feed is (#124); the live refresh replaces it moments later.
+            var age = RelativeTime.Format(DateTimeOffset.UtcNow - cached.CapturedAt);
+            Flash($"Showing cached feed from {age} · refreshing…");
             RefreshFeed(screen); // off-thread live load, swaps fresh in + re-saves the cache
             return;
         }
@@ -1851,13 +1853,16 @@ public sealed class TodoApp
     /// </summary>
     private void TryPaintCachedTasks()
     {
-        var cached = _taskCache.Load(_config);
-        if (cached is not { Count: > 0 })
+        var cached = _taskCache.LoadSnapshot(_config);
+        if (cached is not { Items.Count: > 0 })
             return;
 
-        _all = cached;
-        _status = $"Showing cached tasks · {cached.Count} task(s) · refreshing…";
-        _signature = CurrentSignature(cached);
+        _all = cached.Items;
+        // Mark how stale the painted set is (#124) so the instant paint reads honestly as cached, not
+        // freshly loaded; the live refresh replaces it (and this line) moments later.
+        var age = RelativeTime.Format(DateTimeOffset.UtcNow - cached.CapturedAt);
+        _status = $"Showing cached tasks from {age} · {cached.Items.Count} task(s) · refreshing…";
+        _signature = CurrentSignature(cached.Items);
         Render(keepTaskId: null);
     }
 
