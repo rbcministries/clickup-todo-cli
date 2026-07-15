@@ -19,7 +19,7 @@ public sealed class NotificationsFeedScreenTests
         => new(id, "Author", dateMs, "body", Resolved: false, TaskId: taskId);
 
     private static ActivityItem Activity(string taskId, long? updatedMs)
-        => new(ActivityItem.IdPrefix + taskId, taskId, $"Task {taskId}", "in progress", "#4194f6", updatedMs);
+        => new(ActivityItem.IdPrefix + taskId, taskId, $"Task {taskId}", "in progress", updatedMs);
 
     private static FeedEntry Entry(CommentItem c) => FeedEntry.Of(c);
     private static FeedEntry Entry(ActivityItem a) => FeedEntry.Of(a);

@@ -160,7 +160,7 @@ public sealed class FeedRowFormatterTests
 
     private static ActivityItem Activity(
         string taskName = "Ship the thing", string? statusName = "in progress", long? updatedMs = null)
-        => new("activity:t9", "t9", taskName, statusName, StatusColor: "#4194f6", updatedMs);
+        => new("activity:t9", "t9", taskName, statusName, updatedMs);
 
     [Fact]
     public void Activity_LeadsWithTheActivityChip_AndReportsItsSpan()

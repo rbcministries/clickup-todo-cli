@@ -83,22 +83,30 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
         var comments = StampMentions(feed, MentionSpec.ForUser(me), mentionsOnly);
 
         // The recent-activity source (#117) is a pure projection of the tasks we already fetched above —
-        // no extra endpoint. F12 (includeClosed) transitively bounds it, exactly as it does the comments.
-        var activity = BuildActivity(tasks, DefaultMaxEntries);
+        // no extra endpoint. F12 (includeClosed) bounds it exactly as it does the comments: when off, a
+        // closed task pulled in as a subtask anchor (the server returns those even with include_closed
+        // false when subtasks=true) is dropped, matching what TaskView.Apply hides on the dashboard.
+        var activity = BuildActivity(tasks, DefaultMaxEntries, includeCompleted: includeClosed);
         return new FeedResult(comments, activity);
     }
 
     /// <summary>
     /// Projects the assigned tasks into the recent-activity feed (#117): each task with a non-empty id
-    /// becomes an <see cref="ActivityItem"/>, ordered newest-first by <see cref="TaskItem.UpdatedMs"/>
-    /// (an undated task sorts last, ties broken by task id for a deterministic order), and capped to
-    /// <paramref name="maxEntries"/> — the same bound the comment feed uses. Pure and unit-testable.
+    /// becomes an <see cref="ActivityItem"/>, de-duplicated by task id (paging with <c>subtasks=true</c>
+    /// can return the same task twice — the comment path de-dups ids for the same reason), ordered
+    /// newest-first by <see cref="TaskItem.UpdatedMs"/> (an undated task sorts last, ties broken by task
+    /// id for a deterministic order), and capped to <paramref name="maxEntries"/> — the same bound the
+    /// comment feed uses. When <paramref name="includeCompleted"/> is false, completed
+    /// (<see cref="TaskView.IsCompleted"/>) tasks are dropped, mirroring the F12/<c>include_closed</c>
+    /// bound the dashboard applies (a closed subtask anchor otherwise leaks in). Pure and unit-testable.
     /// </summary>
     internal static IReadOnlyList<ActivityItem> BuildActivity(
-        IReadOnlyList<TaskItem> tasks, int maxEntries)
+        IReadOnlyList<TaskItem> tasks, int maxEntries, bool includeCompleted = true)
         => tasks
             .Where(t => !string.IsNullOrEmpty(t.Id))
+            .Where(t => includeCompleted || !TaskView.IsCompleted(t))
             .Select(ActivityItem.FromTask)
+            .DistinctBy(a => a.Id, StringComparer.Ordinal)
             .OrderByDescending(a => a.UpdatedMs ?? long.MinValue)
             .ThenBy(a => a.TaskId, StringComparer.Ordinal)
             .Take(Math.Max(0, maxEntries))

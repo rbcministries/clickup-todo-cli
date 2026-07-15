@@ -193,8 +193,8 @@ public sealed class FeedServiceTests
 
     // ── BuildActivity (#117) ──────────────────────────────────────────────────
 
-    private static TaskItem T(string id, long? updatedMs, string name = "Task")
-        => new() { Id = id, Name = name, StatusName = "in progress", StatusColor = "#4194f6", UpdatedMs = updatedMs };
+    private static TaskItem T(string id, long? updatedMs, string name = "Task", string? statusType = "open")
+        => new() { Id = id, Name = name, StatusName = "in progress", StatusType = statusType, UpdatedMs = updatedMs };
 
     [Fact]
     public void BuildActivity_ProjectsTasksNewestFirst()
@@ -248,6 +248,33 @@ public sealed class FeedServiceTests
         Assert.Empty(FeedService.BuildActivity(Array.Empty<TaskItem>(), maxEntries: 100));
         Assert.Empty(FeedService.BuildActivity(new[] { T("a", 1) }, maxEntries: 0));
         Assert.Empty(FeedService.BuildActivity(new[] { T("a", 1) }, maxEntries: -3));
+    }
+
+    [Fact]
+    public void BuildActivity_DeDupesByTaskId_KeepingOne()
+    {
+        // Paging with subtasks=true can return the same task twice; the resulting activity ids
+        // ("activity:" + taskId) would otherwise collide and produce duplicate rows.
+        var activity = FeedService.BuildActivity(
+            new[] { T("a", 100), T("a", 100), T("b", 50) }, maxEntries: 100);
+
+        Assert.Equal(new[] { "a", "b" }, activity.Select(a => a.TaskId));
+        Assert.Single(activity, a => a.TaskId == "a");
+    }
+
+    [Fact]
+    public void BuildActivity_ExcludesCompletedTasks_WhenCompletedNotIncluded()
+    {
+        // A closed-type task can arrive as a subtask anchor even with include_closed=false; when the F12
+        // completed bound is off (includeCompleted:false) it must be dropped, mirroring TaskView.Apply.
+        var tasks = new[] { T("open", 100, statusType: "open"), T("closed", 200, statusType: "closed") };
+
+        var hidden = FeedService.BuildActivity(tasks, maxEntries: 100, includeCompleted: false);
+        Assert.Equal(new[] { "open" }, hidden.Select(a => a.TaskId));
+
+        // With the bound on (F12), the closed task's activity is included (newest-first).
+        var shown = FeedService.BuildActivity(tasks, maxEntries: 100, includeCompleted: true);
+        Assert.Equal(new[] { "closed", "open" }, shown.Select(a => a.TaskId));
     }
 
     // ── StampMentions (#113) ──────────────────────────────────────────────────

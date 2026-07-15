@@ -229,7 +229,7 @@ public sealed record CommentItem(
 /// <see cref="TaskId"/> lets a feed row open the task exactly like a comment row (#115).
 /// </summary>
 public sealed record ActivityItem(
-    string Id, string TaskId, string TaskName, string? StatusName, string? StatusColor, long? UpdatedMs)
+    string Id, string TaskId, string TaskName, string? StatusName, long? UpdatedMs)
 {
     /// <summary>The <see cref="Id"/> prefix that namespaces an activity entry apart from comment ids in
     /// the merged feed. A comment id is a bare ClickUp id, so this prefix guarantees disjoint id spaces.</summary>
@@ -238,7 +238,7 @@ public sealed record ActivityItem(
     /// <summary>Projects a recently-updated <see cref="TaskItem"/> into an activity feed entry. The
     /// resulting <see cref="Id"/> is <see cref="IdPrefix"/> + the task id.</summary>
     public static ActivityItem FromTask(TaskItem task) => new(
-        IdPrefix + task.Id, task.Id, task.Name, task.StatusName, task.StatusColor, task.UpdatedMs);
+        IdPrefix + task.Id, task.Id, task.Name, task.StatusName, task.UpdatedMs);
 }
 
 /// <summary>

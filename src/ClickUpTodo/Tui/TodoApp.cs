@@ -692,7 +692,9 @@ public sealed class TodoApp
         _config.FeedShowActivity = on;
         _configStore.Save(_config);
         screen.SetShowActivity(on);
-        Flash(on ? "Feed: showing recent activity (F6)." : "Feed: recent activity hidden (F6).");
+        // "enabled/disabled" describes the persisted toggle, not the view: under the F3 mentions-only
+        // filter the activity rows stay suppressed, so a "showing/hidden" claim would be misleading.
+        Flash(on ? "Feed: recent activity enabled (F6)." : "Feed: recent activity disabled (F6).");
     }
 
     /// <summary>
