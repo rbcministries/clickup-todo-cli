@@ -87,6 +87,24 @@ public sealed class TaskDetailScreen : Screen
     // blank/null ⇒ start blank (⇒ configured default / task-derived dir #98).
     private readonly Func<string>? _workingDirectoryPreFill;
 
+    // The comment composer (#216): a bottom-anchored FrameView hosting a multi-line editor plus Post/
+    // Cancel buttons, hidden until Ctrl+N. Like the Dispatch pane it's a transient child view within
+    // the single already-open screen (not a nested run-loop / second screen), so the dashboard's
+    // single-ListView model (#3) is untouched. The host owns the ClickUp write via _postCommentAsync;
+    // the screen owns the optimistic append + reconcile/revert over its own _comments list.
+    private readonly FrameView _commentBox;
+    private readonly TextView _commentEditor;
+    // The composer's focusable controls in Tab order: the editor, then Post, then Cancel.
+    private readonly View[] _commentControls;
+    private readonly Func<string, CancellationToken, Task<CommentItem>>? _postCommentAsync;
+    // Monotonic sentinel-id sequence for optimistic (provisional) comments, so a reconcile/revert
+    // finds the right one even with overlapping posts. UI-thread only.
+    private int _pendingCommentSeq;
+    // The composer's ideal height: the multi-line editor rows + the Post/Cancel button row + the
+    // top/bottom frame border. Clamped on show so it degrades gracefully on a short terminal.
+    private const int CommentEditorRows = 5;
+    private const int CommentComposerPreferredHeight = CommentEditorRows + 1 + 2;
+
     // The Dispatch pane's working-dir layout (#95): rows above the browser (prompt, one-off, dir
     // field, key hint), the browser's own rows, and rows below (post-to-Comments). Used to size the
     // pane via DispatchPaneModel.PreferredHeightWithBrowser and to place the ListView.
@@ -186,6 +204,12 @@ public sealed class TaskDetailScreen : Screen
     /// blank ⇒ start blank (⇒ configured default / task-derived dir #98). Null ⇒ always blank. The
     /// browser still resets to its root; pre-fill is independent of navigation.
     /// </param>
+    /// <param name="postCommentAsync">
+    /// Posts a plain-text comment to this task (#216, over the #210 facade) and returns the created
+    /// <see cref="CommentItem"/>. The screen owns the composer UI + optimistic append/revert; the host
+    /// owns the off-thread ClickUp write via this callback (the same injected-async seam #212 uses).
+    /// Null disables the composer (<c>Ctrl+N</c> is inert), so non-interactive hosts stay unaffected.
+    /// </param>
     public TaskDetailScreen(
         TaskDetail task,
         IReadOnlyList<CommentItem> comments,
@@ -193,12 +217,14 @@ public sealed class TaskDetailScreen : Screen
         DetailViewSettings? settings = null,
         AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive,
         bool defaultPostToComments = false,
-        Func<string>? workingDirectoryPreFill = null)
+        Func<string>? workingDirectoryPreFill = null,
+        Func<string, CancellationToken, Task<CommentItem>>? postCommentAsync = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
         _comments = comments;
         _workingDirectoryPreFill = workingDirectoryPreFill;
+        _postCommentAsync = postCommentAsync;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
@@ -337,13 +363,47 @@ public sealed class TaskDetailScreen : Screen
         // Wired after the constructor's initial SelectedItem=0 so that first assignment can't fire it.
         _dirBrowser.ValueChanged += OnBrowserSelectionChanged;
 
+        // The comment composer (#216): a bottom-anchored FrameView with a multi-line editor above a
+        // Post/Cancel button row, hidden until Ctrl+N. Modelled on PromptTemplateEditorScreen — the
+        // editor keeps Enter for newlines (TabKeyAddsTab=false so Tab reaches the buttons) and the
+        // Post button is the default (Enter posts when a button has focus), so submit is driver-robust;
+        // Ctrl+Enter is wired as an extra shortcut. Height is sized on show (ShowCommentComposer).
+        _commentEditor = new TextView
+        {
+            X = 1,
+            Y = 0,
+            Width = Dim.Fill(1),
+            Height = Dim.Fill(2),
+            WordWrap = true,
+            TabKeyAddsTab = false,
+        };
+        var postButton = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Post", IsDefault = true };
+        var cancelButton = new Button { X = Pos.Right(postButton) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
+        postButton.Accepting += (_, _) => PostComment();
+        cancelButton.Accepting += (_, _) => HideCommentComposer();
+        _commentControls = [_commentEditor, postButton, cancelButton];
+        _commentBox = new FrameView
+        {
+            Title = "New comment — Ctrl+Enter or Tab→Post · Esc cancel",
+            X = 0,
+            Y = Pos.AnchorEnd(CommentComposerPreferredHeight),
+            Width = Dim.Fill(),
+            Height = CommentComposerPreferredHeight,
+            Visible = false,
+        };
+        _commentBox.Add(_commentEditor, postButton, cancelButton);
+        // Each composer control routes the pane's keys (Ctrl+Enter/Esc/Tab/Shift+Tab) via the pure
+        // CommentComposerModel; other keys fall through so typing + Enter-newline keep working.
+        foreach (var control in _commentControls)
+            control.KeyDown += OnCommentKey;
+
         // Focus lives in whichever scroll target (TextView) is front-most, so the key handler is wired
         // to each to reliably intercept Tab/Esc/Ctrl+B/Ctrl+A/F1 before the read-only TextView sees them.
         foreach (var target in _scrollTargets)
             target.KeyDown += OnKey;
         KeyDown += OnKey;
 
-        Add([_headerView, _tabs, _promptBox]);
+        Add([_headerView, _tabs, _promptBox, _commentBox]);
     }
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Detail;
@@ -509,6 +569,13 @@ public sealed class TaskDetailScreen : Screen
 
     private void OnKey(object? sender, Key key)
     {
+        // While the comment composer (#216) is open it owns the keyboard: its own handler (OnCommentKey)
+        // processes Ctrl+Enter/Esc/Tab and lets the rest fall through to the editor. Don't let the
+        // screen's chords (Ctrl+B close, Ctrl+A/U/N openers, Tab tab-cycle, F5 refresh) fire underneath
+        // and disrupt (or discard) the draft.
+        if (_commentBox.Visible)
+            return;
+
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
         {
             key.Handled = true;
@@ -524,6 +591,17 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             ShowPrompt();
+            return;
+        }
+
+        // Ctrl+N opens the comment composer (#216), stacked as a bottom-anchored overlay like the
+        // Dispatch pane. Same chord shape; inert while the Dispatch prompt is open or when no post
+        // callback was supplied (a non-interactive host). The composer owns the keyboard once shown
+        // (the guard at the top of this handler), so a second Ctrl+N inside it is a no-op.
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.N && !_promptBox.Visible && _postCommentAsync is not null)
+        {
+            key.Handled = true;
+            ShowCommentComposer();
             return;
         }
 
@@ -822,6 +900,146 @@ public sealed class TaskDetailScreen : Screen
         if (current < 0)
             current = 0;
         _scrollTargets[current].SetFocus();
+    }
+
+    // ── Comment composer (#216) ───────────────────────────────────────────────
+
+    /// <summary>Handles keys while a comment-composer control has focus. Tab/Shift+Tab cycle the
+    /// composer's controls (glue, like the Dispatch pane); the pure <see cref="CommentComposerModel"/>
+    /// decides the rest, and keys it doesn't claim (<see cref="CommentComposerModel.ComposerAction.PassThrough"/>)
+    /// fall through so multi-line typing (incl. Enter → newline) and the buttons keep working.</summary>
+    private void OnCommentKey(object? sender, Key key)
+    {
+        // Tab / Shift+Tab move between the editor and the Post/Cancel buttons, so the editor's
+        // TabKeyAddsTab=false doesn't just swallow Tab. Shift+Tab arrives as a bare Tab with IsShift.
+        if (key.KeyCode == KeyCode.Tab)
+        {
+            key.Handled = true;
+            MoveCommentFocus(forward: !key.IsShift);
+            return;
+        }
+
+        var action = CommentComposerModel.Route(ClassifyComposer(key));
+        if (action == CommentComposerModel.ComposerAction.PassThrough)
+            return;
+
+        key.Handled = true;
+        switch (action)
+        {
+            case CommentComposerModel.ComposerAction.Post:
+                PostComment();
+                break;
+            case CommentComposerModel.ComposerAction.Cancel:
+                HideCommentComposer();
+                break;
+        }
+    }
+
+    /// <summary>Classifies a Terminal.Gui key into the composer's vocabulary. Ctrl+Enter submits (a
+    /// best-effort shortcut alongside the default Post button — on drivers that fold it into a bare
+    /// Enter it just inserts a newline, which is harmless); Esc cancels; everything else passes through
+    /// so typing and Enter-newline in the multi-line editor are undisturbed.</summary>
+    private static CommentComposerModel.ComposerKey ClassifyComposer(Key key)
+    {
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.Enter)
+            return CommentComposerModel.ComposerKey.Submit;
+        if (key.KeyCode == KeyCode.Esc)
+            return CommentComposerModel.ComposerKey.Cancel;
+        return CommentComposerModel.ComposerKey.Other;
+    }
+
+    /// <summary>Moves focus to the next/previous composer control, wrapping at both ends (reuses the
+    /// Dispatch pane's wraparound cycle).</summary>
+    private void MoveCommentFocus(bool forward)
+    {
+        var current = Array.FindIndex(_commentControls, static c => c.HasFocus);
+        if (current < 0)
+            current = 0;
+        _commentControls[DispatchPaneModel.NextFocus(current, _commentControls.Length, forward)].SetFocus();
+    }
+
+    /// <summary>Opens the comment composer: clears the editor, sizes the pane to the terminal (the
+    /// editor rows clip before the button row on a very short window, reusing the Dispatch pane's
+    /// clamp), shows it and focuses the editor.</summary>
+    private void ShowCommentComposer()
+    {
+        if (_commentBox.Visible)
+            return;
+        _commentEditor.Text = string.Empty;
+        var height = DispatchPaneModel.ClampHeight(CommentComposerPreferredHeight, Viewport.Height, minTabRows: 3);
+        _commentBox.Height = height;
+        _commentBox.Y = Pos.AnchorEnd(height);
+        _commentBox.Visible = true;
+        _commentEditor.SetFocus();
+    }
+
+    /// <summary>Closes the composer and returns focus to the front-most tab (mirrors HidePrompt).</summary>
+    private void HideCommentComposer()
+    {
+        if (!_commentBox.Visible)
+            return;
+        _commentBox.Visible = false;
+        FocusCurrentPane();
+    }
+
+    /// <summary>
+    /// Posts the composed comment (#216): an empty/whitespace body just closes the composer (a no-op —
+    /// ClickUp rejects an empty <c>comment_text</c>). Otherwise it optimistically appends a provisional
+    /// comment, closes the composer, and writes off the UI thread via the injected callback —
+    /// reconciling the provisional to the server-confirmed comment on success or reverting it on
+    /// failure, the same optimistic/revert discipline the Quick Updates status/priority paths use.
+    /// A background refresh that lands mid-post can drop the provisional before reconcile finds it; the
+    /// reconcile is then a no-op and the next refresh re-pulls the real posted comment (self-healing).
+    /// </summary>
+    private void PostComment()
+    {
+        var raw = _commentEditor.Text?.ToString();
+        if (!CommentComposerModel.IsPostable(raw) || _postCommentAsync is null)
+        {
+            HideCommentComposer();
+            return;
+        }
+        var text = CommentComposerModel.Normalize(raw);
+        HideCommentComposer();
+
+        // Optimistic append: a provisional comment with a client sentinel id (so reconcile/revert can
+        // find it) and a client "now" stamp (so it sorts as the newest entry). Re-render via UpdateData,
+        // which recomputes the Stream/Comments panes in place with scroll preservation.
+        var pendingId = $"__pending__{++_pendingCommentSeq}";
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var provisional = CommentComposerModel.Provisional(pendingId, text, nowMs);
+        UpdateData(_task, CommentComposerModel.Append(_comments, provisional));
+        RequestFlash("Posting comment…");
+
+        // Fully-qualified: this screen exposes a `Task` property (the shown TaskDetail), which would
+        // otherwise shadow System.Threading.Tasks.Task in this expression.
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                var confirmed = await _postCommentAsync(text, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    UpdateData(_task, CommentComposerModel.Reconcile(_comments, pendingId, confirmed));
+                    RequestFlash("Comment posted.");
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    UpdateData(_task, CommentComposerModel.Revert(_comments, pendingId));
+                    RequestFlash($"Could not post comment: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>A one-line, length-capped rendering of an exception for the status flash.</summary>
+    private static string ShortError(Exception ex)
+    {
+        var msg = ex.Message.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        return msg.Length > 80 ? msg[..79] + "…" : msg;
     }
 
     /// <summary>Sets the activity sort direction and re-renders <em>both</em> the Stream and Comments
