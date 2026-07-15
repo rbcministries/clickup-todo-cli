@@ -722,7 +722,7 @@ public sealed class TodoApp
     /// <summary>
     /// Toggles the feed's F12 "Show Completed" — whether the feed includes activity from completed
     /// (closed-type) tasks — and persists it (<see cref="AppConfig.FeedShowCompleted"/>). Independent of
-    /// the main list's F12 (#178), which owns <see cref="ViewSettings.ShowCompleted"/>. Because the
+    /// the main list's F12 (#178/#191), which owns <see cref="ViewSettings.Completed"/>. Because the
     /// closed tasks were never fetched, a client-side re-render can't surface them: this re-fetches via
     /// <see cref="RefreshFeed"/> after reflecting the new state in the screen's title. If a refresh is
     /// already in flight the re-fetch is queued (not dropped), so the toggle always takes effect. Runs on
