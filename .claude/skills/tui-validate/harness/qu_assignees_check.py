@@ -100,6 +100,12 @@ try:
     assert "Quick Updates" in v, f"screen lost after remove:\n{v}"
     print("REMOVE ok — Grace Hopper ✓ cleared")
 
+    # Tab must cycle *out* of the composite Assignees pane (relies on its focus-chain HasFocus) back to
+    # Status, wrapping — the screen stays intact and focus leaves the search box.
+    send(b"\t", 0.8)
+    assert "Quick Updates" in visible(), f"Tab out of the Assignees pane lost the screen:\n{visible()}"
+    print("TAB-OUT ok — cycled out of the Assignees composite")
+
     # Esc returns to the task list.
     send(b"\x1b", 1.5)
     v = visible()

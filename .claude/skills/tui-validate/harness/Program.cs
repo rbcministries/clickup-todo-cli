@@ -67,7 +67,9 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
     // The current assignee set of any task the Assignees pane writes to, mutated by the PUT so the
     // add/remove round-trip is truthful (the write response echoes the new set, which the pane and the
     // list row reconcile to). Starts empty so the empty-state list shows the top-frequent members.
+    // Guarded by _gate since SendAsync is async and a detail GET can race an assignee PUT.
     private readonly HashSet<long> _assignees = [];
+    private readonly object _gate = new();
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
@@ -83,13 +85,16 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
         {
             // Status/priority PUTs carry no assignees (the set is untouched); an assignee add/remove
             // mutates the shared set. Either way echo the task with the current assignees so the write
-            // response reconciles correctly.
-            if (request.Content is { } content)
-                ApplyAssigneeMutation(await content.ReadAsStringAsync(ct));
-            body = DetailJson(path, _assignees);
+            // response reconciles correctly. Read the body before taking the lock (can't await under it).
+            var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
+            lock (_gate)
+            {
+                ApplyAssigneeMutation(reqBody);
+                body = DetailJson(path, _assignees);
+            }
         }
         else if (path.Contains("/task/"))
-            body = DetailJson(path, _assignees);
+            lock (_gate) body = DetailJson(path, _assignees);
         else if (path.Contains("/team/") && path.EndsWith("/task"))
             body = TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
         else if (path.Contains("/list/") && path.EndsWith("/task"))

@@ -1639,9 +1639,16 @@ public sealed class TodoApp
     private async Task<IReadOnlyList<TaskAssignee>> ApplyAssigneeAsync(
         string taskId, ToggleKind kind, TaskAssignee person, CancellationToken ct)
     {
+        // Deliberately do NOT thread the selector's cancellation token into the write: that token is
+        // cancelled when the screen is disposed (Esc), so forwarding it would cancel an in-flight
+        // add/remove the user has already seen applied — silently dropping it until the next refresh.
+        // Status/Priority commits (ApplyStatus/ApplyPriority) issue their writes untokened for the same
+        // reason; assignees match that. The token still guards the *view's* own reconcile/revert (it
+        // re-checks IsCancellationRequested), and our row reconcile below is guarded by TaskById.
+        _ = ct;
         var confirmed = kind == ToggleKind.Added
-            ? await _tasks.AddAssigneeAsync(taskId, person.Id, ct).ConfigureAwait(false)
-            : await _tasks.RemoveAssigneeAsync(taskId, person.Id, ct).ConfigureAwait(false);
+            ? await _tasks.AddAssigneeAsync(taskId, person.Id).ConfigureAwait(false)
+            : await _tasks.RemoveAssigneeAsync(taskId, person.Id).ConfigureAwait(false);
         Application.Invoke(() =>
         {
             if (TaskById(taskId) is { } t)
