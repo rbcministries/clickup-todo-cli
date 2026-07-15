@@ -105,6 +105,29 @@ public sealed class TaskDetailScreen : Screen
     private const int CommentEditorRows = 5;
     private const int CommentComposerPreferredHeight = CommentEditorRows + 1 + 2;
 
+    // The description editor (#217): a bottom-anchored FrameView hosting a multi-line editor above a
+    // Save/Cancel button row (with a hidden inline confirm row between them), hidden until Ctrl+E. Like
+    // the comment composer it's a transient child view within the single already-open screen (not a
+    // nested run-loop / second screen), so the dashboard's single-ListView model (#3) is untouched. The
+    // host owns the ClickUp write via _setDescriptionAsync; the screen owns the seed, the dirty-check,
+    // and the in-place reflection of the server-confirmed text.
+    private readonly FrameView _descriptionBox;
+    private readonly TextView _descriptionEditor;
+    // The editor's focusable controls in Tab order: the editor, then Save, then Cancel.
+    private readonly View[] _descriptionControls;
+    // Inline unsaved-changes confirm row (shown only while an Esc-with-edits discard is pending),
+    // mirroring PromptTemplateEditorScreen's reset Y/N — no nested modal (#38).
+    private readonly Label _descriptionConfirm;
+    private readonly Func<string, CancellationToken, Task<string?>>? _setDescriptionAsync;
+    // True between an Esc-on-dirty and the Y/N answer; the next key confirms (discard+close) or dismisses.
+    private bool _descriptionPendingDiscard;
+    // Guards against a second Save (Ctrl+Enter mash / Save re-press) while a write is in flight.
+    private bool _savingDescription;
+    // The editor's ideal height: the multi-line editor rows + the confirm row + the Save/Cancel button
+    // row + the top/bottom frame border. Clamped on show so it degrades gracefully on a short terminal.
+    private const int DescriptionEditorRows = 12;
+    private const int DescriptionEditorPreferredHeight = DescriptionEditorRows + 1 + 1 + 2;
+
     // The Dispatch pane's working-dir layout (#95): rows above the browser (prompt, one-off, dir
     // field, key hint), the browser's own rows, and rows below (post-to-Comments). Used to size the
     // pane via DispatchPaneModel.PreferredHeightWithBrowser and to place the ListView.
@@ -216,6 +239,13 @@ public sealed class TaskDetailScreen : Screen
     /// owns the off-thread ClickUp write via this callback (the same injected-async seam #212 uses).
     /// Null disables the composer (<c>Ctrl+N</c> is inert), so non-interactive hosts stay unaffected.
     /// </param>
+    /// <param name="setDescriptionAsync">
+    /// Writes this task's plain-text description (#217, over the #211 facade) and returns the
+    /// server-confirmed value. The screen owns the editor UI + the dirty-check + the in-place reflection;
+    /// the host owns the off-thread ClickUp write via this callback (the same injected-async seam the
+    /// comment composer uses). Null disables the editor (<c>Ctrl+E</c> is inert), so non-interactive
+    /// hosts stay unaffected.
+    /// </param>
     public TaskDetailScreen(
         TaskDetail task,
         IReadOnlyList<CommentItem> comments,
@@ -224,13 +254,15 @@ public sealed class TaskDetailScreen : Screen
         AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive,
         bool defaultPostToComments = false,
         Func<string>? workingDirectoryPreFill = null,
-        Func<string, CancellationToken, Task<CommentItem>>? postCommentAsync = null)
+        Func<string, CancellationToken, Task<CommentItem>>? postCommentAsync = null,
+        Func<string, CancellationToken, Task<string?>>? setDescriptionAsync = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
         _comments = comments;
         _workingDirectoryPreFill = workingDirectoryPreFill;
         _postCommentAsync = postCommentAsync;
+        _setDescriptionAsync = setDescriptionAsync;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
@@ -403,16 +435,55 @@ public sealed class TaskDetailScreen : Screen
         foreach (var control in _commentControls)
             control.KeyDown += OnCommentKey;
 
+        // The description editor (#217): a bottom-anchored FrameView with a multi-line editor above a
+        // Save/Cancel button row (and a hidden confirm row), shown on Ctrl+E. Modelled on the comment
+        // composer — the editor keeps Enter for newlines (TabKeyAddsTab=false so Tab reaches the
+        // buttons) and Save is the default (Enter saves when a button has focus), so submit is
+        // driver-robust; Ctrl+Enter is wired as an extra save shortcut. Height is sized on show
+        // (ShowDescriptionEditor). Seeded (pre-filled) from the current description on each open.
+        _descriptionEditor = new TextView
+        {
+            X = 1,
+            Y = 0,
+            Width = Dim.Fill(1),
+            Height = Dim.Fill(2),
+            WordWrap = true,
+            TabKeyAddsTab = false,
+        };
+        // The inline discard confirm sits on its own row above the buttons so it never disturbs the
+        // editor/button layout; blank unless an Esc-on-dirty armed it.
+        _descriptionConfirm = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = "" };
+        var saveButton = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
+        var cancelDescriptionButton = new Button { X = Pos.Right(saveButton) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
+        saveButton.Accepting += (_, _) => SaveDescription();
+        cancelDescriptionButton.Accepting += (_, _) => CancelDescriptionEditor();
+        _descriptionControls = [_descriptionEditor, saveButton, cancelDescriptionButton];
+        _descriptionBox = new FrameView
+        {
+            Title = "Edit description — Ctrl+Enter or Tab→Save · Esc cancel",
+            X = 0,
+            Y = Pos.AnchorEnd(DescriptionEditorPreferredHeight),
+            Width = Dim.Fill(),
+            Height = DescriptionEditorPreferredHeight,
+            Visible = false,
+        };
+        _descriptionBox.Add(_descriptionEditor, _descriptionConfirm, saveButton, cancelDescriptionButton);
+        // Each editor control routes the pane's keys (Ctrl+Enter/Esc/Tab/Shift+Tab/F1 + the pending Y/N)
+        // via OnDescriptionKey; other keys fall through so typing + Enter-newline keep working.
+        foreach (var control in _descriptionControls)
+            control.KeyDown += OnDescriptionKey;
+
         // Focus lives in whichever scroll target (TextView) is front-most, so the key handler is wired
         // to each to reliably intercept Tab/Esc/Ctrl+B/Ctrl+A/F1 before the read-only TextView sees them.
         foreach (var target in _scrollTargets)
             target.KeyDown += OnKey;
         KeyDown += OnKey;
 
-        Add([_headerView, _tabs, _promptBox, _commentBox]);
+        Add([_headerView, _tabs, _promptBox, _commentBox, _descriptionBox]);
     }
 
-    public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Detail;
+    public override IReadOnlyList<HelpItem> HelpItems =>
+        _descriptionBox.Visible ? HelpItemSets.DetailDescriptionEditor : HelpItemSets.Detail;
 
     public override void OnShown()
     {
@@ -575,11 +646,12 @@ public sealed class TaskDetailScreen : Screen
 
     private void OnKey(object? sender, Key key)
     {
-        // While the comment composer (#216) is open it owns the keyboard: its own handler (OnCommentKey)
-        // processes Ctrl+Enter/Esc/Tab and lets the rest fall through to the editor. Don't let the
-        // screen's chords (Ctrl+B close, Ctrl+A/U/N openers, Tab tab-cycle, F5 refresh) fire underneath
-        // and disrupt (or discard) the draft.
-        if (_commentBox.Visible)
+        // While the comment composer (#216) or the description editor (#217) is open it owns the
+        // keyboard: its own handler (OnCommentKey / OnDescriptionKey) processes Ctrl+Enter/Esc/Tab and
+        // lets the rest fall through to the editor. Don't let the screen's chords (Ctrl+B close,
+        // Ctrl+A/U/N/E openers, Tab tab-cycle, F5 refresh) fire underneath and disrupt (or discard) the
+        // draft.
+        if (_commentBox.Visible || _descriptionBox.Visible)
             return;
 
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
@@ -608,6 +680,18 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             ShowCommentComposer();
+            return;
+        }
+
+        // Ctrl+E opens the description editor (#217), stacked as a bottom-anchored overlay like the
+        // comment composer. Same chord shape; inert while the Dispatch prompt is open or when no write
+        // callback was supplied (a non-interactive host). The read-only panes never need Ctrl+E, so
+        // pre-empting it is safe. The editor owns the keyboard once shown (the guard at the top of this
+        // handler), so a second Ctrl+E inside it is a no-op.
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.E && !_promptBox.Visible && _setDescriptionAsync is not null)
+        {
+            key.Handled = true;
+            ShowDescriptionEditor();
             return;
         }
 
@@ -1060,6 +1144,180 @@ public sealed class TaskDetailScreen : Screen
     {
         var msg = ex.Message.Replace('\n', ' ').Replace('\r', ' ').Trim();
         return msg.Length > 80 ? msg[..79] + "…" : msg;
+    }
+
+    // ── Description editor (#217) ──────────────────────────────────────────────
+
+    /// <summary>Handles keys while a description-editor control has focus. A pending unsaved-changes
+    /// discard confirm (armed by Esc-on-dirty) is answered first; then Tab/Shift+Tab cycle the editor
+    /// and buttons, and F1 opens Help — both would otherwise be swallowed by the editor / the
+    /// top-of-OnKey overlay guard. The pure <see cref="DescriptionEditorModel"/> decides the rest, and
+    /// keys it doesn't claim (<see cref="DescriptionEditorModel.EditorAction.PassThrough"/>) fall through
+    /// so multi-line typing (incl. Enter → newline) keeps working.</summary>
+    private void OnDescriptionKey(object? sender, Key key)
+    {
+        // While a discard is pending, the next keystroke answers the Y/N: only Y discards the edits and
+        // closes; anything else (incl. Esc/N) dismisses the confirm and returns to editing (draft kept).
+        if (_descriptionPendingDiscard)
+        {
+            key.Handled = true;
+            _descriptionPendingDiscard = false;
+            _descriptionConfirm.Text = "";
+            if ((key.KeyCode & ~KeyCode.ShiftMask) == KeyCode.Y)
+                HideDescriptionEditor();
+            return;
+        }
+
+        // Tab / Shift+Tab move between the editor and the Save/Cancel buttons, so the editor's
+        // TabKeyAddsTab=false doesn't just swallow Tab. Shift+Tab arrives as a bare Tab with IsShift.
+        if (key.KeyCode == KeyCode.Tab)
+        {
+            key.Handled = true;
+            MoveDescriptionFocus(forward: !key.IsShift);
+            return;
+        }
+
+        // F1 opens Help even while editing (mirrors the composer): handled here because the top-of-OnKey
+        // overlay guard would otherwise eat it; the draft stays intact under the stacked Help screen.
+        if (key.KeyCode == KeyCode.F1)
+        {
+            key.Handled = true;
+            RequestHelp();
+            return;
+        }
+
+        var action = DescriptionEditorModel.Route(ClassifyDescription(key));
+        if (action == DescriptionEditorModel.EditorAction.PassThrough)
+            return;
+
+        key.Handled = true;
+        switch (action)
+        {
+            case DescriptionEditorModel.EditorAction.Save:
+                SaveDescription();
+                break;
+            case DescriptionEditorModel.EditorAction.Cancel:
+                CancelDescriptionEditor();
+                break;
+        }
+    }
+
+    /// <summary>Classifies a key into the editor's vocabulary. Ctrl+Enter saves (a best-effort shortcut
+    /// alongside the default Save button — on drivers that fold it into a bare Enter it just inserts a
+    /// newline, which is harmless); Esc cancels; everything else passes through so typing and
+    /// Enter-newline in the multi-line editor are undisturbed.</summary>
+    private static DescriptionEditorModel.EditorKey ClassifyDescription(Key key)
+    {
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.Enter)
+            return DescriptionEditorModel.EditorKey.Save;
+        if (key.KeyCode == KeyCode.Esc)
+            return DescriptionEditorModel.EditorKey.Cancel;
+        return DescriptionEditorModel.EditorKey.Other;
+    }
+
+    /// <summary>Moves focus to the next/previous editor control, wrapping at both ends (reuses the
+    /// Dispatch pane's wraparound cycle).</summary>
+    private void MoveDescriptionFocus(bool forward)
+    {
+        var current = Array.FindIndex(_descriptionControls, static c => c.HasFocus);
+        if (current < 0)
+            current = 0;
+        _descriptionControls[DispatchPaneModel.NextFocus(current, _descriptionControls.Length, forward)].SetFocus();
+    }
+
+    /// <summary>Opens the description editor: seeds (pre-fills) it with the current description, sizes
+    /// the pane to the terminal (the editor rows clip before the button row on a very short window,
+    /// reusing the Dispatch pane's clamp), shows it and focuses the editor.</summary>
+    private void ShowDescriptionEditor()
+    {
+        if (_descriptionBox.Visible)
+            return;
+        _descriptionEditor.Text = DescriptionEditorModel.Seed(_task.Description);
+        _descriptionPendingDiscard = false;
+        _descriptionConfirm.Text = "";
+        var height = DispatchPaneModel.ClampHeight(DescriptionEditorPreferredHeight, Viewport.Height, minTabRows: 3);
+        _descriptionBox.Height = height;
+        _descriptionBox.Y = Pos.AnchorEnd(height);
+        _descriptionBox.Visible = true;
+        _descriptionEditor.SetFocus();
+    }
+
+    /// <summary>Closes the editor and returns focus to the front-most tab (mirrors HidePrompt), clearing
+    /// any pending discard confirm.</summary>
+    private void HideDescriptionEditor()
+    {
+        if (!_descriptionBox.Visible)
+            return;
+        _descriptionBox.Visible = false;
+        _descriptionPendingDiscard = false;
+        _descriptionConfirm.Text = "";
+        FocusCurrentPane();
+    }
+
+    /// <summary>Esc / Cancel: closes immediately when there are no unsaved edits, otherwise arms the
+    /// inline discard confirm (the next key answers Y/N) rather than losing the draft silently.</summary>
+    private void CancelDescriptionEditor()
+    {
+        if (!DescriptionEditorModel.IsDirty(_task.Description, _descriptionEditor.Text?.ToString()))
+        {
+            HideDescriptionEditor();
+            return;
+        }
+        _descriptionPendingDiscard = true;
+        _descriptionConfirm.Text = "Discard unsaved changes to the description? (Y / N)";
+    }
+
+    /// <summary>
+    /// Saves the edited description (#217). An unchanged editor just closes (no needless write). A real
+    /// change is written off the UI thread via the injected callback; on success the detail reflects the
+    /// server-confirmed text in place (via <see cref="UpdateData"/>, scroll/cursor preserved) and the
+    /// editor closes, on failure the editor stays open with the draft intact and the error is flashed. A
+    /// second Save while a write is in flight is ignored. The <c>_disposed</c> guard mirrors the
+    /// comment-post path so a save that completes after the screen closed doesn't touch torn-down views.
+    /// </summary>
+    private void SaveDescription()
+    {
+        if (_savingDescription || _setDescriptionAsync is null)
+            return;
+        var raw = _descriptionEditor.Text?.ToString();
+        if (!DescriptionEditorModel.IsDirty(_task.Description, raw))
+        {
+            HideDescriptionEditor();
+            return;
+        }
+        var text = DescriptionEditorModel.Normalize(raw);
+        _savingDescription = true;
+        RequestFlash("Saving description…");
+
+        // Fully-qualified: this screen exposes a `Task` property (the shown TaskDetail), which would
+        // otherwise shadow System.Threading.Tasks.Task in this expression.
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                var confirmed = await _setDescriptionAsync(text, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _savingDescription = false;
+                    if (_disposed)
+                        return; // the detail screen was closed mid-save — don't touch torn-down views
+                    UpdateData(_task with { Description = confirmed }, _comments);
+                    HideDescriptionEditor();
+                    RequestFlash("Description saved.");
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _savingDescription = false;
+                    if (_disposed)
+                        return;
+                    // Keep the editor open with the draft intact so the user can retry or copy it out.
+                    RequestFlash($"Could not save description: {ShortError(ex)}");
+                });
+            }
+        });
     }
 
     /// <summary>Sets the activity sort direction and re-renders <em>both</em> the Stream and Comments
