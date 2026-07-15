@@ -28,6 +28,10 @@ public sealed class ResolveWorkspaceListsTests
         public Dictionary<string, List<NamedEntity>> FolderLists { get; } = new(StringComparer.Ordinal);
         public HashSet<string> ThrowOnSpace { get; } = new(StringComparer.Ordinal);
 
+        /// <summary>Exception thrown for spaces in <see cref="ThrowOnSpace"/>; swap in a
+        /// cancellation-typed one to model an HttpClient timeout (token unsignalled).</summary>
+        public Func<Exception> SpaceException { get; set; } = () => new InvalidOperationException("boom");
+
         public int SpacesCalls;
         public readonly List<string> WalkedSpaces = [];
         private readonly object _gate = new();
@@ -43,7 +47,7 @@ public sealed class ResolveWorkspaceListsTests
             lock (_gate)
                 WalkedSpaces.Add(spaceId);
             if (ThrowOnSpace.Contains(spaceId))
-                throw new InvalidOperationException("boom");
+                throw SpaceException();
             return Task.FromResult<IReadOnlyList<NamedEntity>>(
                 FolderlessLists.TryGetValue(spaceId, out var lists) ? lists : []);
         }
@@ -188,5 +192,39 @@ public sealed class ResolveWorkspaceListsTests
 
         Assert.True(result.PassComplete);
         Assert.Empty(result.Lists);
+    }
+
+    [Fact]
+    public async Task TimeoutShapedCancellation_IsSkippedLikeAnyFailure_NotTreatedAsShutdown()
+    {
+        // An HttpClient timeout surfaces as a TaskCanceledException with OUR token unsignalled (the
+        // trap RefreshService.RunAsync filters for at the loop level). One slow space must degrade
+        // like any per-space failure — the other spaces' lists still land and the step completes —
+        // not abort the whole step and discard its siblings' results.
+        var fake = new FakeClient
+        {
+            Spaces = [E("s1"), E("s2")],
+            SpaceException = () => new TaskCanceledException("simulated HTTP timeout"),
+        };
+        fake.ThrowOnSpace.Add("s1");
+        fake.FolderlessLists["s2"] = [E("l2")];
+
+        var result = await Service(fake).ResolveWorkspaceListsAsync();
+
+        Assert.True(result.PassComplete);
+        Assert.Equal(["l2"], result.Lists.Select(l => l.Id));
+    }
+
+    [Fact]
+    public async Task GenuineCancellation_Propagates()
+    {
+        // A signalled token is real shutdown and must NOT be swallowed as best-effort.
+        var fake = new FakeClient { Spaces = [E("s1")] };
+        fake.FolderlessLists["s1"] = [E("l1")];
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Service(fake).ResolveWorkspaceListsAsync(cts.Token));
     }
 }

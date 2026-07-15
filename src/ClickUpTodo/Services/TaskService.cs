@@ -625,10 +625,13 @@ public sealed class TaskService(
                         foreach (var list in await client.GetListsInFolderAsync(folder.Id, token))
                             found.Add(list);
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
                 {
                     // Best-effort (#236): a space we can't walk contributes nothing this pass; the
-                    // next pass retries it.
+                    // next pass retries it. That includes an HttpClient timeout — a cancellation-typed
+                    // exception with our token unsignalled (RefreshService filters the same trap) —
+                    // which must not abort the whole step and drop the other spaces' results. Only a
+                    // genuine cancellation (token signalled: shutdown) propagates.
                 }
             });
 

@@ -344,12 +344,16 @@ public sealed class TodoApp
         {
             return (await _tasks.ResolveWorkspaceListsAsync(ct)).PassComplete;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            throw; // shutdown / superseded fetch — let the refresh loop's own handling see it
+            throw; // genuine shutdown — let the refresh loop's own handling see it
         }
         catch (Exception ex)
         {
+            // Everything else backs off — including an HttpClient timeout, which surfaces as a
+            // (Task)CanceledException with our ct UNSIGNALLED (the same trap RefreshService.RunAsync
+            // filters for): rethrown, it would fail the whole cycle as "Refresh failed" even though
+            // the snapshot and resolvers succeeded.
             Debug.WriteLine($"Workspace list walk failed (backing off to its next window): {ex}");
             return true;
         }
