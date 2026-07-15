@@ -72,6 +72,32 @@ public sealed class DirectoryBrowserModelTests : IDisposable
     }
 
     [Fact]
+    public void SelectionPathAt_SubdirectoryIsItsFullPath_ParentIsCurrentDirectory()
+    {
+        // Backs the glue's selection-follows-cursor sync (#95 follow-up): highlighting a subdirectory
+        // selects its full path, while highlighting ".." selects the directory being browsed itself —
+        // NOT its parent (which is what PathAt(0) resolves to, for up-navigation).
+        Directory.CreateDirectory(Sub("child"));
+        var model = new DirectoryBrowserModel(_root);
+
+        Assert.Equal(Sub("child"), model.SelectionPathAt(1));
+        Assert.Equal(model.CurrentDirectory, model.SelectionPathAt(0));
+        Assert.NotEqual(model.PathAt(0), model.SelectionPathAt(0));
+    }
+
+    [Fact]
+    public void SelectionPathAt_AfterDescend_ParentRowIsTheDescendedDirectory()
+    {
+        // Descending re-homes the highlight onto ".." (index 0); the sync must then reflect the dir
+        // just entered, so a descend alone selects that directory as the working dir.
+        Directory.CreateDirectory(Sub("child"));
+        var model = new DirectoryBrowserModel(_root);
+        model.Descend(1); // into "child"
+
+        Assert.Equal(DirectoryBrowserModel.Normalize(Sub("child")), model.SelectionPathAt(0));
+    }
+
+    [Fact]
     public void Descend_ThenNavigateUp_RoundTripsToRoot()
     {
         Directory.CreateDirectory(Sub("child", "grandchild"));

@@ -50,6 +50,17 @@ public sealed class DirectoryBrowserModel
         return CurrentDirectory;
     }
 
+    /// <summary>
+    /// The working-directory path a highlighted list row represents when the selection cursor drives
+    /// the Dispatch pane's path field (so a merely-highlighted directory is the one that dispatches,
+    /// with no separate confirm step): the directory currently being browsed for the ".." row, and
+    /// the highlighted subdirectory's full path otherwise. Unlike <see cref="PathAt"/> — which
+    /// resolves ".." to the <em>parent</em> for up-navigation — this never points above
+    /// <see cref="CurrentDirectory"/>, so highlighting ".." yields the current directory itself (which,
+    /// after descending into a directory, is exactly the directory just entered).
+    /// </summary>
+    public string SelectionPathAt(int index) => IsParent(index) ? CurrentDirectory : PathAt(index);
+
     /// <summary>Moves up one level (a no-op at a filesystem root) and repopulates <see cref="Entries"/>.</summary>
     public void NavigateUp() => MoveTo(Parent(CurrentDirectory));
 
