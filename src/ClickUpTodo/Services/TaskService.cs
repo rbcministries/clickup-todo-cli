@@ -363,6 +363,19 @@ public sealed class TaskService(
     public Task<int?> SetPriorityAsync(string taskId, int? priorityLevel, CancellationToken ct = default)
         => client.SetTaskPriorityAsync(taskId, priorityLevel, ct);
 
+    /// <summary>
+    /// Adds an assignee to a task and returns the <b>server-confirmed</b> assignee set, so the UI can
+    /// reconcile to the truth after an optimistic update (Quick Updates Assignees pane, #158). Thin
+    /// wrapper over the facade, mirroring <see cref="SetStatusAsync"/>/<see cref="SetPriorityAsync"/>.
+    /// </summary>
+    public Task<IReadOnlyList<TaskAssignee>> AddAssigneeAsync(string taskId, long userId, CancellationToken ct = default)
+        => client.AddTaskAssigneeAsync(taskId, userId, ct);
+
+    /// <summary>Removes an assignee from a task and returns the server-confirmed assignee set (#158);
+    /// the remove sibling of <see cref="AddAssigneeAsync"/>.</summary>
+    public Task<IReadOnlyList<TaskAssignee>> RemoveAssigneeAsync(string taskId, long userId, CancellationToken ct = default)
+        => client.RemoveTaskAssigneeAsync(taskId, userId, ct);
+
     /// <summary>Full detail for a single task, fetched on demand for the detail view (#17).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskDetailAsync(taskId, ct);
@@ -390,6 +403,17 @@ public sealed class TaskService(
         => tasks.Select(t => t.Id == taskId
             ? t with { PriorityLevel = level, PriorityName = name, PriorityColor = color }
             : t).ToList();
+
+    /// <summary>
+    /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying
+    /// <paramref name="assignees"/>, leaving every other task and the overall order untouched. Pure
+    /// (the input list is not mutated), the assignee sibling of <see cref="ApplyStatusChange"/> /
+    /// <see cref="ApplyPriorityChange"/> so the TUI can reflect a server-confirmed assignee change in
+    /// place (Quick Updates Assignees pane, #158).
+    /// </summary>
+    public static IReadOnlyList<TaskItem> ApplyAssigneesChange(
+        IReadOnlyList<TaskItem> tasks, string taskId, IReadOnlyList<TaskAssignee> assignees)
+        => tasks.Select(t => t.Id == taskId ? t with { Assignees = assignees } : t).ToList();
 
     /// <summary>
     /// The distinct parent ids referenced by a subtask in <paramref name="snapshot"/> that aren't
