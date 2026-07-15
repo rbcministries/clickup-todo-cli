@@ -129,4 +129,66 @@ public sealed class StatusUpdateTests
         Assert.Equal(["1", "2"], updated.Select(t => t.Id));
         Assert.Equal([2, 4], updated.Select(t => t.PriorityLevel));
     }
+
+    // ── ApplyAssigneesChange (the assignee sibling, #158) ────────────────────────
+
+    private static TaskItem Asg(string id, params TaskAssignee[] assignees) => new()
+    {
+        Id = id,
+        Name = id,
+        Assignees = assignees,
+    };
+
+    [Fact]
+    public void ApplyAssigneesChange_UpdatesOnlyTheMatchingTask()
+    {
+        TaskItem[] tasks =
+        [
+            Asg("1", new TaskAssignee(1, "Ada")),
+            Asg("2", new TaskAssignee(1, "Ada")),
+            Asg("3", new TaskAssignee(1, "Ada")),
+        ];
+
+        var confirmed = new[] { new TaskAssignee(1, "Ada"), new TaskAssignee(2, "Grace") };
+        var updated = TaskService.ApplyAssigneesChange(tasks, "2", confirmed);
+
+        Assert.Equal([1], updated[0].Assignees.Select(a => a.Id));
+        Assert.Equal([1, 2], updated[1].Assignees.Select(a => a.Id));
+        Assert.Equal([1], updated[2].Assignees.Select(a => a.Id));
+    }
+
+    [Fact]
+    public void ApplyAssigneesChange_PreservesOrderAndCount_AndDoesNotMutateInput()
+    {
+        var original = Asg("b", new TaskAssignee(1, "Ada"));
+        TaskItem[] tasks = [Asg("a", new TaskAssignee(9, "Nine")), original, Asg("c")];
+
+        var updated = TaskService.ApplyAssigneesChange(tasks, "b", [new TaskAssignee(2, "Grace")]);
+
+        Assert.Equal(["a", "b", "c"], updated.Select(t => t.Id));
+        Assert.Equal([1], original.Assignees.Select(a => a.Id));   // input record untouched
+        Assert.NotSame(original, updated[1]);
+        Assert.Equal([2], updated[1].Assignees.Select(a => a.Id));
+    }
+
+    [Fact]
+    public void ApplyAssigneesChange_NoMatch_ReturnsEquivalentSnapshot()
+    {
+        TaskItem[] tasks = [Asg("1", new TaskAssignee(1, "Ada")), Asg("2", new TaskAssignee(2, "Grace"))];
+
+        var updated = TaskService.ApplyAssigneesChange(tasks, "missing", []);
+
+        Assert.Equal([1], updated[0].Assignees.Select(a => a.Id));
+        Assert.Equal([2], updated[1].Assignees.Select(a => a.Id));
+    }
+
+    [Fact]
+    public void ApplyAssigneesChange_CanClearAssigneesToEmpty()
+    {
+        TaskItem[] tasks = [Asg("1", new TaskAssignee(1, "Ada"), new TaskAssignee(2, "Grace"))];
+
+        var updated = TaskService.ApplyAssigneesChange(tasks, "1", []);
+
+        Assert.Empty(updated[0].Assignees);
+    }
 }

@@ -130,18 +130,4 @@ public sealed class QuickUpdatesModelTests
             rows);
     }
 
-    // ── Assignee stub rows ───────────────────────────────────────────────────────
-
-    [Fact]
-    public void AssigneeRows_ListsCurrentAssignees()
-    {
-        var rows = QuickUpdatesModel.AssigneeRows(
-            [new TaskAssignee(1, "Ada"), new TaskAssignee(2, "Grace")]);
-
-        Assert.Equal(["  Ada", "  Grace"], rows);
-    }
-
-    [Fact]
-    public void AssigneeRows_ShowsPlaceholder_WhenNoAssignees()
-        => Assert.Equal(["  (no assignees)"], QuickUpdatesModel.AssigneeRows([]));
 }

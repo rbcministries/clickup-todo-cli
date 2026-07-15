@@ -13,8 +13,10 @@ public enum QuickUpdatesPane
 /// <summary>
 /// Pure presentation/navigation logic for the Quick Updates screen, factored out of the Terminal.Gui
 /// glue so it can be unit-tested without a terminal (mirrors <see cref="StatusPickerModel"/>). Covers
-/// the pane cycle order + wrap, the Status/Priority rows with their leading <c>✓</c> current-value
-/// marker + preselection (#157), and the Assignees stub rows (#158 fills in search/apply).
+/// the pane cycle order + wrap and the Status/Priority rows with their leading <c>✓</c> current-value
+/// marker + preselection (#157). The Assignees pane's own row/search/toggle logic lives in
+/// <see cref="AssigneeSelectorModel"/> (#212), embedded by the screen as an
+/// <see cref="AssigneeSelectorView"/> in immediate-apply mode (#158).
 /// </summary>
 public static class QuickUpdatesModel
 {
@@ -75,13 +77,4 @@ public static class QuickUpdatesModel
     /// effective <paramref name="effectiveLevel"/> (the clear row when it has no priority).</summary>
     public static IReadOnlyList<string> PriorityRows(int? effectiveLevel)
         => [.. PriorityLabels.Select((label, i) => Mark(label, PriorityLevelForRow(i) == effectiveLevel))];
-
-    /// <summary>
-    /// The rows for the (stubbed) Assignees pane: the task's current assignees, or a single
-    /// <c>(no assignees)</c> placeholder when there are none. The candidate pool + search land in #158.
-    /// </summary>
-    public static IReadOnlyList<string> AssigneeRows(IReadOnlyList<TaskAssignee> assignees)
-        => assignees.Count == 0
-            ? [NoMarker + "(no assignees)"]
-            : [.. assignees.Select(a => NoMarker + a.Name)];
 }

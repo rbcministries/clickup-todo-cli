@@ -45,10 +45,12 @@ namespace ClickUpTodo.Tui.Screens;
 /// <para>
 /// <b>Working-dir browser (#95):</b> a single-column <c>ListView</c> under the field, listing
 /// <c>..</c> then the current directory's subdirectories (via the unit-tested
-/// <see cref="DirectoryBrowserModel"/>). ↑/↓ move; → descends into the highlighted dir; ← goes up;
-/// <b>Enter selects</b> the highlighted dir (writes its path into the field and advances focus) —
-/// on <c>..</c>, Enter goes up so it never submits from the browser. A blank field falls through to
-/// the configured-default / task-derived working dir (#98).
+/// <see cref="DirectoryBrowserModel"/>). ↑/↓ move; → descends into the highlighted dir; ← goes up.
+/// <b>The highlight drives the path field:</b> moving the cursor mirrors the highlighted directory
+/// straight into the field (so the highlighted dir is the one that dispatches — no separate select
+/// step), and <b>Enter</b> just confirms it and advances focus. On <c>..</c>, Enter goes up so it
+/// never submits from the browser. A blank field falls through to the configured-default /
+/// task-derived working dir (#98).
 /// </para>
 /// </summary>
 public sealed class TaskDetailScreen : Screen
@@ -75,6 +77,11 @@ public sealed class TaskDetailScreen : Screen
     private readonly ListView _dirBrowser;
     private readonly DirectoryBrowserModel _browser;
     private readonly CheckBox _postToCommentsToggle;
+    // Guards the working-dir field against the browser's selection-follows-cursor sync while the pane
+    // is being (re)opened: pre-fill writes the per-task cached dir (#96) into the field, then resetting
+    // the browser fires ValueChanged, which would otherwise immediately clobber that pre-fill with the
+    // browser root. Set only around the open block in ShowPrompt; genuine user navigation runs unguarded.
+    private bool _suppressWorkingDirSync;
     // Supplies the per-task cached working directory (#96) the pane's dir field is pre-filled with,
     // read live on each open so a same-session dispatch that updated the cache is reflected on reopen;
     // blank/null ⇒ start blank (⇒ configured default / task-derived dir #98).
@@ -277,7 +284,7 @@ public sealed class TaskDetailScreen : Screen
         {
             X = 1,
             Y = 3,
-            Text = "↑↓ move · → open · ← up · Enter select (blank ⇒ default dir)",
+            Text = "↑↓ pick · → open · ← up · Enter confirm (blank ⇒ default dir)",
         };
         _dirBrowser = new ListView
         {
@@ -324,6 +331,11 @@ public sealed class TaskDetailScreen : Screen
             else
                 control.KeyDown += OnDispatchKey;
         }
+        // Selection-follows-cursor (#95 follow-up): moving the highlight in the browser (↑/↓, a mouse
+        // click, or a descend/up that re-homes it) writes the highlighted directory straight into the
+        // path field, so the highlighted dir is the one that dispatches — no separate Enter/select step.
+        // Wired after the constructor's initial SelectedItem=0 so that first assignment can't fire it.
+        _dirBrowser.ValueChanged += OnBrowserSelectionChanged;
 
         // Focus lives in whichever scroll target (TextView) is front-most, so the key handler is wired
         // to each to reliably intercept Tab/Esc/Ctrl+B/Ctrl+A/F1 before the read-only TextView sees them.
@@ -618,11 +630,12 @@ public sealed class TaskDetailScreen : Screen
     };
 
     /// <summary>
-    /// Handles keys while the working-dir file-tree browser (#95) has focus. Enter selects the
-    /// highlighted directory (→ fills the field and advances focus), → descends into it, ← / a "select"
-    /// on ".." goes up; everything else (↑/↓ list navigation, Tab, Esc, PgUp/PgDn) routes through the
-    /// same <see cref="DispatchPaneModel"/> path as the other controls. Intercepting Enter here keeps it
-    /// from submitting the dispatch while browsing.
+    /// Handles keys while the working-dir file-tree browser (#95) has focus. Enter confirms the
+    /// highlighted directory (already mirrored into the field by the selection-follows-cursor sync) and
+    /// advances focus, → descends into it, ← / a "confirm" on ".." goes up; everything else (↑/↓ list
+    /// navigation, Tab, Esc, PgUp/PgDn) routes through the same <see cref="DispatchPaneModel"/> path as
+    /// the other controls — the ↑/↓ that move the highlight are what trigger the field sync. Intercepting
+    /// Enter here keeps it from submitting the dispatch while browsing.
     /// </summary>
     private void OnBrowserKey(object? sender, Key key)
     {
@@ -649,6 +662,22 @@ public sealed class TaskDetailScreen : Screen
 
     /// <summary>The highlighted browser row (0 = ".."), clamped to a valid index.</summary>
     private int SelectedBrowserIndex() => _dirBrowser.SelectedItem is int i && i >= 0 ? i : 0;
+
+    /// <summary>
+    /// Selection-follows-cursor: whenever the browser's highlight moves, mirror the highlighted
+    /// directory into the working-dir field so it — not a stale field value — is what dispatches. A
+    /// highlighted subdirectory is an explicit pick; the ".." row resolves via
+    /// <see cref="DirectoryBrowserModel.SelectionPathAt"/> to the directory being browsed, or to blank
+    /// at the root (so grazing the list doesn't turn the configured default dir into an explicit pick
+    /// and drop task-derived per-task output #98). Suppressed while the pane is (re)opening so the
+    /// pre-filled per-task cached dir (#96) survives the browser's reset.
+    /// </summary>
+    private void OnBrowserSelectionChanged(object? sender, ValueChangedEventArgs<int?> e)
+    {
+        if (_suppressWorkingDirSync)
+            return;
+        _workingDirField.Text = _browser.SelectionPathAt(e.NewValue is int i && i >= 0 ? i : 0);
+    }
 
     /// <summary>
     /// Refreshes the ListView from the model's current listing. Highlights <paramref name="selectEntry"/>
@@ -680,7 +709,9 @@ public sealed class TaskDetailScreen : Screen
         RefreshBrowser(selectEntry: leaving);
     }
 
-    /// <summary>Enter: select the highlighted directory into the field and advance focus; ".." goes up.</summary>
+    /// <summary>Enter: confirm the highlighted directory into the field and advance focus; ".." goes up.
+    /// The field already tracks the highlight (selection-follows-cursor); the write here keeps Enter
+    /// correct even if the highlight was never moved (so the field was never synced).</summary>
     private void SelectBrowserEntry()
     {
         var index = SelectedBrowserIndex();
@@ -751,9 +782,19 @@ public sealed class TaskDetailScreen : Screen
         // from this task, or blank (⇒ default dir #98) if none — read live so a dispatch earlier in
         // this same open detail screen is reflected on reopen. Reset the browser to its root (the base
         // working dir #92); pre-fill is independent of browser navigation.
-        _workingDirField.Text = _workingDirectoryPreFill?.Invoke() ?? string.Empty;
-        _browser.Reset();
-        RefreshBrowser();
+        // Guard the selection-follows-cursor sync: resetting the browser fires ValueChanged, which
+        // would otherwise overwrite the pre-fill with the browser root before the user touches it.
+        _suppressWorkingDirSync = true;
+        try
+        {
+            _workingDirField.Text = _workingDirectoryPreFill?.Invoke() ?? string.Empty;
+            _browser.Reset();
+            RefreshBrowser();
+        }
+        finally
+        {
+            _suppressWorkingDirSync = false;
+        }
         // Size the pane to the current tab body so it degrades gracefully on short terminals: the
         // prompt row + borders always survive; the bottom controls (browser, post-to-Comments) clip first.
         var height = DispatchPaneModel.ClampHeight(

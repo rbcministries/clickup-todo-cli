@@ -72,6 +72,56 @@ public sealed class DirectoryBrowserModelTests : IDisposable
     }
 
     [Fact]
+    public void SelectionPathAt_SubdirectoryIsItsFullPath()
+    {
+        // Backs the glue's selection-follows-cursor sync (#95 follow-up): highlighting a subdirectory
+        // selects its full path (an explicit pick), NOT its "up-navigation" resolution.
+        Directory.CreateDirectory(Sub("child"));
+        var model = new DirectoryBrowserModel(_root);
+
+        Assert.Equal(Sub("child"), model.SelectionPathAt(1));
+    }
+
+    [Fact]
+    public void SelectionPathAt_ParentAtRoot_IsBlank_ToPreserveDefaultDir()
+    {
+        // At the browser root, ".." resolves to the root itself — the configured base/default dir.
+        // Returning it verbatim would read as an explicit pick and drop task-derived per-task output
+        // (#98), so the sync must leave the field blank ("no explicit pick") for a stray graze.
+        Directory.CreateDirectory(Sub("child"));
+        var model = new DirectoryBrowserModel(_root);
+
+        Assert.Equal(string.Empty, model.SelectionPathAt(0));
+        // ...and it is deliberately NOT the parent that PathAt(0) resolves to.
+        Assert.NotEqual(model.PathAt(0), model.SelectionPathAt(0));
+    }
+
+    [Fact]
+    public void SelectionPathAt_AfterDescend_ParentRowIsTheDescendedDirectory()
+    {
+        // Descending re-homes the highlight onto ".." (index 0); below the root that IS an explicit
+        // pick, so the sync reflects the dir just entered — a descend alone selects it.
+        Directory.CreateDirectory(Sub("child"));
+        var model = new DirectoryBrowserModel(_root);
+        model.Descend(1); // into "child"
+
+        Assert.Equal(DirectoryBrowserModel.Normalize(Sub("child")), model.SelectionPathAt(0));
+    }
+
+    [Fact]
+    public void SelectionPathAt_ParentBackAtRootAfterUp_IsBlankAgain()
+    {
+        // Descending then returning to the root must restore the "blank ⇒ default dir" ".." behaviour,
+        // so the root case is genuinely root-relative rather than a one-shot on construction.
+        Directory.CreateDirectory(Sub("child"));
+        var model = new DirectoryBrowserModel(_root);
+        model.Descend(1);   // into "child" (".." now an explicit pick)
+        model.NavigateUp(); // back to root
+
+        Assert.Equal(string.Empty, model.SelectionPathAt(0));
+    }
+
+    [Fact]
     public void Descend_ThenNavigateUp_RoundTripsToRoot()
     {
         Directory.CreateDirectory(Sub("child", "grandchild"));

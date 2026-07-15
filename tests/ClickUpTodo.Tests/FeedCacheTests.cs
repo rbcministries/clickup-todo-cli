@@ -17,6 +17,16 @@ public sealed class FeedCacheTests : IDisposable
 
     private JsonFileStateStore Store() => new(_dir);
 
+    /// <summary>A TimeProvider whose clock only advances when the test moves it.</summary>
+    private sealed class FakeClock(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    private static FakeClock NewClock() => new(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+
     private static AppConfig Config(string workspace = "ws-1", string list = "list-1", ViewSettings? view = null)
         => new()
         {
@@ -143,6 +153,106 @@ public sealed class FeedCacheTests : IDisposable
         });
 
         Assert.Null(new FeedCache(store).Load(config));
+    }
+
+    [Fact]
+    public void Load_WhenPriorSchemaVersion_ReturnsNull()
+    {
+        // The #124 bump (1 → 2, adding the capture timestamp) must discard a pre-#124 v1 document rather
+        // than paint it with a fabricated (zero) age.
+        var store = Store();
+        var config = Config();
+        store.Save(StateKeys.Feed, new FeedCacheDocument
+        {
+            SchemaVersion = 1,
+            Key = FeedCache.KeyFor(config),
+            Items = [Comment("c1")],
+        });
+
+        Assert.Null(new FeedCache(store).Load(config));
+    }
+
+    // --- staleness / TTL / eviction (#124) -------------------------------------------------------
+
+    [Fact]
+    public void LoadSnapshot_ReturnsTheCaptureTime()
+    {
+        var clock = NewClock();
+        var store = Store();
+        var config = Config();
+        new FeedCache(store, clock).Save(config, [Comment("c1")]);
+
+        clock.Advance(TimeSpan.FromMinutes(5));
+        var snapshot = new FeedCache(store, clock).LoadSnapshot(config);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("c1", snapshot!.Items.Single().Id);
+        Assert.Equal(TimeSpan.FromMinutes(5), clock.GetUtcNow() - snapshot.CapturedAt);
+    }
+
+    [Fact]
+    public void Load_WhenWithinMaxAge_Hits()
+    {
+        var clock = NewClock();
+        var store = Store();
+        var config = Config();
+        var maxAge = TimeSpan.FromDays(14);
+        new FeedCache(store, clock, maxAge).Save(config, [Comment("c1")]);
+
+        clock.Advance(maxAge - TimeSpan.FromSeconds(1)); // just inside the window
+        var loaded = new FeedCache(store, clock, maxAge).Load(config);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("c1", loaded!.Single().Id);
+    }
+
+    [Fact]
+    public void Load_WhenExactlyAtMaxAge_IsStale()
+    {
+        // The boundary is exclusive (age == maxAge is a miss), matching StatusCache's age < ttl.
+        var clock = NewClock();
+        var store = Store();
+        var config = Config();
+        var maxAge = TimeSpan.FromDays(14);
+        new FeedCache(store, clock, maxAge).Save(config, [Comment("c1")]);
+
+        clock.Advance(maxAge); // exactly on the boundary
+        Assert.Null(new FeedCache(store, clock, maxAge).Load(config));
+    }
+
+    [Fact]
+    public void Load_WhenOlderThanMaxAge_ReturnsNullAndPrunesTheStaleDocument()
+    {
+        var clock = NewClock();
+        var store = Store();
+        var config = Config();
+        var maxAge = TimeSpan.FromDays(14);
+        new FeedCache(store, clock, maxAge).Save(config, [Comment("c1")]);
+
+        clock.Advance(maxAge + TimeSpan.FromSeconds(1)); // just past the window
+        var loaded = new FeedCache(store, clock, maxAge).Load(config);
+
+        Assert.Null(loaded);
+        Assert.False(store.Exists(StateKeys.Feed)); // self-pruned, not left to linger
+    }
+
+    [Fact]
+    public void Load_WhenTimestampIsOutOfRange_ReturnsNullAndPrunes()
+    {
+        // A hand-tampered file with a nonsense timestamp must degrade to a miss (and get pruned), never
+        // throw on the pre-UI-loop load path.
+        var store = Store();
+        var config = Config();
+        store.Save(StateKeys.Feed, new FeedCacheDocument
+        {
+            SchemaVersion = FeedCache.CurrentSchemaVersion,
+            Key = FeedCache.KeyFor(config),
+            CapturedAtMs = long.MaxValue,
+            Items = [Comment("c1")],
+        });
+
+        Assert.Null(new FeedCache(store).Load(config));
+        Assert.False(store.Exists(StateKeys.Feed));
     }
 
     // --- supersede / clear -----------------------------------------------------------------------
