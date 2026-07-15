@@ -56,7 +56,20 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
     private static readonly string[] Lists = ["plist", "list2", "list3"];
     private static readonly string[] ListNames = ["Personal Tasks", "Q3 Website Refresh", "Ministry Ops"];
 
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    // Workspace members feed the assignee-frequency pool (#155): the Quick Updates Assignees pane
+    // (#158) shows these in its empty-state top-up and matches them on type-ahead search.
+    private static readonly (long Id, string Name)[] Members =
+    [
+        (101, "Ada Lovelace"), (102, "Grace Hopper"), (103, "Alan Turing"),
+        (104, "Margaret Hamilton"), (105, "Katherine Johnson"), (106, "Linus Torvalds"),
+    ];
+
+    // The current assignee set of any task the Assignees pane writes to, mutated by the PUT so the
+    // add/remove round-trip is truthful (the write response echoes the new set, which the pane and the
+    // list row reconcile to). Starts empty so the empty-state list shows the top-frequent members.
+    private readonly HashSet<long> _assignees = [];
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         var path = request.RequestUri!.AbsolutePath;
         var query = request.RequestUri.Query;
@@ -66,8 +79,17 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
             body = """{"user":{"id":1,"username":"bench","email":"bench@example.com"}}""";
         else if (path.Contains("/task/") && path.EndsWith("/comment"))
             body = CommentsJson(TaskIdOfComment(path));
+        else if (path.Contains("/task/") && request.Method == HttpMethod.Put)
+        {
+            // Status/priority PUTs carry no assignees (the set is untouched); an assignee add/remove
+            // mutates the shared set. Either way echo the task with the current assignees so the write
+            // response reconciles correctly.
+            if (request.Content is { } content)
+                ApplyAssigneeMutation(await content.ReadAsStringAsync(ct));
+            body = DetailJson(path, _assignees);
+        }
         else if (path.Contains("/task/"))
-            body = DetailJson(path);
+            body = DetailJson(path, _assignees);
         else if (path.Contains("/team/") && path.EndsWith("/task"))
             body = TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
         else if (path.Contains("/list/") && path.EndsWith("/task"))
@@ -75,14 +97,14 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
         else if (path.Contains("/list/"))
             body = ListJson(path);
         else if (path.EndsWith("/team"))
-            body = """{"teams":[{"id":"ws1","name":"Bench","members":[]}]}""";
+            body = $$"""{"teams":[{"id":"ws1","name":"Bench","members":[{{MembersJson()}}]}]}""";
         else
             body = "{}";
 
-        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(body, Encoding.UTF8, "application/json"),
-        });
+        };
     }
 
     private static int PageOf(string query)
@@ -140,14 +162,49 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
         return sb.ToString();
     }
 
-    /// <summary>Detail for the Enter → detail screen. The description deliberately mixes plain
-    /// prose with wide/multi-byte graphemes so per-cell rendering issues have something to bite.</summary>
-    private static string DetailJson(string path)
+    /// <summary>Detail for the Enter → detail screen (and the echo for a task PUT). The description
+    /// deliberately mixes plain prose with wide/multi-byte graphemes so per-cell rendering issues have
+    /// something to bite; the assignees reflect the current mutable set so an assignee write round-trips.</summary>
+    private static string DetailJson(string path, HashSet<long> assignees)
     {
         var id = path[(path.LastIndexOf('/') + 1)..];
         return $$"""
-        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{"username":"Ben Seymour"}],"description":"Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed"}
+        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"description":"Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed"}
         """;
+    }
+
+    /// <summary>The workspace <c>members</c> array (each wrapped as <c>{ user }</c>) from <see cref="Members"/>.</summary>
+    private static string MembersJson()
+        => string.Join(",", Members.Select(m => $"{{\"user\":{{\"id\":{m.Id},\"username\":\"{m.Name}\"}}}}"));
+
+    /// <summary>The <c>assignees</c> array for the given id set, mapped to the seeded member names.</summary>
+    private static string AssigneesJson(HashSet<long> assignees)
+        => string.Join(",", Members.Where(m => assignees.Contains(m.Id))
+            .Select(m => $"{{\"id\":{m.Id},\"username\":\"{m.Name}\"}}"));
+
+    /// <summary>Applies an assignee PUT body (<c>{"assignees":{"add":[id],"rem":[id]}}</c>) to the shared
+    /// set so the write response echoes the new set; a body without <c>assignees</c> (a status/priority
+    /// PUT) leaves it untouched.</summary>
+    private void ApplyAssigneeMutation(string requestBody)
+    {
+        if (string.IsNullOrWhiteSpace(requestBody))
+            return;
+        try
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            if (!doc.RootElement.TryGetProperty("assignees", out var a))
+                return;
+            if (a.TryGetProperty("add", out var add) && add.ValueKind == JsonValueKind.Array)
+                foreach (var e in add.EnumerateArray())
+                    _assignees.Add(e.GetInt64());
+            if (a.TryGetProperty("rem", out var rem) && rem.ValueKind == JsonValueKind.Array)
+                foreach (var e in rem.EnumerateArray())
+                    _assignees.Remove(e.GetInt64());
+        }
+        catch (JsonException)
+        {
+            // A non-JSON / unexpected body is not this fake's concern — leave the set untouched.
+        }
     }
 
     /// <summary>Comments matching the field report that exposed sparse-flush artifacts: an emoji
