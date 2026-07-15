@@ -4,5 +4,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ClickUpTodo.Tests/ClickUpTodo.Tests.csproj" />
+    <Project Path="tests/ClickUpTodo.Tui.E2E/ClickUpTodo.Tui.E2E.csproj" />
   </Folder>
 </Solution>
