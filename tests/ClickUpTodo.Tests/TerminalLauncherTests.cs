@@ -456,7 +456,7 @@ public sealed class TerminalLauncherTests
         var command = PlanCwd(OSPlatformKind.Windows, Present("pwsh"), "C:/work/dir")[0].Arguments[^1];
 
         Assert.Equal(
-            "Set-Location -LiteralPath 'C:/work/dir'; & 'claude' (Get-Content -Raw '/tmp/clickup-todo/agent-prompt.txt')",
+            "Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop; & 'claude' (Get-Content -Raw '/tmp/clickup-todo/agent-prompt.txt')",
             command);
     }
 
@@ -467,7 +467,28 @@ public sealed class TerminalLauncherTests
         // the command it runs in the new tab.
         var command = PlanCwd(OSPlatformKind.Windows, Present("wt"), "C:/work/dir")[0].Arguments[^1];
 
-        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/dir';", command);
+        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop;", command);
+    }
+
+    [Fact]
+    public void Windows_Cmd_EncodedCommand_CarriesSetLocation()
+    {
+        // The cmd fallback base64-encodes the same pwsh command, so the Set-Location rides along by
+        // construction; decode it back to prove the cwd survives the EncodedCommand hop.
+        var encoded = PlanCwd(OSPlatformKind.Windows, Present("cmd", "pwsh"), "C:/work/dir")
+            .Single(s => s.FileName == "cmd").Arguments[^1];
+
+        var decoded = System.Text.Encoding.Unicode.GetString(Convert.FromBase64String(encoded));
+        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop;", decoded);
+    }
+
+    [Fact]
+    public void Linux_GnomeTerminal_BakesCdIntoWorkingDirectory()
+    {
+        // gnome-terminal uses the `--` separator (not `-e`); confirm the cwd reaches its command too.
+        var inner = PlanCwd(OSPlatformKind.Linux, Present("gnome-terminal"), "/work/dir")[0].Arguments[3];
+
+        Assert.StartsWith("cd '/work/dir' && 'claude'", inner);
     }
 
     [Fact]
@@ -483,7 +504,7 @@ public sealed class TerminalLauncherTests
     {
         var command = PlanCwd(OSPlatformKind.Windows, Present("pwsh"), "C:/work/o'brien")[0].Arguments[^1];
 
-        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/o''brien';", command); // PowerShell doubles the quote
+        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/o''brien' -ErrorAction Stop;", command); // PowerShell doubles the quote
     }
 
     [Fact]

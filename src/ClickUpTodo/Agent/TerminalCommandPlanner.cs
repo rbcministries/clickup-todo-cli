@@ -150,8 +150,9 @@ public static class TerminalCommandPlanner
     /// PowerShell command that runs claude with the prompt read from the file via Get-Content -Raw.
     /// One-off (#94) inserts <c>-p</c> right after the executable; the PowerShell hosts already launch
     /// with <c>-NoExit</c>, so the window stays open after a one-off run finishes. A non-blank
-    /// <paramref name="cwd"/> is prepended as a <c>Set-Location -LiteralPath …;</c> so the session
-    /// starts there even when the host (e.g. a <c>wt</c> tab) ignores the process working directory.
+    /// <paramref name="cwd"/> is prepended as a <c>Set-Location -LiteralPath … -ErrorAction Stop;</c>
+    /// so the session starts there even when the host (e.g. a <c>wt</c> tab) ignores the process
+    /// working directory, and a failed directory change aborts before claude runs.
     /// </summary>
     private static string PwshCommand(string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
@@ -161,9 +162,11 @@ public static class TerminalCommandPlanner
         parts.AddRange(options.ExtraArgs.Select(PwshQuote));
         parts.Add($"(Get-Content -Raw {PwshQuote(file)})");
         var command = string.Join(" ", parts);
+        // -ErrorAction Stop makes a failed directory change terminating, so claude never runs in the
+        // wrong directory — parity with the POSIX `&&` guard. -NoExit keeps the window open on the error.
         return string.IsNullOrWhiteSpace(cwd)
             ? command
-            : $"Set-Location -LiteralPath {PwshQuote(cwd)}; {command}";
+            : $"Set-Location -LiteralPath {PwshQuote(cwd)} -ErrorAction Stop; {command}";
     }
 
     /// <summary>
