@@ -68,6 +68,12 @@ public sealed class AssigneeSelectorView : View
     // highlighted row back to a person. Rebuilt on every render.
     private List<TaskAssignee> _rowPeople = [];
 
+    // True only while the shown rows are settled type-ahead results (all unselected, addable). False in
+    // the empty-search state AND during the debounce window after a keystroke but before results render —
+    // where the rows are still the current-assignee ✓ rows. Gates the search-box Enter so it can only
+    // ever add, never remove the first current assignee (#234). Touched on the UI thread only.
+    private bool _showingSearchResults;
+
     // Monotonic keystroke stamp: bumped on every text change, captured when a debounce timer is armed,
     // and compared when it fires so only the latest keystroke's search runs. Touched on the UI thread.
     private long _searchStamp;
@@ -162,12 +168,13 @@ public sealed class AssigneeSelectorView : View
                 _list.SetFocus();
                 break;
             case KeyCode.Enter:
-                // Add the highlighted result without leaving the box — but only while a search is
-                // active. Search results are always unselected, addable rows, so Enter there only adds.
-                // In the empty-search state row 0 is the first current assignee (a removable ✓ row) and
-                // SelectedItem defaults to 0, so a stray Enter used to silently remove them (#234); it's
-                // a no-op now, and removal stays an explicit ✓-row action reached by arrowing Down.
-                if (AssigneeSelectorModel.ShouldPickFromSearchBox(_search.Text, _rowPeople.Count))
+                // Add the highlighted result without leaving the box — but only when the shown rows are
+                // settled search results (always addable). In the empty-search state, and during the
+                // type-ahead debounce before results render, row 0 is the first current assignee (a
+                // removable ✓ row) with SelectedItem defaulting to 0, so a stray Enter used to silently
+                // remove them (#234). It's a no-op in those states; removal stays an explicit ✓-row
+                // action reached by arrowing Down into the list.
+                if (AssigneeSelectorModel.ShouldPickFromSearchBox(_showingSearchResults, _rowPeople.Count))
                 {
                     key.Handled = true;
                     Pick(_list.SelectedItem ?? 0);
@@ -361,6 +368,7 @@ public sealed class AssigneeSelectorView : View
                 if (token.IsCancellationRequested)
                     return;
                 SetRows(AssigneeSelectorModel.SearchResultRows(matches, _selectedIds));
+                _showingSearchResults = true;
             });
         });
     }
@@ -384,15 +392,21 @@ public sealed class AssigneeSelectorView : View
     {
         var query = (_search.Text ?? "").Trim();
         if (query.Length == 0)
+        {
             RenderEmptyState();
+        }
         else
+        {
             SetRows(AssigneeSelectorModel.SearchResultRows(SafeMatch(query, _selectedIds), _selectedIds));
+            _showingSearchResults = true;
+        }
     }
 
     private void RenderEmptyState()
     {
         var top = SafeTopFrequent(_capacity, _selectedIds);
         SetRows(AssigneeSelectorModel.EmptyStateRows(_selected, _lockedIds, top, _capacity));
+        _showingSearchResults = false;
     }
 
     private void SetRows(IReadOnlyList<AssigneeRow> rows)

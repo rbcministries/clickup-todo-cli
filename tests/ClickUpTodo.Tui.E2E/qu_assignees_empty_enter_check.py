@@ -7,9 +7,11 @@ Runs with E2E_QU_SEED_ASSIGNEE=1 so the fake backend seeds every task with a cur
 assignee (Ada Lovelace). Flow: Space opens Quick Updates → Tab to the Assignees pane → its
 empty-state list shows the current assignee as a leading ✓ row (row 0, the default
 selection) → Enter in the *empty* search box → she must still be ✓ (the pre-fix behaviour
-picked row 0, toggled Removed, and wrote an immediate server remove). Then, to prove the fix
-only disables the empty-box shortcut (not removal itself), Down onto the ✓ row + Enter still
-removes her via the list."""
+picked row 0, toggled Removed, and wrote an immediate server remove). It also covers the
+debounce window: typing a char then pressing Enter *before* the ~1s type-ahead debounce
+renders results (the rows are still the ✓ rows, so a query-text-only gate would still remove
+her). Then, to prove the fix only disables the search-box shortcut in those states (not
+removal itself), Down onto the ✓ row + Enter still removes her via the list."""
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte
 
@@ -83,6 +85,18 @@ try:
     assert "✓ Ada Lovelace" in v, f"Enter in the empty search box removed the current assignee (#234):\n{v}"
     assert "Quick Updates" in v, f"Enter in the empty search box navigated away from the screen:\n{v}"
     print("EMPTY-BOX ENTER ok — no-op, current assignee retained (#234 fixed)")
+
+    # Debounce window: type a char and press Enter *before* the ~1s type-ahead debounce renders results.
+    # The rows are still the empty-state ✓ rows, so a query-text-only gate would remove the assignee here;
+    # gating on the render state must keep it a no-op. Send "g" and "\r" together so Enter lands well
+    # inside the debounce, pump briefly (< debounce), then clear the box and let the empty state settle
+    # before asserting she survived.
+    send(b"g\r", 0.5)
+    send(b"\x7f", 1.8)   # Backspace clears the box → empty state re-renders
+    v = visible()
+    assert "✓ Ada Lovelace" in v, f"Enter during the debounce window removed the current assignee (#234):\n{v}"
+    assert "Quick Updates" in v, f"screen lost after the debounce-window Enter:\n{v}"
+    print("DEBOUNCE-WINDOW ENTER ok — no-op, current assignee retained (#234 fixed)")
 
     # Removal is still reachable the explicit way: Down onto the ✓ row, then Enter removes her.
     send(b"\x1b[B", 0.8)   # CursorDown into the list, onto the ✓ Ada row

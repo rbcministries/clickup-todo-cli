@@ -25,26 +25,39 @@ only holds when the rows are *addable search matches*, not the current-assignee
 This affects both hosts of the reusable component: Quick Updates (#158) and New
 Task (#213), so the fix belongs in the component, once.
 
-## Approach (recommended option from the issue)
+## Approach
 
-Make the search-box `Enter` shortcut fire **only when a search is active** (a
-non-blank query). In that state the rows are always *unselected, addable* search
-matches (`AssigneeSelectorModel.SearchResultRows` excludes `selectedIds`), so
-`Enter` only ever **adds** — never removes. In the empty-search state `Enter`
-becomes a no-op; removal stays an explicit action reached by arrowing `Down` into
-the list and pressing `Enter` there (`OnListKey`, unchanged).
+Make the search-box `Enter` shortcut fire **only when the shown rows are settled
+search results**. Those rows are always *unselected, addable* matches
+(`AssigneeSelectorModel.SearchResultRows` excludes `selectedIds`), so `Enter`
+only ever **adds** — never removes. In the empty-search state `Enter` becomes a
+no-op; removal stays an explicit action reached by arrowing `Down` into the list
+and pressing `Enter` there (`OnListKey`, unchanged).
 
-Why a no-op rather than swallowing everything: this is the minimal-diff change —
-`Enter` is left to fall through exactly as it already did when `_rowPeople` was
-empty. Both hosts treat a bubbled `Enter` from the selector as a no-op today:
-Quick Updates' commit branch is keyed by `sender` identity (`_statusList` /
-`_priorityList`), and New Task's key handler only acts on `Esc`/`F1`.
+**Gate on render state, not the query text.** A first cut gated on a non-blank
+`_search.Text`, but the rows lag the query text during the ~1s type-ahead
+debounce: `OnSearchChanged` only arms the debounce timer — it does **not**
+re-render — so between a keystroke and the debounce firing, the query is
+non-blank while the rows are still the empty-state `✓` rows. A query-text gate
+would still remove the first assignee if the user types a name and presses
+`Enter` before the debounce resolves. Tracking whether the shown rows are search
+results closes that window.
+
+Why a no-op rather than swallowing everything: `Enter` is left to fall through
+exactly as it already did when `_rowPeople` was empty. Both hosts treat a bubbled
+`Enter` from the selector as a no-op today: Quick Updates' commit branch is keyed
+by `sender` identity (`_statusList` / `_priorityList`), and New Task's key
+handler only acts on `Esc`/`F1`.
 
 ## Design
 
-- New pure predicate `AssigneeSelectorModel.ShouldPickFromSearchBox(string? query,
-  int rowCount)` = `rowCount > 0 && !string.IsNullOrWhiteSpace(query)`. Keeps the
-  decision unit-testable, mirroring `ShouldRunSearch`.
+- New `bool _showingSearchResults` field on the View: `true` only after a settled
+  search renders results (`RunSearch` / `RenderCurrent` non-blank branch),
+  `false` in `RenderEmptyState` (i.e. also during the debounce window, since no
+  render happens then). Touched on the UI thread only.
+- New pure predicate `AssigneeSelectorModel.ShouldPickFromSearchBox(bool
+  showingSearchResults, int rowCount)` = `showingSearchResults && rowCount > 0`.
+  Keeps the decision unit-testable, mirroring `ShouldRunSearch`.
 - `OnSearchKey` calls it to gate the `Pick`. `OnListKey`'s `Enter` (removal via a
   `✓` row) is untouched.
 - Update the Quick Updates `OnPaneKey` doc comment: a stray empty-box `Enter` may
@@ -53,14 +66,19 @@ Quick Updates' commit branch is keyed by `sender` identity (`_statusList` /
 ## Tests
 
 `AssigneeSelectorModelTests` — cover `ShouldPickFromSearchBox`:
-- non-blank query + rows → picks (adds).
-- blank / whitespace-only query → no-op (the #234 removal path).
-- non-blank query but zero rows → no-op.
+- settled search + rows → picks (adds).
+- not showing search results (empty state *or* unsettled debounce) → no-op (the
+  #234 removal path).
+- settled search but zero rows → no-op.
 
-The View glue itself is CI-untestable (Terminal.Gui). The E2E
-`qu_assignees_check.py` already exercises the add path *from an active search*
-(types "grac", then `Enter`) and removal via `Down`+`Enter` in the list, so it
-keeps passing unchanged and continues to guard the fixed behaviour.
+The View glue itself is CI-untestable (Terminal.Gui). E2E via `tui-validate`:
+- `qu_assignees_check.py` (unchanged) exercises the add path *from a settled
+  search* (types "grac", waits the debounce, `Enter`) and removal via
+  `Down`+`Enter` in the list — keeps passing.
+- new `qu_assignees_empty_enter_check.py` (env-gated seed of a current assignee)
+  asserts: empty-box `Enter` retains the `✓`; a type-then-quick-`Enter` **inside
+  the debounce window** retains the `✓`; and `Down`+`Enter` on the `✓` row still
+  removes. Verified it fails on the pre-fix behaviour.
 
 ## Acceptance criteria (from #234)
 

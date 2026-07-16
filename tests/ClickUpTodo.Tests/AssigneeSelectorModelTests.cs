@@ -189,19 +189,18 @@ public sealed class AssigneeSelectorModelTests
     // ── ShouldPickFromSearchBox (#234) ───────────────────────────────────────────
 
     [Fact]
-    public void ShouldPickFromSearchBox_ActiveSearchWithRows_Picks()
-        => Assert.True(AssigneeSelectorModel.ShouldPickFromSearchBox("grac", 3)); // adds the highlighted match
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData(null)]
-    public void ShouldPickFromSearchBox_BlankQuery_IsNoOp(string? query)
-        // The empty-search state shows current assignees (✓ removal rows) with SelectedItem defaulting to
-        // 0 — Enter must not act there, or it silently removes the first assignee (#234).
-        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox(query, 5));
+    public void ShouldPickFromSearchBox_SettledSearchWithRows_Picks()
+        // Settled type-ahead results are all unselected/addable, so Enter adds the highlighted match.
+        => Assert.True(AssigneeSelectorModel.ShouldPickFromSearchBox(showingSearchResults: true, rowCount: 3));
 
     [Fact]
-    public void ShouldPickFromSearchBox_NoRows_IsNoOp()
-        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("grac", 0)); // nothing to pick
+    public void ShouldPickFromSearchBox_EmptyStateOrUnsettledDebounce_IsNoOp()
+        // The empty-search state — and the debounce window after a keystroke but before results render —
+        // shows current assignees (✓ removal rows) with SelectedItem defaulting to 0. Enter must not act
+        // there, or it silently removes the first assignee (#234).
+        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox(showingSearchResults: false, rowCount: 5));
+
+    [Fact]
+    public void ShouldPickFromSearchBox_SearchWithNoMatches_IsNoOp()
+        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox(showingSearchResults: true, rowCount: 0));
 }
