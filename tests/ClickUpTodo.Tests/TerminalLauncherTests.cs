@@ -600,9 +600,22 @@ public sealed class TerminalLauncherTests
     {
         var specs = Plan(OSPlatformKind.Linux, Present("konsole"), Tab, Env(("KONSOLE_VERSION", "230804")));
 
-        Assert.Equal("konsole (tab)", specs[0].DisplayName);
+        Assert.Equal(["konsole (tab)", "konsole"], specs.Select(s => s.DisplayName)); // window fallback kept
         Assert.Equal(["--new-tab", "-e", "bash", "-lc"], specs[0].Arguments.Take(4));
-        Assert.Equal(["konsole (tab)", "konsole"], specs.Select(s => s.DisplayName));
+    }
+
+    [Fact]
+    public void NewTab_ThreadsOneOff_IntoTheTabCommand()
+    {
+        // The tab block is one-off-agnostic: a NewTab one-off carries `-p` and the POSIX keep-alive in
+        // the same inner command the window path builds, so the two dimensions compose.
+        var inner = TerminalCommandPlanner.Plan(
+            OSPlatformKind.Linux, Present("gnome-terminal"), Env(("VTE_VERSION", "1")), PromptFile, null, Tab, oneOff: true)[0].Arguments[4];
+
+        Assert.Equal("gnome-terminal (tab)", Plan(OSPlatformKind.Linux, Present("gnome-terminal"), Tab, Env(("VTE_VERSION", "1")))[0].DisplayName);
+        Assert.StartsWith("'claude' -p ", inner);
+        Assert.Contains("$(cat '/tmp/clickup-todo/agent-prompt.txt')", inner); // still file-indirected
+        Assert.Contains("read -r _", inner);                                   // keep-alive
     }
 
     [Fact]
