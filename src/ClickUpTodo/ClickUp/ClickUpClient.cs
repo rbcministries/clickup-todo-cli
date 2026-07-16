@@ -144,8 +144,16 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// <b>empty</b> set omits the <c>assignees</c> filter entirely, so ClickUp returns tasks for
     /// everyone in the workspace — a deliberately broad (and slower) fetch the caller opts into by
     /// clearing the Assignee rule (#68).
+    /// <para>
+    /// <paramref name="updatedAfterMs"/> is an optional server-side <c>date_updated_gt</c> window
+    /// (epoch ms): when set, only tasks updated after it are returned, so a busy workspace fetches a
+    /// smaller set (#244 — the feed's look-back window). Null (the default) omits the filter, leaving
+    /// today's full-set behaviour untouched. It composes with <paramref name="includeClosed"/> exactly
+    /// as the delta path does (see <see cref="GetAssignedTasksDeltaAsync"/>): the two query params are
+    /// independent.
+    /// </para>
     /// </summary>
-    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, CancellationToken ct = default)
+    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, long? updatedAfterMs = null, CancellationToken ct = default)
         => Guard("GetFilteredTeamTasks", () => PageAsync(page =>
             _client.V2.Team[workspaceId].Task.GetAsync(cfg =>
             {
@@ -157,6 +165,8 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 // any that still arrive as subtask anchors are hidden client-side by TaskView).
                 cfg.QueryParameters.IncludeClosed = includeClosed;
                 cfg.QueryParameters.Subtasks = true;
+                if (updatedAfterMs is { } after)
+                    cfg.QueryParameters.DateUpdatedGt = after;
             }, ct), ct));
 
     /// <summary>

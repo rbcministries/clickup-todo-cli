@@ -350,4 +350,34 @@ public sealed class FeedServiceTests
         Assert.True(stamped.Single(c => c.Id == "a").MentionsMe);
         Assert.False(stamped.Single(c => c.Id == "b").MentionsMe);
     }
+
+    // ── ComputeUpdatedAfterMs (look-back window, #244) ───────────────────────
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(-30)]
+    public void ComputeUpdatedAfterMs_Disabled_WhenZeroOrNegative(int lookbackDays)
+    {
+        // 0 = off (the default); a non-positive value (e.g. hand-edited config) is treated as off too,
+        // so the caller omits the filter and fetches the full assigned set.
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000);
+        Assert.Null(FeedService.ComputeUpdatedAfterMs(lookbackDays, now));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(7)]
+    [InlineData(90)]
+    public void ComputeUpdatedAfterMs_ReturnsWindowStart_WhenPositive(int lookbackDays)
+    {
+        const long nowMs = 1_700_000_000_000;
+        const long msPerDay = 86_400_000;
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(nowMs);
+
+        var result = FeedService.ComputeUpdatedAfterMs(lookbackDays, now);
+
+        Assert.Equal(nowMs - lookbackDays * msPerDay, result);
+        Assert.Equal(now.AddDays(-lookbackDays).ToUnixTimeMilliseconds(), result);
+    }
 }

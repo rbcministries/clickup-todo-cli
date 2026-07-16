@@ -31,8 +31,11 @@ public sealed record FeedResult(
 /// <c>internal static</c> <see cref="Aggregate"/> / <see cref="GatherAsync"/> so it is unit-testable
 /// offline (via <c>InternalsVisibleTo</c>) without a live ClickUp client.
 /// </remarks>
-public sealed class FeedService(ClickUpClient client, TaskService taskService, AppConfig config)
+public sealed class FeedService(ClickUpClient client, TaskService taskService, AppConfig config, TimeProvider? timeProvider = null)
 {
+    // Clock for the look-back window (#244); injectable so ComputeUpdatedAfterMs's caller is testable.
+    private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
+
     /// <summary>Default number of tasks whose comments are fetched concurrently. Bounded so a large
     /// assigned-task set doesn't open a fetch per task all at once, while still hiding per-call latency.</summary>
     public const int DefaultMaxConcurrency = 8;
@@ -68,8 +71,11 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
         bool includeClosed, bool mentionsOnly = false, CancellationToken ct = default)
     {
         var assigneeIds = await taskService.ResolveAssigneeIdsAsync(config.View, ct);
+        // Optional server-side look-back window (#244): when configured, shrink the fetch to tasks
+        // updated in the last N days. Null (the default) leaves the full-set fetch unchanged.
+        var updatedAfterMs = ComputeUpdatedAfterMs(config.FeedActivityLookbackDays, _clock.GetUtcNow());
         var tasks = await client.GetAssignedTasksAsync(
-            config.WorkspaceId, assigneeIds, includeClosed: includeClosed, ct: ct);
+            config.WorkspaceId, assigneeIds, includeClosed: includeClosed, updatedAfterMs: updatedAfterMs, ct: ct);
 
         var taskIds = tasks
             .Select(t => t.Id)
@@ -89,6 +95,16 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
         var activity = BuildActivity(tasks, DefaultMaxEntries, includeCompleted: includeClosed);
         return new FeedResult(comments, activity);
     }
+
+    /// <summary>
+    /// Computes the <c>date_updated_gt</c> window (epoch ms) for the feed's assigned-task fetch (#244)
+    /// from the configured look-back <paramref name="lookbackDays"/> and the current time
+    /// <paramref name="now"/>. Returns null when the window is disabled (<c>0</c>) or non-positive
+    /// (defensive against a hand-edited config), so the caller omits the filter and fetches the full
+    /// set. Pure and unit-testable.
+    /// </summary>
+    internal static long? ComputeUpdatedAfterMs(int lookbackDays, DateTimeOffset now)
+        => lookbackDays > 0 ? now.AddDays(-lookbackDays).ToUnixTimeMilliseconds() : null;
 
     /// <summary>
     /// Projects the assigned tasks into the recent-activity feed (#117): each task with a non-empty id

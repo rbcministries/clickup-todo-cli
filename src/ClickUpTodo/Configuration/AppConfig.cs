@@ -69,6 +69,19 @@ public sealed class AppConfig
     public bool FeedShowActivity { get; set; }
 
     /// <summary>
+    /// Optional look-back window, in days, that narrows the feed's assigned-task fetch server-side via
+    /// <c>date_updated_gt</c> (#244). <c>0</c> (the default) disables it — the feed fetches the full
+    /// assigned set exactly as before, so existing configs need no migration. When &gt; 0, the feed's
+    /// single <see cref="Services.FeedService.LoadFeedAsync"/> fetch is limited to tasks updated within
+    /// the last N days, shrinking the payload on a busy workspace. Because that one fetch feeds
+    /// <b>both</b> the recent-activity projection and the comment fan-out, the window also bounds the
+    /// comments feed — but posting a comment bumps a task's <c>date_updated</c>, so tasks with recent
+    /// comments stay in-window; the window only drops tasks with no activity at all in the period. The
+    /// semantic is therefore "activity and comments from tasks touched in the last N days".
+    /// </summary>
+    public int FeedActivityLookbackDays { get; set; }
+
+    /// <summary>
     /// How the task list renders each row's Status/Priority badges (F6 cycles Icons → Text → Hidden).
     /// A cosmetic display preference, deliberately kept out of <see cref="ViewSettings"/> so it's
     /// independent of the F3 filter/sort/group view (and its <see cref="ViewSettings.IsDefault"/>).
