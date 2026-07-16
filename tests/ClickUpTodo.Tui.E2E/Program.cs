@@ -46,7 +46,9 @@ var taskCache = new TaskCache(cacheStore);
 var feedCache = new FeedCache(cacheStore);
 var assignees = new AssigneeFrequencyCache(
     stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
-new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees).Run("ansi");
+// List-frequency pool (#238), on the same store — a cold pool each run keeps A/B renders identical.
+var lists = new ListFrequencyCache(stateStore, config.WorkspaceId);
+new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists).Run("ansi");
 return;
 
 sealed class FakeClickUp(int taskCount) : HttpMessageHandler
