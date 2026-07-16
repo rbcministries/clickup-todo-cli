@@ -168,12 +168,20 @@ public static class TerminalCommandPlanner
     {
         var inner = PosixCommand(file, cwd, options, oneOff);
         var tab = NewTabRequested(options, oneOff);
-        var specs = new List<LaunchSpec>();
+
+        // Tab specs are collected separately and returned *ahead* of the window specs. The launcher
+        // starts candidates in order and stops at the first that starts, and a valid emulator always
+        // starts — so a generic window spec ordered first (x-terminal-emulator, which on Debian/Ubuntu
+        // is an update-alternatives symlink present whenever gnome-terminal/konsole is; or an explicit
+        // $TERMINAL) would silently preempt a detected-emulator tab and defeat the opt-in. Keeping the
+        // window specs as the fallback chain after the tab spec fixes that.
+        var tabSpecs = new List<LaunchSpec>();
+        var windowSpecs = new List<LaunchSpec>();
 
         // An explicit $TERMINAL stays window-only: it's an arbitrary emulator with no portable tab flag.
         var configured = getEnv("TERMINAL");
         if (!string.IsNullOrWhiteSpace(configured) && exists(configured))
-            specs.Add(new LaunchSpec(configured, [ExecSeparator(configured), "bash", "-lc", inner], cwd, configured));
+            windowSpecs.Add(new LaunchSpec(configured, [ExecSeparator(configured), "bash", "-lc", inner], cwd, configured));
 
         foreach (var name in new[] { "x-terminal-emulator", "gnome-terminal", "konsole" })
         {
@@ -184,14 +192,14 @@ public static class TerminalCommandPlanner
             // (`--new-tab`) can open a tab in the running instance when we detect we're inside them.
             // x-terminal-emulator is a generic alias with no portable tab flag, so it stays window-only.
             if (tab && name == "gnome-terminal" && EnvPresent(getEnv, "GNOME_TERMINAL_SCREEN", "VTE_VERSION"))
-                specs.Add(new LaunchSpec(name, ["--tab", "--", "bash", "-lc", inner], cwd, "gnome-terminal (new tab)"));
+                tabSpecs.Add(new LaunchSpec(name, ["--tab", "--", "bash", "-lc", inner], cwd, "gnome-terminal (new tab)"));
             else if (tab && name == "konsole" && EnvPresent(getEnv, "KONSOLE_VERSION"))
-                specs.Add(new LaunchSpec(name, ["--new-tab", "-e", "bash", "-lc", inner], cwd, "konsole (new tab)"));
+                tabSpecs.Add(new LaunchSpec(name, ["--new-tab", "-e", "bash", "-lc", inner], cwd, "konsole (new tab)"));
             else
-                specs.Add(new LaunchSpec(name, [ExecSeparator(name), "bash", "-lc", inner], cwd, name));
+                windowSpecs.Add(new LaunchSpec(name, [ExecSeparator(name), "bash", "-lc", inner], cwd, name));
         }
 
-        return specs;
+        return [.. tabSpecs, .. windowSpecs];
     }
 
     /// <summary>

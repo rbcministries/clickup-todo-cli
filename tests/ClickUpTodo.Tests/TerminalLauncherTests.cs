@@ -648,6 +648,32 @@ public sealed class TerminalLauncherTests
     }
 
     [Fact]
+    public void NewTab_Linux_DetectedTabSpec_IsTriedBeforeGenericWindowSpecs()
+    {
+        // The realistic Debian/Ubuntu case: x-terminal-emulator (an alternatives symlink) is present
+        // alongside the gnome-terminal we're actually inside. Its window-only spec must NOT preempt the
+        // gnome tab — the launcher stops at the first spec that starts, so the tab spec must be first.
+        var specs = PlanTab(
+            OSPlatformKind.Linux, Present("x-terminal-emulator", "gnome-terminal"), Env(("VTE_VERSION", "6003")));
+
+        Assert.Equal("gnome-terminal (new tab)", specs[0].DisplayName);
+        Assert.Equal(["--tab", "--", "bash", "-lc"], specs[0].Arguments.Take(4));
+        Assert.Contains(specs, s => s.FileName == "x-terminal-emulator"); // window spec retained as fallback
+    }
+
+    [Fact]
+    public void NewTab_Linux_TerminalEnv_DoesNotPreemptDetectedTabSpec()
+    {
+        // A set $TERMINAL adds a window spec, but a detected-emulator tab spec must still be tried first.
+        var specs = PlanTab(
+            OSPlatformKind.Linux, Present("konsole"), Env(("TERMINAL", "konsole"), ("KONSOLE_VERSION", "220300")));
+
+        Assert.Equal("konsole (new tab)", specs[0].DisplayName);
+        Assert.Equal(["--new-tab", "-e", "bash", "-lc"], specs[0].Arguments.Take(4));
+        Assert.Contains(specs, s => s.DisplayName == "konsole" && s.Arguments[0] == "-e"); // window fallback
+    }
+
+    [Fact]
     public void NewTab_MacOS_ITerm_OpensTabViaAppleScript_WithTerminalWindowFallback()
     {
         var specs = PlanTab(OSPlatformKind.MacOS, Present("osascript"), Env(("TERM_PROGRAM", "iTerm.app")));
