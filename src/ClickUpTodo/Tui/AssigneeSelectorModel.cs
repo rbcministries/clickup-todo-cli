@@ -132,18 +132,22 @@ public static class AssigneeSelectorModel
 
     /// <summary>
     /// Whether pressing <c>Enter</c> in the search box should pick the highlighted row. The box's
-    /// <c>Enter</c> is an <em>add</em> shortcut — "add the highlighted match without leaving the box" —
-    /// so it only fires when there is an active (non-blank) <paramref name="query"/>, where the rows are
-    /// addable search matches (<see cref="SearchResultRows"/> excludes already-selected ids, so a pick
-    /// can only add). On a blank query the rows are the current-assignee <c>✓</c> rows and
-    /// <c>SelectedItem</c> defaults to <c>0</c>, so picking would silently <b>remove</b> the first
-    /// assignee (#234) — hence a blank-query <c>Enter</c> is a no-op; removal stays an explicit action on
-    /// a <c>✓</c> row reached by arrowing into the list. Also <c>false</c> when there are no rows
-    /// (<paramref name="rowCount"/> is 0) to pick. Whitespace-only counts as blank, matching the View's
-    /// <c>Trim()</c> (a whitespace box renders the empty <c>✓</c>-row state).
+    /// <c>Enter</c> is an <em>add-only</em> shortcut — "add the highlighted candidate without leaving the
+    /// box" — so it fires only when the highlighted row is a real, currently <b>unselected</b> person, i.e.
+    /// picking it can only <em>add</em>, never remove. The decision keys off the row's actual selected
+    /// state (<paramref name="selectedIds"/>), <b>not</b> the query text, so it stays correct even in the
+    /// type-ahead debounce window: while a freshly-typed query is still pending, the rendered rows are
+    /// still the empty-state current-assignee <c>✓</c> rows (with <c>SelectedItem</c> at <c>0</c>), so
+    /// <c>Enter</c> is a no-op and can't silently remove the first assignee (#234). Removal stays an
+    /// explicit action on a <c>✓</c> row reached by arrowing into the list (which the caller routes
+    /// through <see cref="Toggle"/> directly, not through this predicate). Returns <c>false</c> for an
+    /// out-of-range <paramref name="highlightedRow"/>.
     /// </summary>
-    public static bool ShouldPickFromSearchBox(string? query, int rowCount)
-        => rowCount > 0 && !string.IsNullOrWhiteSpace(query);
+    public static bool ShouldAddFromSearchBox(
+        int highlightedRow, IReadOnlyList<TaskAssignee> rows, ISet<long> selectedIds)
+        => highlightedRow >= 0
+           && highlightedRow < rows.Count
+           && !selectedIds.Contains(rows[highlightedRow].Id);
 
     private static bool IsUsable(TaskAssignee person)
         => person.Id > 0 && !string.IsNullOrWhiteSpace(person.Name);

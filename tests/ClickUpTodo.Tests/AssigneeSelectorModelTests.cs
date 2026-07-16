@@ -186,34 +186,45 @@ public sealed class AssigneeSelectorModelTests
     public void ShouldRunSearch_StaleCapture_Skips()
         => Assert.False(AssigneeSelectorModel.ShouldRunSearch(5, 6)); // a newer keystroke arrived
 
-    // ── ShouldPickFromSearchBox (empty-search Enter must not remove — #234) ───────
+    // ── ShouldAddFromSearchBox (search-box Enter is add-only; never removes — #234) ─
 
     [Fact]
-    public void ShouldPickFromSearchBox_BlankQueryWithRows_DoesNotPick()
+    public void ShouldAddFromSearchBox_HighlightedUnselectedCandidate_Adds()
     {
-        // The bug: empty box, rows are the current-assignee ✓ rows; a pick would remove the first one.
-        Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("", rowCount: 3));
+        // Search-results (or empty-state top-up) rows are unselected candidates — Enter adds them.
+        var rows = new List<TaskAssignee> { A(1, "Ada"), A(2, "Babbage") };
+        Assert.True(AssigneeSelectorModel.ShouldAddFromSearchBox(0, rows, Ids()));
+        Assert.True(AssigneeSelectorModel.ShouldAddFromSearchBox(1, rows, Ids()));
     }
 
     [Fact]
-    public void ShouldPickFromSearchBox_WhitespaceQueryWithRows_DoesNotPick()
+    public void ShouldAddFromSearchBox_HighlightedSelectedCheckRow_DoesNotPick()
     {
-        // A whitespace-only box renders the empty ✓-row state (the View trims), so it must not pick.
-        Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("   ", rowCount: 2));
+        // The #234 bug: in the empty state row 0 is the first current assignee (a ✓ row, selected).
+        // A search-box Enter must NOT pick it, or it would silently remove that assignee.
+        var rows = new List<TaskAssignee> { A(1, "Ada"), A(2, "Babbage") };
+        Assert.False(AssigneeSelectorModel.ShouldAddFromSearchBox(0, rows, Ids(1)));
     }
 
     [Fact]
-    public void ShouldPickFromSearchBox_NullQuery_DoesNotPick()
-        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox(null, rowCount: 5));
-
-    [Fact]
-    public void ShouldPickFromSearchBox_ActiveQueryWithMatches_Picks()
+    public void ShouldAddFromSearchBox_DebounceWindow_HighlightedSelectedRow_DoesNotPick()
     {
-        // Adding via a searched match with Enter still works — the rows here are addable candidates.
-        Assert.True(AssigneeSelectorModel.ShouldPickFromSearchBox("ad", rowCount: 4));
+        // Debounce race: the query is non-blank but the rendered rows still show the current-assignee ✓
+        // rows (search hasn't resolved). Keying off row selection — not the query text — keeps Enter a
+        // no-op here instead of removing the highlighted ✓ assignee.
+        var stillShowingChecks = new List<TaskAssignee> { A(1, "Ada"), A(2, "Babbage") };
+        Assert.False(AssigneeSelectorModel.ShouldAddFromSearchBox(0, stillShowingChecks, Ids(1, 2)));
     }
 
     [Fact]
-    public void ShouldPickFromSearchBox_ActiveQueryNoRows_DoesNotPick()
-        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("zzz", rowCount: 0));
+    public void ShouldAddFromSearchBox_OutOfRangeRow_DoesNotPick()
+    {
+        var rows = new List<TaskAssignee> { A(1, "Ada") };
+        Assert.False(AssigneeSelectorModel.ShouldAddFromSearchBox(-1, rows, Ids()));
+        Assert.False(AssigneeSelectorModel.ShouldAddFromSearchBox(1, rows, Ids()));
+    }
+
+    [Fact]
+    public void ShouldAddFromSearchBox_NoRows_DoesNotPick()
+        => Assert.False(AssigneeSelectorModel.ShouldAddFromSearchBox(0, [], Ids()));
 }

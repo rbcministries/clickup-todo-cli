@@ -15,25 +15,26 @@ Because the behaviour lives in the reusable component (#212), it also affects th
 (#213). Worse there: New Task's Save button is `IsDefault = true`, so an `Enter` that *falls through*
 unhandled would bubble to a form **Save/create**.
 
-## Fix (issue option 1 — the recommended one)
+## Fix — make the search box's `Enter` **add-only**, keyed on the highlighted row's selection state
 
-Make the search box's `Enter` an **add-only** shortcut:
+The naive "no-op when the query is blank" gate is **not enough**: search is debounced (~1s), so the
+rendered rows (`_rowPeople`) lag behind `_search.Text`. Typing a name and pressing `Enter` before the
+debounce resolves (the *most natural* add flow) leaves the box non-blank while the rows are still the
+current-assignee `✓` rows — a query-based gate would `Pick(0)` and silently remove the first assignee.
+So the decision must key off the **actual highlighted row**, not the query text:
 
-- Pick the highlighted row **only** when there is an active (non-blank) query — in that state the
-  rows are addable search matches (`SearchResultRows`, which excludes already-selected ids, so a
-  pick can only ever *add*).
-- On a **blank** (empty / whitespace-only) query the rows are the current-assignee `✓` rows, so
-  `Enter` is a **no-op**.
+- Pick the highlighted row **only** when that row is a currently **unselected** person — i.e. picking
+  it can only *add*, never remove. This is correct in every state: empty-state `✓` rows and the
+  debounce-window `✓` rows are selected → no-op; search-result rows and empty-state top-up rows are
+  unselected candidates → add. It also *preserves* the intended "Enter adds the highlighted candidate"
+  behaviour (e.g. the top-frequent row on a task with no assignees — which the issue explicitly notes
+  was never the bug), which a blanket blank-query no-op would have regressed.
 - Always mark the search-box `Enter` **handled** so a no-op never bubbles to a host default action
   (New Task's default Save button, or any future host). This also matches the component contract
   already documented in `QuickUpdatesScreen` ("it handles Enter … and marks them handled").
 
 Removal stays an **explicit** action: Cursor Down into the list (`OnListKey`), then `Enter` on the
-`✓` row — that path is untouched.
-
-The "active query" test uses `string.IsNullOrWhiteSpace`, matching the View's `Trim()` in
-`OnSearchChanged`/`RenderCurrent` (a whitespace-only box renders the empty `✓`-row state), so the
-decision and the rendered rows agree.
+`✓` row — that path is untouched (it still routes through `Toggle` directly).
 
 ## Where the logic goes
 
@@ -42,16 +43,19 @@ the View), add a pure predicate to the model and call it from the View:
 
 ```csharp
 // AssigneeSelectorModel
-public static bool ShouldPickFromSearchBox(string? query, int rowCount)
-    => rowCount > 0 && !string.IsNullOrWhiteSpace(query);
+public static bool ShouldAddFromSearchBox(
+    int highlightedRow, IReadOnlyList<TaskAssignee> rows, ISet<long> selectedIds)
+    => highlightedRow >= 0
+       && highlightedRow < rows.Count
+       && !selectedIds.Contains(rows[highlightedRow].Id);
 ```
 
 ```csharp
 // AssigneeSelectorView.OnSearchKey, Enter branch
 case KeyCode.Enter:
     key.Handled = true; // never bubble to a host default (e.g. New Task's default Save)
-    if (AssigneeSelectorModel.ShouldPickFromSearchBox(_search.Text, _rowPeople.Count))
-        Pick(_list.SelectedItem ?? 0);
+    if (AssigneeSelectorModel.ShouldAddFromSearchBox(_list.SelectedItem ?? -1, _rowPeople, _selectedIds))
+        Pick(_list.SelectedItem ?? -1);
     break;
 ```
 
@@ -59,11 +63,12 @@ case KeyCode.Enter:
 
 Add to `AssigneeSelectorModelTests`:
 
-- blank query (`""`) with rows present → `false` (the bug: would have removed the first assignee).
-- whitespace-only query (`"   "`) with rows → `false` (matches the View's trim → empty state).
-- `null` query → `false`.
-- active query with matches → `true` (adding via a searched match still works).
-- active query but zero rows → `false` (nothing to pick; `Enter` is a swallowed no-op).
+- highlighted **unselected** candidate → `true` (adding via a searched match / top-up still works).
+- highlighted **selected `✓`** row (empty-state row 0) → `false` (the bug: would have removed them).
+- **debounce window** — non-blank query but rows still the selected `✓` rows → `false` (the race the
+  first attempt missed; guaranteed because the predicate ignores the query text).
+- out-of-range row (`-1`, past the end) → `false`.
+- no rows → `false`.
 
 The list-`✓`-row removal path (`OnListKey`) and the immediate-apply add/remove flow are unchanged, so
 the existing `AssigneeSelectorModelTests` (Toggle/EmptyState/Search) all stay green.

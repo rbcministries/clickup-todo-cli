@@ -162,16 +162,17 @@ public sealed class AssigneeSelectorView : View
                 _list.SetFocus();
                 break;
             case KeyCode.Enter:
-                // The search box's Enter is an *add* shortcut — pick the highlighted match without
-                // leaving the box. It fires only with an active (non-blank) query, where the rows are
-                // addable search matches. On a blank query the rows are the current-assignee ✓ rows and
-                // SelectedItem defaults to 0, so picking would silently *remove* the first assignee
-                // (#234); a blank-query Enter is a no-op instead. Removal stays explicit: Cursor Down
-                // into the list, then Enter on the ✓ row. Enter is always marked handled so a no-op
-                // never bubbles to a host default action (e.g. New Task's default Save button).
+                // The search box's Enter is an *add-only* shortcut — add the highlighted candidate
+                // without leaving the box — so it picks only when the highlighted row is a currently
+                // *unselected* person. Picking a selected ✓ row would silently *remove* them (#234): in
+                // the empty state row 0 is the first current assignee, and the same holds during the
+                // type-ahead debounce window (rows still show the ✓ rows while a typed query is pending).
+                // Removal stays explicit: Cursor Down into the list, then Enter on the ✓ row (OnListKey).
+                // Enter is always marked handled so a no-op never bubbles to a host default action (e.g.
+                // New Task's default Save button).
                 key.Handled = true;
-                if (AssigneeSelectorModel.ShouldPickFromSearchBox(_search.Text, _rowPeople.Count))
-                    Pick(_list.SelectedItem ?? 0);
+                if (AssigneeSelectorModel.ShouldAddFromSearchBox(_list.SelectedItem ?? -1, _rowPeople, _selectedIds))
+                    Pick(_list.SelectedItem ?? -1);
                 break;
         }
         // Tab / Shift+Tab / Esc / F1 fall through to the host screen (pane cycle, exit, help).
