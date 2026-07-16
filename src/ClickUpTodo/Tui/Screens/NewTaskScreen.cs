@@ -85,7 +85,7 @@ public sealed class NewTaskScreen : Screen
             topFrequent,
             initialSelected: null,
             lockedDefault: lockedSelf,
-            mode: AssigneeSelectorMode.CollectSelection)
+            mode: SelectorMode.CollectSelection)
         {
             X = 1,
             Y = Pos.Bottom(assigneesLabel),
