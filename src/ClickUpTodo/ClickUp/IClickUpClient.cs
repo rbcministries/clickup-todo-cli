@@ -49,6 +49,21 @@ public interface IClickUpClient
         => throw new NotSupportedException($"{GetType().Name} does not implement the description write.");
     Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskAssignee>> RemoveTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
+
+    /// <summary>Add a task to an additional List ("Tasks in Multiple Lists", #237) — the task's home
+    /// List (set at creation) is unchanged; this manages the extra <c>locations</c> surfaced read-side by
+    /// <see cref="TaskDetail.Lists"/>. Requires the workspace's "Tasks in Multiple Lists" ClickApp; when
+    /// it's disabled the call throws a <see cref="ClickUpApiException"/> the caller flashes rather than
+    /// crashing. A default throwing implementation (mirroring the create/description writes) spares
+    /// read-only fakes from a write path they never call; <see cref="ClickUpClient"/> overrides it.</summary>
+    Task AddTaskToListAsync(string taskId, string listId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement list-membership writes.");
+
+    /// <summary>Remove a task from an additional List ("Tasks in Multiple Lists", #237). Removing a task
+    /// from its home List is not supported here. See <see cref="AddTaskToListAsync"/> for the ClickApp
+    /// prerequisite and the default-implementation rationale.</summary>
+    Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement list-membership writes.");
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default);

@@ -13,6 +13,8 @@ public sealed class ClickUpClientIntegrationTests
     private static string? WorkspaceId => Environment.GetEnvironmentVariable("CLICKUP_WORKSPACE_ID");
     private static string? ListId => Environment.GetEnvironmentVariable("CLICKUP_LIST_ID");
     private static string? TaskId => Environment.GetEnvironmentVariable("CLICKUP_TASK_ID");
+    // A List distinct from the task's home list, used only by the membership round-trip below.
+    private static string? SecondaryListId => Environment.GetEnvironmentVariable("CLICKUP_SECONDARY_LIST_ID");
 
     [SkippableFact]
     public async Task GetMe_ReturnsAuthenticatedUser()
@@ -206,6 +208,46 @@ public sealed class ClickUpClientIntegrationTests
             var afterRemove = await client.RemoveTaskAssigneeAsync(TaskId!, me.Id);
             Assert.DoesNotContain(afterRemove, a => a.Id == me.Id);
         }
+    }
+
+    [SkippableFact]
+    public async Task AddAndRemoveTaskToList_ReflectedInDetailLocations()
+    {
+        Skip.If(
+            string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId) || string.IsNullOrWhiteSpace(SecondaryListId),
+            "Set CLICKUP_TOKEN, CLICKUP_TASK_ID and CLICKUP_SECONDARY_LIST_ID (a list other than the task's home list) to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        // Don't disturb a membership the task already has: only add/remove when it isn't already there.
+        var before = await client.GetTaskDetailAsync(TaskId!);
+        Skip.If(before.Lists.Any(l => l.Id == SecondaryListId),
+            "Task is already in CLICKUP_SECONDARY_LIST_ID; pick a list it isn't in for a clean round-trip.");
+
+        try
+        {
+            await client.AddTaskToListAsync(TaskId!, SecondaryListId!);
+        }
+        catch (ClickUpApiException ex)
+        {
+            // "Tasks in Multiple Lists" is an opt-in ClickApp; a workspace without it returns a 4xx.
+            // Treat that as a skip (the facade correctly surfaced it, not a crash) rather than a failure.
+            Skip.If(true, $"Add-to-list failed — the 'Tasks in Multiple Lists' ClickApp is likely disabled on this workspace (HTTP {ex.StatusCode}).");
+            return;
+        }
+
+        try
+        {
+            var afterAdd = await client.GetTaskDetailAsync(TaskId!);
+            Assert.Contains(afterAdd.Lists, l => l.Id == SecondaryListId);
+        }
+        finally
+        {
+            // Restore the original membership set so the test is idempotent.
+            await client.RemoveTaskFromListAsync(TaskId!, SecondaryListId!);
+        }
+
+        var afterRemove = await client.GetTaskDetailAsync(TaskId!);
+        Assert.DoesNotContain(afterRemove.Lists, l => l.Id == SecondaryListId);
     }
 
     [SkippableFact]

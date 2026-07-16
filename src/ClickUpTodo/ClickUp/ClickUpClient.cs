@@ -338,6 +338,35 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             return MapAssignees(updated?.Assignees);
         });
 
+    /// <summary>
+    /// Add a task to an additional List (<c>POST /list/{list_id}/task/{task_id}</c>, ClickUp's "Tasks in
+    /// Multiple Lists", #237). The task keeps its home List (set at creation, #209); this adds one of the
+    /// extra <c>locations</c> the detail read side surfaces as <see cref="TaskDetail.Lists"/>. No request
+    /// body is sent and the empty success response is discarded. When the workspace's "Tasks in Multiple
+    /// Lists" ClickApp is disabled ClickUp returns a 4xx, surfaced as a <see cref="ClickUpApiException"/>
+    /// for the caller (#241 / #242) to flash — never a crash. Argument order is <c>(taskId, listId)</c>
+    /// though the URL nests the task under the list.
+    /// </summary>
+    public Task AddTaskToListAsync(string taskId, string listId, CancellationToken ct = default)
+        => Guard("AddTaskToList", async () =>
+        {
+            // The generated bodyless POST returns the raw response stream (the spec's success body is an
+            // empty object); dispose it rather than leak the response content.
+            using var _ = await _client.V2.List[listId].Task[taskId].PostAsync(cancellationToken: ct);
+        });
+
+    /// <summary>
+    /// Remove a task from an additional List (<c>DELETE /list/{list_id}/task/{task_id}</c>, #237). The
+    /// mirror of <see cref="AddTaskToListAsync"/>: removing a task from its home List is not supported
+    /// here, no body is sent, the empty response is discarded, and a disabled-ClickApp 4xx surfaces as a
+    /// <see cref="ClickUpApiException"/>.
+    /// </summary>
+    public Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
+        => Guard("RemoveTaskFromList", async () =>
+        {
+            using var _ = await _client.V2.List[listId].Task[taskId].DeleteAsync(cancellationToken: ct);
+        });
+
     /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => Guard("GetTask", async () =>
@@ -701,6 +730,21 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         try
         {
             return await call();
+        }
+        catch (ApiException ex)
+        {
+            throw new ClickUpApiException(ex.ResponseStatusCode, operation, ex);
+        }
+    }
+
+    /// <summary>Void overload of <see cref="Guard{T}"/> for generated calls with no return value
+    /// (the list-membership writes), keeping the same <see cref="ApiException"/> → <see cref="ClickUpApiException"/>
+    /// translation.</summary>
+    private static async Task Guard(string operation, Func<Task> call)
+    {
+        try
+        {
+            await call();
         }
         catch (ApiException ex)
         {

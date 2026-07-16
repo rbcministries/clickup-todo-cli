@@ -187,6 +187,30 @@
         }
       }
     },
+    "/v2/list/{list_id}/task/{task_id}": {
+      "post": {
+        "operationId": "AddTaskToList",
+        "summary": "Add a task to an additional List ('Tasks in Multiple Lists'). No request body; the task's home List is unchanged. Requires the workspace's 'Tasks in Multiple Lists' ClickApp to be enabled, else the API returns a 4xx.",
+        "parameters": [
+          { "name": "list_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "The task was added to the List (ClickUp returns an empty object)." }
+        }
+      },
+      "delete": {
+        "operationId": "RemoveTaskFromList",
+        "summary": "Remove a task from an additional List ('Tasks in Multiple Lists'). No request body; removing a task from its home List is not supported here.",
+        "parameters": [
+          { "name": "list_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "The task was removed from the List (ClickUp returns an empty object)." }
+        }
+      }
+    },
     "/v2/task/{task_id}": {
       "get": {
         "operationId": "GetTask",
