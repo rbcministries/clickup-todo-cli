@@ -1288,6 +1288,20 @@ public sealed class TodoApp
     private static bool IsForeignOthers(TaskItem task, IReadOnlyDictionary<string, TaskItem> visibleForeign)
         => visibleForeign.ContainsKey(task.Id) && !SubtaskVisibility.IsUnassigned(task);
 
+    /// <summary>The not-mine / context classification for a single row — the three trailing-marker
+    /// flags <see cref="TaskRowFormatter.Format"/> reads (#264). Pure so the in-place
+    /// <see cref="UpdateTaskRow"/> derives the same marker the full render path gives the row,
+    /// instead of silently dropping it. <paramref name="contextParents"/> keys are disjoint from the
+    /// snapshot (a context parent is never in <c>_all</c>), so <c>ContainsKey</c> reproduces the
+    /// render path's <c>row.IsContextParent</c> for the one row an in-place update touches.</summary>
+    internal static (bool IsContextParent, bool IsForeignSubtask, bool IsUnassignedSubtask) ClassifyRowMarker(
+        TaskItem task,
+        IReadOnlyDictionary<string, TaskItem> contextParents,
+        IReadOnlyDictionary<string, TaskItem> visibleForeign)
+        => (contextParents.ContainsKey(task.Id),
+            IsForeignOthers(task, visibleForeign),
+            IsForeignUnassigned(task, visibleForeign));
+
     // ── Actions ────────────────────────────────────────────────────────────
 
     private void TogglePin()
@@ -1994,7 +2008,16 @@ public sealed class TodoApp
         var groupedBy = inFocus ? (TaskField?)null : _config.View.GroupField;
         // Reproduce the row's ▶/▼ fold marker from its stored state so an in-place update keeps it (#76).
         var marker = FoldMarker(index < _folds.Count ? _folds[index] : FoldState.None, _config.View.ShowSubtasks);
-        var (text, badges) = BuildRow(updated, _config.BadgeDisplay, _tasks.UserId, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy, marker: marker);
+        // Reproduce the row's not-mine / context classification (#264): without these flags BuildRow
+        // drops the trailing "(not assigned to you)" (#70/#179) / "(parent — not assigned to you)"
+        // (#46) / "(unassigned)" (#179) marker until the next full Render, mirroring how the render
+        // path (Render → AddTask → BuildRow) sets them per row.
+        var (isContextParent, isForeignSubtask, isUnassignedSubtask) =
+            ClassifyRowMarker(updated, _contextParents, VisibleForeignSubtasks());
+        var (text, badges) = BuildRow(
+            updated, _config.BadgeDisplay, _tasks.UserId, index < _depths.Count ? _depths[index] : 0,
+            isContextParent, groupedBy: groupedBy, marker: marker,
+            isForeignSubtask: isForeignSubtask, isUnassignedSubtask: isUnassignedSubtask);
         _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
