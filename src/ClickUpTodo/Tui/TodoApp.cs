@@ -1992,7 +1992,16 @@ public sealed class TodoApp
         var groupedBy = inFocus ? (TaskField?)null : _config.View.GroupField;
         // Reproduce the row's ▶/▼ fold marker from its stored state so an in-place update keeps it (#76).
         var marker = FoldMarker(index < _folds.Count ? _folds[index] : FoldState.None, _config.View.ShowSubtasks);
-        var (text, badges) = BuildRow(updated, _config.BadgeDisplay, _tasks.UserId, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy, marker: marker);
+        // A not-mine row keeps its trailing context marker across an in-place update, mirroring the Render
+        // path — a Quick Updates edit lifts only the write restriction, not the "(not assigned to you)" /
+        // "(parent — not assigned to you)" / "(unassigned)" labelling (#160). Without re-deriving these,
+        // an optimistic status/priority/assignee update would drop the marker until the next full render
+        // (#232). Same predicates Render uses, so a normal in-snapshot row derives no marker as before.
+        var visibleForeign = VisibleForeignSubtasks();
+        var isContextParent = _contextParents.ContainsKey(updated.Id);
+        var isForeignSubtask = IsForeignOthers(updated, visibleForeign);
+        var isUnassignedSubtask = IsForeignUnassigned(updated, visibleForeign);
+        var (text, badges) = BuildRow(updated, _config.BadgeDisplay, _tasks.UserId, index < _depths.Count ? _depths[index] : 0, isContextParent, groupedBy, marker, isForeignSubtask, isUnassignedSubtask);
         _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.

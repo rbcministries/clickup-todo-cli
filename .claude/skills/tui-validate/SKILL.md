@@ -81,6 +81,20 @@ This check is why the frame diff is **row-atomic**: cell-level skipping repositi
 the cursor mid-row from the buffer's column model, which drifts around
 wide/ambiguous-width graphemes; whole-row flushes are byte-identical to stock.
 
+**5. Quick Updates on not-mine rows (#232)** — opt-in scenario (`E2E_FOREIGN=1`) that seeds a
+**foreign subtask** (a teammate-owned subtask pulled in under my parent, #70/#179) and a **context
+parent** (a parent absent from my snapshot, pulled in as a header, #46), and models the
+`PUT /task/{id}` write echo. Confirms Quick Updates opens on such a row (it isn't write-blocked —
+the #160 guard lift), a committed status round-trips and shows **in place**, the row isn't dropped,
+and its `(not assigned to you)` / `(parent — not assigned to you)` marker survives the edit:
+
+```bash
+E2E_FOREIGN=1 timeout 90 python3 -u .claude/skills/tui-validate/harness/foreign_quickupdates_check.py $DLL
+```
+
+The scenario is behind the env flag, so the default A/B byte-identical renders (checks 1–4) are
+undisturbed — the drive script sets `E2E_FOREIGN=1` itself. Expected: `FOREIGN QUICK UPDATES E2E: PASS`.
+
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 
 - **Answer the terminal's queries or nothing ever renders.** Terminal.Gui's ANSI driver

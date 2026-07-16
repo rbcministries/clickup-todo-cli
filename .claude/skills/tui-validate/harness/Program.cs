@@ -12,6 +12,12 @@ using ClickUpTodo.Tui;
 
 var taskCount = int.TryParse(Environment.GetEnvironmentVariable("E2E_TASKS"), out var n) ? n : 200;
 
+// Opt-in "not-mine rows" scenario (#232): seed a foreign subtask (#70/#179) and a context parent
+// (#46) so Quick Updates edits on tasks that aren't the user's own work can be asserted end-to-end
+// (the gap #160 / PR #233 left open). Off by default, so every existing scenario — and the A/B
+// byte-identical renders — are untouched.
+var foreignScenario = Environment.GetEnvironmentVariable("E2E_FOREIGN") == "1";
+
 var config = new AppConfig
 {
     WorkspaceId = "ws1",
@@ -29,7 +35,17 @@ if (Environment.GetEnvironmentVariable("E2E_VIEW") == "rich")
     config.PinnedTaskIds = ["t1", "t5", "t9"];
 }
 
-var client = new ClickUpClient("fake-token", new HttpClient(new FakeClickUp(taskCount)));
+if (foreignScenario)
+{
+    // F4 "all" pulls in teammate-owned subtasks and context parents; ungrouped + no pins keeps the
+    // row order deterministic (t1, fsub, cpar, t2 — see the seed in FakeClickUp). Text badges render
+    // a row's status as a readable word ("in progress") rather than the (IP) chip, so the drive
+    // script can assert the committed status on the row directly.
+    config.View.Subtasks = SubtaskView.All;
+    config.BadgeDisplay = BadgeDisplay.Text;
+}
+
+var client = new ClickUpClient("fake-token", new HttpClient(new FakeClickUp(taskCount, foreignScenario)));
 IStateStore stateStore = new JsonFileStateStore();
 var configStore = new ConfigStore(stateStore);
 var tasks = new TaskService(client, config, 1, userName: "Ben Seymour");
@@ -49,7 +65,7 @@ var assignees = new AssigneeFrequencyCache(
 new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees).Run("ansi");
 return;
 
-sealed class FakeClickUp(int taskCount) : HttpMessageHandler
+sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandler
 {
     private static readonly string[] Statuses = ["to do", "in progress", "blocked", "in review"];
     private static readonly string[] StatusColors = ["#d3d3d3", "#4194f6", "#e50000", "#a875ff"];
@@ -95,13 +111,20 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
             lock (_gate)
             {
                 ApplyAssigneeMutation(reqBody);
-                body = DetailJson(path, _assignees);
+                // In the not-mine-rows scenario (#232) echo the *requested* status/priority so a Quick
+                // Updates commit on a foreign subtask / context parent round-trips truthfully
+                // (SetTaskStatusAsync reads status.status back). Otherwise keep the fixed detail echo.
+                body = foreign ? WriteEchoJson(path, reqBody, _assignees) : DetailJson(path, _assignees);
             }
         }
+        else if (foreign && path.Contains("/task/"))
+            // GET /task/{id}: the foreign-subtask fetch (include_subtasks=true) and the context-parent /
+            // detail fetch (no query) share this path — ForeignTaskJson picks the shape from the query.
+            lock (_gate) body = ForeignTaskJson(path, query, _assignees);
         else if (path.Contains("/task/"))
             lock (_gate) body = DetailJson(path, _assignees);
         else if (path.Contains("/team/") && path.EndsWith("/task"))
-            body = TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
+            body = foreign ? ForeignSnapshotJson() : TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
         else if (request.Method == HttpMethod.Post && path.Contains("/list/") && path.EndsWith("/task"))
             // Create-task (#209/#213): echo a created task so the New Task screen's Save round-trips
             // through the facade and closes back to the list. (Not persisted into the team-tasks list.)
@@ -267,6 +290,96 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
         }
         return JsonSerializer.Serialize(new { comments });
     }
+
+    // ── #232 not-mine-rows scenario (E2E_FOREIGN=1) ──────────────────────────
+    // Ids the scenario seeds. t1/t2 are the assigned main tasks in the team-tasks snapshot; fsub is
+    // t1's teammate-owned subtask (surfaced by the adaptive fetch #87 as a foreign subtask #70);
+    // cpar is t2's parent, absent from the snapshot, so it's pulled in as a context parent (#46).
+    // Names are chosen so the default sort (due, then name) + nesting yields a deterministic row
+    // order: t1, fsub (nested under t1), cpar (context header injected at t2), t2 (nested under cpar).
+    private const string ForeignParentId = "t1";
+    private const string ForeignSubtaskId = "fsub";
+    private const string ContextChildId = "t2";
+    private const string ContextParentId = "cpar";
+
+    /// <summary>The two assigned main tasks (both in plist) returned by the team-tasks fetch: t1
+    /// (parent of the foreign subtask) and t2 (child of the absent context parent). Small enough that
+    /// the adaptive fetch takes the per-parent path, so t1's subtasks are fetched via
+    /// <c>GET /task/t1?include_subtasks=true</c>.</summary>
+    private static string ForeignSnapshotJson() => $$"""
+    {"tasks":[{"id":"{{ForeignParentId}}","name":"Aardvark parent task","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"date_updated":"1700000000000","url":"https://app.clickup.com/t/t1"},{"id":"{{ContextChildId}}","name":"Beta task under context parent","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"date_updated":"1700000000000","parent":"{{ContextParentId}}","url":"https://app.clickup.com/t/t2"}],"last_page":true}
+    """;
+
+    /// <summary>GET /task/{id} in the scenario. With <c>include_subtasks=true</c> (the foreign-subtask
+    /// fetch, #70) t1 returns its teammate-owned subtask <c>fsub</c> and every other id returns no
+    /// subtasks; without the query (the context-parent resolve #46 / a detail open) it returns the
+    /// task's own detail, so <c>cpar</c> resolves as a context-parent header.</summary>
+    private static string ForeignTaskJson(string path, string query, HashSet<long> assignees)
+    {
+        var id = path[(path.LastIndexOf('/') + 1)..];
+        var wantSubtasks = query.Contains("include_subtasks=true", StringComparison.OrdinalIgnoreCase);
+        if (wantSubtasks)
+        {
+            // Only t1 has a (foreign) subtask; recursion into fsub / the other parents finds none.
+            var subtasks = id == ForeignParentId
+                ? $$"""[{"id":"{{ForeignSubtaskId}}","name":"Delta foreign subtask","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"parent":"{{ForeignParentId}}","date_updated":"1700000000000","assignees":[{"id":999,"username":"Casey Teammate"}],"url":"https://app.clickup.com/t/fsub"}]"""
+                : "[]";
+            return $$"""{"id":"{{id}}","name":"{{ForeignTaskName(id)}}","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","subtasks":{{subtasks}}}""";
+        }
+        // Plain detail (context-parent resolve / detail open): the task's own record, no subtasks. The
+        // context parent (cpar) carries no assignees — it's not the user's work, just a header.
+        return $$"""{"id":"{{id}}","name":"{{ForeignTaskName(id)}}","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"url":"https://app.clickup.com/t/{{id}}"}""";
+    }
+
+    /// <summary>The seeded display name for a scenario task id (used by both the read and write echoes
+    /// so a row keeps its name across a Quick Updates commit).</summary>
+    private static string ForeignTaskName(string id) => id switch
+    {
+        ForeignParentId => "Aardvark parent task",
+        ForeignSubtaskId => "Delta foreign subtask",
+        ContextChildId => "Beta task under context parent",
+        ContextParentId => "Gamma context parent",
+        _ => id,
+    };
+
+    /// <summary>The PUT /task/{id} write echo for the scenario: reflect the <b>requested</b> status
+    /// (and priority) back so a Quick Updates commit round-trips truthfully — <c>SetTaskStatusAsync</c>
+    /// reads <c>status.status</c> and <c>SetTaskPriorityAsync</c> reads <c>priority.id</c> from the
+    /// response. A body with no status (an assignee-only PUT) falls back to the seeded "to do". The
+    /// task keeps its seeded name and the current shared assignee set.</summary>
+    private static string WriteEchoJson(string path, string reqBody, HashSet<long> assignees)
+    {
+        var id = path[(path.LastIndexOf('/') + 1)..];
+        var status = "to do";
+        string? priorityLevel = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(reqBody);
+            if (doc.RootElement.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.String)
+                status = s.GetString() ?? status;
+            if (doc.RootElement.TryGetProperty("priority", out var p) && p.ValueKind == JsonValueKind.Number)
+                priorityLevel = p.GetInt32().ToString();
+        }
+        catch (JsonException)
+        {
+            // A non-JSON body isn't this fake's concern — echo the seeded defaults.
+        }
+        // ClickUpPriority.Level reads the priority object's id ("1".."4") first, so echoing {id} is enough.
+        var priorityJson = priorityLevel is null ? "" : $",\"priority\":{{\"id\":\"{priorityLevel}\"}}";
+        return $$"""{"id":"{{id}}","name":"{{ForeignTaskName(id)}}","status":{"status":"{{status}}","color":"{{StatusColor(status)}}"},"list":{"id":"plist","name":"Personal Tasks"},"assignees":[{{AssigneesJson(assignees)}}]{{priorityJson}},"url":"https://app.clickup.com/t/{{id}}"}""";
+    }
+
+    /// <summary>The plist status colours (mirrors <see cref="StatusColors"/> / <see cref="ListJson"/>),
+    /// so a status echoed by <see cref="WriteEchoJson"/> carries its real colour.</summary>
+    private static string StatusColor(string status) => status switch
+    {
+        "to do" => "#d3d3d3",
+        "in progress" => "#4194f6",
+        "blocked" => "#e50000",
+        "in review" => "#a875ff",
+        "complete" => "#6bc950",
+        _ => "#d3d3d3",
+    };
 
     private static string ListJson(string path)
     {
