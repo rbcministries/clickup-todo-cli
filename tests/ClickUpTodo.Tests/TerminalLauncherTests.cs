@@ -523,6 +523,182 @@ public sealed class TerminalLauncherTests
         }
     }
 
+    // ── New-tab launch location (#255) ──────────────────────────────────────────
+    //
+    // Opt-in, interactive-only, detection-gated per emulator: a tab spec is emitted only when the
+    // user asked for a tab AND an env var proves we're inside that host; otherwise today's window
+    // spec stands. The baked-in cd/Set-Location (#252) must ride along on the tab command too.
+
+    private static readonly TerminalLauncherOptions Tab = new() { LaunchLocation = LaunchLocation.NewTab };
+
+    private static Func<string, string?> Env(params (string Key, string Value)[] pairs)
+    {
+        var map = pairs.ToDictionary(p => p.Key, p => p.Value, StringComparer.Ordinal);
+        return k => map.TryGetValue(k, out var v) ? v : null;
+    }
+
+    private static IReadOnlyList<LaunchSpec> PlanTab(
+        OSPlatformKind os, Func<string, bool> exists, Func<string, string?> env, string? cwd = null, bool oneOff = false)
+        => TerminalCommandPlanner.Plan(os, exists, env, PromptFile, cwd, Tab, oneOff);
+
+    [Fact]
+    public void NewTab_Windows_WindowsTerminal_TargetsCurrentWindow_WhenInsideWt()
+    {
+        var spec = PlanTab(OSPlatformKind.Windows, Present("wt"), Env(("WT_SESSION", "abc")))[0];
+
+        Assert.Equal("wt", spec.FileName);
+        Assert.Equal(["-w", "0", "new-tab", "pwsh", "-NoExit", "-Command"], spec.Arguments.Take(6));
+        Assert.Equal("Windows Terminal (new tab)", spec.DisplayName);
+    }
+
+    [Fact]
+    public void NewTab_Windows_FallsBackToNewWindow_WhenNotInsideWt()
+    {
+        // No WT_SESSION → we can't target the current window, so keep today's `wt new-tab` (new window).
+        var spec = PlanTab(OSPlatformKind.Windows, Present("wt"), NoEnv)[0];
+
+        Assert.Equal(["new-tab", "pwsh", "-NoExit", "-Command"], spec.Arguments.Take(4));
+        Assert.Equal("Windows Terminal", spec.DisplayName);
+    }
+
+    [Fact]
+    public void NewTab_Windows_OneOff_StaysNewWindow_EvenInsideWt()
+    {
+        // A one-off `-p` terminal launch is never a tab (the issue: new-tab is meaningless for one-off).
+        var spec = PlanTab(OSPlatformKind.Windows, Present("wt"), Env(("WT_SESSION", "abc")), oneOff: true)[0];
+
+        Assert.Equal("Windows Terminal", spec.DisplayName);
+        Assert.DoesNotContain("-w", spec.Arguments);
+    }
+
+    [Fact]
+    public void DefaultLaunchLocation_IsNewWindow_UnchangedWtBehavior_EvenInsideWt()
+    {
+        var spec = TerminalCommandPlanner.Plan(
+            OSPlatformKind.Windows, Present("wt"), Env(("WT_SESSION", "1")), PromptFile, null, Defaults)[0];
+
+        Assert.Equal(["new-tab", "pwsh", "-NoExit", "-Command"], spec.Arguments.Take(4));
+        Assert.Equal("Windows Terminal", spec.DisplayName);
+    }
+
+    [Fact]
+    public void NewTab_Linux_GnomeTerminal_UsesTabFlag_WhenInsideGnome_ViaVteVersion()
+    {
+        var spec = PlanTab(OSPlatformKind.Linux, Present("gnome-terminal"), Env(("VTE_VERSION", "6003")))[0];
+
+        Assert.Equal("gnome-terminal", spec.FileName);
+        Assert.Equal(["--tab", "--", "bash", "-lc"], spec.Arguments.Take(4));
+        Assert.Equal("gnome-terminal (new tab)", spec.DisplayName);
+    }
+
+    [Fact]
+    public void NewTab_Linux_GnomeTerminal_DetectsViaGnomeTerminalScreen()
+    {
+        var spec = PlanTab(OSPlatformKind.Linux, Present("gnome-terminal"), Env(("GNOME_TERMINAL_SCREEN", "/org/gnome/x")))[0];
+
+        Assert.Equal(["--tab", "--", "bash", "-lc"], spec.Arguments.Take(4));
+    }
+
+    [Fact]
+    public void NewTab_Linux_GnomeTerminal_FallsBackToWindow_WhenNotDetected()
+    {
+        var spec = PlanTab(OSPlatformKind.Linux, Present("gnome-terminal"), NoEnv)[0];
+
+        Assert.Equal(["--", "bash", "-lc"], spec.Arguments.Take(3));
+        Assert.Equal("gnome-terminal", spec.DisplayName);
+    }
+
+    [Fact]
+    public void NewTab_Linux_Konsole_UsesNewTabFlag_WhenInsideKonsole()
+    {
+        var spec = PlanTab(OSPlatformKind.Linux, Present("konsole"), Env(("KONSOLE_VERSION", "220300")))[0];
+
+        Assert.Equal("konsole", spec.FileName);
+        Assert.Equal(["--new-tab", "-e", "bash", "-lc"], spec.Arguments.Take(4));
+        Assert.Equal("konsole (new tab)", spec.DisplayName);
+    }
+
+    [Fact]
+    public void NewTab_Linux_Konsole_FallsBackToWindow_WhenNotDetected()
+    {
+        var spec = PlanTab(OSPlatformKind.Linux, Present("konsole"), NoEnv)[0];
+
+        Assert.Equal(["-e", "bash", "-lc"], spec.Arguments.Take(3));
+        Assert.Equal("konsole", spec.DisplayName);
+    }
+
+    [Fact]
+    public void NewTab_Linux_XTerminalEmulator_StaysWindowOnly_NoPortableTabFlag()
+    {
+        // Generic alias: even with a tab preference and a detection env present, keep the window form.
+        var spec = PlanTab(OSPlatformKind.Linux, Present("x-terminal-emulator"), Env(("VTE_VERSION", "6003")))[0];
+
+        Assert.Equal("x-terminal-emulator", spec.FileName);
+        Assert.Equal(["-e", "bash", "-lc"], spec.Arguments.Take(3));
+    }
+
+    [Fact]
+    public void NewTab_Linux_TerminalEnv_StaysWindowOnly()
+    {
+        // An explicit $TERMINAL is an arbitrary emulator — window-only regardless of a tab preference.
+        var spec = PlanTab(OSPlatformKind.Linux, Present("alacritty"), Env(("TERMINAL", "alacritty"), ("VTE_VERSION", "6003")))[0];
+
+        Assert.Equal("alacritty", spec.FileName);
+        Assert.Equal(["-e", "bash", "-lc"], spec.Arguments.Take(3));
+    }
+
+    [Fact]
+    public void NewTab_MacOS_ITerm_OpensTabViaAppleScript_WithTerminalWindowFallback()
+    {
+        var specs = PlanTab(OSPlatformKind.MacOS, Present("osascript"), Env(("TERM_PROGRAM", "iTerm.app")));
+
+        Assert.Equal(2, specs.Count);
+        var iterm = specs[0];
+        Assert.Equal("osascript", iterm.FileName);
+        Assert.Equal("iTerm2 (new tab)", iterm.DisplayName);
+        var script = string.Join("\n", iterm.Arguments);
+        Assert.Contains("tell application \"iTerm\"", script);
+        Assert.Contains("create tab with default profile", script);
+        Assert.Contains("write text", script);
+        Assert.Contains("$(cat '/tmp/clickup-todo/agent-prompt.txt')", script); // prompt stays file-indirected
+
+        Assert.Equal("Terminal (osascript)", specs[1].DisplayName); // window fallback retained
+    }
+
+    [Fact]
+    public void NewTab_MacOS_AppleTerminal_StaysWindowOnly()
+    {
+        var specs = PlanTab(OSPlatformKind.MacOS, Present("osascript"), Env(("TERM_PROGRAM", "Apple_Terminal")));
+
+        var spec = Assert.Single(specs);
+        Assert.Equal("Terminal (osascript)", spec.DisplayName);
+        Assert.Contains("do script", spec.Arguments[1]);
+    }
+
+    [Fact]
+    public void NewTab_MacOS_UnknownHost_StaysWindowOnly()
+    {
+        var specs = PlanTab(OSPlatformKind.MacOS, Present("osascript"), NoEnv);
+
+        Assert.Equal("Terminal (osascript)", Assert.Single(specs).DisplayName);
+    }
+
+    [Fact]
+    public void NewTab_BakesWorkingDirectoryIntoTheTabCommand()
+    {
+        var wt = PlanTab(OSPlatformKind.Windows, Present("wt"), Env(("WT_SESSION", "1")), "C:/work/dir")[0];
+        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop;", wt.Arguments[^1]);
+
+        var gnome = PlanTab(OSPlatformKind.Linux, Present("gnome-terminal"), Env(("VTE_VERSION", "1")), "/work/dir")[0];
+        Assert.StartsWith("cd '/work/dir' && 'claude'", gnome.Arguments[^1]);
+
+        var konsole = PlanTab(OSPlatformKind.Linux, Present("konsole"), Env(("KONSOLE_VERSION", "1")), "/work/dir")[0];
+        Assert.StartsWith("cd '/work/dir' && 'claude'", konsole.Arguments[^1]);
+
+        var iterm = PlanTab(OSPlatformKind.MacOS, Present("osascript"), Env(("TERM_PROGRAM", "iTerm.app")), "/work/dir")[0];
+        Assert.Contains("cd '/work/dir' && 'claude'", string.Join("\n", iterm.Arguments));
+    }
+
     [Fact]
     public void Unknown_OS_NoCandidates()
         => Assert.Empty(Plan(OSPlatformKind.Unknown, Present("wt", "pwsh", "bash", "osascript")));

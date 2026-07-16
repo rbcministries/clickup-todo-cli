@@ -195,6 +195,16 @@ public sealed class SettingsScreen : Screen
             postToCommentsButton.Text = PostToCommentsText(postToComments);
         };
 
+        // Launch location (#255): where an interactive session opens — a new window (default) or a new
+        // tab of the current terminal where the host supports it (best-effort, falls back to a window).
+        var launchLocation = dispatch.LaunchLocation;
+        var launchLocationButton = new Button { X = rightX, Y = 17, Text = LaunchLocationText(launchLocation) };
+        launchLocationButton.Accepting += (_, _) =>
+        {
+            launchLocation = launchLocation == LaunchLocation.NewWindow ? LaunchLocation.NewTab : LaunchLocation.NewWindow;
+            launchLocationButton.Text = LaunchLocationText(launchLocation);
+        };
+
         var save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var cancel = new Button { X = Pos.Right(save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         save.Accepting += (_, _) =>
@@ -212,6 +222,7 @@ public sealed class SettingsScreen : Screen
                     FixedWorkingDirectory = fixedDirField.Text?.Trim() ?? "",
                     DefaultSessionMode = sessionMode,
                     DefaultPostResultsToComments = postToComments,
+                    LaunchLocation = launchLocation,
                     PromptTemplate = _promptTemplate,
                 },
                 new DetailViewSettings
@@ -246,7 +257,7 @@ public sealed class SettingsScreen : Screen
             detailHeader, defaultTabButton, activityOrderButton, autoScrollButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, templateButton,
-            sessionModeButton, postToCommentsButton,
+            sessionModeButton, postToCommentsButton, launchLocationButton,
             save, cancel,
         ]);
     }
@@ -278,6 +289,12 @@ public sealed class SettingsScreen : Screen
     };
 
     private static string PostToCommentsText(bool on) => "Default post to Comments: " + (on ? "On" : "Off");
+
+    private static string LaunchLocationText(LaunchLocation l) => "Launch: " + l switch
+    {
+        LaunchLocation.NewTab => "New tab (where supported)",
+        _ => "New window",
+    };
 
     private static string DefaultTabText(DetailTab t) => "Default tab: " + t switch
     {

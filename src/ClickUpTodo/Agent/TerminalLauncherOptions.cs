@@ -16,6 +16,23 @@ public enum PreferredTerminal
 }
 
 /// <summary>
+/// Where an interactive dispatch's <c>claude</c> session opens (issue #255): a
+/// <see cref="NewWindow"/> (the historical default) or a <see cref="NewTab"/> of the terminal the
+/// app is already running in, where the host supports it. New-tab is best-effort and detection-gated
+/// per emulator; when the host isn't a supported/detected one it falls back to a new window. It only
+/// applies to interactive sessions — a one-off <c>claude -p</c> runs through the background runner
+/// with no terminal, so "new tab" is meaningless there.
+/// </summary>
+public enum LaunchLocation
+{
+    /// <summary>Open the session in a new terminal window (default; today's behavior).</summary>
+    NewWindow,
+
+    /// <summary>Open the session in a new tab of the current terminal where supported, else a window.</summary>
+    NewTab,
+}
+
+/// <summary>
 /// Configuration for <see cref="ITerminalLauncher"/>. Intentionally lean for this slice (issue #25):
 /// it must work with zero config (all defaults). The full settings surface — preferred terminal,
 /// custom <c>claude</c> path/args, working directory, prompt-template — is wired to
@@ -31,4 +48,10 @@ public sealed record TerminalLauncherOptions
 
     /// <summary>Preferred terminal on Windows; ignored on other platforms.</summary>
     public PreferredTerminal Preferred { get; init; } = PreferredTerminal.Auto;
+
+    /// <summary>
+    /// Where an interactive session opens (#255): a new window (default) or a new tab of the current
+    /// terminal where the host supports it. Ignored for one-off runs (which have no terminal).
+    /// </summary>
+    public LaunchLocation LaunchLocation { get; init; } = LaunchLocation.NewWindow;
 }
