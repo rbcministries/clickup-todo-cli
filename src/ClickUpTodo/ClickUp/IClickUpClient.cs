@@ -49,6 +49,23 @@ public interface IClickUpClient
         => throw new NotSupportedException($"{GetType().Name} does not implement the description write.");
     Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskAssignee>> RemoveTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
+
+    /// <summary>Add a task to an <b>additional</b> list (ClickUp's "Tasks in Multiple Lists"; #237),
+    /// leaving its home list unchanged. There is no confirmable payload — the write returns nothing;
+    /// verify via a subsequent <see cref="GetTaskDetailAsync"/> whose <see cref="TaskDetail.Lists"/>
+    /// reflects the membership. Fails with a <see cref="ClickUpApiException"/> when the "Tasks in
+    /// Multiple Lists" ClickApp is disabled for the workspace — call sites (#241/#242) catch that and
+    /// flash it. Default throwing implementation so read-only fakes needn't implement a write path they
+    /// never call (mirrors <see cref="CreateTaskAsync"/>); <see cref="ClickUpClient"/> overrides it.</summary>
+    Task AddTaskToListAsync(string taskId, string listId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement the add-to-list write.");
+
+    /// <summary>Remove a task from an <b>additional</b> list (#237), leaving its home list unchanged.
+    /// No confirmable payload — verify via <see cref="GetTaskDetailAsync"/>'s <see cref="TaskDetail.Lists"/>.
+    /// Default throwing implementation (mirrors <see cref="AddTaskToListAsync"/>);
+    /// <see cref="ClickUpClient"/> overrides it.</summary>
+    Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement the remove-from-list write.");
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default);

@@ -338,6 +338,35 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             return MapAssignees(updated?.Assignees);
         });
 
+    /// <summary>
+    /// Add a task to an <b>additional</b> list — ClickUp's "Tasks in Multiple Lists" feature (#237) —
+    /// via <c>POST /list/{list_id}/task/{task_id}</c>, leaving the task's <b>home</b> list (set at
+    /// create, #209) unchanged. The endpoint returns an empty body, so there is nothing to map back;
+    /// callers verify the membership with a subsequent <see cref="GetTaskDetailAsync"/> whose
+    /// <see cref="TaskDetail.Lists"/> now includes the list. When the workspace has the "Tasks in
+    /// Multiple Lists" ClickApp disabled the write fails; <see cref="Guard{T}"/> surfaces that as a
+    /// <see cref="ClickUpApiException"/> for the (not-yet-built) call sites (#241/#242) to catch and
+    /// flash, rather than a crash.
+    /// </summary>
+    public Task AddTaskToListAsync(string taskId, string listId, CancellationToken ct = default)
+        => Guard("AddTaskToList", async () =>
+        {
+            (await _client.V2.List[listId].Task[taskId].PostAsync(cancellationToken: ct))?.Dispose();
+            return true; // Guard is generic over a value; the empty response carries nothing to return.
+        });
+
+    /// <summary>
+    /// Remove a task from an <b>additional</b> list (#237) via <c>DELETE /list/{list_id}/task/{task_id}</c>,
+    /// leaving its home list unchanged. Empty response — verify via <see cref="GetTaskDetailAsync"/>'s
+    /// <see cref="TaskDetail.Lists"/>. Mirrors <see cref="AddTaskToListAsync"/>'s error handling.
+    /// </summary>
+    public Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
+        => Guard("RemoveTaskFromList", async () =>
+        {
+            (await _client.V2.List[listId].Task[taskId].DeleteAsync(cancellationToken: ct))?.Dispose();
+            return true;
+        });
+
     /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => Guard("GetTask", async () =>

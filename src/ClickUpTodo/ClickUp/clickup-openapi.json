@@ -187,6 +187,30 @@
         }
       }
     },
+    "/v2/list/{list_id}/task/{task_id}": {
+      "post": {
+        "operationId": "AddTaskToList",
+        "summary": "Add a task to an additional List (Tasks in Multiple Lists ClickApp). No request body; returns an empty object.",
+        "parameters": [
+          { "name": "list_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "The task was added to the List (empty body)." }
+        }
+      },
+      "delete": {
+        "operationId": "RemoveTaskFromList",
+        "summary": "Remove a task from an additional List (Tasks in Multiple Lists ClickApp). No request body; returns an empty object.",
+        "parameters": [
+          { "name": "list_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "The task was removed from the List (empty body)." }
+        }
+      }
+    },
     "/v2/task/{task_id}": {
       "get": {
         "operationId": "GetTask",
