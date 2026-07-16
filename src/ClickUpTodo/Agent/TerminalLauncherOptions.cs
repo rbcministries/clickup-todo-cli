@@ -16,6 +16,25 @@ public enum PreferredTerminal
 }
 
 /// <summary>
+/// Where an interactive dispatch opens the <c>claude</c> session (#255): a
+/// <see cref="NewWindow"/> (default, today's behaviour) or a <see cref="NewTab"/> of the terminal the
+/// app is already running in, where the host emulator supports it. This only affects the interactive
+/// terminal path — one-off <c>claude -p</c> runs go through the background runner with no terminal.
+/// </summary>
+public enum TerminalLaunchLocation
+{
+    /// <summary>Open the session in a brand-new terminal window (default; current behaviour).</summary>
+    NewWindow,
+
+    /// <summary>
+    /// Open the session in a new tab of the running terminal, where the detected host emulator
+    /// supports it (Windows Terminal, gnome-terminal, konsole, iTerm2); falls back to a new window
+    /// on unsupported hosts (Terminal.app, generic <c>$TERMINAL</c>) or when detection fails.
+    /// </summary>
+    NewTab,
+}
+
+/// <summary>
 /// Configuration for <see cref="ITerminalLauncher"/>. Intentionally lean for this slice (issue #25):
 /// it must work with zero config (all defaults). The full settings surface — preferred terminal,
 /// custom <c>claude</c> path/args, working directory, prompt-template — is wired to
@@ -31,4 +50,11 @@ public sealed record TerminalLauncherOptions
 
     /// <summary>Preferred terminal on Windows; ignored on other platforms.</summary>
     public PreferredTerminal Preferred { get; init; } = PreferredTerminal.Auto;
+
+    /// <summary>
+    /// Whether an interactive dispatch opens a new window (default) or a new tab of the running
+    /// terminal where supported (#255). <see cref="TerminalLaunchLocation.NewTab"/> makes the planner
+    /// try a host-specific tab candidate first, keeping the new-window candidate(s) as the fallback.
+    /// </summary>
+    public TerminalLaunchLocation LaunchLocation { get; init; } = TerminalLaunchLocation.NewWindow;
 }

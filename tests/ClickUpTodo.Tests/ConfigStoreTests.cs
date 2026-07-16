@@ -70,6 +70,7 @@ public sealed class ConfigStoreTests : IDisposable
             AgentDispatch = new AgentDispatchSettings
             {
                 PreferredTerminal = PreferredTerminal.Pwsh,
+                LaunchLocation = TerminalLaunchLocation.NewTab,
                 ClaudeExecutable = "/opt/claude",
                 ExtraArgs = ["--model", "opus"],
                 WorkingDirectory = AgentWorkingDirectory.Fixed,
@@ -85,6 +86,7 @@ public sealed class ConfigStoreTests : IDisposable
 
         var d = loaded.AgentDispatch;
         Assert.Equal(PreferredTerminal.Pwsh, d.PreferredTerminal);
+        Assert.Equal(TerminalLaunchLocation.NewTab, d.LaunchLocation);
         Assert.Equal("/opt/claude", d.ClaudeExecutable);
         Assert.Equal(["--model", "opus"], d.ExtraArgs);
         Assert.Equal(AgentWorkingDirectory.Fixed, d.WorkingDirectory);
@@ -92,6 +94,36 @@ public sealed class ConfigStoreTests : IDisposable
         Assert.Equal(AgentSessionMode.OneOff, d.DefaultSessionMode);
         Assert.True(d.DefaultPostResultsToComments);
         Assert.Equal("Lead: {userPrompt}\n{contextJson}", d.PromptTemplate);
+    }
+
+    [Fact]
+    public void Save_PersistsDispatchLaunchLocationAsReadableString()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig
+        {
+            AgentDispatch = new AgentDispatchSettings { LaunchLocation = TerminalLaunchLocation.NewTab },
+        });
+
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.Contains("NewTab", json);
+        Assert.DoesNotContain("\"launchLocation\":1", json);
+    }
+
+    [Fact]
+    public void Load_WhenFileMissingLaunchLocation_DefaultsToNewWindow()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig { WorkspaceId = "1", PersonalTasksListId = "2" });
+        // An agentDispatch block from before #255 — no launchLocation key.
+        File.WriteAllText(
+            store.ConfigPath,
+            "{\"workspaceId\":\"1\",\"personalTasksListId\":\"2\",\"agentDispatch\":{\"claudeExecutable\":\"claude\"}}");
+
+        var loaded = store.Load();
+
+        Assert.Equal(TerminalLaunchLocation.NewWindow, loaded.AgentDispatch.LaunchLocation);
+        Assert.True(loaded.AgentDispatch.IsDefault);
     }
 
     [Fact]

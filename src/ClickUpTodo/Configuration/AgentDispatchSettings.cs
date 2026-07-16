@@ -42,6 +42,13 @@ public sealed class AgentDispatchSettings
     /// <summary>Which terminal to prefer on Windows; <see cref="PreferredTerminal.Auto"/> uses the fallback chain.</summary>
     public PreferredTerminal PreferredTerminal { get; set; } = PreferredTerminal.Auto;
 
+    /// <summary>
+    /// Where an interactive dispatch opens the session (#255): a new window (default, today's
+    /// behaviour) or a new tab of the running terminal where the host emulator supports it. Absent in
+    /// an old config ⇒ <see cref="TerminalLaunchLocation.NewWindow"/>.
+    /// </summary>
+    public TerminalLaunchLocation LaunchLocation { get; set; } = TerminalLaunchLocation.NewWindow;
+
     /// <summary>The <c>claude</c> executable to invoke (looked up on PATH). Blank ⇒ <c>"claude"</c>.</summary>
     public string ClaudeExecutable { get; set; } = "claude";
 
@@ -91,6 +98,7 @@ public sealed class AgentDispatchSettings
     /// <summary>True when nothing has been customised, so all launcher/composer defaults apply.</summary>
     public bool IsDefault =>
         PreferredTerminal == PreferredTerminal.Auto
+        && LaunchLocation == TerminalLaunchLocation.NewWindow
         && (string.IsNullOrWhiteSpace(ClaudeExecutable) || ClaudeExecutable == "claude")
         && ExtraArgs.Count == 0
         && WorkingDirectory == AgentWorkingDirectory.TaskDerived
@@ -110,6 +118,7 @@ public sealed class AgentDispatchSettings
         // dialog's ParseExtraArgs cleans typed input (and the executable is coalesced above).
         ExtraArgs = [.. ExtraArgs.Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim())],
         Preferred = PreferredTerminal,
+        LaunchLocation = LaunchLocation,
     };
 
     /// <summary>

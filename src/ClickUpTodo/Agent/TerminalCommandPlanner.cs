@@ -37,8 +37,8 @@ public static class TerminalCommandPlanner
         TerminalLauncherOptions options,
         bool oneOff = false) => os switch
         {
-            OSPlatformKind.Windows => PlanWindows(exists, promptFilePath, workingDir, options, oneOff),
-            OSPlatformKind.MacOS => PlanMacOS(exists, promptFilePath, workingDir, options, oneOff),
+            OSPlatformKind.Windows => PlanWindows(exists, getEnv, promptFilePath, workingDir, options, oneOff),
+            OSPlatformKind.MacOS => PlanMacOS(exists, getEnv, promptFilePath, workingDir, options, oneOff),
             OSPlatformKind.Linux => PlanLinux(exists, getEnv, promptFilePath, workingDir, options, oneOff),
             _ => [],
         };
@@ -54,9 +54,21 @@ public static class TerminalCommandPlanner
     // last and is reached only if the direct launches fail to start, or when it's explicitly preferred.
 
     private static IReadOnlyList<LaunchSpec> PlanWindows(
-        Func<string, bool> exists, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
+        Func<string, bool> exists, Func<string, string?> getEnv, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
         var command = PwshCommand(file, cwd, options, oneOff); // `Set-Location …; & 'claude' [-p] … (Get-Content -Raw '<file>')`
+
+        var specs = new List<LaunchSpec>();
+
+        // New-tab in the running Windows Terminal window (#255), tried before the new-window chain.
+        // `-w 0` targets the current window (bare `wt new-tab` opens a new window); gated on WT_SESSION
+        // so we only attempt it when we're actually inside Windows Terminal. Window candidates follow
+        // as the fallback if this fails to start or the app isn't Windows Terminal.
+        if (options.LaunchLocation == TerminalLaunchLocation.NewTab && exists("wt") && EnvSet(getEnv, "WT_SESSION"))
+        {
+            specs.Add(new LaunchSpec(
+                "wt", ["-w", "0", "new-tab", "pwsh", "-NoExit", "-Command", command], cwd, "Windows Terminal (tab)"));
+        }
 
         // Candidate builders keyed by the terminal they represent, in default fallback order.
         var order = new[]
@@ -72,7 +84,6 @@ public static class TerminalCommandPlanner
             ? order
             : new[] { options.Preferred }.Concat(order.Where(t => t != options.Preferred));
 
-        var specs = new List<LaunchSpec>();
         foreach (var terminal in chain)
         {
             var spec = terminal switch
@@ -96,6 +107,10 @@ public static class TerminalCommandPlanner
         return specs;
     }
 
+    /// <summary>True when an environment variable is set to a non-blank value — the signal that we're
+    /// running inside a particular terminal emulator, used to gate its new-tab candidate (#255).</summary>
+    private static bool EnvSet(Func<string, string?> getEnv, string name) => !string.IsNullOrWhiteSpace(getEnv(name));
+
     /// <summary>The PowerShell host to run inside the cmd window — pwsh preferred, else powershell; null if neither.</summary>
     private static string? PwshHost(Func<string, bool> exists) =>
         exists("pwsh") ? "pwsh" : exists("powershell") ? "powershell" : null;
@@ -103,14 +118,39 @@ public static class TerminalCommandPlanner
     // ── macOS: osascript drives Terminal to run the bash command ──
 
     private static IReadOnlyList<LaunchSpec> PlanMacOS(
-        Func<string, bool> exists, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
+        Func<string, bool> exists, Func<string, string?> getEnv, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
         if (!exists("osascript"))
             return [];
 
         var inner = PosixCommand(file, cwd, options, oneOff); // `cd …; 'claude' [-p] … "$(cat '<file>')"`
+        var specs = new List<LaunchSpec>();
+
+        // New-tab in the running iTerm2 window (#255), tried before the Terminal.app window fallback.
+        // iTerm2 has a real scripting API for tabs; `create tab with default profile` opens a tab in the
+        // current window and `write text` runs the same command the window path would (cwd + prompt-file
+        // indirection ride along in `inner`). Terminal.app has no scriptable tab, so it stays window-only
+        // and is the fallback here if the iTerm2 script fails (e.g. no current window).
+        if (options.LaunchLocation == TerminalLaunchLocation.NewTab
+            && string.Equals(getEnv("TERM_PROGRAM"), "iTerm.app", StringComparison.Ordinal))
+        {
+            specs.Add(new LaunchSpec(
+                "osascript",
+                [
+                    "-e", "tell application \"iTerm\"",
+                    "-e", "tell current window",
+                    "-e", "create tab with default profile",
+                    "-e", $"tell current session to write text \"{AppleScriptEscape(inner)}\"",
+                    "-e", "end tell",
+                    "-e", "end tell",
+                ],
+                cwd,
+                "iTerm2 (tab)"));
+        }
+
         var script = $"tell application \"Terminal\" to do script \"{AppleScriptEscape(inner)}\"";
-        return [new LaunchSpec("osascript", ["-e", script], cwd, "Terminal (osascript)")];
+        specs.Add(new LaunchSpec("osascript", ["-e", script], cwd, "Terminal (osascript)"));
+        return specs;
     }
 
     // ── Linux: honor $TERMINAL, else probe common emulators ──
@@ -120,6 +160,19 @@ public static class TerminalCommandPlanner
     {
         var inner = PosixCommand(file, cwd, options, oneOff);
         var specs = new List<LaunchSpec>();
+
+        // New-tab in the running emulator (#255), tried before the new-window chain. Each is gated on
+        // both the emulator being installed and the env var it exports when we're inside it, so a tab is
+        // only attempted in a terminal that can honour it; the window candidates below remain the
+        // fallback. gnome-terminal's shared server makes `--tab` land in the existing window; konsole
+        // takes `--new-tab`.
+        if (options.LaunchLocation == TerminalLaunchLocation.NewTab)
+        {
+            if (exists("gnome-terminal") && (EnvSet(getEnv, "GNOME_TERMINAL_SCREEN") || EnvSet(getEnv, "VTE_VERSION")))
+                specs.Add(new LaunchSpec("gnome-terminal", ["--tab", "--", "bash", "-lc", inner], cwd, "gnome-terminal (tab)"));
+            if (exists("konsole") && EnvSet(getEnv, "KONSOLE_VERSION"))
+                specs.Add(new LaunchSpec("konsole", ["--new-tab", "-e", "bash", "-lc", inner], cwd, "konsole (tab)"));
+        }
 
         var configured = getEnv("TERMINAL");
         if (!string.IsNullOrWhiteSpace(configured) && exists(configured))

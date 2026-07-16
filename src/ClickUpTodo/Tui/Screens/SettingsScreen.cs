@@ -172,6 +172,18 @@ public sealed class SettingsScreen : Screen
         var fixedDirLabel = new Label { X = rightX, Y = 9, Text = "Fixed dir (when Working dir = Fixed):" };
         var fixedDirField = new TextField { X = rightX, Y = 10, Width = Dim.Fill(2), Text = dispatch.FixedWorkingDirectory };
 
+        // Where an interactive session opens (#255): a new window, or a new tab of the running terminal
+        // where the host supports it (falls back to a window otherwise). Cycle button, mirroring above.
+        var launchLocation = dispatch.LaunchLocation;
+        var launchLocationButton = new Button { X = rightX, Y = 11, Text = LaunchLocationText(launchLocation) };
+        launchLocationButton.Accepting += (_, _) =>
+        {
+            launchLocation = launchLocation == TerminalLaunchLocation.NewWindow
+                ? TerminalLaunchLocation.NewTab
+                : TerminalLaunchLocation.NewWindow;
+            launchLocationButton.Text = LaunchLocationText(launchLocation);
+        };
+
         // The prompt template (#100) is edited on its own screen; this button opens it via the host.
         var templateButton = new Button { X = rightX, Y = 12, Text = "Edit prompt template…" };
         templateButton.Accepting += (_, _) =>
@@ -206,6 +218,7 @@ public sealed class SettingsScreen : Screen
                 new AgentDispatchSettings
                 {
                     PreferredTerminal = terminal,
+                    LaunchLocation = launchLocation,
                     ClaudeExecutable = string.IsNullOrWhiteSpace(exeField.Text) ? "claude" : exeField.Text!.Trim(),
                     ExtraArgs = SettingsForm.ParseExtraArgs(argsField.Text),
                     WorkingDirectory = workingDir,
@@ -245,7 +258,7 @@ public sealed class SettingsScreen : Screen
             workingDirLabel, workingDirField, workingDirNote,
             detailHeader, defaultTabButton, activityOrderButton, autoScrollButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
-            fixedDirLabel, fixedDirField, templateButton,
+            fixedDirLabel, fixedDirField, launchLocationButton, templateButton,
             sessionModeButton, postToCommentsButton,
             save, cancel,
         ]);
@@ -269,6 +282,12 @@ public sealed class SettingsScreen : Screen
         AgentWorkingDirectory.Home => "Home",
         AgentWorkingDirectory.Fixed => "Fixed",
         _ => "Task-derived",
+    };
+
+    private static string LaunchLocationText(TerminalLaunchLocation l) => "Launch: " + l switch
+    {
+        TerminalLaunchLocation.NewTab => "New tab (where supported)",
+        _ => "New window",
     };
 
     private static string SessionModeText(AgentSessionMode m) => "Default session: " + m switch

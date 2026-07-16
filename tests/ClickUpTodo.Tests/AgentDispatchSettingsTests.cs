@@ -21,6 +21,7 @@ public sealed class AgentDispatchSettingsTests
         Assert.Equal(AgentWorkingDirectory.TaskDerived, s.WorkingDirectory);
         Assert.Equal(AgentSessionMode.Interactive, s.DefaultSessionMode);
         Assert.False(s.DefaultPostResultsToComments);
+        Assert.Equal(TerminalLaunchLocation.NewWindow, s.LaunchLocation);
     }
 
     [Theory]
@@ -41,6 +42,7 @@ public sealed class AgentDispatchSettingsTests
         Assert.False(new AgentDispatchSettings { DefaultSessionMode = AgentSessionMode.OneOff }.IsDefault);
         Assert.False(new AgentDispatchSettings { DefaultPostResultsToComments = true }.IsDefault);
         Assert.False(new AgentDispatchSettings { PromptTemplate = "Custom {userPrompt}" }.IsDefault);
+        Assert.False(new AgentDispatchSettings { LaunchLocation = TerminalLaunchLocation.NewTab }.IsDefault);
     }
 
     // ── ToLauncherOptions ──────────────────────────────────────────────────────────
@@ -53,11 +55,13 @@ public sealed class AgentDispatchSettingsTests
             ClaudeExecutable = "/opt/claude",
             ExtraArgs = ["--model", "opus"],
             PreferredTerminal = PreferredTerminal.Pwsh,
+            LaunchLocation = TerminalLaunchLocation.NewTab,
         }.ToLauncherOptions();
 
         Assert.Equal("/opt/claude", opts.ClaudeExecutable);
         Assert.Equal(["--model", "opus"], opts.ExtraArgs);
         Assert.Equal(PreferredTerminal.Pwsh, opts.Preferred);
+        Assert.Equal(TerminalLaunchLocation.NewTab, opts.LaunchLocation);
     }
 
     [Theory]
