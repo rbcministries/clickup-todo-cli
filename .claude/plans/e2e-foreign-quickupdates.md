@@ -58,19 +58,29 @@ default path stays byte-identical.
 
 ## Drive script `foreign_quickupdates_check.py`
 
-1. Boot with `E2E_FOREIGN=1`; assert the list rendered and both markers are present:
-   `(not assigned to you)` (fs1) and `(parent — not assigned to you)` (cp1).
+1. Boot with `E2E_FOREIGN=1`; assert both markers render — `(not assigned to you)` (fs1, after an
+   idempotent expand-all `Ctrl+→`, since a normal parent folds collapsed) and
+   `(parent — not assigned to you)` (cp1, always shown).
 2. **Find-and-open** Quick Updates on the foreign subtask by its QU title (the screen title is
    `Quick Updates — {taskName}`): press Space, and if the open screen's title isn't fs1, Esc +
    Down and retry (robust to row ordering). Asserting QU **opens** on the foreign row is the #160
    headline — the pre-#160 build flashed "not assigned to you — unchanged" and never opened.
-3. Commit a **changed, active** status: the Status pane preselects the current (`to do`, index 0);
-   Down → `in progress` (index 1); Enter commits. #207 keeps the screen open. After the async
-   write settles, assert the Status pane's `✓` sits on `in progress` — this only holds if the
-   modelled `PUT` echoed the committed status (the round-trip), since `ApplyStatus` reconciles the
-   `✓` to the **server-confirmed** value (`confirmed ?? status`).
-4. Esc → back to the list; assert the fs1 row is still present (name + marker) — "the row stays in
-   place and isn't dropped".
+3. Commit a **changed** Status and Priority while the screen stays open (#207): Status pane
+   preselects `to do` (row 0), Down → `in progress`, Enter; Tab to the Priority pane, Up×4 clamps
+   to `Urgent` (row 0), Enter. The `✓` moving here is only an **optimistic** reflection —
+   `ApplyStatus`/`ApplyPriority` set it before the server responds and reconcile to
+   `confirmed ?? committed`, so a *null* echo still leaves the optimistic value in place — hence
+   this step does **not** by itself prove the round-trip; it confirms the commit path fired.
+4. Esc → back to the list; assert the fs1 row is still present and shows the committed status in
+   place (`(IP)` — "the row stays in place and isn't dropped").
+5. **Round-trip proof:** force a manual refresh (`F5`, never a delta) so the per-parent foreign
+   fetch re-serves `fs1` from the fake's **persisted** model (`_foreignStatus`/`_foreignPriority`),
+   replacing every optimistic value. Assert the re-rendered row is `(IP)` (and the foreign marker
+   returns on the full render path), then reopen QU on `fs1` — seeded from the re-fetched task — and
+   assert the Status pane marks `in progress` and the Priority pane marks `Urgent`. Had the modelled
+   `PUT` not persisted the commit, `fs1` would re-serve its seed (`to do`, no priority) and these
+   would fail — so this is what actually establishes the Status **and** Priority round-trip through
+   the modelled write.
 
 ## Files
 

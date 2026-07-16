@@ -297,11 +297,14 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
             return;
         try
         {
-            var root = JsonDocument.Parse(requestBody).RootElement;
+            using var doc = JsonDocument.Parse(requestBody);
+            var root = doc.RootElement;
             if (root.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.String)
                 _foreignStatus[id] = st.GetString()!;
+            // priority: an integer level sets it; an explicit null (ClickUp's "clear") resets it. Guard the
+            // int read so a non-integer number can't throw past the JsonException catch below.
             if (root.TryGetProperty("priority", out var pr))
-                _foreignPriority[id] = pr.ValueKind == JsonValueKind.Number ? pr.GetInt32() : null;
+                _foreignPriority[id] = pr.ValueKind == JsonValueKind.Number && pr.TryGetInt32(out var level) ? level : null;
         }
         catch (JsonException)
         {
@@ -324,8 +327,10 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
         };
         var status = _foreignStatus.TryGetValue(id, out var s) ? s : "to do";
         var parentField = parent is null ? "" : $",\"parent\":\"{parent}\"";
+        // Echo the priority level as ClickUp does: id "1".."4" (which SetTaskPriorityAsync reads back via
+        // ClickUpPriority.Level) plus the lowercase name, matching the real API and the default TasksJson.
         var priorityField = _foreignPriority.TryGetValue(id, out var lvl) && lvl is { } l
-            ? $",\"priority\":{{\"id\":\"{l}\",\"priority\":\"{ClickUpPriority.NameFromLevel(l)}\",\"color\":\"#f50000\"}}"
+            ? $",\"priority\":{{\"id\":\"{l}\",\"priority\":\"{ClickUpPriority.NameFromLevel(l)?.ToLowerInvariant()}\",\"color\":\"#f50000\"}}"
             : "";
         var subtasksField = includeSubtasks && id == "pt1"
             ? $",\"subtasks\":[{ForeignTaskJson("fs1", includeSubtasks: false)}]"

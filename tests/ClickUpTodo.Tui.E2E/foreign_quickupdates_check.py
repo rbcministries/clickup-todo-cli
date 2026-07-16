@@ -92,8 +92,36 @@ def qu_open():
 SPACE = b" "
 ESC = b"\x1b"
 DOWN = b"\x1b[B"
+UP = b"\x1b[A"
+TAB = b"\t"
 ENTER = b"\r"
-CTRL_RIGHT = b"\x1b[1;5C"    # expand-all (the bulk counterpart to the per-parent → fold)
+CTRL_RIGHT = b"\x1b[1;5C"    # expand-all (bulk counterpart to the per-parent → fold)
+F5 = b"\x1b[15~"             # manual refresh — never a delta, so it re-runs the foreign resolve
+
+
+def open_qu_on_fs1(what):
+    """Open Quick Updates on the foreign subtask. Space opens QU on the selected row; if the open
+    screen's title isn't fs1, Esc + Down and retry (robust to row ordering). QU is a full-window screen,
+    so while it's open the fs1 name can only be the title — a reliable oracle for "on fs1"."""
+    for _ in range(12):
+        send(SPACE, 2.5)
+        if qu_open() and FS1 in visible():
+            return
+        if qu_open():
+            send(ESC, 1.5)
+        send(DOWN, 0.8)
+    require(False, f"could not open Quick Updates on the foreign subtask ({what}) — "
+                   "a not-mine row should be editable since #160")
+
+
+def marked(name):
+    """True when some pane row shows `name` with the leading ✓ current-value marker."""
+    return any(name in ln and "✓" in ln for ln in lines())
+
+
+def fs1_row():
+    return next((ln for ln in lines() if FS1 in ln), None)
+
 
 try:
     pump(8.0)
@@ -108,49 +136,67 @@ try:
     require(FOREIGN_MARKER in visible(), f"foreign-subtask marker {FOREIGN_MARKER!r} not rendered after expand-all")
     print("MARKERS ok — foreign subtask + context parent both rendered")
 
-    # 2. Find and open Quick Updates on the foreign subtask. Space opens QU on the selected row; if the
-    #    open screen's title isn't fs1, Esc + Down and retry (robust to row ordering). QU is a full-window
-    #    screen, so while it's open the fs1 name can only be the title — a reliable oracle for "on fs1".
-    opened = False
-    for _ in range(10):
-        send(SPACE, 2.5)
-        if qu_open() and FS1 in visible():
-            opened = True
-            break
-        if qu_open():
-            send(ESC, 1.5)
-        send(DOWN, 0.8)
-    require(opened, "Space never opened Quick Updates on the foreign subtask "
-                    "(a not-mine row should be editable since #160)")
+    # 2. Opening Quick Updates on the foreign subtask is the #160 headline: the pre-#160 build flashed
+    #    "not assigned to you — unchanged" and never opened.
+    open_qu_on_fs1("initial open")
     print("OPEN ok — Quick Updates opened on the foreign subtask (not blocked)")
 
-    # 3. Commit a changed, active status. The Status pane preselects the current value ("to do", row 0);
-    #    Down → "in progress" (row 1); Enter commits and (#207) keeps the screen open. After the async
-    #    write settles, the ✓ must sit on "in progress" — proving the modelled PUT echoed it (else the
-    #    host would reconcile ✓ to the server value and it would move).
+    # 3. Commit a changed Status and Priority while the screen stays open (#207 apply-on-Enter):
+    #    - Status pane preselects the current value ("to do", row 0); Down → "in progress" (row 1); Enter.
+    #    - Tab to the Priority pane (preselected on "(no priority)"); Up×4 clamps to "Urgent" (row 0); Enter.
+    #    The ✓ moving here is only an OPTIMISTIC reflection — ApplyStatus/ApplyPriority set it before the
+    #    server responds (final = confirmed ?? committed) — so it does NOT by itself prove the PUT
+    #    round-tripped; step 5 forces a model-sourced re-fetch to prove that. It does confirm the commit
+    #    path fired and the screen stayed open.
     send(DOWN, 0.8)
-    send(ENTER, 3.0)
-    pump(1.5)
-    require(qu_open(), "Quick Updates should stay open after apply-on-Enter (#207)")
-    require(any("in progress" in ln and "✓" in ln for ln in lines()),
-            "the committed status 'in progress' is not marked current (✓) — the write did not round-trip")
-    print("COMMIT ok — 'in progress' committed and confirmed (✓) via the modelled PUT")
+    send(ENTER, 2.5)
+    pump(1.0)
+    require(qu_open(), "Quick Updates should stay open after status apply-on-Enter (#207)")
+    require(marked("in progress"), "status ✓ did not move to 'in progress' after commit")
+    send(TAB, 0.8)
+    for _ in range(4):
+        send(UP, 0.4)
+    send(ENTER, 2.5)
+    pump(1.0)
+    require(marked("Urgent"), "priority ✓ did not move to 'Urgent' after commit")
+    print("COMMIT ok — status 'in progress' + priority 'Urgent' committed (optimistic ✓)")
 
-    # 4. Esc back to the list; the foreign row is still there (stays in place, not dropped) and now
-    #    reflects the committed status in place — "in progress" renders as the (IP) abbreviation chip,
-    #    unique to fs1 (pt1/ct1 are (TD), cp1 is (IR)).
+    # 4. Esc back to the list; the foreign row is still there (stays in place, not dropped) and reflects
+    #    the committed status in place — "in progress" → the (IP) abbreviation chip, unique to fs1
+    #    (pt1/ct1 are (TD), cp1 is (IR)).
     #    (Note: the in-place row update — UpdateTaskRow → BuildRow — re-formats without the
     #    isForeignSubtask flag, so the "(not assigned to you)" marker transiently drops until the next
-    #    full re-render. That's pre-existing #160/#179 render behaviour, not gated by this scenario and
-    #    outside #160's acceptance ("shows the confirmed status in place and isn't dropped"), so this
-    #    check deliberately does NOT assert the marker persists post-edit — see the PR / issue link.)
+    #    full re-render. Pre-existing #160/#179 behaviour, outside #160's acceptance ("shows the confirmed
+    #    status in place and isn't dropped"), tracked in #264 — so this does NOT assert the marker here.)
     send(ESC, 2.0)
     require(not qu_open(), "Esc did not close Quick Updates")
-    fs1_row = next((ln for ln in lines() if FS1 in ln), None)
-    require(fs1_row is not None, "the foreign-subtask row was dropped from the list after the edit")
-    require("(IP)" in fs1_row,
-            f"the committed 'in progress' status is not reflected on the foreign row in place: {fs1_row!r}")
+    row = fs1_row()
+    require(row is not None, "the foreign-subtask row was dropped from the list after the edit")
+    require("(IP)" in row, f"the committed status is not reflected on the foreign row in place: {row!r}")
     print("STAYS ok — foreign row still present and shows the committed status in place")
+
+    # 5. THE ROUND-TRIP PROOF. Force a manual refresh (F5 — never a delta) so the per-parent foreign fetch
+    #    (GET /task/{id}?include_subtasks=true) re-serves fs1 from the fake's PERSISTED model
+    #    (_foreignStatus/_foreignPriority), replacing every optimistic value. Had the modelled PUT not
+    #    persisted the commit, fs1 would re-serve its seed ("to do", no priority) and these would fail.
+    #    Re-expand (idempotent) in case the refresh reset the fold; the re-rendered row also carries the
+    #    foreign marker again (full render path), and reopening QU reads the model-sourced current values.
+    send(F5, 4.0)
+    send(CTRL_RIGHT, 1.5)
+    row = fs1_row()
+    require(row is not None, "foreign row missing after refresh")
+    require(FOREIGN_MARKER in row,
+            f"foreign marker did not return on the full re-render after refresh: {row!r}")
+    require("(IP)" in row,
+            f"status did NOT round-trip: after a model-sourced re-fetch fs1 is not 'in progress': {row!r}")
+    open_qu_on_fs1("reopen after refresh")
+    require(marked("in progress"),
+            "status did NOT round-trip: reopened Quick Updates (seeded from the re-fetched task) "
+            "does not mark 'in progress' as current")
+    require(marked("Urgent"),
+            "priority did NOT round-trip: reopened Quick Updates does not mark 'Urgent' as current")
+    send(ESC, 1.5)
+    print("ROUND-TRIP ok — status + priority persisted through the modelled PUT and re-served on refresh")
 
     print("FOREIGN QUICK UPDATES E2E: PASS")
 finally:
