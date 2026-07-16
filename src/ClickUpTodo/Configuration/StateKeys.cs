@@ -29,6 +29,14 @@ public static class StateKeys
     public const string Assignees = "assignees";
 
     /// <summary>
+    /// The list-frequency candidate pool (#238) — most-frequently-used lists across the loaded task
+    /// working set (the free ride-along tally), plus the long tail seeded by the scheduled
+    /// list-hierarchy walk (#236), scoped to one workspace. Maps to <c>lists.json</c> in the file
+    /// backend. A mismatched workspace/schema on load is a clean miss (empty pool).
+    /// </summary>
+    public const string Lists = "lists";
+
+    /// <summary>
     /// The persisted mentions/comments feed cache (#123) — the last successfully-aggregated feed, so
     /// opening the feed screen paints instantly while the live refresh runs. Maps to <c>feed.json</c>
     /// in the file backend. One document; the stored payload carries the workspace/assignee fingerprint

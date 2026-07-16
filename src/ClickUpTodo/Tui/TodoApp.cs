@@ -56,6 +56,10 @@ public sealed class TodoApp
     // loaded working set and topped up (once, off-thread) from the workspace members. Never touches
     // rendering or input — no #3/#12 impact.
     private readonly AssigneeFrequencyCache _assignees;
+    // Candidate-list pool for the future List selector (#238/#239): tallied from each loaded working set
+    // (free — every task carries its home list) and backfilled by the scheduled list-hierarchy walk
+    // (#236). Like the assignee pool, it never touches rendering or input — no #3/#12 impact.
+    private readonly ListFrequencyCache _lists;
     // How many candidates the Assignees pane wants available before it stops needing the deferred
     // workspace-members top-up (it fills its empty state up to 10 rows).
     private const int AssigneeCandidateTarget = 10;
@@ -153,7 +157,8 @@ public sealed class TodoApp
     private string? _pendingSelectId;
 
     public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
-        IFocusStore focus, TaskCache taskCache, FeedCache feedCache, AssigneeFrequencyCache assignees)
+        IFocusStore focus, TaskCache taskCache, FeedCache feedCache, AssigneeFrequencyCache assignees,
+        ListFrequencyCache lists)
     {
         _tasks = tasks;
         _feed = feed;
@@ -163,6 +168,7 @@ public sealed class TodoApp
         _taskCache = taskCache;
         _feedCache = feedCache;
         _assignees = assignees;
+        _lists = lists;
         _agent = BuildAgentDispatcher();
     }
 
@@ -342,7 +348,12 @@ public sealed class TodoApp
     {
         try
         {
-            return (await _tasks.ResolveWorkspaceListsAsync(ct)).PassComplete;
+            var resolution = await _tasks.ResolveWorkspaceListsAsync(ct);
+            // Backfill the long-tail lists the task rows don't already carry into the frequency pool
+            // (#238) as count-0 candidates, so the List selector's empty state can offer lists the user
+            // hasn't recently been shown. Seed is idempotent and persists only when it adds a new list.
+            _lists.Seed(resolution.Lists);
+            return resolution.PassComplete;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -2050,6 +2061,11 @@ public sealed class TodoApp
             _assigneeTopUpKicked = true;
             _ = _assignees.TopUpAsync(AssigneeCandidateTarget);
         }
+
+        // Tally this working set's home lists into the list-frequency pool (#238) — the free primary
+        // tier; the long tail is backfilled off-thread by the scheduled list-hierarchy walk (#236) via
+        // _lists.Seed in RunWorkspaceListWalkStepAsync. Also a cheap, idempotent dictionary update.
+        _lists.RecordFromTasks(tasks);
 
         _status = $"Updated {DateTime.Now:HH:mm:ss} · {tasks.Count} task(s) · refresh every {_config.RefreshSeconds}s";
         // Surface an adaptive-fetch cap (#87) on the persisted status line — a Flash here would be
