@@ -13,6 +13,7 @@ public sealed class ClickUpClientIntegrationTests
     private static string? WorkspaceId => Environment.GetEnvironmentVariable("CLICKUP_WORKSPACE_ID");
     private static string? ListId => Environment.GetEnvironmentVariable("CLICKUP_LIST_ID");
     private static string? TaskId => Environment.GetEnvironmentVariable("CLICKUP_TASK_ID");
+    private static string? SecondaryListId => Environment.GetEnvironmentVariable("CLICKUP_SECONDARY_LIST_ID");
 
     [SkippableFact]
     public async Task GetMe_ReturnsAuthenticatedUser()
@@ -206,6 +207,39 @@ public sealed class ClickUpClientIntegrationTests
             var afterRemove = await client.RemoveTaskAssigneeAsync(TaskId!, me.Id);
             Assert.DoesNotContain(afterRemove, a => a.Id == me.Id);
         }
+    }
+
+    [SkippableFact]
+    public async Task AddAndRemoveTaskFromList_RoundTripsThroughDetailMembership()
+    {
+        // Needs a *second* list to add the task to (its home list is set at create). Skips unless a
+        // throwaway secondary list is supplied, and requires the "Tasks in Multiple Lists" ClickApp to
+        // be enabled on the workspace — otherwise the add legitimately fails with a ClickUpApiException.
+        Skip.If(
+            string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId) || string.IsNullOrWhiteSpace(SecondaryListId),
+            "Set CLICKUP_TOKEN, CLICKUP_TASK_ID and CLICKUP_SECONDARY_LIST_ID (a throwaway list) to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var before = await client.GetTaskDetailAsync(TaskId!);
+        var alreadyMember = before.Lists.Any(l => l.Id == SecondaryListId);
+        Skip.If(alreadyMember, "CLICKUP_TASK_ID already belongs to CLICKUP_SECONDARY_LIST_ID; point it at a task that doesn't.");
+
+        try
+        {
+            await client.AddTaskToListAsync(TaskId!, SecondaryListId!);
+
+            // Membership is confirmed by a detail re-fetch (the write itself returns nothing).
+            var afterAdd = await client.GetTaskDetailAsync(TaskId!);
+            Assert.Contains(afterAdd.Lists, l => l.Id == SecondaryListId);
+        }
+        finally
+        {
+            // Restore the original membership so the test is idempotent, whether or not the assert held.
+            await client.RemoveTaskFromListAsync(TaskId!, SecondaryListId!);
+        }
+
+        var afterRemove = await client.GetTaskDetailAsync(TaskId!);
+        Assert.DoesNotContain(afterRemove.Lists, l => l.Id == SecondaryListId);
     }
 
     [SkippableFact]
