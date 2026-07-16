@@ -185,4 +185,31 @@ public sealed class AssigneeSelectorModelTests
     [Fact]
     public void ShouldRunSearch_StaleCapture_Skips()
         => Assert.False(AssigneeSelectorModel.ShouldRunSearch(5, 6)); // a newer keystroke arrived
+
+    // ── ShouldPickFromSearchBox (empty-search Enter guard, #234) ─────────────────
+
+    [Fact]
+    public void ShouldPickFromSearchBox_ActiveQueryWithRows_Picks()
+        => Assert.True(AssigneeSelectorModel.ShouldPickFromSearchBox("ad", rowCount: 3));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\t")]
+    [InlineData(null)]
+    public void ShouldPickFromSearchBox_BlankQuery_DoesNotPick(string? query)
+    {
+        // The regression (#234): on a blank box the rows are the current-assignee ✓ rows, so a
+        // stray Enter must NOT pick (which would remove the first assignee). rowCount > 0 here.
+        Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox(query, rowCount: 4));
+    }
+
+    [Fact]
+    public void ShouldPickFromSearchBox_NoRows_DoesNotPick()
+        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("ada", rowCount: 0));
+
+    [Fact]
+    public void ShouldPickFromSearchBox_QueryWithSurroundingWhitespace_Picks()
+        // The View trims before matching, but even an untrimmed non-blank query is a real search.
+        => Assert.True(AssigneeSelectorModel.ShouldPickFromSearchBox("  ada  ", rowCount: 1));
 }

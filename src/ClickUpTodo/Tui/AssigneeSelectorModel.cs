@@ -130,6 +130,18 @@ public static class AssigneeSelectorModel
     public static bool ShouldRunSearch(long capturedStamp, long currentStamp)
         => capturedStamp == currentStamp;
 
+    /// <summary>
+    /// Whether an <c>Enter</c> keypress in the search box should pick the highlighted row. Only when
+    /// there is an active (non-blank) <paramref name="query"/> and at least one row
+    /// (<paramref name="rowCount"/> &gt; 0) — in that state every row is an addable search match, so
+    /// picking <em>adds</em> without leaving the box. On a blank query the rows are the current-assignee
+    /// <c>✓</c> rows (and top-frequent top-ups), where picking row 0 would silently <em>remove</em> the
+    /// first assignee (#234); there the caller swallows <c>Enter</c> as a no-op and leaves removal to an
+    /// explicit pick on a <c>✓</c> row (cursor into the list, then <c>Enter</c>).
+    /// </summary>
+    public static bool ShouldPickFromSearchBox(string? query, int rowCount)
+        => rowCount > 0 && !string.IsNullOrWhiteSpace(query);
+
     private static bool IsUsable(TaskAssignee person)
         => person.Id > 0 && !string.IsNullOrWhiteSpace(person.Name);
 }
