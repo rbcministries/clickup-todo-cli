@@ -186,11 +186,12 @@ public sealed class AssigneeSelectorModelTests
     public void ShouldRunSearch_StaleCapture_Skips()
         => Assert.False(AssigneeSelectorModel.ShouldRunSearch(5, 6)); // a newer keystroke arrived
 
-    // ── ShouldPickFromSearchBox (empty-search Enter guard, #234) ─────────────────
+    // ── ShouldPickFromSearchBox (add-only search-box Enter guard, #234) ──────────
 
     [Fact]
-    public void ShouldPickFromSearchBox_ActiveQueryWithRows_Picks()
-        => Assert.True(AssigneeSelectorModel.ShouldPickFromSearchBox("ad", rowCount: 3));
+    public void ShouldPickFromSearchBox_ActiveQuery_HighlightedUnselected_Picks()
+        // A real search: the highlighted match is an addable (unselected) candidate → add it.
+        => Assert.True(AssigneeSelectorModel.ShouldPickFromSearchBox("ad", highlightedId: 7, Ids(1, 2)));
 
     [Theory]
     [InlineData("")]
@@ -198,18 +199,23 @@ public sealed class AssigneeSelectorModelTests
     [InlineData("\t")]
     [InlineData(null)]
     public void ShouldPickFromSearchBox_BlankQuery_DoesNotPick(string? query)
-    {
-        // The regression (#234): on a blank box the rows are the current-assignee ✓ rows, so a
-        // stray Enter must NOT pick (which would remove the first assignee). rowCount > 0 here.
-        Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox(query, rowCount: 4));
-    }
+        // On a blank box the highlighted row is a current-assignee ✓ row; a stray Enter must NOT pick
+        // (which would remove the first assignee — the original #234 symptom).
+        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox(query, highlightedId: 1, Ids(1, 2)));
 
     [Fact]
-    public void ShouldPickFromSearchBox_NoRows_DoesNotPick()
-        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("ada", rowCount: 0));
+    public void ShouldPickFromSearchBox_NonBlankQuery_HighlightedAlreadySelected_DoesNotPick()
+        // The debounce-window regression: the query box is already non-blank but the still-displayed
+        // rows are the empty-state ✓ current-assignee rows, so the highlighted id is already selected.
+        // Picking would remove it — refuse, so a search-box Enter can never remove (#234).
+        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("ada", highlightedId: 1, Ids(1, 2)));
+
+    [Fact]
+    public void ShouldPickFromSearchBox_NonPositiveHighlightedId_DoesNotPick()
+        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("ada", highlightedId: 0, Ids()));
 
     [Fact]
     public void ShouldPickFromSearchBox_QueryWithSurroundingWhitespace_Picks()
         // The View trims before matching, but even an untrimmed non-blank query is a real search.
-        => Assert.True(AssigneeSelectorModel.ShouldPickFromSearchBox("  ada  ", rowCount: 1));
+        => Assert.True(AssigneeSelectorModel.ShouldPickFromSearchBox("  ada  ", highlightedId: 9, Ids()));
 }

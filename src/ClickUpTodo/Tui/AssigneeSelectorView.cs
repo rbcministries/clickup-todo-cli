@@ -162,16 +162,19 @@ public sealed class AssigneeSelectorView : View
                 _list.SetFocus();
                 break;
             case KeyCode.Enter:
-                // Pick the highlighted result (top row by default) so the user can add without leaving
-                // the box — but only when there's an active query, where every row is an addable search
-                // match. On a blank box the rows are the current-assignee ✓ rows, so picking row 0 would
-                // silently remove the first assignee (#234); there Enter is a swallowed no-op and removal
-                // stays an explicit ✓-row pick (Cursor Down into the list, then Enter — see OnListKey).
-                // Enter is always Handled so it never falls through to a host default action (e.g. New
-                // Task's IsDefault Save button).
+                // Enter in the search box is strictly add-only: pick the highlighted row so the user can
+                // add without leaving the box, but only when there's an active query AND that row is an
+                // addable (not already-selected) candidate. Picking a ✓ current-assignee row would remove
+                // it — and that row can still be the highlighted one under a non-blank query during the
+                // type-ahead debounce window (rows haven't re-rendered yet), so gating on query text
+                // alone would reintroduce #234. Removal stays an explicit ✓-row pick (Cursor Down into the
+                // list, then Enter — see OnListKey). Enter is always Handled so it never falls through to
+                // a host default action (e.g. New Task's IsDefault Save button).
                 key.Handled = true;
-                if (AssigneeSelectorModel.ShouldPickFromSearchBox(_search.Text, _rowPeople.Count))
-                    Pick(_list.SelectedItem ?? 0);
+                var row = _list.SelectedItem ?? 0;
+                if (row >= 0 && row < _rowPeople.Count
+                    && AssigneeSelectorModel.ShouldPickFromSearchBox(_search.Text, _rowPeople[row].Id, _selectedIds))
+                    Pick(row);
                 break;
         }
         // Tab / Shift+Tab / Esc / F1 fall through to the host screen (pane cycle, exit, help).

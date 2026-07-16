@@ -131,16 +131,24 @@ public static class AssigneeSelectorModel
         => capturedStamp == currentStamp;
 
     /// <summary>
-    /// Whether an <c>Enter</c> keypress in the search box should pick the highlighted row. Only when
-    /// there is an active (non-blank) <paramref name="query"/> and at least one row
-    /// (<paramref name="rowCount"/> &gt; 0) — in that state every row is an addable search match, so
-    /// picking <em>adds</em> without leaving the box. On a blank query the rows are the current-assignee
-    /// <c>✓</c> rows (and top-frequent top-ups), where picking row 0 would silently <em>remove</em> the
-    /// first assignee (#234); there the caller swallows <c>Enter</c> as a no-op and leaves removal to an
-    /// explicit pick on a <c>✓</c> row (cursor into the list, then <c>Enter</c>).
+    /// Whether an <c>Enter</c> keypress in the search box should pick the highlighted row — making the
+    /// search box strictly <em>add-only</em>. True only when there is an active (non-blank)
+    /// <paramref name="query"/> <b>and</b> the highlighted row is an addable candidate: a usable
+    /// (<paramref name="highlightedId"/> &gt; 0) person who is <b>not already selected</b>
+    /// (<paramref name="selectedIds"/>).
+    /// <para>
+    /// Gating on the query text alone is not enough: during the type-ahead debounce the displayed rows
+    /// can still be the empty-state <c>✓</c> current-assignee rows even though the query box is already
+    /// non-blank (<c>OnSearchChanged</c> arms the timer without re-rendering). Picking row 0 there would
+    /// silently <em>remove</em> the first assignee — the exact #234 symptom, through a timing window. By
+    /// refusing to pick an already-selected row, a search-box <c>Enter</c> can never remove regardless of
+    /// debounce/render state; removal stays an explicit pick on a <c>✓</c> row (cursor into the list,
+    /// then <c>Enter</c>). A blank query yields no addable target (row 0 is a <c>✓</c> assignee), so it
+    /// is a no-op.
+    /// </para>
     /// </summary>
-    public static bool ShouldPickFromSearchBox(string? query, int rowCount)
-        => rowCount > 0 && !string.IsNullOrWhiteSpace(query);
+    public static bool ShouldPickFromSearchBox(string? query, long highlightedId, ISet<long> selectedIds)
+        => !string.IsNullOrWhiteSpace(query) && highlightedId > 0 && !selectedIds.Contains(highlightedId);
 
     private static bool IsUsable(TaskAssignee person)
         => person.Id > 0 && !string.IsNullOrWhiteSpace(person.Name);

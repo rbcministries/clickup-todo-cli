@@ -13,20 +13,30 @@ The `Enter` shortcut is intended as "add the highlighted **search match** withou
 box" — which only makes sense when there is an active query (then every row is an addable,
 unselected match, per `SearchResultRows`). On a blank query it is misapplied to the `✓` rows.
 
-## Fix (issue option 1 — add-only Enter)
+## Fix (issue option 1 — add-only Enter, made timing-proof)
 
 Keep the decision pure (repo convention: all decisions live in `AssigneeSelectorModel`).
 
-1. **`AssigneeSelectorModel.ShouldPickFromSearchBox(string? query, int rowCount)`** — returns
-   `true` only when `rowCount > 0` **and** the query is non-blank. This is the sole new logic.
+1. **`AssigneeSelectorModel.ShouldPickFromSearchBox(string? query, long highlightedId, ISet<long> selectedIds)`**
+   — returns `true` only when the query is non-blank **and** the highlighted row is an *addable*
+   candidate: a usable id (`> 0`) that is **not already selected**. This makes the search box strictly
+   add-only.
 2. **`AssigneeSelectorView.OnSearchKey`** `Enter` branch: always set `key.Handled = true` (so
    `Enter` never falls through to a host default — New Task's `Save` button is `IsDefault = true`;
-   QuickUpdatesScreen's `OnPaneKey` already expects the selector to mark `Enter` handled), and only
-   call `Pick(_list.SelectedItem ?? 0)` when `ShouldPickFromSearchBox` is true. On a blank box it is
-   a swallowed no-op.
+   QuickUpdatesScreen's `OnPaneKey` already expects the selector to mark `Enter` handled), and call
+   `Pick(row)` only when the highlighted row is in range and `ShouldPickFromSearchBox` is true.
 
 Removal stays an explicit action: cursor `Down` into the list, then `Enter` on a `✓` row
 (`OnListKey`, unchanged).
+
+### Why not gate on query text alone
+
+A first cut gated the pick on the query being non-blank. That's a false proxy: `OnSearchChanged`
+arms the debounce timer **without re-rendering** (`AssigneeSelectorView.cs:305-318`), so for the
+~1s debounce window the displayed rows are still the empty-state `✓` current-assignee rows even
+though the box is already non-blank. An `Enter` in that window would pick a `✓` row → remove the
+first assignee — reintroducing #234 through a timing window. Refusing to pick an **already-selected**
+row closes the window regardless of render/debounce state (verified in first-pass review of PR #269).
 
 ## Acceptance criteria → coverage
 
