@@ -45,6 +45,13 @@ public static class StateKeys
     public const string Statuses = "statuses";
 
     /// <summary>
+    /// The list-frequency candidate pool (#238) — most-frequent lists across the loaded task rows, plus
+    /// a count-0 long-tail backfill from the scheduled list-hierarchy walk (#236), scoped to one
+    /// workspace. Maps to <c>lists.json</c> in the file backend.
+    /// </summary>
+    public const string Lists = "lists";
+
+    /// <summary>
     /// The per-list color-chip cache (#125) — the resolved list colors <see cref="Services.TaskService"/>
     /// uses to tint List-grouped headers, warmed on launch to avoid re-resolving every color at first
     /// render. Each entry carries its capture timestamp, so a persisted color expires after the color TTL
