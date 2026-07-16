@@ -31,8 +31,12 @@ public sealed record FeedResult(
 /// <c>internal static</c> <see cref="Aggregate"/> / <see cref="GatherAsync"/> so it is unit-testable
 /// offline (via <c>InternalsVisibleTo</c>) without a live ClickUp client.
 /// </remarks>
-public sealed class FeedService(ClickUpClient client, TaskService taskService, AppConfig config)
+public sealed class FeedService(ClickUpClient client, TaskService taskService, AppConfig config, TimeProvider? timeProvider = null)
 {
+    // Injectable clock for the recent-activity look-back window (#244), mirroring FeedCache's seam.
+    private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
+
+
     /// <summary>Default number of tasks whose comments are fetched concurrently. Bounded so a large
     /// assigned-task set doesn't open a fetch per task all at once, while still hiding per-call latency.</summary>
     public const int DefaultMaxConcurrency = 8;
@@ -68,8 +72,13 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
         bool includeClosed, bool mentionsOnly = false, CancellationToken ct = default)
     {
         var assigneeIds = await taskService.ResolveAssigneeIdsAsync(config.View, ct);
+        // Opt-in recent-activity look-back (#244): when configured, narrow the single shared fetch to
+        // tasks updated in the last N days. Null (the default, FeedActivityLookbackDays == 0) leaves the
+        // fetch unchanged. This narrows both the comment fan-out and the activity projection below, since
+        // they share this one fetch — the documented trade-off (a recent comment keeps its task in-window).
+        var updatedAfterMs = ActivityLookbackWindowMs(config.FeedActivityLookbackDays, _clock.GetUtcNow());
         var tasks = await client.GetAssignedTasksAsync(
-            config.WorkspaceId, assigneeIds, includeClosed: includeClosed, ct: ct);
+            config.WorkspaceId, assigneeIds, includeClosed: includeClosed, updatedAfterMs: updatedAfterMs, ct: ct);
 
         var taskIds = tasks
             .Select(t => t.Id)
@@ -89,6 +98,18 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
         var activity = BuildActivity(tasks, DefaultMaxEntries, includeCompleted: includeClosed);
         return new FeedResult(comments, activity);
     }
+
+    /// <summary>
+    /// Computes the epoch-ms <c>date_updated_gt</c> look-back window (#244) from the configured
+    /// <see cref="AppConfig.FeedActivityLookbackDays"/> against <paramref name="now"/>. Returns
+    /// <c>null</c> when <paramref name="lookbackDays"/> is non-positive (the disabled default) so the
+    /// fetch is left unwindowed; otherwise the instant <paramref name="lookbackDays"/> days before
+    /// <paramref name="now"/>, in epoch milliseconds. Pure and unit-testable.
+    /// </summary>
+    internal static long? ActivityLookbackWindowMs(int lookbackDays, DateTimeOffset now)
+        => lookbackDays <= 0
+            ? null
+            : now.Subtract(TimeSpan.FromDays(lookbackDays)).ToUnixTimeMilliseconds();
 
     /// <summary>
     /// Projects the assigned tasks into the recent-activity feed (#117): each task with a non-empty id

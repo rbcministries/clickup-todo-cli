@@ -277,6 +277,43 @@ public sealed class FeedServiceTests
         Assert.Equal(new[] { "closed", "open" }, shown.Select(a => a.TaskId));
     }
 
+    // ── ActivityLookbackWindowMs (#244) ───────────────────────────────────────
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(-30)]
+    public void ActivityLookbackWindow_NonPositiveDays_IsDisabled(int days)
+    {
+        // Zero (the default) and any negative value mean "no window" — the fetch is left unwindowed so
+        // behavior is byte-for-byte unchanged from before #244.
+        Assert.Null(FeedService.ActivityLookbackWindowMs(days, DateTimeOffset.UnixEpoch.AddDays(1000)));
+    }
+
+    [Fact]
+    public void ActivityLookbackWindow_PositiveDays_IsNowMinusThatManyDays()
+    {
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000);
+
+        var window = FeedService.ActivityLookbackWindowMs(7, now);
+
+        var expected = now.Subtract(TimeSpan.FromDays(7)).ToUnixTimeMilliseconds();
+        Assert.Equal(expected, window);
+        // Sanity: the window is strictly in the past and exactly 7 days of ms behind now.
+        Assert.Equal(TimeSpan.FromDays(7).TotalMilliseconds, now.ToUnixTimeMilliseconds() - window!.Value);
+    }
+
+    [Fact]
+    public void ActivityLookbackWindow_LargerDays_MovesFurtherBack()
+    {
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000);
+
+        var oneDay = FeedService.ActivityLookbackWindowMs(1, now);
+        var thirtyDays = FeedService.ActivityLookbackWindowMs(30, now);
+
+        Assert.True(thirtyDays < oneDay, "a longer look-back must reach further into the past.");
+    }
+
     // ── StampMentions (#113) ──────────────────────────────────────────────────
 
     private static readonly MentionSpec BenSpec = MentionSpec.ForUser(new ClickUpUser(7, "Ben"));

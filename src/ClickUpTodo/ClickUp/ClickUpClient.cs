@@ -144,8 +144,15 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// <b>empty</b> set omits the <c>assignees</c> filter entirely, so ClickUp returns tasks for
     /// everyone in the workspace — a deliberately broad (and slower) fetch the caller opts into by
     /// clearing the Assignee rule (#68).
+    /// <para>
+    /// <paramref name="updatedAfterMs"/> is an optional server-side look-back window (#244): when set,
+    /// only tasks whose <c>date_updated</c> is after that epoch-ms instant are returned, shrinking the
+    /// payload on a busy workspace. It reuses the same <c>date_updated_gt</c> query parameter the delta
+    /// fetch (<see cref="GetAssignedTasksDeltaAsync"/>, #194) relies on. Left <c>null</c> (the default),
+    /// the parameter is never sent, so the request is byte-for-byte identical to the unwindowed fetch.
+    /// </para>
     /// </summary>
-    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, CancellationToken ct = default)
+    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, long? updatedAfterMs = null, CancellationToken ct = default)
         => Guard("GetFilteredTeamTasks", () => PageAsync(page =>
             _client.V2.Team[workspaceId].Task.GetAsync(cfg =>
             {
@@ -157,6 +164,11 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 // any that still arrive as subtask anchors are hidden client-side by TaskView).
                 cfg.QueryParameters.IncludeClosed = includeClosed;
                 cfg.QueryParameters.Subtasks = true;
+                // Optional recent-activity look-back (#244): only set when a window is supplied so the
+                // default (null) leaves the request unchanged. Orthogonal to IncludeClosed — they compose
+                // exactly as they do on the delta path above.
+                if (updatedAfterMs is { } since)
+                    cfg.QueryParameters.DateUpdatedGt = since;
             }, ct), ct));
 
     /// <summary>

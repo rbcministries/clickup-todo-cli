@@ -231,7 +231,7 @@ public sealed class TaskService(
     // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone. A
     // username/email rule is resolved to an id via the workspace-members lookup (#73).
     private async Task<List<TaskItem>> LoadAssignedAsync(bool includeClosed, CancellationToken ct)
-        => await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), includeClosed, ct);
+        => await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), includeClosed, ct: ct);
 
     /// <summary>
     /// Cap on concurrent round-trips per fan-out (context parents, list colors). Small and fixed:

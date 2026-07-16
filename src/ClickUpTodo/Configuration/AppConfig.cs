@@ -69,6 +69,26 @@ public sealed class AppConfig
     public bool FeedShowActivity { get; set; }
 
     /// <summary>
+    /// Optional server-side look-back window for the mentions/comments feed's assigned-tasks fetch
+    /// (#244), in <b>days</b>. <c>0</c> (the default, so no config migration is needed) disables it —
+    /// the feed fetches its assigned tasks exactly as before. A positive value narrows the single
+    /// <see cref="Services.FeedService.LoadFeedAsync"/> fetch to tasks whose <c>date_updated</c> is
+    /// within the last N days (via the <c>date_updated_gt</c> query parameter the delta path already
+    /// uses), shrinking the payload on a busy workspace — an opt-in optimisation.
+    /// <para>
+    /// Because that one fetch feeds <b>both</b> the comment fan-out and the recent-activity projection,
+    /// the window narrows both. A new comment bumps its task's <c>date_updated</c>, so tasks with recent
+    /// comment activity stay in-window; the window's meaning is "activity/comments from tasks touched in
+    /// the last N days". It is orthogonal to the F12 <see cref="FeedShowCompleted"/> (<c>include_closed</c>)
+    /// toggle — the two compose exactly as they do on the delta path. It is deliberately <b>not</b> part
+    /// of <see cref="Services.FeedCache.KeyFor"/>: the window is time-relative (shifts every second), so
+    /// keying on it would make the cache key perpetually unstable; the near-immediate live refresh
+    /// reconciles the instant-paint within moments.
+    /// </para>
+    /// </summary>
+    public int FeedActivityLookbackDays { get; set; }
+
+    /// <summary>
     /// How the task list renders each row's Status/Priority badges (F6 cycles Icons → Text → Hidden).
     /// A cosmetic display preference, deliberately kept out of <see cref="ViewSettings"/> so it's
     /// independent of the F3 filter/sort/group view (and its <see cref="ViewSettings.IsDefault"/>).
