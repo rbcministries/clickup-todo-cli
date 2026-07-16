@@ -314,6 +314,24 @@ public sealed class FeedServiceTests
         Assert.True(thirtyDays < oneDay, "a longer look-back must reach further into the past.");
     }
 
+    [Theory]
+    [InlineData(1_000_000)]
+    [InlineData(100_000_000)]
+    [InlineData(int.MaxValue)]
+    public void ActivityLookbackWindow_AbsurdDays_ClampsInsteadOfThrowing(int days)
+    {
+        // A fat-fingered hand-edited config value must not crash the feed load: without the clamp,
+        // now.Subtract(FromDays(days)) underflows DateTimeOffset.MinValue and throws. It degrades to
+        // the MaxLookbackDays window (an effectively unbounded look-back) instead.
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000);
+
+        var window = FeedService.ActivityLookbackWindowMs(days, now);
+
+        Assert.Equal(
+            now.Subtract(TimeSpan.FromDays(FeedService.MaxLookbackDays)).ToUnixTimeMilliseconds(),
+            window);
+    }
+
     // ── StampMentions (#113) ──────────────────────────────────────────────────
 
     private static readonly MentionSpec BenSpec = MentionSpec.ForUser(new ClickUpUser(7, "Ben"));

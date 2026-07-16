@@ -36,7 +36,6 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
     // Injectable clock for the recent-activity look-back window (#244), mirroring FeedCache's seam.
     private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
 
-
     /// <summary>Default number of tasks whose comments are fetched concurrently. Bounded so a large
     /// assigned-task set doesn't open a fetch per task all at once, while still hiding per-call latency.</summary>
     public const int DefaultMaxConcurrency = 8;
@@ -100,16 +99,26 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
     }
 
     /// <summary>
+    /// Upper bound on the look-back window, in days (~100 years). Well past any useful window; it exists
+    /// only so an absurd hand-edited <see cref="AppConfig.FeedActivityLookbackDays"/> (there is no F2 UI
+    /// validating it yet, #271) can't drive <see cref="ActivityLookbackWindowMs"/> to subtract past
+    /// <see cref="DateTimeOffset.MinValue"/> and throw — it clamps instead, so a fat-fingered value just
+    /// yields a very old (effectively unbounded) window rather than crashing the whole feed load.
+    /// </summary>
+    internal const int MaxLookbackDays = 36_500;
+
+    /// <summary>
     /// Computes the epoch-ms <c>date_updated_gt</c> look-back window (#244) from the configured
     /// <see cref="AppConfig.FeedActivityLookbackDays"/> against <paramref name="now"/>. Returns
     /// <c>null</c> when <paramref name="lookbackDays"/> is non-positive (the disabled default) so the
     /// fetch is left unwindowed; otherwise the instant <paramref name="lookbackDays"/> days before
-    /// <paramref name="now"/>, in epoch milliseconds. Pure and unit-testable.
+    /// <paramref name="now"/> (clamped to <see cref="MaxLookbackDays"/> so an out-of-range config value
+    /// can't overflow the subtraction), in epoch milliseconds. Pure and unit-testable.
     /// </summary>
     internal static long? ActivityLookbackWindowMs(int lookbackDays, DateTimeOffset now)
         => lookbackDays <= 0
             ? null
-            : now.Subtract(TimeSpan.FromDays(lookbackDays)).ToUnixTimeMilliseconds();
+            : now.Subtract(TimeSpan.FromDays(Math.Min(lookbackDays, MaxLookbackDays))).ToUnixTimeMilliseconds();
 
     /// <summary>
     /// Projects the assigned tasks into the recent-activity feed (#117): each task with a non-empty id
