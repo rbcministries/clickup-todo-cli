@@ -1,4 +1,5 @@
 using ClickUpTodo.ClickUp;
+using ClickUpTodo.Configuration;
 using ClickUpTodo.Services;
 
 namespace ClickUpTodo.Tests;
@@ -379,5 +380,85 @@ public sealed class FeedServiceTests
 
         Assert.Equal(nowMs - lookbackDays * msPerDay, result);
         Assert.Equal(now.AddDays(-lookbackDays).ToUnixTimeMilliseconds(), result);
+    }
+
+    [Fact]
+    public void ComputeUpdatedAfterMs_ClampsHugeValue_WithoutOverflowing()
+    {
+        // A hand-edited config can bypass the UI clamp (SettingsForm.MaxLookbackDays); an unbounded
+        // AddDays(-huge) would throw ArgumentOutOfRangeException and break the feed load. The compute
+        // clamps to MaxLookbackDays instead.
+        var now = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000);
+
+        var result = FeedService.ComputeUpdatedAfterMs(int.MaxValue, now);
+
+        Assert.Equal(now.AddDays(-FeedService.MaxLookbackDays).ToUnixTimeMilliseconds(), result);
+    }
+
+    // ── LoadFeedAsync wiring (window threaded into the fetch, #244) ───────────
+
+    [Theory]
+    [InlineData(0)]   // disabled → no window passed to the fetch
+    [InlineData(7)]   // enabled → computed window passed through
+    public async Task LoadFeedAsync_ThreadsConfiguredLookbackWindow_IntoAssignedFetch(int lookbackDays)
+    {
+        var now = new DateTimeOffset(2026, 7, 16, 0, 0, 0, TimeSpan.Zero);
+        var client = new CapturingClient();
+        var config = new AppConfig
+        {
+            WorkspaceId = "ws-1",
+            FeedActivityLookbackDays = lookbackDays,
+            View = new ViewSettings { Filters = [ViewSettings.DefaultAssigneeRule()] },
+        };
+        // "Assignee IS me" resolves to [userId] with no client call, so the fetch is the only client hit.
+        var taskService = new TaskService(client, config, userId: 42);
+        var feed = new FeedService(client, taskService, config, new FixedClock(now));
+
+        await feed.LoadFeedAsync(includeClosed: false);
+
+        Assert.Equal(FeedService.ComputeUpdatedAfterMs(lookbackDays, now), client.LastUpdatedAfterMs);
+    }
+
+    /// <summary>A TimeProvider pinned to a fixed instant.</summary>
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    /// <summary>
+    /// A read-only <see cref="IClickUpClient"/> fake that records the <c>updatedAfterMs</c> the feed
+    /// passed to the assigned-task fetch and returns an empty task set (so the comment fan-out and
+    /// activity projection are trivially empty). Every other member is unused by this flow.
+    /// </summary>
+    private sealed class CapturingClient : IClickUpClient
+    {
+        public long? LastUpdatedAfterMs { get; private set; }
+
+        public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, long? updatedAfterMs = null, CancellationToken ct = default)
+        {
+            LastUpdatedAfterMs = updatedAfterMs;
+            return Task.FromResult(new List<TaskItem>());
+        }
+
+        public Task<ClickUpUser> GetMeAsync(CancellationToken ct = default) => Task.FromResult(new ClickUpUser(42, "me"));
+
+        public Task<IReadOnlyList<NamedEntity>> GetWorkspacesAsync(CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<WorkspaceMember>> GetWorkspaceMembersAsync(string workspaceId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<NamedEntity>> GetSpacesAsync(string workspaceId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<NamedEntity>> GetFoldersAsync(string spaceId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<NamedEntity>> GetFolderlessListsAsync(string spaceId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<NamedEntity>> GetListsInFolderAsync(string folderId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<NamedEntity> GetListAsync(string listId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<string?> GetListColorAsync(string listId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<StatusOption>> GetListStatusesAsync(string listId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<List<TaskItem>> GetListTasksAsync(string listId, bool includeClosed = false, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<string?> SetTaskStatusAsync(string taskId, string statusName, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<int?> SetTaskPriorityAsync(string taskId, int? priorityLevel, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<TaskAssignee>> RemoveTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default) => throw new NotImplementedException();
     }
 }

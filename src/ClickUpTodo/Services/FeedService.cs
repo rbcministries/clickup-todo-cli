@@ -31,7 +31,7 @@ public sealed record FeedResult(
 /// <c>internal static</c> <see cref="Aggregate"/> / <see cref="GatherAsync"/> so it is unit-testable
 /// offline (via <c>InternalsVisibleTo</c>) without a live ClickUp client.
 /// </remarks>
-public sealed class FeedService(ClickUpClient client, TaskService taskService, AppConfig config, TimeProvider? timeProvider = null)
+public sealed class FeedService(IClickUpClient client, TaskService taskService, AppConfig config, TimeProvider? timeProvider = null)
 {
     // Clock for the look-back window (#244); injectable so ComputeUpdatedAfterMs's caller is testable.
     private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
@@ -96,15 +96,23 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
         return new FeedResult(comments, activity);
     }
 
+    /// <summary>Defensive upper bound (~100 years) on the look-back window (#244). The F2 settings
+    /// field already clamps to <see cref="Tui.Screens.SettingsForm.MaxLookbackDays"/>, but a
+    /// hand-edited config can carry any value; capping here keeps <see cref="ComputeUpdatedAfterMs"/>
+    /// from overflowing <see cref="DateTimeOffset"/> (subtracting more than ~730k days throws). Any
+    /// value this large already means "effectively everything", so the cap changes no real behaviour.</summary>
+    internal const int MaxLookbackDays = 36_500;
+
     /// <summary>
     /// Computes the <c>date_updated_gt</c> window (epoch ms) for the feed's assigned-task fetch (#244)
     /// from the configured look-back <paramref name="lookbackDays"/> and the current time
     /// <paramref name="now"/>. Returns null when the window is disabled (<c>0</c>) or non-positive
     /// (defensive against a hand-edited config), so the caller omits the filter and fetches the full
-    /// set. Pure and unit-testable.
+    /// set. A positive value is clamped to <see cref="MaxLookbackDays"/> so an out-of-range
+    /// hand-edited config can't overflow <see cref="DateTimeOffset"/>. Pure and unit-testable.
     /// </summary>
     internal static long? ComputeUpdatedAfterMs(int lookbackDays, DateTimeOffset now)
-        => lookbackDays > 0 ? now.AddDays(-lookbackDays).ToUnixTimeMilliseconds() : null;
+        => lookbackDays > 0 ? now.AddDays(-Math.Min(lookbackDays, MaxLookbackDays)).ToUnixTimeMilliseconds() : null;
 
     /// <summary>
     /// Projects the assigned tasks into the recent-activity feed (#117): each task with a non-empty id
