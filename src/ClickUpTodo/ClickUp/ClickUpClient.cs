@@ -364,7 +364,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         => Guard("RemoveTaskFromList", async () =>
         {
             (await _client.V2.List[listId].Task[taskId].DeleteAsync(cancellationToken: ct))?.Dispose();
-            return true;
+            return true; // Guard is generic over a value; the empty response carries nothing to return.
         });
 
     /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>

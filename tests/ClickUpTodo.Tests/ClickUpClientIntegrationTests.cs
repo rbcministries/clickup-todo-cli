@@ -235,7 +235,10 @@ public sealed class ClickUpClientIntegrationTests
         finally
         {
             // Restore the original membership so the test is idempotent, whether or not the assert held.
-            await client.RemoveTaskFromListAsync(TaskId!, SecondaryListId!);
+            // Best-effort: if the add above threw (e.g. the ClickApp is disabled) the removal would throw
+            // too and mask the real failure, so swallow a cleanup error rather than replace the cause.
+            try { await client.RemoveTaskFromListAsync(TaskId!, SecondaryListId!); }
+            catch (ClickUpApiException) { /* best-effort restore */ }
         }
 
         var afterRemove = await client.GetTaskDetailAsync(TaskId!);

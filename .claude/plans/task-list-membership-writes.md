@@ -37,8 +37,8 @@ those additional locations — does not exist at any layer today. This adds it.
 ### Spec (`ClickUp/clickup-openapi.json`)
 Add a new path `/v2/list/{list_id}/task/{task_id}` with two operations:
 - `post` → `operationId: AddTaskToList`, path params `list_id` + `task_id`, **no** request
-  body, a `200` response with **no `content`** (so Kiota generates a `PostAsync` returning
-  `Task`, no payload).
+  body, a `200` response with **no `content`** (Kiota generates a `PostAsync` returning
+  `Task<Stream?>` — the raw empty body — which the facade disposes and discards).
 - `delete` → `operationId: RemoveTaskFromList`, same path params, no body, empty `200`.
 
 No new component schemas (both responses are empty). This is the only spec change.
