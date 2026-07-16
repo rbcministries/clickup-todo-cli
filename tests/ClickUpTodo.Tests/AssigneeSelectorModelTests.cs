@@ -185,4 +185,23 @@ public sealed class AssigneeSelectorModelTests
     [Fact]
     public void ShouldRunSearch_StaleCapture_Skips()
         => Assert.False(AssigneeSelectorModel.ShouldRunSearch(5, 6)); // a newer keystroke arrived
+
+    // ── ShouldPickFromSearchBox (#234) ───────────────────────────────────────────
+
+    [Fact]
+    public void ShouldPickFromSearchBox_ActiveSearchWithRows_Picks()
+        => Assert.True(AssigneeSelectorModel.ShouldPickFromSearchBox("grac", 3)); // adds the highlighted match
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void ShouldPickFromSearchBox_BlankQuery_IsNoOp(string? query)
+        // The empty-search state shows current assignees (✓ removal rows) with SelectedItem defaulting to
+        // 0 — Enter must not act there, or it silently removes the first assignee (#234).
+        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox(query, 5));
+
+    [Fact]
+    public void ShouldPickFromSearchBox_NoRows_IsNoOp()
+        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("grac", 0)); // nothing to pick
 }

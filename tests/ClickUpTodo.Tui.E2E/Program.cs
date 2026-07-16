@@ -64,11 +64,19 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
         (104, "Margaret Hamilton"), (105, "Katherine Johnson"), (106, "Linus Torvalds"),
     ];
 
+    // #234 repro seam: when E2E_QU_SEED_ASSIGNEE=1, tasks open Quick Updates already assigned to this
+    // member, so the Assignees pane's empty-state row 0 is a removable ✓ row — the state where a stray
+    // Enter in the *empty* search box used to silently remove them. Off by default, so the other checks
+    // (which don't set it) see the original empty assignee set.
+    private const long SeededAssigneeId = 101; // Ada Lovelace (Members[0])
+    private static bool SeedQuAssignee => Environment.GetEnvironmentVariable("E2E_QU_SEED_ASSIGNEE") == "1";
+
     // The current assignee set of any task the Assignees pane writes to, mutated by the PUT so the
     // add/remove round-trip is truthful (the write response echoes the new set, which the pane and the
-    // list row reconcile to). Starts empty so the empty-state list shows the top-frequent members.
+    // list row reconcile to). Starts empty so the empty-state list shows the top-frequent members
+    // (or pre-seeded with the #234 member so a remove would round-trip truthfully).
     // Guarded by _gate since SendAsync is async and a detail GET can race an assignee PUT.
-    private readonly HashSet<long> _assignees = [];
+    private readonly HashSet<long> _assignees = SeedQuAssignee ? [SeededAssigneeId] : [];
     private readonly object _gate = new();
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -157,8 +165,13 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
             // Every 4th task is a subtask of the task 3 before it (same list), so the F4
             // nested view has real parents to nest under.
             var parent = k % 4 == 3 ? $",\"parent\":\"t{k - 3}\"" : "";
+            // #234: when opted in, every task carries the seeded current assignee, so whichever task the
+            // cursor opens Quick Updates on has a removable ✓ row 0 in its Assignees empty state.
+            var seeded = SeedQuAssignee
+                ? $",\"assignees\":[{{\"id\":{SeededAssigneeId},\"username\":\"{Members[0].Name}\"}}]"
+                : "";
             sb.Append($$"""
-            {"id":"t{{k}}","name":"Task {{k}} — follow up on the {{ListNames[li]}} item with a realistic title 📌","status":{"status":"{{Statuses[k % 4]}}","color":"{{StatusColors[k % 4]}}"},"list":{"id":"{{Lists[li]}}","name":"{{ListNames[li]}}"},"due_date":"{{DateTimeOffset.UtcNow.AddDays(k % 14).ToUnixTimeMilliseconds()}}","date_updated":"1700000000000","url":"https://app.clickup.com/t/t{{k}}"{{parent}}{{(k % 3 == 0 ? ",\"priority\":{\"priority\":\"high\",\"color\":\"#f50000\"}" : "")}}}
+            {"id":"t{{k}}","name":"Task {{k}} — follow up on the {{ListNames[li]}} item with a realistic title 📌","status":{"status":"{{Statuses[k % 4]}}","color":"{{StatusColors[k % 4]}}"},"list":{"id":"{{Lists[li]}}","name":"{{ListNames[li]}}"},"due_date":"{{DateTimeOffset.UtcNow.AddDays(k % 14).ToUnixTimeMilliseconds()}}","date_updated":"1700000000000","url":"https://app.clickup.com/t/t{{k}}"{{seeded}}{{parent}}{{(k % 3 == 0 ? ",\"priority\":{\"priority\":\"high\",\"color\":\"#f50000\"}" : "")}}}
             """);
         }
         // A completed (closed-type) task, returned only when the caller opts into closed tasks. The feed

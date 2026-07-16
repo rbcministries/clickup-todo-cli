@@ -162,9 +162,12 @@ public sealed class AssigneeSelectorView : View
                 _list.SetFocus();
                 break;
             case KeyCode.Enter:
-                // Pick the highlighted result (top row by default) so the user can add without leaving
-                // the box; no-op when the list is empty.
-                if (_rowPeople.Count > 0)
+                // Add the highlighted result without leaving the box — but only while a search is
+                // active. Search results are always unselected, addable rows, so Enter there only adds.
+                // In the empty-search state row 0 is the first current assignee (a removable ✓ row) and
+                // SelectedItem defaults to 0, so a stray Enter used to silently remove them (#234); it's
+                // a no-op now, and removal stays an explicit ✓-row action reached by arrowing Down.
+                if (AssigneeSelectorModel.ShouldPickFromSearchBox(_search.Text, _rowPeople.Count))
                 {
                     key.Handled = true;
                     Pick(_list.SelectedItem ?? 0);

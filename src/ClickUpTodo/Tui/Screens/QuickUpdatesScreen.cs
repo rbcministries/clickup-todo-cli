@@ -154,9 +154,11 @@ public sealed class QuickUpdatesScreen : Screen
     /// Screen-wide keys shared by all three panes. Tab/Shift+Tab cycle focus (wrapping); Esc exits;
     /// F1 opens Help; Enter commits the highlighted Status/Priority value. ↑/↓ fall through so each
     /// Status/Priority ListView moves its own selection. The Assignees pane is a single focusable
-    /// <see cref="AssigneeSelectorView"/> composite: it handles Enter (add/remove) and ↑/↓ (search
-    /// box ↔ list) internally and marks them handled, so only its bubbled Tab/Shift+Tab/Esc/F1 reach
-    /// here — the Enter-commit branch below stays keyed to the Status/Priority lists by identity.
+    /// <see cref="AssigneeSelectorView"/> composite: it handles ↑/↓ (search box ↔ list) and a search
+    /// Enter (add) internally, so mostly its bubbled Tab/Shift+Tab/Esc/F1 reach here. A stray Enter in
+    /// its empty search box is intentionally left unhandled (#234) and may bubble here too, but the
+    /// Enter-commit branch below stays keyed to the Status/Priority lists by identity, so it's a no-op
+    /// on the Assignees pane.
     /// </summary>
     private void OnPaneKey(object? sender, Key key)
     {
