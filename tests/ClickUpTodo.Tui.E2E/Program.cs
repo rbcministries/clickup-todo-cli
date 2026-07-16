@@ -29,7 +29,20 @@ if (Environment.GetEnvironmentVariable("E2E_VIEW") == "rich")
     config.PinnedTaskIds = ["t1", "t5", "t9"];
 }
 
-var client = new ClickUpClient("fake-token", new HttpClient(new FakeClickUp(taskCount)));
+// #232: an opt-in scenario that seeds a foreign subtask and a context parent — rows that are NOT the
+// user's own work — so Quick Updates edits on not-mine tasks can be driven end-to-end (the write-block
+// lifted in #160). Behind its own env flag so the default A/B byte-identical renders stay undisturbed.
+var foreignScenario = Environment.GetEnvironmentVariable("E2E_FOREIGN") == "1";
+if (foreignScenario)
+{
+    // Subtasks on so both resolvers run (ResolveForeignSubtasksAsync + ResolveContextParentsAsync) and
+    // nest; Text badges so the row shows the full status NAME ([status]) — the default Icons chip is a
+    // letter abbreviation, which isn't assertable as screen text after a status round-trip.
+    config.View.Subtasks = SubtaskView.All;
+    config.BadgeDisplay = BadgeDisplay.Text;
+}
+
+var client = new ClickUpClient("fake-token", new HttpClient(new FakeClickUp(taskCount, foreignScenario)));
 IStateStore stateStore = new JsonFileStateStore();
 var configStore = new ConfigStore(stateStore);
 var tasks = new TaskService(client, config, 1, userName: "Ben Seymour");
@@ -49,7 +62,7 @@ var assignees = new AssigneeFrequencyCache(
 new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees).Run("ansi");
 return;
 
-sealed class FakeClickUp(int taskCount) : HttpMessageHandler
+sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandler
 {
     private static readonly string[] Statuses = ["to do", "in progress", "blocked", "in review"];
     private static readonly string[] StatusColors = ["#d3d3d3", "#4194f6", "#e50000", "#a875ff"];
@@ -92,16 +105,28 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
             // mutates the shared set. Either way echo the task with the current assignees so the write
             // response reconciles correctly. Read the body before taking the lock (can't await under it).
             var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
-            lock (_gate)
-            {
-                ApplyAssigneeMutation(reqBody);
-                body = DetailJson(path, _assignees);
-            }
+            // Foreign scenario (#232): echo the committed status/priority straight back so a Quick
+            // Updates commit on a not-mine row round-trips (SetTaskStatusAsync reads the returned status).
+            if (foreign)
+                body = ForeignPutEchoJson(path, reqBody);
+            else
+                lock (_gate)
+                {
+                    ApplyAssigneeMutation(reqBody);
+                    body = DetailJson(path, _assignees);
+                }
         }
+        // Foreign scenario (#232): a parent's include_subtasks fetch (GetSubtasksAsync) surfaces a
+        // teammate-owned child; a plain detail GET backs the context parent. Must precede the generic
+        // /task/ branch below, and the include_subtasks check must precede the plain-detail one.
+        else if (foreign && path.Contains("/task/") && IncludeSubtasks(query))
+            body = ForeignSubtasksJson(TaskIdOf(path));
+        else if (foreign && path.Contains("/task/"))
+            body = ForeignDetailJson(TaskIdOf(path));
         else if (path.Contains("/task/"))
             lock (_gate) body = DetailJson(path, _assignees);
         else if (path.Contains("/team/") && path.EndsWith("/task"))
-            body = TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
+            body = foreign ? ForeignTeamTasksJson() : TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
         else if (request.Method == HttpMethod.Post && path.Contains("/list/") && path.EndsWith("/task"))
             // Create-task (#209/#213): echo a created task so the New Task screen's Save round-trips
             // through the facade and closes back to the list. (Not persisted into the team-tasks list.)
@@ -133,6 +158,88 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
     /// flips <c>include_closed=true</c>).</summary>
     private static bool IncludeClosed(string query)
         => query.Contains("include_closed=true", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Whether the request opted into a task's subtasks (<see cref="ClickUpClient.GetSubtasksAsync"/>
+    /// sets <c>include_subtasks=true</c>; a plain detail GET does not) — the seam the #232 foreign scenario
+    /// uses to tell a subtask fetch from a context-parent detail on the same <c>GET /task/{id}</c>.</summary>
+    private static bool IncludeSubtasks(string query)
+        => query.Contains("include_subtasks=true", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The task id trailing a <c>/v2/task/{id}</c> path (query already stripped by
+    /// <see cref="Uri.AbsolutePath"/>).</summary>
+    private static string TaskIdOf(string path) => path[(path.LastIndexOf('/') + 1)..];
+
+    // ── #232 foreign scenario ────────────────────────────────────────────────
+    // A tiny, deterministic snapshot with rows that AREN'T the user's own work, so Quick Updates edits
+    // on not-mine tasks (the #160 write-block lift) can be driven end-to-end. All gated behind the
+    // `foreign` flag (E2E_FOREIGN=1); the default scenario is untouched.
+
+    /// <summary>The team-tasks snapshot for the foreign scenario: <c>fp</c>, a normal assigned parent
+    /// (its <c>include_subtasks</c> fetch surfaces a teammate-owned child), and <c>mine</c>, an assigned
+    /// task whose <c>parent</c> (<c>cpar</c>) is absent from the snapshot so it pulls in a context
+    /// parent. One page, so the de-paging fetch stops after it.</summary>
+    private static string ForeignTeamTasksJson()
+        => """
+        {"tasks":[{"id":"fp","name":"Assigned parent — my ticket","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"date_updated":"1700000000000","url":"https://app.clickup.com/t/fp","assignees":[{"id":1,"username":"Ben Seymour"}]},{"id":"mine","name":"My subtask under a teammate's parent","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"date_updated":"1700000000000","url":"https://app.clickup.com/t/mine","parent":"cpar","assignees":[{"id":1,"username":"Ben Seymour"}]}],"last_page":true}
+        """;
+
+    /// <summary>The <c>include_subtasks</c> fetch (<see cref="ClickUpClient.GetSubtasksAsync"/>): <c>fp</c>
+    /// returns one teammate-owned child <c>fsub</c> (assignee id 102 != the signed-in id 1, so it renders
+    /// <c>(not assigned to you)</c>); every other id returns no subtasks, which stops the BFS recursion.</summary>
+    private static string ForeignSubtasksJson(string taskId)
+        => taskId == "fp"
+            ? """
+              {"id":"fp","name":"Assigned parent — my ticket","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/fp","subtasks":[{"id":"fsub","name":"Teammate-owned subtask","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"parent":"fp","date_updated":"1700000000000","url":"https://app.clickup.com/t/fsub","assignees":[{"id":102,"username":"Grace Hopper"}]}]}
+              """
+            : $$"""{"id":"{{taskId}}","name":"leaf","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{taskId}}","subtasks":[]}""";
+
+    /// <summary>A plain detail GET in the foreign scenario. <c>cpar</c> is the context parent header
+    /// (<see cref="TaskService.ResolveContextParentsAsync"/> fetches it via <c>GET /task/cpar</c>); it has
+    /// no assignee, so it renders <c>(parent — not assigned to you)</c>.</summary>
+    private static string ForeignDetailJson(string taskId)
+    {
+        var name = taskId == "cpar" ? "Context parent — teammate's epic" : $"Task {taskId}";
+        var status = taskId == "cpar" ? "in review" : "to do";
+        return $$"""{"id":"{{taskId}}","name":"{{name}}","status":{"status":"{{status}}","color":"{{ColorForStatus(status)}}"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{taskId}}","date_updated":"1700000000000","assignees":[]}""";
+    }
+
+    /// <summary>Echoes a Quick Updates <c>PUT /task/{id}</c> back with the committed <c>status</c> (and
+    /// <c>priority</c>) it carried, so <see cref="ClickUpClient.SetTaskStatusAsync"/>'s read-back is
+    /// truthful and the screen's ✓ + the list row settle on the committed value (a round-trip, not just
+    /// the optimistic move). A body without a field leaves it at the seeded default.</summary>
+    private static string ForeignPutEchoJson(string path, string requestBody)
+    {
+        var id = TaskIdOf(path);
+        var status = "to do";
+        var priorityJson = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("status", out var s) && s.ValueKind == JsonValueKind.String)
+                status = s.GetString() ?? status;
+            // Priority PUTs send a numeric level or an explicit null (clear). Echo either shape so a
+            // future priority round-trip check reads it back via ClickUpPriority.Level(id, name).
+            if (root.TryGetProperty("priority", out var p))
+                priorityJson = p.ValueKind == JsonValueKind.Number
+                    ? $",\"priority\":{{\"id\":\"{p.GetInt32()}\"}}"
+                    : ",\"priority\":null";
+        }
+        catch (JsonException)
+        {
+            // A non-JSON body isn't this fake's concern — fall back to the seeded status.
+        }
+        return $$"""{"id":"{{id}}","name":"echo","status":{"status":"{{status}}","color":"{{ColorForStatus(status)}}"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}"{{priorityJson}}}""";
+    }
+
+    /// <summary>The seeded colour for a workflow status name (falls back to the neutral grey for
+    /// <c>complete</c> / anything unlisted). Only cosmetic — the row keeps its existing colour on an
+    /// in-place status update — but keeps the echoed JSON self-consistent.</summary>
+    private static string ColorForStatus(string status)
+    {
+        var i = Array.IndexOf(Statuses, status);
+        return i >= 0 ? StatusColors[i] : "#d3d3d3";
+    }
 
     /// <summary>The task id from a <c>/v2/task/{id}/comment</c> path.</summary>
     private static string TaskIdOfComment(string path)
