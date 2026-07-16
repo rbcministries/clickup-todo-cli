@@ -46,7 +46,9 @@ var taskCache = new TaskCache(cacheStore);
 var feedCache = new FeedCache(cacheStore);
 var assignees = new AssigneeFrequencyCache(
     stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
-// List-frequency pool (#238), on the same store — a cold pool each run keeps A/B renders identical.
+// List-frequency pool (#238), on the same shared state store as the assignee pool above. Like that
+// pool it's off-render — no view consumes it yet (the List selector #239/#240 lands later) — so its
+// state never affects the A/B renders regardless of whether the store is warm from a prior run.
 var lists = new ListFrequencyCache(stateStore, config.WorkspaceId);
 new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists).Run("ansi");
 return;
