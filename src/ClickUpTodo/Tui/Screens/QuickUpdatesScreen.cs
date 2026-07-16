@@ -5,7 +5,7 @@ using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 
-// AssigneeSelectorView / AssigneeSelectorMode / ToggleKind live in the parent ClickUpTodo.Tui
+// AssigneeSelectorView / SelectorMode / ToggleKind live in the parent ClickUpTodo.Tui
 // namespace and are visible here without an extra using (this is the nested Screens namespace).
 
 // See TodoApp.cs: the static `Application` API is deprecated in Terminal.Gui 2.4 but remains the
@@ -29,7 +29,7 @@ namespace ClickUpTodo.Tui.Screens;
 /// </para>
 /// <para>
 /// The Assignees pane (#158) is an embedded <see cref="AssigneeSelectorView"/> in
-/// <see cref="AssigneeSelectorMode.ImmediateApply"/> mode: a search box over a type-ahead list, drawing
+/// <see cref="SelectorMode.ImmediateApply"/> mode: a search box over a type-ahead list, drawing
 /// its candidate pool from the assignee-frequency cache (#155). Add/remove apply to ClickUp immediately
 /// (optimistic + revert-on-failure) via the injected apply callback; unlike Status/Priority there is no
 /// <c>Enter</c> commit gate. The selector owns its own display + optimistic state; the host owns the
@@ -108,7 +108,7 @@ public sealed class QuickUpdatesScreen : Screen
             assigneeTopFrequent,
             initialSelected: currentAssignees,
             lockedDefault: null, // Quick Updates has no self-lock (that's the New Task rule, #213)
-            mode: AssigneeSelectorMode.ImmediateApply,
+            mode: SelectorMode.ImmediateApply,
             applyAsync: applyAssignee,
             timeProvider: timeProvider,
             debounce: assigneeDebounce)
