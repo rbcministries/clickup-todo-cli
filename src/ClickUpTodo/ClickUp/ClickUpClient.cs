@@ -338,6 +338,34 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             return MapAssignees(updated?.Assignees);
         });
 
+    /// <summary>
+    /// Add a task to an <b>additional</b> list — ClickUp's "Tasks in Multiple Lists" feature
+    /// (<c>POST /list/{list_id}/task/{task_id}</c>). The task keeps its home list (set at creation)
+    /// and gains <paramref name="listId"/> as an extra location, surfaced by
+    /// <see cref="GetTaskDetailAsync"/> in <see cref="TaskDetail.Lists"/>. ClickUp returns an empty
+    /// body, so this returns no value.
+    /// <para><b>Workspace prerequisite:</b> "Tasks in Multiple Lists" is an opt-in ClickApp; when it is
+    /// disabled the call fails with an HTTP 4xx (ClickUp error <c>OV_016</c>), surfaced here as a caught
+    /// <see cref="ClickUpApiException"/> so a caller (e.g. the New Task screen #241 or Quick Updates
+    /// #242) can flash it rather than crash.</para>
+    /// </summary>
+    public Task AddTaskToListAsync(string taskId, string listId, CancellationToken ct = default)
+        => Guard("AddTaskToList", async () =>
+        {
+            using var _ = await _client.V2.List[listId].Task[taskId].PostAsync(cancellationToken: ct);
+        });
+
+    /// <summary>
+    /// Remove a task from an additional list (<c>DELETE /list/{list_id}/task/{task_id}</c>) — the
+    /// inverse of <see cref="AddTaskToListAsync"/>. The task's home list is unaffected; ClickUp returns
+    /// an empty body. Errors surface as a caught <see cref="ClickUpApiException"/>.
+    /// </summary>
+    public Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
+        => Guard("RemoveTaskFromList", async () =>
+        {
+            using var _ = await _client.V2.List[listId].Task[taskId].DeleteAsync(cancellationToken: ct);
+        });
+
     /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => Guard("GetTask", async () =>
@@ -701,6 +729,22 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         try
         {
             return await call();
+        }
+        catch (ApiException ex)
+        {
+            throw new ClickUpApiException(ex.ResponseStatusCode, operation, ex);
+        }
+    }
+
+    /// <summary>
+    /// Non-generic <see cref="Guard{T}"/> for writes whose response carries nothing useful (an empty
+    /// <c>{}</c> body): still translates Kiota <see cref="ApiException"/> into <see cref="ClickUpApiException"/>.
+    /// </summary>
+    private static async Task Guard(string operation, Func<Task> call)
+    {
+        try
+        {
+            await call();
         }
         catch (ApiException ex)
         {
