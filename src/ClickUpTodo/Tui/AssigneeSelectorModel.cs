@@ -130,6 +130,21 @@ public static class AssigneeSelectorModel
     public static bool ShouldRunSearch(long capturedStamp, long currentStamp)
         => capturedStamp == currentStamp;
 
+    /// <summary>
+    /// Whether pressing <c>Enter</c> in the search box should pick the highlighted row. The box's
+    /// <c>Enter</c> is an <em>add</em> shortcut — "add the highlighted match without leaving the box" —
+    /// so it only fires when there is an active (non-blank) <paramref name="query"/>, where the rows are
+    /// addable search matches (<see cref="SearchResultRows"/> excludes already-selected ids, so a pick
+    /// can only add). On a blank query the rows are the current-assignee <c>✓</c> rows and
+    /// <c>SelectedItem</c> defaults to <c>0</c>, so picking would silently <b>remove</b> the first
+    /// assignee (#234) — hence a blank-query <c>Enter</c> is a no-op; removal stays an explicit action on
+    /// a <c>✓</c> row reached by arrowing into the list. Also <c>false</c> when there are no rows
+    /// (<paramref name="rowCount"/> is 0) to pick. Whitespace-only counts as blank, matching the View's
+    /// <c>Trim()</c> (a whitespace box renders the empty <c>✓</c>-row state).
+    /// </summary>
+    public static bool ShouldPickFromSearchBox(string? query, int rowCount)
+        => rowCount > 0 && !string.IsNullOrWhiteSpace(query);
+
     private static bool IsUsable(TaskAssignee person)
         => person.Id > 0 && !string.IsNullOrWhiteSpace(person.Name);
 }

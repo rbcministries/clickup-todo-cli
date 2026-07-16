@@ -162,13 +162,16 @@ public sealed class AssigneeSelectorView : View
                 _list.SetFocus();
                 break;
             case KeyCode.Enter:
-                // Pick the highlighted result (top row by default) so the user can add without leaving
-                // the box; no-op when the list is empty.
-                if (_rowPeople.Count > 0)
-                {
-                    key.Handled = true;
+                // The search box's Enter is an *add* shortcut — pick the highlighted match without
+                // leaving the box. It fires only with an active (non-blank) query, where the rows are
+                // addable search matches. On a blank query the rows are the current-assignee ✓ rows and
+                // SelectedItem defaults to 0, so picking would silently *remove* the first assignee
+                // (#234); a blank-query Enter is a no-op instead. Removal stays explicit: Cursor Down
+                // into the list, then Enter on the ✓ row. Enter is always marked handled so a no-op
+                // never bubbles to a host default action (e.g. New Task's default Save button).
+                key.Handled = true;
+                if (AssigneeSelectorModel.ShouldPickFromSearchBox(_search.Text, _rowPeople.Count))
                     Pick(_list.SelectedItem ?? 0);
-                }
                 break;
         }
         // Tab / Shift+Tab / Esc / F1 fall through to the host screen (pane cycle, exit, help).

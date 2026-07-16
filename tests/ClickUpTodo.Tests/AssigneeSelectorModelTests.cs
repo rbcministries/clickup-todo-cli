@@ -185,4 +185,35 @@ public sealed class AssigneeSelectorModelTests
     [Fact]
     public void ShouldRunSearch_StaleCapture_Skips()
         => Assert.False(AssigneeSelectorModel.ShouldRunSearch(5, 6)); // a newer keystroke arrived
+
+    // ── ShouldPickFromSearchBox (empty-search Enter must not remove — #234) ───────
+
+    [Fact]
+    public void ShouldPickFromSearchBox_BlankQueryWithRows_DoesNotPick()
+    {
+        // The bug: empty box, rows are the current-assignee ✓ rows; a pick would remove the first one.
+        Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("", rowCount: 3));
+    }
+
+    [Fact]
+    public void ShouldPickFromSearchBox_WhitespaceQueryWithRows_DoesNotPick()
+    {
+        // A whitespace-only box renders the empty ✓-row state (the View trims), so it must not pick.
+        Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("   ", rowCount: 2));
+    }
+
+    [Fact]
+    public void ShouldPickFromSearchBox_NullQuery_DoesNotPick()
+        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox(null, rowCount: 5));
+
+    [Fact]
+    public void ShouldPickFromSearchBox_ActiveQueryWithMatches_Picks()
+    {
+        // Adding via a searched match with Enter still works — the rows here are addable candidates.
+        Assert.True(AssigneeSelectorModel.ShouldPickFromSearchBox("ad", rowCount: 4));
+    }
+
+    [Fact]
+    public void ShouldPickFromSearchBox_ActiveQueryNoRows_DoesNotPick()
+        => Assert.False(AssigneeSelectorModel.ShouldPickFromSearchBox("zzz", rowCount: 0));
 }
