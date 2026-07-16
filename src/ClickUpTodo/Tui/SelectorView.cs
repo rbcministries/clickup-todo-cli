@@ -173,9 +173,6 @@ public class SelectorView : View
     /// write failure) for the host to surface in its status line.</summary>
     public event EventHandler<string>? Flash;
 
-    /// <summary>Raises <see cref="SelectionChanged"/> — for subclasses that need to signal a change.</summary>
-    protected void OnSelectionChanged() => SelectionChanged?.Invoke(this, EventArgs.Empty);
-
     // ── Input ───────────────────────────────────────────────────────────────
 
     private void OnSearchKey(object? sender, Key key)
