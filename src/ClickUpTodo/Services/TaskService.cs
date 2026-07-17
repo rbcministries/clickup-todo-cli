@@ -231,7 +231,7 @@ public sealed class TaskService(
     // me" resolves to [userId] — today's behaviour; an empty set (rule cleared) fetches everyone. A
     // username/email rule is resolved to an id via the workspace-members lookup (#73).
     private async Task<List<TaskItem>> LoadAssignedAsync(bool includeClosed, CancellationToken ct)
-        => await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), includeClosed, ct);
+        => await client.GetAssignedTasksAsync(config.WorkspaceId, await ResolveAssigneeIdsAsync(config.View, ct), includeClosed, ct: ct);
 
     /// <summary>
     /// Cap on concurrent round-trips per fan-out (context parents, list colors). Small and fixed:
@@ -411,6 +411,12 @@ public sealed class TaskService(
     /// <see cref="CommentItem"/> so the detail view can append it optimistically.</summary>
     public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default)
         => client.CreateTaskCommentAsync(taskId, text, ct);
+
+    /// <summary>Writes a task's plain-text description (#217, over the #211 facade) and returns the
+    /// server-confirmed value so the detail view can reflect it without a manual refresh. Pass <c>""</c>
+    /// to clear the description.</summary>
+    public Task<string?> SetTaskDescriptionAsync(string taskId, string description, CancellationToken ct = default)
+        => client.SetTaskDescriptionAsync(taskId, description, ct);
 
     /// <summary>
     /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying

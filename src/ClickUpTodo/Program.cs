@@ -109,7 +109,10 @@ var focusStore = new LocalFocusStore(config, configStore);
 // the workspace members — rides the same state store, scoped to the active workspace.
 var assigneeCache = new AssigneeFrequencyCache(
     stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
-new TodoApp(taskService, feedService, config, configStore, focusStore, taskCache, feedCache, assigneeCache).Run(driverName);
+// The list-frequency candidate pool (#238) — warmed from the lists on the loaded tasks and backfilled
+// by the scheduled list-hierarchy walk (#236) — rides the same state store, scoped to the workspace.
+var listCache = new ListFrequencyCache(stateStore, config.WorkspaceId);
+new TodoApp(taskService, feedService, config, configStore, focusStore, taskCache, feedCache, assigneeCache, listCache).Run(driverName);
 return 0;
 
 // Reads "--opt value" or "--opt=value" from args.

@@ -118,11 +118,23 @@ public static class HelpItemSets
         new("Ctrl+PgUp/PgDn", "order activity"),
         new("Ctrl+A", "dispatch to Claude"),
         new("Ctrl+N", "add comment"),
+        new("Ctrl+E", "edit description"),
         new("Ctrl+B", "browser"),
         new("Ctrl+U", "quick update"),
         new("F5", "↻"),
         new("F1", "help"),
         new("Esc", "back"),
+    ];
+
+    /// <summary>The Task Detail description editor overlay (Ctrl+E, #217): a multi-line editor with
+    /// Save/Cancel; Ctrl+Enter (or Tab→Save) saves, Esc cancels (confirming if there are unsaved edits),
+    /// F1 opens Help.</summary>
+    public static readonly IReadOnlyList<HelpItem> DetailDescriptionEditor =
+    [
+        new("Tab", "editor/Save/Cancel"),
+        new("Ctrl+Enter", "save"),
+        new("F1", "help"),
+        new("Esc", "cancel"),
     ];
 
     /// <summary>The settings screen (F2).</summary>

@@ -18,7 +18,7 @@ public sealed class TaskServiceLoadTests
         public bool? AssignedIncludeClosed { get; private set; }
         public bool? PersonalIncludeClosed { get; private set; }
 
-        public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, CancellationToken ct = default)
+        public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, long? updatedAfterMs = null, CancellationToken ct = default)
         {
             AssignedIncludeClosed = includeClosed;
             return Task.FromResult(new List<TaskItem>());

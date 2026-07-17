@@ -36,7 +36,7 @@ public sealed class TaskServiceParallelFetchTests
         public Func<Task>? OnDetail { get; set; }
         public Func<Task>? OnListColor { get; set; }
 
-        public async Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, CancellationToken ct = default)
+        public async Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, long? updatedAfterMs = null, CancellationToken ct = default)
         {
             await (OnAssigned?.Invoke() ?? Task.CompletedTask);
             return Assigned;
