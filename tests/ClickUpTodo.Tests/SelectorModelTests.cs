@@ -227,4 +227,40 @@ public sealed class SelectorModelTests
     [Fact]
     public void ShouldRunSearch_StaleCapture_Skips()
         => Assert.False(SelectorModel.ShouldRunSearch(5, 6));
+
+    // ── ShouldPickFromSearchBox (add-only search-box Enter guard, #234) ──────────
+
+    [Fact]
+    public void ShouldPickFromSearchBox_ActiveQuery_HighlightedUnselected_Picks()
+        // A real search: the highlighted match is an addable (unselected) candidate → add it.
+        => Assert.True(SelectorModel.ShouldPickFromSearchBox("ad", highlightedId: "7", Ids("1", "2")));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\t")]
+    [InlineData(null)]
+    public void ShouldPickFromSearchBox_BlankQuery_DoesNotPick(string? query)
+        // On a blank box the highlighted row is a current-selection ✓ row; a stray Enter must NOT pick
+        // (which would remove the first selected entry — the original #234 symptom).
+        => Assert.False(SelectorModel.ShouldPickFromSearchBox(query, highlightedId: "1", Ids("1", "2")));
+
+    [Fact]
+    public void ShouldPickFromSearchBox_NonBlankQuery_HighlightedAlreadySelected_DoesNotPick()
+        // The debounce-window regression: the query box is already non-blank but the still-displayed
+        // rows are the empty-state ✓ current-selection rows, so the highlighted id is already selected.
+        // Picking would remove it — refuse, so a search-box Enter can never remove (#234).
+        => Assert.False(SelectorModel.ShouldPickFromSearchBox("ada", highlightedId: "1", Ids("1", "2")));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ShouldPickFromSearchBox_BlankHighlightedId_DoesNotPick(string highlightedId)
+        => Assert.False(SelectorModel.ShouldPickFromSearchBox("ada", highlightedId, Ids()));
+
+    [Fact]
+    public void ShouldPickFromSearchBox_IdsAreOrdinal_CaseSensitiveSelectionMiss_Picks()
+        // Selection membership is ordinal (matching the base's HashSet). A case-different id is a
+        // genuinely different, unselected candidate under an active query → addable.
+        => Assert.True(SelectorModel.ShouldPickFromSearchBox("abc", highlightedId: "ABC123", Ids("abc123")));
 }

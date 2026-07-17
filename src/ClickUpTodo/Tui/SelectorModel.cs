@@ -147,6 +147,28 @@ public static class SelectorModel
     public static bool ShouldRunSearch(long capturedStamp, long currentStamp)
         => capturedStamp == currentStamp;
 
+    /// <summary>
+    /// Whether an <c>Enter</c> keypress in the search box should pick the highlighted row — making the
+    /// search box strictly <em>add-only</em>. True only when there is an active (non-blank)
+    /// <paramref name="query"/> <b>and</b> the highlighted row is an addable candidate: a usable
+    /// (non-blank <paramref name="highlightedId"/>) entry that is <b>not already selected</b>
+    /// (<paramref name="selectedIds"/>).
+    /// <para>
+    /// Gating on the query text alone is not enough: during the type-ahead debounce the displayed rows
+    /// can still be the empty-state <c>✓</c> current-selection rows even though the query box is already
+    /// non-blank (<c>OnSearchChanged</c> arms the timer without re-rendering). Picking row 0 there would
+    /// silently <em>remove</em> the first selected entry — the exact #234 symptom, through a timing
+    /// window. By refusing to pick an already-selected row, a search-box <c>Enter</c> can never remove
+    /// regardless of debounce/render state; removal stays an explicit pick on a <c>✓</c> row (cursor into
+    /// the list, then <c>Enter</c>). A blank query yields no addable target (row 0 is a <c>✓</c> entry),
+    /// so it is a no-op. Applies to every specialization of the base (assignees #158/#213, lists #239).
+    /// </para>
+    /// </summary>
+    public static bool ShouldPickFromSearchBox(string? query, string highlightedId, ISet<string> selectedIds)
+        => !string.IsNullOrWhiteSpace(query)
+           && !string.IsNullOrWhiteSpace(highlightedId)
+           && !selectedIds.Contains(highlightedId);
+
     private static bool IsUsable(SelectorItem item)
         => !string.IsNullOrWhiteSpace(item.Id) && !string.IsNullOrWhiteSpace(item.Name);
 }
