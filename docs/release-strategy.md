@@ -64,8 +64,8 @@ agent dispatch — and explicitly defers the in-progress creation/editing surfac
 | --- | --- | --- |
 | Core triage list (assigned + Personal Tasks, status change, pin, group/sort/filter, refresh) | pre-epic core | ✅ shipped |
 | Task Detail view (Description / Comments / Stream tabs, contextual help) | #102 | ✅ closed |
-| Mentions & Comments feed (F-key feed, recent-activity source) | #109 | ✅ 9/9 — close on release |
-| Persistent local cache & storage backend (LiteDB, staleness/TTL, closed-task prefetch) | #118 | ✅ 7/7 — close on release |
+| Mentions & Comments feed (F-key feed, recent-activity source) | #109 | ✅ 9/9 — closed |
+| Persistent local cache & storage backend (LiteDB, staleness/TTL, closed-task prefetch) | #118 | ✅ 7/7 — closed |
 | Agent dispatch (interactive + one-off `claude` sessions, working dirs, result posting) | #23, #90 | ✅ closed |
 
 ### Land-before-cut (in-flight PRs) — ✅ merged
@@ -86,8 +86,8 @@ Both are now on `main`. Once the release workflow (§8) lands, confirm CI green 
 - **Mouse/UX polish** (#283, 0%) and **Multi-tab / multi-instance** (#292, 0%). Large,
   fully-scoped, not started — these define the road to `0.3+` / `1.0`, not the first beta.
 
-**Action:** close the two 100%-complete-but-open epics (#109, #118) as part of cutting
-beta.1 so the milestone board reflects reality.
+(Epics #109 and #118 hit 100% and are now closed, so the board already reflects the beta.1
+scope.)
 
 ## 5. Beta phasing
 
@@ -108,7 +108,7 @@ testing; skip weeks with nothing user-facing.
 
 1. Creation & editing complete: Quick Updates (#153) and Writing New Content (#208) closed.
 2. Mouse/UX (#283) and Multi-tab (#292) either shipped or explicitly declared post-1.0.
-3. **Name/identifier decision (#39) resolved** — see §10; the public NuGet package id is
+3. **Name/identifier decision (#39) resolved** — see §11; the public NuGet package id is
    effectively permanent, so this must be settled before the first *public* NuGet publish.
 4. Config schema considered stable (documented migration path already exists via LiteDB).
 5. Two consecutive betas with no P1 bugs.
@@ -132,7 +132,7 @@ macOS is untested end-to-end, so `linux-x64` and `osx-arm64` are held out of the
 (commented in `release.yml`, one line to re-enable). **Re-enabling them is gated on the
 cross-platform readiness epic (#312)** — see §11. Contributors on any OS run from source via
 `dotnet run` regardless. A one-page
-[beta tester guide](#10-feedback--contribution-loop) tells testers: download, run, paste token,
+[beta tester guide](beta-testing.md) tells testers: download, run, paste token,
 known limitations (including the SmartScreen prompt on the unsigned exe).
 
 ### 7b. Dev-machine users — .NET global tool
@@ -160,10 +160,10 @@ this, complementing the existing `ci.yml` (build + test on `main`/PRs):
 - **Trigger:** push of a tag matching `v*`.
 - **`test` job (gate):** restore → build → `dotnet test`; the rest of the pipeline never runs
   on a red build.
-- **`build` job (matrix):** one self-contained, single-file executable per RID
-  (`win-x64`, `linux-x64`, `osx-arm64`), each on its **native OS** runner so ReadyToRun is
-  valid; version injected via `-p:Version=${TAG#v}`; staged as
-  `clickup-todo-<version>-<rid>[.exe]`.
+- **`build` job (matrix):** one self-contained, single-file executable per RID, each on its
+  **native OS** runner so ReadyToRun is valid; version injected via `-p:Version=${TAG#v}`;
+  staged as `clickup-todo-<version>-<rid>[.exe]`. **Only `win-x64` is active today** —
+  `linux-x64` / `osx-arm64` are commented out in the matrix pending epic #312 (§7a/§11).
 - **`release` job:** `dotnet pack` the global tool → gather all binaries → `gh release create`
   with `--generate-notes`, marking it **pre-release** when the tag version contains a `-`
   (e.g. `-beta.1`). `dotnet nuget push` is intentionally left out until the package id is
@@ -183,7 +183,7 @@ git push origin v0.1.0-beta.1   # -> workflow builds binaries + tool, publishes 
 
 1. All intended PRs merged; `main` CI green.
 2. `dotnet test clickup-todo.slnx` green locally; `tui-validate` run for any rendering-touching change.
-3. Close any epics that hit 100% (e.g. #109, #118 for beta.1).
+3. Close any epics that have hit 100% so the board reflects the shipped scope.
 4. Draft release notes: highlights, known limitations, the ClickUp-token setup reminder,
    and the mentions-automation caveat (`docs/mention-assignee-automation.md`).
 5. Tag `vX.Y.Z[-beta.N]` on `main` and push → release workflow produces artifacts.
