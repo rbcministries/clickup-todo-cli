@@ -1038,11 +1038,27 @@ public sealed class TodoApp
         var selfName = string.IsNullOrWhiteSpace(_tasks.UserName) ? "Me" : _tasks.UserName;
         var self = new TaskAssignee(_tasks.UserId, selfName);
 
+        // Seed the List selector's primary/home create target (#240) from the cursor's task list, falling
+        // back to the configured Personal Tasks list on a header row (no current task), a context parent
+        // (#46), a foreign subtask (#70/#179), or a task with a blank list id. The context/foreign
+        // classification reuses the same membership the row markers read.
+        var cursor = CurrentTask();
+        var primaryList = NewTaskForm.ResolveListSeed(
+            cursorListId: cursor?.ListId,
+            cursorListName: cursor?.ListName,
+            cursorIsContextParent: cursor is not null && _contextParents.ContainsKey(cursor.Id),
+            cursorIsForeignSubtask: cursor is not null && _foreignSubtasks.ContainsKey(cursor.Id),
+            personalListId: listId!,
+            personalListName: _config.PersonalTasksListName);
+
         var screen = new NewTaskScreen(
             match: (query, exclude) => _assignees.Match(query, exclude),
             topFrequent: (n, exclude) => _assignees.TopMostFrequent(n, exclude),
             lockedSelf: self,
-            createAsync: (request, ct) => _tasks.CreateTaskAsync(listId, request, ct));
+            listMatch: (query, exclude) => _lists.Match(query, exclude),
+            listTopFrequent: (n, exclude) => _lists.TopMostFrequent(n, exclude),
+            primaryList: primaryList,
+            createAsync: (targetListId, request, ct) => _tasks.CreateTaskAsync(targetListId, request, ct));
         screen.Created += (_, created) =>
         {
             // Land the next refresh on the new task, then kick that refresh directly (RequestRefresh's

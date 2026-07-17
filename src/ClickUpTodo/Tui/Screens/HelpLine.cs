@@ -168,11 +168,12 @@ public static class HelpItemSets
         new("Esc", "exit"),
     ];
 
-    /// <summary>The New Task compose screen (Ctrl+N, #213): Tab moves between Name/Description/Assignees
-    /// and the buttons, Enter (or the default Save button) files the task, Esc cancels, F1 help.</summary>
+    /// <summary>The New Task compose screen (Ctrl+N, #213/#240): Tab moves between
+    /// Name/Description/Assignees/List and the buttons, Enter (or the default Save button) files the task
+    /// in the primary (home) list, Esc cancels, F1 help.</summary>
     public static readonly IReadOnlyList<HelpItem> NewTask =
     [
-        new("Tab", "moves"),
+        new("Tab", "Name/Descr/Assignees/List"),
         new("Enter/Save", "saves"),
         new("Esc", "cancels"),
         new("F1", "help"),
