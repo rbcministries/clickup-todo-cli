@@ -89,6 +89,10 @@ eligible. For `needs-decision` issues, check whether the decision was recorded
 (in an issue comment or `docs/`); if so, treat it as ordinary work. This pass is
 fast — always run it before triage.
 
+While here, retire shipped plans: for each active `docs/plans/<feature>.md`
+whose issue/PR has merged, `git mv` it into `docs/plans/completed/` so the
+active listing only shows in-flight work (see `docs/plans/README.md`).
+
 ## 2. Pick the next ticket
 
 ```bash
@@ -145,10 +149,12 @@ gitignored — leave it intact when exiting; pre-flight prunes stale ones.
 
 ## 4. Read the plan
 
-Look in `.claude/plans/` for a file matching the feature/issue. If a plan
-exists, read it before writing code. If none exists, enter planning mode,
+Look in `docs/plans/` for a file matching the feature/issue (check
+`docs/plans/completed/` too — a related plan may already have shipped). If a
+plan exists, read it before writing code. If none exists, enter planning mode,
 produce a plan grounded in the issue's acceptance criteria, and save it to
-`.claude/plans/<feature>.md` before implementing.
+`docs/plans/<feature>.md` before implementing. See `docs/plans/README.md` for
+the layout and lifecycle.
 
 ## 5. Phases
 
@@ -194,7 +200,7 @@ gh pr create --draft \
 
 ## Plan
 
-Linked plan: `.claude/plans/<file>.md`
+Linked plan: `docs/plans/<file>.md`
 
 ## Test plan
 

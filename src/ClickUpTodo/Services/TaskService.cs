@@ -788,7 +788,7 @@ public sealed class TaskService(
     /// chosen for lists where enough in-view parents cluster that it beats the per-parent calls it
     /// replaces. Its one tradeoff is that a routed parent's <em>cross-list</em> descendants aren't
     /// recovered by that branch (the pre-#84 limitation) — only heavily-clustered lists take that path;
-    /// see <c>.claude/plans/adaptive-subtask-fetch.md</c>.
+    /// see <c>docs/plans/completed/adaptive-subtask-fetch.md</c>.
     /// </para>
     /// Worst cases are bounded: the plan caps the whole-list and per-parent <em>seeds</em>, and the
     /// per-parent BFS below counts <em>every</em> <c>GetSubtasksAsync</c> round-trip (seeds + recursion)
