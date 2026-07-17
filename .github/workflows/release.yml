@@ -1,0 +1,151 @@
+name: Release
+
+# Cut a release by pushing a tag:
+#   git tag v0.1.0-beta.1 && git push origin v0.1.0-beta.1   # -> pre-release
+#   git tag v0.1.0        && git push origin v0.1.0           # -> stable release
+#
+# The version is derived from the tag (leading "v" stripped) and injected into
+# both the self-contained binaries and the packed .NET global tool, so the csproj
+# <Version> never has to be hand-bumped per release. A tag whose version contains a
+# "-" (SemVer pre-release, e.g. -beta.1) is published as a GitHub pre-release.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # required to create the GitHub Release
+
+jobs:
+  # Gate: never publish artifacts from a red build.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet restore clickup-todo.slnx
+      - run: dotnet build clickup-todo.slnx --configuration Release --no-restore
+      # ClickUp integration tests self-skip without CLICKUP_TOKEN.
+      - run: dotnet test clickup-todo.slnx --configuration Release --no-build
+
+  # Build one self-contained, single-file executable per target runtime, each on
+  # its native OS so ReadyToRun (ahead-of-time) compilation is valid.
+  build:
+    needs: test
+    strategy:
+      fail-fast: true # don't ship a release missing a platform
+      matrix:
+        # Beta.1 ships win-x64 only: it's the primary (Windows) audience, the token is
+        # OS-encrypted at rest (DPAPI), and it's the best-tested target. On non-Windows the
+        # token store falls back to an UNENCRYPTED file and macOS is untested — re-enable the
+        # commented RIDs below once they've been alpha-tested on real hardware. (Each runs on
+        # its native OS so PublishReadyToRun stays valid.) Contributors run any OS via `dotnet run`.
+        include:
+          - rid: win-x64
+            os: windows-latest
+            ext: ".exe"
+          # - rid: linux-x64
+          #   os: ubuntu-latest
+          #   ext: ""
+          # - rid: osx-arm64
+          #   os: macos-latest
+          #   ext: ""
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash # bash is present on the Windows runner too — one script for all OSes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Compute version from tag
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish self-contained single file
+        run: |
+          dotnet publish src/ClickUpTodo/ClickUpTodo.csproj \
+            --configuration Release \
+            --runtime ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:EnableCompressionInSingleFile=true \
+            -p:PublishReadyToRun=true \
+            -p:Version=${{ steps.v.outputs.version }} \
+            --output "publish/${{ matrix.rid }}"
+
+      - name: Stage the versioned binary
+        run: |
+          mkdir -p dist
+          cp "publish/${{ matrix.rid }}/clickup-todo${{ matrix.ext }}" \
+             "dist/clickup-todo-${{ steps.v.outputs.version }}-${{ matrix.rid }}${{ matrix.ext }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.rid }}
+          path: dist/*
+          if-no-files-found: error
+
+  # Pack the framework-dependent global tool, gather every binary, and publish the
+  # GitHub Release with auto-generated notes.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Compute version from tag
+        id: v
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Pack the .NET global tool
+        run: |
+          dotnet pack src/ClickUpTodo/ClickUpTodo.csproj \
+            --configuration Release \
+            -p:Version=${{ steps.v.outputs.version }} \
+            --output dist
+
+      - name: Download platform binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: binary-*
+          merge-multiple: true
+
+      - name: Collect all release assets
+        run: |
+          cp artifacts/* dist/
+          echo "Release assets:"
+          ls -la dist
+
+      - name: Mark pre-release for SemVer pre-release tags (e.g. -beta.N)
+        id: pre
+        run: |
+          if [[ "${{ steps.v.outputs.version }}" == *-* ]]; then
+            echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
+          else
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            ${{ steps.pre.outputs.flag }} \
+            dist/*
