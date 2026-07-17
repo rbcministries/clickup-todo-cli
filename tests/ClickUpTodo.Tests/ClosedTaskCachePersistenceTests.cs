@@ -95,6 +95,39 @@ public sealed class ClosedTaskCachePersistenceTests : IDisposable
     }
 
     [Fact]
+    public void Load_NullTasksPayload_IsCleanMiss_NoThrow()
+    {
+        var store = Store();
+        // `required` guards presence, not non-null — a structurally-valid document with tasks:null must
+        // degrade to an empty set, not throw out of the constructor and brick launch.
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(
+            Path.Combine(_dir, $"{StateKeys.Closed}.json"),
+            $$"""{"SchemaVersion":{{ClosedTaskCache.CurrentSchemaVersion}},"Key":"ctx-1","Tasks":null}""");
+
+        Assert.Empty(Persisted(store, key: "ctx-1").Snapshot);
+    }
+
+    [Fact]
+    public void ContextKey_IsEvaluatedLive_OnEachPersist()
+    {
+        var store = Store();
+        var key = "ctx-1";
+        var cache = new ClosedTaskCache(new FakeClock(Now), store: store, contextKey: () => key);
+
+        cache.Update([Closed("a", Now.AddDays(-1))]);
+        Assert.Equal(["a"], Persisted(store, key: "ctx-1").Snapshot.Select(t => t.Id));
+
+        // The provider now reports a switched context (e.g. an F3 assignee-scope change); the next
+        // persist must key the set under the *current* value, not the one captured at construction.
+        key = "ctx-2";
+        cache.Update([Closed("b", Now.AddDays(-1))]);
+
+        Assert.Equal(["b"], Persisted(store, key: "ctx-2").Snapshot.Select(t => t.Id));
+        Assert.Empty(Persisted(store, key: "ctx-1").Snapshot); // the ctx-1 document was overwritten
+    }
+
+    [Fact]
     public void Load_CorruptDocument_IsCleanMiss_NoThrow()
     {
         var store = Store();

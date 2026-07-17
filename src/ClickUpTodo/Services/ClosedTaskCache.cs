@@ -120,10 +120,12 @@ public sealed class ClosedTaskCache
     {
         var (kept, dropped) = Bound(closed, _maxCount, _maxAge, _time.GetUtcNow());
         lock (_gate)
-        {
             _closed = kept;
-            Persist(kept);
-        }
+        // Persist outside the lock: Update is single-writer (only the one background refresh loop drives
+        // it, and it never overlaps its own iterations), so IStateStore's "serialise access to a key"
+        // contract still holds — while the UI-thread Snapshot read on the F12->All bridge-paint path
+        // never blocks on this disk write.
+        Persist(kept);
         return dropped;
     }
 
@@ -148,6 +150,7 @@ public sealed class ClosedTaskCache
         }
         if (doc is null
             || doc.SchemaVersion != CurrentSchemaVersion
+            || doc.Tasks is null // required guards presence, not non-null: a "tasks":null payload is a miss, not a crash
             || !string.Equals(doc.Key, _contextKey!(), StringComparison.Ordinal))
             return;
 
@@ -155,10 +158,10 @@ public sealed class ClosedTaskCache
         _closed = kept;
     }
 
-    // Caller holds _gate. Serialising the write under the lock satisfies IStateStore's "caller must
-    // serialise concurrent access to a key" contract. Best-effort: a failed write (read-only / full
-    // disk) must never break the background refresh loop that drives Update — the set lives on in memory
-    // and the next prefetch retries.
+    // Called only from Update (the single background writer) — deliberately NOT under _gate, so a
+    // UI-thread Snapshot read never blocks on this disk write. Best-effort: a failed write (read-only /
+    // full disk) must never break the refresh loop that drives Update — the set lives on in memory and
+    // the next prefetch retries.
     private void Persist(IReadOnlyList<TaskItem> kept)
     {
         if (!Persistent)
