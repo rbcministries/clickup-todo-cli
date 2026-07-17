@@ -91,6 +91,19 @@ public sealed class ListFrequencyCacheTests : IDisposable
     }
 
     [Fact]
+    public void ConstructorLoad_AndPersistReRead_SwallowNonJsonReadFailure_NotCrash()
+    {
+        // A LiteDB contention error (not a JsonException) — on the constructor load and on the persist
+        // re-read — must degrade to empty/skip, never crash: #293 broadened both guards past JsonException.
+        var cache = new ListFrequencyCache(new ThrowOnLoadStore(), "ws1");
+
+        var ex = Record.Exception(() => cache.RecordFromTasks([MakeTask("t1", "L1", "Alpha")]));
+
+        Assert.Null(ex);
+        Assert.Equal(1, cache.Count); // load degraded to empty; the poll's own tally lives on
+    }
+
+    [Fact]
     public void RecordFromTasks_SwallowsWriteFailure_NotCrash()
     {
         // A failed persist (read-only/full disk, or LiteDB contention under multi-tab writes #293) must
@@ -236,6 +249,16 @@ public sealed class ListFrequencyCacheTests : IDisposable
         public bool Exists(string key) => false;
         public T? Load<T>(string key) where T : class => null;
         public void Save<T>(string key, T value) where T : class => throw new IOException("disk full");
+        public void Delete(string key) { }
+    }
+
+    /// <summary>A store whose read always fails with a non-JsonException (as a LiteDB contention error
+    /// would) — so a test can assert the constructor load and the persist re-read degrade, not crash.</summary>
+    private sealed class ThrowOnLoadStore : IStateStore
+    {
+        public bool Exists(string key) => false;
+        public T? Load<T>(string key) where T : class => throw new IOException("read contention");
+        public void Save<T>(string key, T value) where T : class { }
         public void Delete(string key) { }
     }
 }

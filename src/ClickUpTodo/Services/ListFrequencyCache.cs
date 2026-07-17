@@ -1,4 +1,3 @@
-using System.Text.Json;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 
@@ -65,12 +64,12 @@ public sealed class ListFrequencyCache
         {
             doc = _store.Load<ListFrequencyDocument>(StateKeys.Lists);
         }
-        catch (JsonException)
+        catch
         {
-            // A malformed payload (an older/incompatible shape, or a torn write from a concurrent tab
-            // — #293) is a clean miss, never a crash: Load() runs synchronously in the constructor, so
-            // a throw here would brick the selector's owner. Start empty; the pool re-warms from the
-            // next poll. Mirrors the corrupt-cache handling in TaskCache/FeedCache.
+            // Any read failure — a malformed payload (older/incompatible shape or a torn write from a
+            // concurrent tab), or a LiteDB contention error under multi-tab startup (#293) — is a clean
+            // miss, never a crash: Load() runs synchronously in the constructor, so a throw here would
+            // brick the selector's owner. Start empty; the pool re-warms from the next poll.
             return;
         }
         // A missing document, a different workspace, or an incompatible schema all mean "no warm pool"
@@ -149,9 +148,10 @@ public sealed class ListFrequencyCache
                 && string.Equals(disk.WorkspaceId, _workspaceId, StringComparison.Ordinal))
                 ListFrequency.Merge(_entries, disk.Entries);
         }
-        catch (JsonException)
+        catch
         {
-            // A torn/hand-tampered disk document — skip the merge and write ours; best-effort.
+            // A torn/hand-tampered disk document, or a LiteDB contention error on the re-read (#293) —
+            // skip the merge and write our own set. Best-effort; must never crash the refresh loop.
         }
 
         try

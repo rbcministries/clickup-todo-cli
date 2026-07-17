@@ -66,42 +66,47 @@ public sealed class ConfigStore
         {
             // A failed settings write (read-only / full disk, or a LiteDB contention error when a
             // second tab is writing #293) must never crash the UI action that triggered it (a pin
-            // toggle, an F3 view change). The in-memory config lives on; the next save retries.
+            // toggle, an F3 view change). The in-memory config lives on and the baseline is NOT advanced
+            // — so the un-persisted change is still seen as a local change and retried on the next save.
+            return;
         }
-        // Baseline mirrors THIS process's in-memory config (not the merged doc): only a genuine future
-        // local edit should read as a change; a field another tab owns stays deferred to disk.
+        // Only after a successful write: baseline mirrors THIS process's in-memory config (not the
+        // merged doc), so only a genuine future local edit reads as a change; a field another tab owns
+        // stays deferred to disk.
         _baseline = Clone(config);
     }
 
     /// <summary>
     /// Three-way merges <paramref name="config"/> over the freshly re-read on-disk config so a
     /// concurrent tab's field change isn't clobbered (#293). Returns <paramref name="config"/> unchanged
-    /// when there's nothing to merge against — no baseline yet, or no (or a torn) on-disk document.
+    /// when there's nothing to merge against — no baseline yet, or no on-disk document — or when the
+    /// re-read/merge fails for any reason (a torn write, a LiteDB contention error, a corrupt document):
+    /// this is called before the write, outside its try/catch, so it must never throw out of
+    /// <see cref="Save"/> and crash the caller's UI action. Falling back to writing our own config is
+    /// the safe best-effort degradation.
     /// </summary>
     private AppConfig MergeWithDisk(AppConfig config)
     {
         if (_baseline is null)
             return config;
 
-        AppConfig? onDisk;
         try
         {
-            onDisk = _store.Load<AppConfig>(StateKeys.Config);
+            var onDisk = _store.Load<AppConfig>(StateKeys.Config);
+            if (onDisk is null)
+                return config;
+
+            // Normalise the on-disk copy to the current schema before merging so a legacy shim (e.g. the
+            // pre-#69 excludedStatuses array, dropped by migration) can't resurrect through the merge.
+            ConfigMigrations.Apply(onDisk);
+
+            var mergedJson = ConfigMerge.ThreeWay(Serialize(_baseline), Serialize(config), Serialize(onDisk));
+            return JsonSerializer.Deserialize<AppConfig>(mergedJson, StateJson.Options) ?? config;
         }
-        catch (JsonException)
+        catch
         {
-            // A torn write from another tab mid-save — skip the merge and write ours; best-effort.
             return config;
         }
-        if (onDisk is null)
-            return config;
-
-        // Normalise the on-disk copy to the current schema before merging so a legacy shim (e.g. the
-        // pre-#69 excludedStatuses array, dropped by migration) can't resurrect through the merge.
-        ConfigMigrations.Apply(onDisk);
-
-        var mergedJson = ConfigMerge.ThreeWay(Serialize(_baseline), Serialize(config), Serialize(onDisk));
-        return JsonSerializer.Deserialize<AppConfig>(mergedJson, StateJson.Options) ?? config;
     }
 
     private static string Serialize(AppConfig config) => JsonSerializer.Serialize(config, StateJson.Options);

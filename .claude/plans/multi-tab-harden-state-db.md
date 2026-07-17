@@ -76,3 +76,8 @@ not a new logging subsystem.
 - No in-process write queue (LiteDB's mutex already serialises — the issue says don't add one).
 - The nudge-then-fetch cross-process *signalling* is #294/#295, not this issue.
 - TTL/eviction of the frequency pools is #124.
+- **Config merge is per-field last-writer-wins as the issue specified**, so two tabs editing the
+  *same* field within one load→save window (e.g. both editing `pinnedTaskIds`) resolve last-writer-wins
+  for that field — the second save takes its own array wholesale. Different-field concurrent edits are
+  preserved (covered by tests). Element-level set-union for `pinnedTaskIds` (so a pin added in one tab
+  survives a concurrent pin in another) is a possible follow-up, tracked separately.
