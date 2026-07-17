@@ -104,6 +104,26 @@ public sealed class ListFrequencyCacheTests : IDisposable
     }
 
     [Fact]
+    public void Persist_MergesAConcurrentTabsEntries_RatherThanClobbering()
+    {
+        // The concrete multi-tab clobber (#293): two tabs sharing one store both learn a different
+        // list. Tab B's whole-set write used to overwrite tab A's — now B re-reads and unions first.
+        var store = new JsonFileStateStore(_dir);
+        var tabA = new ListFrequencyCache(store, "ws1");
+        var tabB = new ListFrequencyCache(new JsonFileStateStore(_dir), "ws1");
+
+        tabA.RecordFromTasks([MakeTask("t1", "L1", "Alpha")]); // disk: { L1 }
+        tabB.RecordFromTasks([MakeTask("t2", "L2", "Beta")]);  // merges disk (L1) before writing → { L1, L2 }
+
+        Assert.Equal(2, tabB.Count); // B also picked up L1 in-memory via the merge
+
+        // A fresh reader sees BOTH — tab B's write did not discard tab A's L1.
+        var reader = new ListFrequencyCache(new JsonFileStateStore(_dir), "ws1");
+        Assert.Equal(2, reader.Count);
+        Assert.Equal(["L1", "L2"], reader.TopMostFrequent(10).Select(l => l.Id)); // count tie → name asc
+    }
+
+    [Fact]
     public void RecordFromTasks_PersistsOnlyOnChange()
     {
         var store = new CountingStateStore(new JsonFileStateStore(_dir));

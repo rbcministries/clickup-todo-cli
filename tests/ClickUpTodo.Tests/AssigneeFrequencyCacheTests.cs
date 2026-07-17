@@ -105,6 +105,26 @@ public sealed class AssigneeFrequencyCacheTests : IDisposable
     }
 
     [Fact]
+    public void Persist_MergesAConcurrentTabsEntries_RatherThanClobbering()
+    {
+        // The concrete multi-tab clobber (#293): two tabs sharing one store both learn a different
+        // person. Tab B's whole-set write used to overwrite tab A's — now B re-reads and unions first.
+        var store = new JsonFileStateStore(_dir);
+        var tabA = new AssigneeFrequencyCache(store, "ws1", NoMembers);
+        var tabB = new AssigneeFrequencyCache(new JsonFileStateStore(_dir), "ws1", NoMembers);
+
+        tabA.RecordFromTasks([MakeTask("t1", (1, "Ada"))]); // disk: { Ada }
+        tabB.RecordFromTasks([MakeTask("t2", (2, "Bo"))]);  // merges disk (Ada) before writing → { Ada, Bo }
+
+        Assert.Equal(2, tabB.Count); // B also picked up Ada in-memory via the merge
+
+        // A fresh reader sees BOTH — tab B's write did not discard tab A's Ada.
+        var reader = new AssigneeFrequencyCache(new JsonFileStateStore(_dir), "ws1", NoMembers);
+        Assert.Equal(2, reader.Count);
+        Assert.Equal([1, 2], reader.TopMostFrequent(10).Select(a => a.Id)); // count tie → name asc
+    }
+
+    [Fact]
     public void RecordFromTasks_PersistsOnlyOnChange()
     {
         var store = new CountingStateStore(new JsonFileStateStore(_dir));

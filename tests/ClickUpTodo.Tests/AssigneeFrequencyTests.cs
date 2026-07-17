@@ -238,4 +238,53 @@ public sealed class AssigneeFrequencyTests
 
         Assert.Equal([1, 5], top.Select(a => a.Id)); // Ada (count 1) ahead of Newcomer (count 0)
     }
+
+    // --- Merge (#293): union a concurrent tab's document into ours without losing either side --------
+
+    [Fact]
+    public void Merge_UnionsDistinctTaskSets_AndAddsUnknownPeople()
+    {
+        var acc = Tally(Task("t1", (1, "Ada")));            // ours: Ada on {t1}
+
+        var changed = AssigneeFrequency.Merge(acc,
+        [
+            new AssigneeFrequencyEntry(1, "Ada", ["t1", "t2"]), // other tab saw Ada on t2 too
+            new AssigneeFrequencyEntry(2, "Bo", ["t3"]),        // other tab learned Bo
+        ]);
+
+        Assert.True(changed);
+        Assert.Equal(2, acc[1].Count);            // {t1} ∪ {t1,t2} = {t1,t2}
+        Assert.Equal(["t1", "t2"], acc[1].TaskIds);
+        Assert.Equal(1, acc[2].Count);            // Bo adopted
+        Assert.Equal("Bo", acc[2].Name);
+    }
+
+    [Fact]
+    public void Merge_IsIdempotent_MergingAnEqualOrSubsetSetChangesNothing()
+    {
+        var acc = Tally(Task("t1", (1, "Ada")), Task("t2", (1, "Ada")));
+
+        // Re-reading our own just-written document (same set) and merging it back is a no-op.
+        Assert.False(AssigneeFrequency.Merge(acc, [new AssigneeFrequencyEntry(1, "Ada", ["t1", "t2"])]));
+        // A strict subset is also a no-op.
+        Assert.False(AssigneeFrequency.Merge(acc, [new AssigneeFrequencyEntry(1, "Ada", ["t1"])]));
+        Assert.Equal(2, acc[1].Count);
+    }
+
+    [Fact]
+    public void Merge_KeepsOurKnownName_AndIgnoresInvalidRows()
+    {
+        var acc = Tally(Task("t1", (1, "Ada")));
+
+        AssigneeFrequency.Merge(acc,
+        [
+            new AssigneeFrequencyEntry(1, "STALE", ["t1"]), // our non-blank name wins over the incoming one
+            new AssigneeFrequencyEntry(0, "Zero", ["t9"]),  // non-positive id ignored
+            new AssigneeFrequencyEntry(3, "  ", ["t9"]),    // nameless new entry ignored
+        ]);
+
+        Assert.Equal("Ada", acc[1].Name);
+        Assert.DoesNotContain(0, acc.Keys);
+        Assert.DoesNotContain(3, acc.Keys);
+    }
 }

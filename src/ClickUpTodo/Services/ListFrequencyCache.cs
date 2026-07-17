@@ -137,6 +137,23 @@ public sealed class ListFrequencyCache
     // holding the lock across the write is not a hot path.
     private void Persist()
     {
+        // Re-read the current document and union in any entries a concurrent tab learned after we loaded
+        // (#293), so this whole-set write doesn't clobber the other process's additions. A missing,
+        // foreign-workspace, incompatible, or torn/corrupt document is ignored — we then just write our
+        // own set. Merging our own just-written document back is a no-op (Merge is idempotent).
+        try
+        {
+            var disk = _store.Load<ListFrequencyDocument>(StateKeys.Lists);
+            if (disk is not null
+                && disk.SchemaVersion == CurrentSchemaVersion
+                && string.Equals(disk.WorkspaceId, _workspaceId, StringComparison.Ordinal))
+                ListFrequency.Merge(_entries, disk.Entries);
+        }
+        catch (JsonException)
+        {
+            // A torn/hand-tampered disk document — skip the merge and write ours; best-effort.
+        }
+
         try
         {
             var doc = new ListFrequencyDocument(
