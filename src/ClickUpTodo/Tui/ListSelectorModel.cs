@@ -69,6 +69,23 @@ public static class ListSelectorModel
     public static bool ShouldRunSearch(long capturedStamp, long currentStamp)
         => SelectorModel.ShouldRunSearch(capturedStamp, currentStamp);
 
+    /// <summary>
+    /// The primary/home list — the create target — for the current state: the first
+    /// <b>currently-marked</b> distinguished (home) list if one is still selected, otherwise the first
+    /// selected list (so the host always has a create target while ≥1 list is selected), otherwise
+    /// <c>null</c> when nothing is selected. Driven off the same distinguished set the base renders the
+    /// <c>" (home)"</c> marker from, so the exposed primary and the on-screen marker never disagree: once
+    /// the seeded home is removed and the base stops marking it, this falls through to the first
+    /// selection rather than resurrecting an unmarked list as "home".
+    /// </summary>
+    public static NamedEntity? ResolvePrimary(
+        IReadOnlyList<NamedEntity> selection, IReadOnlyList<NamedEntity> distinguishedSelection)
+    {
+        if (distinguishedSelection.Count > 0)
+            return distinguishedSelection[0];
+        return selection.Count > 0 ? selection[0] : null;
+    }
+
     // ── list ↔ base conversions ───────────────────────────────────────────────
 
     private static readonly ISet<string> EmptyStringSet = new HashSet<string>(StringComparer.Ordinal);

@@ -200,4 +200,41 @@ public sealed class ListSelectorModelTests
     [Fact]
     public void ShouldPickFromSearchBox_ActiveQueryAddableHighlight_Picks()
         => Assert.True(SelectorModel.ShouldPickFromSearchBox("in", "3", Ids("1", "2")));
+
+    // ── ResolvePrimary (the create target, in lockstep with the rendered home marker) ─────
+
+    [Fact]
+    public void ResolvePrimary_MarkedHomeSelected_ReturnsIt()
+    {
+        var primary = ListSelectorModel.ResolvePrimary(
+            selection: [L("home", "Inbox"), L("2", "Backlog")],
+            distinguishedSelection: [L("home", "Inbox")]);
+        Assert.Equal(L("home", "Inbox"), primary);
+    }
+
+    [Fact]
+    public void ResolvePrimary_MarkedHomeNotFirstInSelection_StillReturnsHome()
+    {
+        // New Task seeds initialSelected first, then the primary — so the home may not be Selection[0];
+        // ResolvePrimary follows the marker, not the position.
+        var primary = ListSelectorModel.ResolvePrimary(
+            selection: [L("1", "Backlog"), L("home", "Inbox")],
+            distinguishedSelection: [L("home", "Inbox")]);
+        Assert.Equal(L("home", "Inbox"), primary);
+    }
+
+    [Fact]
+    public void ResolvePrimary_NoMarkedHome_FallsThroughToFirstSelected()
+    {
+        // The seeded home was removed (base stopped marking it): the create target degrades to the
+        // first remaining selection rather than resurrecting an unmarked list as "home".
+        var primary = ListSelectorModel.ResolvePrimary(
+            selection: [L("1", "Backlog"), L("2", "Sprint")],
+            distinguishedSelection: []);
+        Assert.Equal(L("1", "Backlog"), primary);
+    }
+
+    [Fact]
+    public void ResolvePrimary_EmptySelection_ReturnsNull()
+        => Assert.Null(ListSelectorModel.ResolvePrimary(selection: [], distinguishedSelection: []));
 }

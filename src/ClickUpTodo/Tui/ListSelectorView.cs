@@ -23,8 +23,6 @@ namespace ClickUpTodo.Tui;
 /// </summary>
 public sealed class ListSelectorView : SelectorView
 {
-    private readonly string? _primaryId;
-
     /// <param name="match">Substring match over the candidate pool, excluding the given ids — i.e.
     /// <c>ListFrequencyCache.Match</c>.</param>
     /// <param name="topFrequent">Top-N most-frequent candidates excluding the given ids — i.e.
@@ -57,37 +55,33 @@ public sealed class ListSelectorView : SelectorView
             distinguishedSuffix: ListSelectorModel.HomeSuffix,
             mode: mode,
             applyAsync: AdaptApply(applyAsync),
-            lockedRemoveMessage: item => $"{item.Name} can't be removed.",
+            // Lists carry no locked entry, so the base's locked-remove flash can never fire here; the
+            // base default is left in place rather than passing a message that's dead by construction.
             applyFailureMessage: ex => $"Couldn't update lists: {ex.Message}",
             timeProvider: timeProvider,
             debounce: debounce,
             capacity: capacity)
     {
-        _primaryId = primary is { } p && !string.IsNullOrWhiteSpace(p.Id) ? p.Id : null;
     }
 
-    /// <summary>The current selection as lists, in add order (the primary/home list, then any others).</summary>
+    /// <summary>The current selection as lists, in selection order — the seeded <c>initialSelected</c>
+    /// (if any) first, then the seeded <paramref name="primary"/>, then any lists picked at runtime.
+    /// (For the New Task case, where <c>initialSelected</c> is empty, that makes the primary the first
+    /// element; use <see cref="Primary"/> rather than <c>Selection[0]</c> to identify the create target
+    /// in the general case.)</summary>
     public IReadOnlyList<NamedEntity> Selection
         => SelectedItems.Select(ListSelectorModel.ToEntity).ToList();
 
-    /// <summary>The primary/home list — the create target. The seeded primary while it's still selected,
-    /// otherwise the first remaining selection (the host may re-derive its home from
-    /// <see cref="Selection"/>[0]), otherwise null when nothing is selected. Removing the seeded primary
-    /// falls through to the next selected list rather than leaving a dangling home id.</summary>
+    /// <summary>The primary/home list — the create target. The currently-marked home list if one is
+    /// still selected (kept in lockstep with the on-screen <c>" (home)"</c> marker via the base's
+    /// <see cref="SelectorView.DistinguishedSelection"/>), otherwise the first selected list, otherwise
+    /// null when nothing is selected. So removing the seeded home falls through to the first remaining
+    /// selection rather than pointing at an unmarked list, and — in immediate-apply mode — a home the
+    /// server dropped stops being reported the moment the base stops marking it. See
+    /// <see cref="ListSelectorModel.ResolvePrimary"/>.</summary>
     public NamedEntity? Primary
-    {
-        get
-        {
-            var selection = Selection;
-            if (_primaryId is not null)
-            {
-                var seeded = selection.FirstOrDefault(l => string.Equals(l.Id, _primaryId, StringComparison.Ordinal));
-                if (seeded is not null)
-                    return seeded;
-            }
-            return selection.Count > 0 ? selection[0] : null;
-        }
-    }
+        => ListSelectorModel.ResolvePrimary(
+            Selection, DistinguishedSelection.Select(ListSelectorModel.ToEntity).ToList());
 
     // ── list ↔ base adapters (near-identity: lists are natively string-id'd) ────
 
