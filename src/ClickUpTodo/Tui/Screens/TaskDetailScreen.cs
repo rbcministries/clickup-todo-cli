@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Drawing;
+using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using Terminal.Gui.App;
@@ -77,6 +78,10 @@ public sealed class TaskDetailScreen : Screen
     private readonly ListView _dirBrowser;
     private readonly DirectoryBrowserModel _browser;
     private readonly CheckBox _postToCommentsToggle;
+    // The per-dispatch launch-location toggle (#275): checked ⇒ open this session in a new tab of the
+    // current terminal (where supported), unchecked ⇒ a new window. Seeded from the persisted default
+    // and read on submit. Greyed out in one-off mode (a -p run has no terminal); see UpdateLaunchLocationEnabled.
+    private readonly CheckBox _launchLocationToggle;
     // Guards the working-dir field against the browser's selection-follows-cursor sync while the pane
     // is being (re)opened: pre-fill writes the per-task cached dir (#96) into the field, then resetting
     // the browser fires ValueChanged, which would otherwise immediately clobber that pre-fill with the
@@ -129,11 +134,12 @@ public sealed class TaskDetailScreen : Screen
     private const int DescriptionEditorPreferredHeight = DescriptionEditorRows + 1 + 1 + 2;
 
     // The Dispatch pane's working-dir layout (#95): rows above the browser (prompt, one-off, dir
-    // field, key hint), the browser's own rows, and rows below (post-to-Comments). Used to size the
-    // pane via DispatchPaneModel.PreferredHeightWithBrowser and to place the ListView.
+    // field, key hint), the browser's own rows, and rows below (post-to-Comments + the #275
+    // launch-location toggle). Used to size the pane via DispatchPaneModel.PreferredHeightWithBrowser
+    // and to place the ListView.
     private const int DispatchRowsAboveBrowser = 4;
     private const int DispatchBrowserRows = 5;
-    private const int DispatchRowsBelowBrowser = 1;
+    private const int DispatchRowsBelowBrowser = 2;
 
     // The coloured title header (#162) and the three text-based tab bodies, kept as fields so a refresh
     // (#114 follow-up) can re-render each in place — only when its content actually changed, so a poll
@@ -226,6 +232,12 @@ public sealed class TaskDetailScreen : Screen
     /// Seeds the pane's post-results-to-Comments toggle (#97) from the persisted default; the user can
     /// flip it per dispatch. Defaults to off.
     /// </param>
+    /// <param name="defaultLaunchLocation">
+    /// Seeds the pane's launch-location toggle (#275) from the persisted default
+    /// (<c>AgentDispatchSettings.LaunchLocation</c>); the user can override it per dispatch. Only applies
+    /// to interactive dispatches (the toggle is greyed out in one-off mode). Defaults to
+    /// <see cref="LaunchLocation.NewWindow"/>.
+    /// </param>
     /// <param name="workingDirectoryPreFill">
     /// Supplies the per-task cached working directory (#96) to pre-fill the pane's working-dir field
     /// with. Invoked <b>each time the pane opens</b> (not captured once), so a dispatch that updates the
@@ -253,6 +265,7 @@ public sealed class TaskDetailScreen : Screen
         DetailViewSettings? settings = null,
         AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive,
         bool defaultPostToComments = false,
+        LaunchLocation defaultLaunchLocation = LaunchLocation.NewWindow,
         Func<string>? workingDirectoryPreFill = null,
         Func<string, CancellationToken, Task<CommentItem>>? postCommentAsync = null,
         Func<string, CancellationToken, Task<string?>>? setDescriptionAsync = null)
@@ -370,8 +383,20 @@ public sealed class TaskDetailScreen : Screen
             Text = "Post results to Comments (agent needs ClickUp MCP access)",
             Value = defaultPostToComments ? CheckState.Checked : CheckState.UnChecked,
         };
+        // Live (#275): seeded from the persisted default; checked ⇒ open this session in a new tab of
+        // the current terminal (where the host supports it), unchecked ⇒ a new window. Read on submit
+        // via DispatchPaneModel.ToLaunchLocation. It only affects interactive sessions — a one-off -p
+        // run has no terminal — so it's greyed out (and skipped by Tab) whenever one-off is checked;
+        // UpdateLaunchLocationEnabled keeps that in sync with the one-off toggle.
+        _launchLocationToggle = new CheckBox
+        {
+            X = 1,
+            Y = DispatchRowsAboveBrowser + DispatchBrowserRows + 1,
+            Text = "Open in a new tab of this terminal (interactive only; else a new window)",
+            Value = defaultLaunchLocation == LaunchLocation.NewTab ? CheckState.Checked : CheckState.UnChecked,
+        };
 
-        _dispatchControls = [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle];
+        _dispatchControls = [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle, _launchLocationToggle];
 
         var paneHeight = DispatchPaneModel.PreferredHeightWithBrowser(
             DispatchRowsAboveBrowser, DispatchBrowserRows, DispatchRowsBelowBrowser);
@@ -384,7 +409,7 @@ public sealed class TaskDetailScreen : Screen
             Height = paneHeight,
             Visible = false,
         };
-        _promptBox.Add(promptLabel, _promptField, _oneOffToggle, dirLabel, _workingDirField, browserHint, _dirBrowser, _postToCommentsToggle);
+        _promptBox.Add(promptLabel, _promptField, _oneOffToggle, dirLabel, _workingDirField, browserHint, _dirBrowser, _postToCommentsToggle, _launchLocationToggle);
         // Each dispatch control routes the pane's keys (Enter/Esc/Tab/PgUp/PgDn) via the pure
         // DispatchPaneModel; other keys fall through so typing/Space-toggle keep working. The browser
         // gets its own handler so Enter/→/← navigate it instead of submitting the dispatch (#95).
@@ -400,6 +425,11 @@ public sealed class TaskDetailScreen : Screen
         // path field, so the highlighted dir is the one that dispatches — no separate Enter/select step.
         // Wired after the constructor's initial SelectedItem=0 so that first assignment can't fire it.
         _dirBrowser.ValueChanged += OnBrowserSelectionChanged;
+        // The launch-location toggle (#275) only applies to interactive sessions, so flipping the
+        // one-off toggle greys it in/out. Wired after seeding both toggles (their initializers set
+        // Value before this handler exists, so no premature fire); the initial state is set once now.
+        _oneOffToggle.ValueChanged += (_, _) => UpdateLaunchLocationEnabled();
+        UpdateLaunchLocationEnabled();
 
         // The comment composer (#216): a bottom-anchored FrameView with a multi-line editor above a
         // Post/Cancel button row, hidden until Ctrl+N. Modelled on PromptTemplateEditorScreen — the
@@ -908,7 +938,8 @@ public sealed class TaskDetailScreen : Screen
 
     /// <summary>Submits the pane: hides it, then (only for non-empty text) raises the dispatch event
     /// carrying the prompt, the one-off/interactive session mode (#94), the chosen working directory
-    /// (#95; blank ⇒ null ⇒ default dir), and the post-to-Comments flag (#97).</summary>
+    /// (#95; blank ⇒ null ⇒ default dir), the post-to-Comments flag (#97), and the launch-location
+    /// override (#275; only honoured for an interactive session — the host ignores it for one-off).</summary>
     private void SubmitDispatch()
     {
         var text = _promptField.Text?.ToString() ?? string.Empty;
@@ -917,19 +948,40 @@ public sealed class TaskDetailScreen : Screen
             : AgentSessionMode.Interactive;
         var dir = _workingDirField.Text?.ToString();
         var postToComments = _postToCommentsToggle.Value == CheckState.Checked;
+        var launchLocation = DispatchPaneModel.ToLaunchLocation(_launchLocationToggle.Value == CheckState.Checked);
         HidePrompt();
         // A stray Enter shouldn't launch a session — only dispatch when something was typed.
         if (!string.IsNullOrWhiteSpace(text))
-            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, sessionMode, dir, postToComments));
+            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, sessionMode, dir, postToComments, launchLocation));
     }
 
-    /// <summary>Moves focus to the next/previous dispatch control, wrapping at both ends.</summary>
+    /// <summary>Greys the launch-location toggle (#275) in/out to match the session mode: a one-off
+    /// <c>claude -p</c> run has no terminal, so new-window-vs-new-tab is meaningless there. Disabled
+    /// controls are also skipped by <see cref="MoveDispatchFocus"/> so Tab still cycles cleanly.</summary>
+    private void UpdateLaunchLocationEnabled()
+    {
+        var sessionMode = _oneOffToggle.Value == CheckState.Checked
+            ? AgentSessionMode.OneOff
+            : AgentSessionMode.Interactive;
+        _launchLocationToggle.Enabled = DispatchPaneModel.LaunchLocationApplies(sessionMode);
+    }
+
+    /// <summary>Moves focus to the next/previous dispatch control, wrapping at both ends and skipping
+    /// any control that can't currently take focus — e.g. the launch-location toggle greyed out in
+    /// one-off mode (#275) — so Tab never lands on (or stalls at) a disabled control.</summary>
     private void MoveDispatchFocus(bool forward)
     {
         var current = Array.FindIndex(_dispatchControls, static c => c.HasFocus);
         if (current < 0)
             current = 0;
-        _dispatchControls[DispatchPaneModel.NextFocus(current, _dispatchControls.Length, forward)].SetFocus();
+        var next = current;
+        for (var i = 0; i < _dispatchControls.Length; i++)
+        {
+            next = DispatchPaneModel.NextFocus(next, _dispatchControls.Length, forward);
+            if (_dispatchControls[next].Enabled && _dispatchControls[next].CanFocus)
+                break;
+        }
+        _dispatchControls[next].SetFocus();
     }
 
     /// <summary>Scrolls the front-most tab's body while the pane holds keyboard focus (PgUp/PgDn pass
