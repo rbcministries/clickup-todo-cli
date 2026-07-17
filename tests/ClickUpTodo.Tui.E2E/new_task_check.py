@@ -99,6 +99,14 @@ try:
     # -> Due date -> Save (#215/#240).
     send(b"\x1b[A", 0.6)  # Up: Assignees list -> its search box
     send(b"\t", 0.6)      # Assignees search box -> List selector search box (Tab bubbles out of composite)
+    # Change the list set (#240 "the user can change the list(s)"): type-ahead a second list and add it
+    # from the search box. The seeded home stays the primary/home create target.
+    send(b"Ministry", 1.8)  # debounced (~1s) substring match on "Ministry Ops"
+    send(b"\r", 1.2)        # Enter in the search box adds the highlighted match
+    v = visible()
+    assert "✓ Ministry Ops" in v, f"type-ahead add of a second list didn't take (#240):\n{v}"
+    assert "✓ Personal Tasks (home)" in v, f"primary/home list changed after adding another list (#240):\n{v}"
+    print("LIST ok — added a second list via type-ahead; home stays the create target")
     send(b"\t", 0.6)      # List selector search box -> Priority list
     send(b"\x1b[A", 0.6)  # Up: move off "(no priority)" onto a real priority (Low)
     send(b"\t", 0.6)      # Priority -> Due date field

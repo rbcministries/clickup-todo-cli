@@ -1016,11 +1016,14 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// Ctrl+N — opens the New Task compose screen (#213) over the list. Guarded on
+    /// Ctrl+N — opens the New Task compose screen (#213/#240) over the list. Guarded on
     /// <see cref="ActiveScreen"/> like the other list-initiated opens (only Help stacks). Requires a
-    /// configured Personal Tasks list (the create target); flashes and no-ops when unset. The embedded
-    /// assignee selector draws its candidate pool from the #155 frequency cache and seeds the current
-    /// user as a locked default. On success the list refreshes and the cursor lands on the new task.
+    /// configured Personal Tasks list (the fallback seed / create target when the cursor can't supply one);
+    /// flashes and no-ops when unset. The embedded assignee selector draws its candidate pool from the #155
+    /// frequency cache and seeds the current user as a locked default; the List selector (#239) draws from
+    /// the #238 list-frequency cache and is seeded with the cursor's list as the primary/home create target
+    /// (personal-list fallback — see <see cref="NewTaskForm.ResolveListSeed"/>). On success the list
+    /// refreshes and the cursor lands on the new task.
     /// </summary>
     private void OpenNewTask()
     {
