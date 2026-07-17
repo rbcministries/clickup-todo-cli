@@ -38,6 +38,8 @@ public sealed class CacheResetTests : IDisposable
         Assert.Contains(StateKeys.Statuses, CacheReset.CacheKeys);
         Assert.Contains(StateKeys.ListColors, CacheReset.CacheKeys);
         Assert.Contains(StateKeys.Assignees, CacheReset.CacheKeys);
+        // The warm closed-task set (#280) persists across restarts, so a logout must forget it too.
+        Assert.Contains(StateKeys.Closed, CacheReset.CacheKeys);
     }
 
     [Fact]

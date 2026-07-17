@@ -2,8 +2,9 @@ namespace ClickUpTodo.Configuration;
 
 /// <summary>
 /// Clears every persisted cache payload (#124) on logout — the task working set (#122), the feed
-/// (#123), the per-list status/color metadata (#125), and the assignee-frequency pool (#155) — so
-/// <c>--reset</c> / <c>--logout</c> leaves no cache behind for a different account or workspace.
+/// (#123), the per-list status/color metadata (#125), the assignee-frequency pool (#155), and the warm
+/// closed-task set (#280) — so <c>--reset</c> / <c>--logout</c> leaves no cache behind for a different
+/// account or workspace.
 /// The token and settings are forgotten separately by the caller (they are not <see cref="IStateStore"/>
 /// cache keys). Centralised and key-listed here so the exact set of cleared caches is verifiable in one
 /// place, rather than scattered across the composition root where a key could silently be dropped.
@@ -18,6 +19,7 @@ public static class CacheReset
         StateKeys.Statuses,
         StateKeys.ListColors,
         StateKeys.Assignees,
+        StateKeys.Closed,
     ];
 
     /// <summary>Delete every cache payload from <paramref name="store"/>. A no-op per key when nothing
