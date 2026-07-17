@@ -13,7 +13,7 @@ using Terminal.Gui.Views;
 namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>The result of editing settings, or null when the user cancels.</summary>
-public sealed record SettingsResult(int RefreshSeconds, int FeedRefreshSeconds, string DefaultWorkingDirectory, AgentDispatchSettings AgentDispatch, DetailViewSettings DetailView);
+public sealed record SettingsResult(int RefreshSeconds, int FeedRefreshSeconds, int FeedActivityLookbackDays, string DefaultWorkingDirectory, AgentDispatchSettings AgentDispatch, DetailViewSettings DetailView);
 
 /// <summary>
 /// Carries a prompt-template edit request from the settings screen to the host (#100): the current
@@ -43,6 +43,7 @@ public sealed class SettingsScreen : Screen
 
     private readonly TextField _refreshField;
     private readonly TextField _feedRefreshField;
+    private readonly TextField _feedLookbackField;
 
     /// <summary>
     /// The dispatch prompt template (#100), carried through this screen unchanged and edited on the
@@ -61,7 +62,7 @@ public sealed class SettingsScreen : Screen
     /// </summary>
     public event EventHandler<PromptTemplateEditRequest>? EditPromptTemplateRequested;
 
-    public SettingsScreen(int refreshSeconds, int feedRefreshSeconds, string defaultWorkingDirectory, AgentDispatchSettings dispatch, DetailViewSettings detailView)
+    public SettingsScreen(int refreshSeconds, int feedRefreshSeconds, int feedActivityLookbackDays, string defaultWorkingDirectory, AgentDispatchSettings dispatch, DetailViewSettings detailView)
     {
         Title = "Settings";
         _promptTemplate = dispatch.PromptTemplate;
@@ -90,11 +91,24 @@ public sealed class SettingsScreen : Screen
             Text = feedRefreshSeconds.ToString(CultureInfo.InvariantCulture),
         };
 
+        // Optional server-side look-back window for the feed's assigned-task fetch (#244): 0 = off
+        // (fetch the full set, today's behaviour); N>0 narrows the feed to tasks updated in the last
+        // N days. Because that one fetch feeds both the activity projection and the comments, the field
+        // is worded to make the "fetch fewer" trade-off clear.
+        var feedLookbackLabel = new Label { X = 1, Y = 3, Text = "Feed look-back (days, 0 = all):" };
+        _feedLookbackField = new TextField
+        {
+            X = Pos.Right(feedLookbackLabel) + 1,
+            Y = 3,
+            Width = 8,
+            Text = feedActivityLookbackDays.ToString(CultureInfo.InvariantCulture),
+        };
+
         // Status hiding moved to F3 filter rules (#69) — point the user there rather than a control here.
         var excludedNote = new Label
         {
             X = 1,
-            Y = 3,
+            Y = 4,
             Width = Dim.Percent(48),
             Text = "To hide statuses, add a Status IS NOT rule in the F3 filter view.",
         };
@@ -202,6 +216,7 @@ public sealed class SettingsScreen : Screen
             Result = new SettingsResult(
                 SettingsForm.ParseRefreshSeconds(_refreshField.Text, refreshSeconds),
                 SettingsForm.ParseRefreshSeconds(_feedRefreshField.Text, feedRefreshSeconds),
+                SettingsForm.ParseLookbackDays(_feedLookbackField.Text, feedActivityLookbackDays),
                 SettingsForm.ExpandHomePath(workingDirField.Text, home),
                 new AgentDispatchSettings
                 {
@@ -241,7 +256,8 @@ public sealed class SettingsScreen : Screen
         };
 
         Add([
-            refreshLabel, _refreshField, feedRefreshLabel, _feedRefreshField, excludedNote,
+            refreshLabel, _refreshField, feedRefreshLabel, _feedRefreshField,
+            feedLookbackLabel, _feedLookbackField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
             detailHeader, defaultTabButton, activityOrderButton, autoScrollButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,

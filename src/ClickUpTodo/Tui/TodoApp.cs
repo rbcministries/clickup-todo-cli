@@ -887,7 +887,7 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.DefaultWorkingDirectory, _config.AgentDispatch, _config.DetailView);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.AgentDispatch, _config.DetailView);
 
         // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
         // save it folds the edited template back into the settings screen via the request's callback, so
@@ -912,6 +912,9 @@ public sealed class TodoApp
             // The feed screen reads FeedRefreshSeconds when it opens (#123), so a reopened feed picks
             // up the new cadence — no live retiming of an already-open feed's timer is needed.
             _config.FeedRefreshSeconds = result.FeedRefreshSeconds;
+            // The look-back window (#244) is read live by FeedService on the next load, so a reopened
+            // (or next-polled) feed picks up the new window with no extra wiring.
+            _config.FeedActivityLookbackDays = result.FeedActivityLookbackDays;
             _config.DefaultWorkingDirectory = result.DefaultWorkingDirectory;
             _config.AgentDispatch = result.AgentDispatch;
             _config.DetailView = result.DetailView;
