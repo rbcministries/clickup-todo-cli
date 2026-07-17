@@ -43,7 +43,10 @@ public sealed class AgentDispatcher
     /// "write outputs to <c>./{subdir}</c>" instruction. <paramref name="oneOff"/> selects a one-off
     /// <c>claude -p</c> run over the default interactive session (#94). <paramref name="postToComments"/>
     /// (the #97 toggle) appends an instruction telling the agent to post a summary comment back to the
-    /// ClickUp task.
+    /// ClickUp task. <paramref name="launchLocation"/> (the #275 per-dispatch toggle) overrides where
+    /// this one interactive session opens — a new window or a new tab of the current terminal — on top
+    /// of the constructor <see cref="TerminalLauncherOptions.LaunchLocation"/> default; null keeps that
+    /// default. It only affects interactive launches (a one-off run has no terminal).
     /// </summary>
     public async Task<AgentDispatchResult> DispatchAsync(
         TaskDetail task,
@@ -54,12 +57,16 @@ public sealed class AgentDispatcher
         string? outputSubdirectory = null,
         bool oneOff = false,
         bool postToComments = false,
+        LaunchLocation? launchLocation = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
 
         var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, outputSubdirectory, postToComments);
-        var result = await _launcher.LaunchAsync(promptFile, workingDir, _options, oneOff, ct).ConfigureAwait(false);
+        // A per-dispatch override (#275) replaces only the launch location on this launch's options;
+        // null leaves the settings-derived _options (incl. its LaunchLocation) untouched.
+        var options = launchLocation is { } loc ? _options with { LaunchLocation = loc } : _options;
+        var result = await _launcher.LaunchAsync(promptFile, workingDir, options, oneOff, ct).ConfigureAwait(false);
         return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile);
     }
 

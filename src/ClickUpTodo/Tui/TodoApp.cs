@@ -1503,6 +1503,9 @@ public sealed class TodoApp
                         settings: _config.DetailView,
                         defaultSessionMode: _config.AgentDispatch.DefaultSessionMode,
                         defaultPostToComments: _config.AgentDispatch.DefaultPostResultsToComments,
+                        // Seed the per-dispatch launch-location toggle (#275) from the persisted default
+                        // (#255/#274); the user can override it per dispatch without changing the default.
+                        defaultLaunchLocation: _config.AgentDispatch.LaunchLocation,
                         // Pre-fill the Dispatch working-dir field from the per-task cache (#96) — the
                         // last explicit dir dispatched from this task, or blank if none. Read live on
                         // each pane open so a dispatch within this same open screen is reflected on reopen.
@@ -1515,9 +1518,9 @@ public sealed class TodoApp
                         setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(taskId, text, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
-                    // prompt, the one-off/interactive mode (#94), the working dir (#95), and the
-                    // post-to-Comments flag (#97) are consumed. The detail view opens on the configured
-                    // tab/sort/scroll (#108).
+                    // prompt, the one-off/interactive mode (#94), the working dir (#95), the
+                    // post-to-Comments flag (#97), and the per-dispatch launch location (#275) are
+                    // consumed. The detail view opens on the configured tab/sort/scroll (#108).
                     screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request);
                     // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data; re-fetch off the UI
                     // thread and feed it back into the still-open screen (its tab/scroll stay put).
@@ -1671,7 +1674,9 @@ public sealed class TodoApp
                 if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
                     Directory.CreateDirectory(workingDir);
 
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff, postToComments);
+                // Thread the per-dispatch launch-location override (#275) into this one interactive
+                // launch; the one-off branch returned above never reaches here, so it's always honoured.
+                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff, postToComments, launchLocation: request.LaunchLocation);
                 Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
             }
             catch (Exception ex)

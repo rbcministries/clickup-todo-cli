@@ -1,3 +1,6 @@
+using ClickUpTodo.Agent;
+using ClickUpTodo.Configuration;
+
 namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>
@@ -8,6 +11,25 @@ namespace ClickUpTodo.Tui.Screens;
 /// </summary>
 public static class DispatchPaneModel
 {
+    /// <summary>
+    /// Whether the per-dispatch launch-location choice (#275) is meaningful for
+    /// <paramref name="sessionMode"/>. Only an <see cref="AgentSessionMode.Interactive"/> session
+    /// opens a terminal, so new-window-vs-new-tab applies there; a one-off <c>claude -p</c> run (#94)
+    /// goes through the background runner with no terminal, so the pane greys the toggle out — and any
+    /// value it happens to carry is ignored downstream. Pure so the enable/disable rule is unit-tested
+    /// rather than buried in the CI-untestable glue.
+    /// </summary>
+    public static bool LaunchLocationApplies(AgentSessionMode sessionMode)
+        => sessionMode == AgentSessionMode.Interactive;
+
+    /// <summary>
+    /// The <see cref="LaunchLocation"/> the pane's launch-location toggle represents (#275): checked ⇒
+    /// a new tab of the current terminal (where the host supports it), unchecked ⇒ a new window (the
+    /// historical default). Pure so the toggle's read-on-submit mapping is unit-tested.
+    /// </summary>
+    public static LaunchLocation ToLaunchLocation(bool newTabChecked)
+        => newTabChecked ? LaunchLocation.NewTab : LaunchLocation.NewWindow;
+
     /// <summary>
     /// The keys the pane intercepts. The glue classifies a Terminal.Gui <c>Key</c> into one of these;
     /// anything else is <see cref="PaneKey.Other"/> and falls through to the focused control (so
