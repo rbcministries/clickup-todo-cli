@@ -73,6 +73,11 @@ public sealed class FeedService(IClickUpClient client, TaskService taskService, 
         var assigneeIds = await taskService.ResolveAssigneeIdsAsync(config.View, ct);
         // Optional server-side look-back window (#244): when configured, shrink the fetch to tasks
         // updated in the last N days. Null (the default) leaves the full-set fetch unchanged.
+        //
+        // The window is intentionally NOT part of FeedCache.KeyFor: it is time-relative (now − N days),
+        // so keying on it would make the cache key perpetually unstable (never a hit) for no benefit.
+        // The bounded instant-paint is reconciled by the near-immediate live refresh; workspace/
+        // assignees/completed are still keyed, so the cache can never surface a wrong feed.
         var updatedAfterMs = ComputeUpdatedAfterMs(config.FeedActivityLookbackDays, _clock.GetUtcNow());
         var tasks = await client.GetAssignedTasksAsync(
             config.WorkspaceId, assigneeIds, includeClosed: includeClosed, updatedAfterMs: updatedAfterMs, ct: ct);
