@@ -244,6 +244,18 @@ public sealed class TodoApp
     // loop runs fetches strictly one at a time).
     private int _deltaPollsSinceFullLoad;
 
+    /// <summary>Minimum age between workspace list-walk passes (#236): the hierarchy changes on human
+    /// timescales, so ~30 min bounds staleness without spending the walk's round-trips every poll.
+    /// A minimum age, not an exact period — the walk runs on the first refresh cycle at or after it
+    /// (see <see cref="FetchCadenceGate"/>).</summary>
+    internal static readonly TimeSpan WorkspaceListWalkMinAge = TimeSpan.FromMinutes(30);
+
+    private const string WorkspaceListWalkGroup = "workspace-lists";
+
+    // Per-group cadence gate (#246 ADR): lets slow-cadence work ride the existing refresh loop
+    // instead of adding timers or a scheduler. Today's only group is the workspace list walk.
+    private readonly FetchCadenceGate _cadence = new();
+
     /// <summary>
     /// Background fetch for the refresh loop: loads the task snapshot — incrementally on background
     /// polls, in full on the initial load, a manual refresh, or the periodic resync (#194) — and, when
@@ -259,12 +271,26 @@ public sealed class TodoApp
         var snapshot = await _tasks.LoadSnapshotAsync(preferDelta, ct);
         _deltaPollsSinceFullLoad = snapshot.WasDelta ? _deltaPollsSinceFullLoad + 1 : 0;
 
+        // Snapshot-INDEPENDENT work first (#246 ADR): the workspace list walk (#236) is gated on its
+        // own minimum age, never on the snapshot — and is decided before the empty-delta early
+        // return below (which only skips snapshot-DERIVED resolvers), so a quiet workspace can't
+        // starve it. Initial/Manual force it due, matching "manual is always full" (#194). Mid-pass
+        // the walk stays due every cycle (MarkRan fires only on pass completion), which is what
+        // spreads a large workspace's walk across cycles instead of bursting it.
+        var walkFetch = kind != RefreshKind.Poll || _cadence.IsDue(WorkspaceListWalkGroup, WorkspaceListWalkMinAge)
+            ? RunWorkspaceListWalkStepAsync(ct)
+            : Task.FromResult(false);
+
         // A provably-empty delta means the world hasn't changed: keep the previous resolver results
         // (context parents / foreign subtasks / list colors) instead of re-spending their round-trips.
         // Anything that changes what the resolvers should see (F3/F4/grouping edits) triggers a manual
         // refresh, which is never a delta.
         if (snapshot is { WasDelta: true, Changed: false })
+        {
+            if (await walkFetch)
+                _cadence.MarkRan(WorkspaceListWalkGroup);
             return snapshot.Tasks;
+        }
 
         var tasks = snapshot.Tasks;
 
@@ -288,8 +314,9 @@ public sealed class TodoApp
             ? _tasks.ResolveListColorsAsync(tasks.Select(t => t.ListId ?? ""), ct)
             : Task.FromResult(EmptyListColors);
 
-        // WhenAll (rather than awaiting in turn) so a fault in one resolver still observes the others.
-        await Task.WhenAll(parentsFetch, foreignFetch, colorsFetch);
+        // WhenAll (rather than awaiting in turn) so a fault in one resolver still observes the others;
+        // the walk step joins the batch (#246 ADR), so a due walk costs the cycle max, not sum.
+        await Task.WhenAll(parentsFetch, foreignFetch, colorsFetch, walkFetch);
 
         _contextParents = await parentsFetch;
         var foreign = await foreignFetch;
@@ -299,7 +326,37 @@ public sealed class TodoApp
             : foreign.Subtasks.ToDictionary(t => t.Id, StringComparer.Ordinal);
         _foreignSubtasksTruncated = foreign.Truncated;
         _listColors = await colorsFetch;
+        if (await walkFetch)
+            _cadence.MarkRan(WorkspaceListWalkGroup);
         return tasks;
+    }
+
+    /// <summary>
+    /// One bounded step of the workspace list walk (#236), wrapped best-effort: the walk only feeds
+    /// a lookaside cache, so its failure must not surface as "Refresh failed" when the task rows and
+    /// resolvers were fine. A failed step reports the pass complete so the gate is stamped — per-group
+    /// error backoff (#246 ADR): the next attempt waits the walk's full minimum age instead of
+    /// retrying at poll cadence. Returns whether to stamp the cadence gate.
+    /// </summary>
+    private async Task<bool> RunWorkspaceListWalkStepAsync(CancellationToken ct)
+    {
+        try
+        {
+            return (await _tasks.ResolveWorkspaceListsAsync(ct)).PassComplete;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // genuine shutdown — let the refresh loop's own handling see it
+        }
+        catch (Exception ex)
+        {
+            // Everything else backs off — including an HttpClient timeout, which surfaces as a
+            // (Task)CanceledException with our ct UNSIGNALLED (the same trap RefreshService.RunAsync
+            // filters for): rethrown, it would fail the whole cycle as "Refresh failed" even though
+            // the snapshot and resolvers succeeded.
+            Debug.WriteLine($"Workspace list walk failed (backing off to its next window): {ex}");
+            return true;
+        }
     }
 
     // Shared "feature off / nothing found" result for the foreign-subtask resolver above.
@@ -462,7 +519,7 @@ public sealed class TodoApp
                 break;
             case KeyCode.F12:
                 key.Handled = true;
-                ToggleShowCompleted();
+                CycleShowCompleted();
                 break;
         }
     }
@@ -665,7 +722,7 @@ public sealed class TodoApp
     /// <summary>
     /// Toggles the feed's F12 "Show Completed" — whether the feed includes activity from completed
     /// (closed-type) tasks — and persists it (<see cref="AppConfig.FeedShowCompleted"/>). Independent of
-    /// the main list's F12 (#178), which owns <see cref="ViewSettings.ShowCompleted"/>. Because the
+    /// the main list's F12 (#178/#191), which owns <see cref="ViewSettings.Completed"/>. Because the
     /// closed tasks were never fetched, a client-side re-render can't surface them: this re-fetches via
     /// <see cref="RefreshFeed"/> after reflecting the new state in the screen's title. If a refresh is
     /// already in flight the re-fetch is queued (not dropped), so the toggle always takes effect. Runs on
@@ -742,25 +799,27 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// Toggles the F12 "Show Completed" view (#178) — completed (closed-type) tasks and subtasks shown
-    /// vs. hidden — and persists it. Off (default) hides them; the display gate in <see cref="TaskView"/>
-    /// re-renders immediately from the current snapshot. Turning it on additionally requests a refresh so
-    /// the server returns the closed-type tasks it drops while off (a client-side re-render can't surface
-    /// tasks never fetched — mirrors <see cref="CycleSubtaskView"/>; a Manual refresh is a full fetch).
+    /// Cycles the three-state F12 completed view (#191): Active (hide done + closed) -> WithDone (show
+    /// done, hide closed) -> All (show everything) -> …, persisting the choice. The display gate in
+    /// <see cref="TaskView"/> re-renders immediately from the current snapshot. Only reaching
+    /// <see cref="CompletedView.All"/> requests a refresh, since that's the one state whose fetch must
+    /// return closed-type tasks the server drops otherwise — done-type arrives regardless, so
+    /// Active↔WithDone is a pure client-side re-render (mirrors <see cref="CycleSubtaskView"/>'s
+    /// Hidden→on refresh; a Manual refresh is a full fetch).
     /// </summary>
-    private void ToggleShowCompleted()
+    private void CycleShowCompleted()
     {
         if (ActiveScreen is not null)
             return;
 
-        var on = !_config.View.ShowCompleted;
-        _config.View.ShowCompleted = on;
+        var next = _config.View.Completed.Next();
+        _config.View.Completed = next;
         _configStore.Save(_config);
-        Flash(on ? "Showing completed tasks (F12)." : "Completed tasks hidden (F12).");
+        Flash(next.Describe());
 
         Render(keepTaskId: CurrentTask()?.Id);
         _signature = CurrentSignature(_all);
-        if (on)
+        if (next == CompletedView.All)
             _refresh.RequestRefresh();
     }
 
@@ -2043,9 +2102,10 @@ public sealed class TodoApp
     private string CurrentSignature(IReadOnlyList<TaskItem> tasks)
     {
         var sb = new System.Text.StringBuilder(BuildSignature(tasks));
-        // Fold in "Show Completed" (#178) so toggling F12 is treated as a render change, not a no-op
-        // refresh, even when the underlying task set is byte-identical.
-        sb.Append("#done=").Append(_config.View.ShowCompleted);
+        // Fold in the F12 completed view (not just on/off) so cycling between states — a pure re-render
+        // over the same fetched set — is treated as a render change, not a no-op refresh, even when the
+        // underlying task set is byte-identical (#178/#191).
+        sb.Append("#done=").Append(_config.View.Completed);
         // Fold in the F4 state (not just on/off) so switching between the two on-states — a pure re-render
         // over the same fetched set — is treated as a change rather than a no-op (#179).
         sb.Append("#sub=").Append(_config.View.Subtasks);
@@ -2089,8 +2149,8 @@ public sealed class TodoApp
             flags.Add($"grouped by {TaskFieldInfo.DisplayName(gf)}");
         if (view.Subtasks.TitleFlag() is { } subtaskFlag)
             flags.Add(subtaskFlag);
-        if (view.ShowCompleted)
-            flags.Add("+completed");
+        if (view.Completed.TitleFlag() is { } completedFlag)
+            flags.Add(completedFlag);
         return flags.Count > 0 ? $"{title} · {string.Join(" · ", flags)}" : title;
     }
 
@@ -2115,10 +2175,11 @@ public sealed class TodoApp
         // a pinned parent nests under it in Focus rather than vanishing (#85). NestedSubtaskIds then covers
         // both in-snapshot and foreign rows pulled into Focus — the exact set to keep out of the to-do list.
         var foreignList = nest && visibleForeign.Count > 0 ? visibleForeign.Values.ToList() : null;
-        // Pass Show Completed (#178) so FocusSectionLayout gates completed descendants (in-snapshot and
-        // foreign alike) in one place — a completed subtask never nests under a pinned ancestor when off,
-        // matching TaskView.Apply's gate on the to-do section; explicit pins stay visible regardless.
-        var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection, _expanded, foreignList, includeCompleted: view.ShowCompleted);
+        // Pass the F12 completed view (#178/#191) so FocusSectionLayout gates completed descendants
+        // (in-snapshot and foreign alike) in one place — a completed subtask never nests under a pinned
+        // ancestor unless the view shows it, matching TaskView.Apply's gate on the to-do section;
+        // explicit pins stay visible regardless.
+        var focus = FocusSectionLayout.Build(_all, pinnedIds, nest, view.SortField, view.SortDirection, _expanded, foreignList, completed: view.Completed);
         _focusNestedIds = focus.NestedSubtaskIds;
 
         // The non-pinned set feeds the F3 view. Drop pinned tasks and (when nesting) any subtask pulled

@@ -12,7 +12,7 @@ comments feed (Ctrl+E), and asserts the F6 "show/hide activity" display state:
 Activity is a client-side projection of the assigned tasks the feed already fetches, so
 F6 is a local re-render (no re-fetch) — the rows appear/disappear without a network wait.
 
-Usage: activity_check.py <e2e.dll> [out.txt]
+Usage: activity_check.py <ClickUpTodo.Tui.E2E.dll> [out.txt]
 """
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte

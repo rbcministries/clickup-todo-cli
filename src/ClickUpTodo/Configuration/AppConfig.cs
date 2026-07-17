@@ -48,7 +48,7 @@ public sealed class AppConfig
     /// <see cref="Services.FeedService.LoadFeedAsync"/> gathers comments only from the user's
     /// <b>open</b> assigned tasks, so a comment on a ticket that has since closed doesn't surface. On:
     /// the feed's task fetch flips <c>IncludeClosed</c> so closed tasks (and their comments) are pulled
-    /// in too. Deliberately separate from <see cref="ViewSettings.ShowCompleted"/> (the main list's
+    /// in too. Deliberately separate from <see cref="ViewSettings.Completed"/> (the main list's
     /// F12) so the feed and list toggle independently, and kept on <see cref="AppConfig"/> like
     /// <see cref="RefreshSeconds"/>/<see cref="BadgeDisplay"/> so it's independent of the F3 view. A new
     /// bool defaults to false for existing configs, so no migration is needed.

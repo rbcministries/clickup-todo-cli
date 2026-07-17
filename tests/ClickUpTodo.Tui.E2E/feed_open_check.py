@@ -8,7 +8,7 @@ detail *stacked over the feed*, and asserts:
   - The feed's selected row is preserved across the round-trip.
   - A second Esc from the feed returns to the dashboard.
 
-Usage: feed_open_check.py <e2e.dll> [out.txt]
+Usage: feed_open_check.py <ClickUpTodo.Tui.E2E.dll> [out.txt]
 """
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte

@@ -13,6 +13,14 @@ namespace ClickUpTodo.Services;
 public sealed record TaskSnapshotResult(IReadOnlyList<TaskItem> Tasks, bool Changed, bool WasDelta);
 
 /// <summary>
+/// Result of one <see cref="TaskService.ResolveWorkspaceListsAsync"/> step (#236): every list
+/// discovered so far this session (deduped by id) and whether the current pass has now covered
+/// every space — the caller's signal to stamp its cadence gate (#246 ADR) so the next pass waits
+/// a full minimum age instead of restarting immediately.
+/// </summary>
+public sealed record WorkspaceListsResolution(IReadOnlyList<NamedEntity> Lists, bool PassComplete);
+
+/// <summary>
 /// Fetches and merges the user's actionable tasks (assigned-to-me ∪ Personal Tasks list),
 /// de-duplicated and stably ordered, and resolves per-list status options on demand (cached).
 /// </summary>
@@ -94,7 +102,7 @@ public sealed class TaskService(
                 if (!string.IsNullOrEmpty(task.Id))
                     delta[task.Id] = task;
             }
-            var (merged, changed) = MergeDelta(previous, delta.Values.ToList(), keepClosed: config.View.ShowCompleted);
+            var (merged, changed) = MergeDelta(previous, delta.Values.ToList(), keepClosed: config.View.IncludesClosedTasks);
             _watermarkMs = MaxUpdatedMs(delta.Values) is { } newest ? Math.Max(watermark, newest) : watermark;
             _lastSnapshot = merged;
             return new TaskSnapshotResult(merged, changed, WasDelta: true);
@@ -184,10 +192,12 @@ public sealed class TaskService(
         // The two source fetches are independent, so the personal-list fetch overlaps assignee-id
         // resolution + the assigned fetch (#192): wall-clock is the slower of the two, not their sum.
         // WhenAll (rather than awaiting in turn) so a fault in one still observes the other.
-        // The F12 "Show Completed" toggle (#178) widens both fetches to include closed-type tasks; when
-        // off (the default) closed-type tasks are dropped server-side and TaskView hides any that still
-        // arrive (e.g. subtask anchors), so hiding is consistent at every level.
-        var includeClosed = config.View.ShowCompleted;
+        // The F12 completed view (#178/#191) widens both fetches to include closed-type tasks only in
+        // its All state; when narrower, closed-type tasks are dropped server-side and TaskView hides any
+        // that still arrive (e.g. subtask anchors) — plus done-type when in Active — so hiding is
+        // consistent at every level. done-type tasks arrive regardless of this flag, so WithDone needs no
+        // wider fetch than Active.
+        var includeClosed = config.View.IncludesClosedTasks;
         var personalFetch = client.GetListTasksAsync(config.PersonalTasksListId, includeClosed, ct);
         var assignedFetch = LoadAssignedAsync(includeClosed, ct);
         await Task.WhenAll(assignedFetch, personalFetch);
@@ -561,6 +571,86 @@ public sealed class TaskService(
                 }
             });
         return result;
+    }
+
+    /// <summary>
+    /// How many spaces one <see cref="ResolveWorkspaceListsAsync"/> step walks (#236). ClickUp has no
+    /// bulk all-lists endpoint, so enumeration is a Spaces → Folders/folderless → Lists walk; walking
+    /// a large workspace in one shot is exactly what trips its rate limit (the SetupWizard caution).
+    /// Bounding the step and resuming next refresh cycle spreads the pass instead.
+    /// </summary>
+    internal const int MaxSpacesPerWalkStep = 3;
+
+    // The in-progress walk pass: spaces enumerated at pass start and not yet walked. Null when no
+    // pass is running (the next invocation re-enumerates spaces and starts a fresh pass). Only
+    // touched by ResolveWorkspaceListsAsync — the refresh loop runs fetches strictly one at a time.
+    private Queue<NamedEntity>? _walkPendingSpaces;
+
+    // Every list the walk has discovered this session, keyed by id (last-wins on rename). The
+    // mutable map is walk-owned; _knownWorkspaceLists republishes an immutable snapshot after each
+    // step so other threads (a future New Task list picker, #208-J) read a coherent set.
+    private readonly Dictionary<string, NamedEntity> _knownListsById = new(StringComparer.Ordinal);
+    private volatile IReadOnlyList<NamedEntity> _knownWorkspaceLists = [];
+
+    /// <summary>Every workspace list discovered so far by <see cref="ResolveWorkspaceListsAsync"/>
+    /// (#236), deduped by id. Grows as walk steps land; empty until the first step. Safe to read
+    /// from any thread.</summary>
+    public IReadOnlyList<NamedEntity> KnownWorkspaceLists => _knownWorkspaceLists;
+
+    /// <summary>
+    /// Runs one bounded step of the workspace list-hierarchy walk (#236): on the first call of a
+    /// pass, enumerates the workspace's spaces; each call then walks up to
+    /// <see cref="MaxSpacesPerWalkStep"/> of them (folderless lists + per-folder lists) and
+    /// accumulates the results into <see cref="KnownWorkspaceLists"/>. Returns
+    /// <see cref="WorkspaceListsResolution.PassComplete"/> when every space has been covered — the
+    /// caller stamps its cadence gate then, so the walk stays due (and keeps resuming) across
+    /// cycles mid-pass, and the <em>next</em> pass starts fresh after the gate's minimum age
+    /// (#246 ADR: mark ran at completion). Best-effort per space: a space whose walk fails is
+    /// skipped for this pass rather than failing the step.
+    /// </summary>
+    public async Task<WorkspaceListsResolution> ResolveWorkspaceListsAsync(CancellationToken ct = default)
+    {
+        _walkPendingSpaces ??= new Queue<NamedEntity>(await client.GetSpacesAsync(config.WorkspaceId, ct));
+
+        var step = new List<NamedEntity>();
+        while (step.Count < MaxSpacesPerWalkStep && _walkPendingSpaces.Count > 0)
+            step.Add(_walkPendingSpaces.Dequeue());
+
+        var found = new System.Collections.Concurrent.ConcurrentBag<NamedEntity>();
+        await Parallel.ForEachAsync(
+            step,
+            new ParallelOptions { MaxDegreeOfParallelism = MaxFanOutConcurrency, CancellationToken = ct },
+            async (space, token) =>
+            {
+                try
+                {
+                    // Within a space the calls run serially — concurrency comes from walking the
+                    // step's spaces side by side, so the step's in-flight ceiling is the step size,
+                    // comfortably under MaxFanOutConcurrency and the process-wide gate (#193).
+                    foreach (var list in await client.GetFolderlessListsAsync(space.Id, token))
+                        found.Add(list);
+                    foreach (var folder in await client.GetFoldersAsync(space.Id, token))
+                        foreach (var list in await client.GetListsInFolderAsync(folder.Id, token))
+                            found.Add(list);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException || !token.IsCancellationRequested)
+                {
+                    // Best-effort (#236): a space we can't walk contributes nothing this pass; the
+                    // next pass retries it. That includes an HttpClient timeout — a cancellation-typed
+                    // exception with our token unsignalled (RefreshService filters the same trap) —
+                    // which must not abort the whole step and drop the other spaces' results. Only a
+                    // genuine cancellation (token signalled: shutdown) propagates.
+                }
+            });
+
+        foreach (var list in found)
+            _knownListsById[list.Id] = list;
+        _knownWorkspaceLists = _knownListsById.Values.ToList();
+
+        var passComplete = _walkPendingSpaces.Count == 0;
+        if (passComplete)
+            _walkPendingSpaces = null; // next invocation starts a fresh pass (re-enumerating spaces)
+        return new WorkspaceListsResolution(_knownWorkspaceLists, passComplete);
     }
 
     /// <summary>

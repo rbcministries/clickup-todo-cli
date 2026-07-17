@@ -7,18 +7,23 @@ description: Validate TUI rendering, colors, and keypress latency end-to-end by 
 
 Runs the **real** `TodoApp` (real Terminal.Gui stack, no network) under a pseudo-terminal,
 drives it with keyboard escape sequences, and validates what a user would actually see by
-feeding all output through a real VT emulator (pyte). Everything needed is in `harness/`
-— do not rebuild this from scratch; it encodes several hard-won fixes (see Pitfalls).
+feeding all output through a real VT emulator (pyte). Everything needed lives in the harness
+project at `tests/ClickUpTodo.Tui.E2E/` — do not rebuild this from scratch; it encodes
+several hard-won fixes (see Pitfalls).
+
+The harness host (`Program.cs`) and its Python checks live in the test tree, **not** in this
+skill, so adding a scenario is an ordinary edit under `tests/` — no skill-directory writes.
+This file is the how-to; the code it drives is versioned alongside the app it exercises.
 
 ## Prerequisites
 
 ```bash
 pip install pyte                      # VT emulator for screen/color assertions
-dotnet build -c Release .claude/skills/tui-validate/harness/e2e.csproj
+dotnet build -c Release tests/ClickUpTodo.Tui.E2E/ClickUpTodo.Tui.E2E.csproj
 ```
 
-`DLL=.claude/skills/tui-validate/harness/bin/Release/net10.0/e2e.dll` below.
-The harness (`harness/Program.cs`) boots the app against a canned in-process ClickUp
+`DLL=tests/ClickUpTodo.Tui.E2E/bin/Release/net10.0/ClickUpTodo.Tui.E2E.dll` below.
+The harness (`tests/ClickUpTodo.Tui.E2E/Program.cs`) boots the app against a canned in-process ClickUp
 backend (a fake `HttpMessageHandler` — no sockets). Scenario knobs (env vars):
 
 - `E2E_TASKS=200` — task count (paging is exercised above 100)
@@ -31,7 +36,7 @@ backend (a fake `HttpMessageHandler` — no sockets). Scenario knobs (env vars):
 **1. Keypress latency** — time from sending `↓` to the redraw arriving:
 
 ```bash
-E2E_TASKS=200 timeout 90 python3 -u .claude/skills/tui-validate/harness/drive.py $DLL 10
+E2E_TASKS=200 timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/drive.py $DLL 10
 ```
 
 Baseline: ~50 ms median locally (dominated by the driver's 20 ms input poll + 25 fps
@@ -41,7 +46,7 @@ iteration cap). Investigate anything over ~150 ms sustained.
 final rendered screen text:
 
 ```bash
-E2E_TASKS=200 timeout 40 python3 -u .claude/skills/tui-validate/harness/screen_check.py $DLL 5 /tmp/screen.txt
+E2E_TASKS=200 timeout 40 python3 -u tests/ClickUpTodo.Tui.E2E/screen_check.py $DLL 5 /tmp/screen.txt
 ```
 
 Baseline: **~0.9 KB per Down-press** with the diff-flush output (default); the stock
@@ -52,8 +57,8 @@ regression here means unchanged cells are being re-flushed again.
 (boot → 3×`↓` → F1 help → Esc → `↓`), then a per-cell `char|fg|bg|reverse` signature dump:
 
 ```bash
-E2E_TASKS=200 timeout 60 python3 -u .claude/skills/tui-validate/harness/color_check.py $DLL /tmp/cells_new.txt
-E2E_TASKS=200 CLICKUP_TODO_NO_DIFF=1 timeout 60 python3 -u .claude/skills/tui-validate/harness/color_check.py $DLL /tmp/cells_stock.txt
+E2E_TASKS=200 timeout 60 python3 -u tests/ClickUpTodo.Tui.E2E/color_check.py $DLL /tmp/cells_new.txt
+E2E_TASKS=200 CLICKUP_TODO_NO_DIFF=1 timeout 60 python3 -u tests/ClickUpTodo.Tui.E2E/color_check.py $DLL /tmp/cells_stock.txt
 diff /tmp/cells_stock.txt /tmp/cells_new.txt
 ```
 
@@ -69,8 +74,8 @@ a VS16 sequence (🛠️), em-dashes, curly quotes, and a URL on the same lines 
 grapheme mix that exposed sparse-flush cursor drift in the field:
 
 ```bash
-E2E_TASKS=20 timeout 60 python3 -u .claude/skills/tui-validate/harness/detail_check.py $DLL /tmp/detail_new.txt
-E2E_TASKS=20 CLICKUP_TODO_NO_DIFF=1 timeout 60 python3 -u .claude/skills/tui-validate/harness/detail_check.py $DLL /tmp/detail_stock.txt
+E2E_TASKS=20 timeout 60 python3 -u tests/ClickUpTodo.Tui.E2E/detail_check.py $DLL /tmp/detail_new.txt
+E2E_TASKS=20 CLICKUP_TODO_NO_DIFF=1 timeout 60 python3 -u tests/ClickUpTodo.Tui.E2E/detail_check.py $DLL /tmp/detail_stock.txt
 diff /tmp/detail_stock.txt /tmp/detail_new.txt
 ```
 
@@ -95,10 +100,10 @@ wide/ambiguous-width graphemes; whole-row flushes are byte-identical to stock.
   iteration (cursor hide/home, periodic size query). Measure to a chunk containing row
   content; subtract the idle-window byte count from volume numbers.
 - **Kill stale harness processes before rebuilding** — a running instance holds the DLL
-  and `dotnet build` silently leaves the old binary in place. Run `pkill -f '[e]2e.dll'`
+  and `dotnet build` silently leaves the old binary in place. Run `pkill -f '[C]lickUpTodo.Tui.E2E.dll'`
   as its **own** shell command: chained into a compound command whose later arguments
-  mention `e2e.dll`, `pkill -f` matches the shell's own command line and kills it
-  (exit 144).
+  mention the DLL name, `pkill -f` matches the shell's own command line and kills it
+  (exit 144). (The `[C]…` bracket keeps the pattern from matching the `pkill` line itself.)
 - Failure dumps show the *last* 1500 bytes, which is always idle chatter — read the whole
   captured stream (or the pyte screen) before concluding the app rendered nothing.
 

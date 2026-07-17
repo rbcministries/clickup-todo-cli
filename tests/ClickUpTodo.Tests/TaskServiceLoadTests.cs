@@ -6,9 +6,10 @@ namespace ClickUpTodo.Tests;
 
 /// <summary>
 /// Unit tests for <see cref="TaskService.LoadAsync"/>'s fetch wiring — specifically that the F12
-/// "Show Completed" toggle (#178) threads <c>ViewSettings.ShowCompleted</c> into the
-/// <c>includeClosed</c> flag on both the assigned-tasks and personal-list fetches, so completed
-/// (closed-type) tasks are only requested when the toggle is on.
+/// completed view (#178/#191) threads <c>ViewSettings.IncludesClosedTasks</c> into the
+/// <c>includeClosed</c> flag on both the assigned-tasks and personal-list fetches, so closed-type
+/// tasks are only requested in the All state. done-type tasks arrive regardless of the flag, so the
+/// Active and WithDone states both fetch open-only.
 /// </summary>
 public sealed class TaskServiceLoadTests
 {
@@ -50,18 +51,20 @@ public sealed class TaskServiceLoadTests
         public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
-    private static AppConfig Config(bool showCompleted) => new()
+    private static AppConfig Config(CompletedView completed) => new()
     {
         WorkspaceId = "ws",
         PersonalTasksListId = "list",
-        View = new ViewSettings { ShowCompleted = showCompleted },
+        View = new ViewSettings { Completed = completed },
     };
 
-    [Fact]
-    public async Task LoadAsync_ShowCompletedOff_FetchesOpenOnly()
+    [Theory]
+    [InlineData(CompletedView.Active)]
+    [InlineData(CompletedView.WithDone)] // done-type arrives regardless, so no wider fetch than Active
+    public async Task LoadAsync_NotAll_FetchesOpenOnly(CompletedView completed)
     {
         var fake = new FakeClient();
-        var service = new TaskService(fake, Config(showCompleted: false), userId: 1);
+        var service = new TaskService(fake, Config(completed), userId: 1);
 
         await service.LoadAsync();
 
@@ -70,10 +73,10 @@ public sealed class TaskServiceLoadTests
     }
 
     [Fact]
-    public async Task LoadAsync_ShowCompletedOn_IncludesClosedOnBothFetches()
+    public async Task LoadAsync_All_IncludesClosedOnBothFetches()
     {
         var fake = new FakeClient();
-        var service = new TaskService(fake, Config(showCompleted: true), userId: 1);
+        var service = new TaskService(fake, Config(CompletedView.All), userId: 1);
 
         await service.LoadAsync();
 

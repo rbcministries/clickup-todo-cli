@@ -78,3 +78,35 @@ public sealed class SubtaskViewExtensionsTests
         Assert.NotNull(SubtaskView.All.TitleFlag());
     }
 }
+
+/// <summary>Unit tests for the F12 cycle order and display text (<see cref="CompletedViewExtensions"/>, #191).</summary>
+public sealed class CompletedViewExtensionsTests
+{
+    [Fact]
+    public void Next_WrapsActive_WithDone_All()
+    {
+        // Pressing F12 walks default → + done → + done & closed → default (#191).
+        Assert.Equal(CompletedView.WithDone, CompletedView.Active.Next());
+        Assert.Equal(CompletedView.All, CompletedView.WithDone.Next());
+        Assert.Equal(CompletedView.Active, CompletedView.All.Next());
+    }
+
+    [Fact]
+    public void Next_ThreePresses_ReturnToStart()
+        => Assert.Equal(CompletedView.Active, CompletedView.Active.Next().Next().Next());
+
+    [Theory]
+    [InlineData(CompletedView.Active)]
+    [InlineData(CompletedView.WithDone)]
+    [InlineData(CompletedView.All)]
+    public void Describe_MentionsF12_ForEveryState(CompletedView state)
+        => Assert.Contains("F12", state.Describe());
+
+    [Fact]
+    public void TitleFlag_NullOnlyWhenActive()
+    {
+        Assert.Null(CompletedView.Active.TitleFlag());
+        Assert.NotNull(CompletedView.WithDone.TitleFlag());
+        Assert.NotNull(CompletedView.All.TitleFlag());
+    }
+}

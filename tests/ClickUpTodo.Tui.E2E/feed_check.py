@@ -7,7 +7,7 @@ back. Then F12 pulls in completed-ticket activity (a closed task's comment appea
 only while the toggle is on) and toggling it off drops it again, before Ctrl+E
 toggles back to the dashboard.
 
-Usage: feed_check.py <e2e.dll> [out.txt]
+Usage: feed_check.py <ClickUpTodo.Tui.E2E.dll> [out.txt]
 """
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte
