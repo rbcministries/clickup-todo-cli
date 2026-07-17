@@ -258,8 +258,22 @@ public sealed class TodoApp
 
     private const string WorkspaceListWalkGroup = "workspace-lists";
 
+    /// <summary>Minimum age between warm closed-task prefetches (#253): the set only bridges the F12→All
+    /// transition, so a few minutes of staleness is invisible (the on-demand refresh corrects it) while
+    /// keeping the extra include_closed=true fetch off the steady-state poll. A minimum age, not a period
+    /// — never-run ⇒ due, so it warms on the first background poll after startup and then rides the loop
+    /// (see <see cref="FetchCadenceGate"/>).</summary>
+    internal static readonly TimeSpan ClosedPrefetchMinAge = TimeSpan.FromMinutes(3);
+
+    private const string ClosedPrefetchGroup = "closed-prefetch";
+
+    // How many closed tasks the last prefetch's bounds dropped (#253); surfaced on the F12→All bridge so
+    // an over-cap warm set isn't a silent truncation. Written off-thread by the prefetch step, read on
+    // the UI thread — the int write/read is atomic and it's advisory, so volatile suffices.
+    private volatile int _closedPrefetchDropped;
+
     // Per-group cadence gate (#246 ADR): lets slow-cadence work ride the existing refresh loop
-    // instead of adding timers or a scheduler. Today's only group is the workspace list walk.
+    // instead of adding timers or a scheduler. Groups: the workspace list walk and the closed prefetch.
     private readonly FetchCadenceGate _cadence = new();
 
     /// <summary>
@@ -287,6 +301,20 @@ public sealed class TodoApp
             ? RunWorkspaceListWalkStepAsync(ct)
             : Task.FromResult(false);
 
+        // Warm the closed-task cache (#253) on its own slow cadence, gated three ways: only on a
+        // background Poll (never Initial/Manual — the warm set benefits a *future* F12→All, not the
+        // fetch the user is currently waiting on, so it must not add latency to a first or manual
+        // paint — unlike the walk, whose list cache feeds the current render); only while below the F12
+        // All state (in All the live snapshot already carries closed tasks, so it'd be a redundant
+        // include_closed=true fetch); and only when its minimum age has elapsed. Snapshot-INDEPENDENT
+        // like the walk, so it's decided here and awaited in both the empty-delta early return and the
+        // main path.
+        var closedPrefetch = kind == RefreshKind.Poll
+                             && !_config.View.IncludesClosedTasks
+                             && _cadence.IsDue(ClosedPrefetchGroup, ClosedPrefetchMinAge)
+            ? RunClosedPrefetchStepAsync(ct)
+            : Task.FromResult(false);
+
         // A provably-empty delta means the world hasn't changed: keep the previous resolver results
         // (context parents / foreign subtasks / list colors) instead of re-spending their round-trips.
         // Anything that changes what the resolvers should see (F3/F4/grouping edits) triggers a manual
@@ -295,6 +323,8 @@ public sealed class TodoApp
         {
             if (await walkFetch)
                 _cadence.MarkRan(WorkspaceListWalkGroup);
+            if (await closedPrefetch)
+                _cadence.MarkRan(ClosedPrefetchGroup);
             return snapshot.Tasks;
         }
 
@@ -321,8 +351,9 @@ public sealed class TodoApp
             : Task.FromResult(EmptyListColors);
 
         // WhenAll (rather than awaiting in turn) so a fault in one resolver still observes the others;
-        // the walk step joins the batch (#246 ADR), so a due walk costs the cycle max, not sum.
-        await Task.WhenAll(parentsFetch, foreignFetch, colorsFetch, walkFetch);
+        // the walk step and closed prefetch join the batch (#246 ADR), so a due slow-cadence job costs
+        // the cycle max, not sum.
+        await Task.WhenAll(parentsFetch, foreignFetch, colorsFetch, walkFetch, closedPrefetch);
 
         _contextParents = await parentsFetch;
         var foreign = await foreignFetch;
@@ -334,6 +365,8 @@ public sealed class TodoApp
         _listColors = await colorsFetch;
         if (await walkFetch)
             _cadence.MarkRan(WorkspaceListWalkGroup);
+        if (await closedPrefetch)
+            _cadence.MarkRan(ClosedPrefetchGroup);
         return tasks;
     }
 
@@ -366,6 +399,33 @@ public sealed class TodoApp
             // filters for): rethrown, it would fail the whole cycle as "Refresh failed" even though
             // the snapshot and resolvers succeeded.
             Debug.WriteLine($"Workspace list walk failed (backing off to its next window): {ex}");
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// One warm closed-task prefetch step (#253), wrapped best-effort exactly like the walk: the cache
+    /// only bridges the F12→All paint, so a failed fetch must not surface as "Refresh failed" when the
+    /// task rows were fine. Records how many the bounds dropped (for the bridge's truncation note) and
+    /// returns whether to stamp the cadence gate — true on both success and (backed-off) failure, so a
+    /// failing prefetch waits its full minimum age rather than retrying every poll (#246 ADR).
+    /// </summary>
+    private async Task<bool> RunClosedPrefetchStepAsync(CancellationToken ct)
+    {
+        try
+        {
+            _closedPrefetchDropped = await _tasks.PrefetchClosedTasksAsync(ct);
+            if (_closedPrefetchDropped > 0)
+                Debug.WriteLine($"Closed-task prefetch bounded its set, dropped {_closedPrefetchDropped} task(s).");
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw; // genuine shutdown — let the refresh loop's own handling see it
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Closed-task prefetch failed (backing off to its next window): {ex}");
             return true;
         }
     }
@@ -826,7 +886,20 @@ public sealed class TodoApp
         var next = _config.View.Completed.Next();
         _config.View.Completed = next;
         _configStore.Save(_config);
-        Flash(next.Describe());
+
+        // Bridge paint (#253): entering All, splice the warm closed set into the snapshot so closed rows
+        // appear immediately instead of after the on-demand include_closed=true fetch below returns. The
+        // authoritative refresh replaces _all with a superset, so this is a transient bridge, never an
+        // overlay; SupplementWithClosed returns the same instance (no-op) when the cache is empty or its
+        // tasks are already present.
+        var flash = next.Describe();
+        if (next == CompletedView.All)
+        {
+            _all = _tasks.SupplementWithClosed(_all);
+            if (_closedPrefetchDropped > 0)
+                flash += " Older completed omitted until refresh.";
+        }
+        Flash(flash);
 
         Render(keepTaskId: CurrentTask()?.Id);
         _signature = CurrentSignature(_all);
