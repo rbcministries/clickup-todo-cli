@@ -1,3 +1,5 @@
+using ClickUpTodo.Agent;
+using ClickUpTodo.Configuration;
 using ClickUpTodo.Tui.Screens;
 
 namespace ClickUpTodo.Tests;
@@ -74,4 +76,18 @@ public sealed class DispatchPaneModelTests
     public void PreferredHeightWithBrowser_SumsRowsPlusBorder(
         int above, int browser, int below, int expected)
         => Assert.Equal(expected, DispatchPaneModel.PreferredHeightWithBrowser(above, browser, below));
+
+    // ── per-dispatch launch location (#275) ──────────────────────────────────────────
+
+    [Theory]
+    [InlineData(AgentSessionMode.Interactive, true)]
+    [InlineData(AgentSessionMode.OneOff, false)] // a one-off -p run has no terminal ⇒ toggle greyed out
+    public void LaunchLocationApplies_OnlyForInteractive(AgentSessionMode mode, bool expected)
+        => Assert.Equal(expected, DispatchPaneModel.LaunchLocationApplies(mode));
+
+    [Theory]
+    [InlineData(true, LaunchLocation.NewTab)]   // checked ⇒ new tab of the current terminal
+    [InlineData(false, LaunchLocation.NewWindow)] // unchecked ⇒ the historical new-window default
+    public void ToLaunchLocation_MapsCheckedStateToLocation(bool newTabChecked, LaunchLocation expected)
+        => Assert.Equal(expected, DispatchPaneModel.ToLaunchLocation(newTabChecked));
 }

@@ -312,6 +312,53 @@ public sealed class AgentDispatcherTests : IDisposable
         Assert.True(launcher.OneOff);
     }
 
+    // ── per-dispatch launch location override (#275) ─────────────────────────────────
+
+    [Fact]
+    public async Task DispatchAsync_ThreadsLaunchLocationOverride_ToLauncherOptions()
+    {
+        var launcher = new FakeLauncher();
+        // Constructor options default LaunchLocation to NewWindow; the per-dispatch override (#275)
+        // flips just this launch to NewTab.
+        var options = new TerminalLauncherOptions { ClaudeExecutable = "claude-dev", ExtraArgs = ["--model", "opus"] };
+        var dispatcher = new AgentDispatcher(launcher, options, _dir);
+
+        await dispatcher.DispatchAsync(Detail(), Comments(), "go", launchLocation: LaunchLocation.NewTab);
+
+        Assert.Equal(LaunchLocation.NewTab, launcher.Options!.LaunchLocation);
+        // Only the launch location is overridden — the rest of the settings-derived options survive.
+        Assert.Equal("claude-dev", launcher.Options!.ClaudeExecutable);
+        Assert.Equal(["--model", "opus"], launcher.Options!.ExtraArgs);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_NoLaunchLocationOverride_KeepsConfiguredOptionsInstance()
+    {
+        var launcher = new FakeLauncher();
+        var options = new TerminalLauncherOptions { LaunchLocation = LaunchLocation.NewTab };
+        var dispatcher = new AgentDispatcher(launcher, options, _dir);
+
+        // Omitting the override leaves the settings-derived options untouched — same instance, so the
+        // configured LaunchLocation (here NewTab) still applies.
+        await dispatcher.DispatchAsync(Detail(), Comments(), "go");
+
+        Assert.Same(options, launcher.Options);
+        Assert.Equal(LaunchLocation.NewTab, launcher.Options!.LaunchLocation);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_LaunchLocationOverride_WinsOverConfiguredDefault()
+    {
+        var launcher = new FakeLauncher();
+        var options = new TerminalLauncherOptions { LaunchLocation = LaunchLocation.NewTab };
+        var dispatcher = new AgentDispatcher(launcher, options, _dir);
+
+        // An explicit NewWindow override beats a NewTab settings default for this one launch.
+        await dispatcher.DispatchAsync(Detail(), Comments(), "go", launchLocation: LaunchLocation.NewWindow);
+
+        Assert.Equal(LaunchLocation.NewWindow, launcher.Options!.LaunchLocation);
+    }
+
     // ── Settings → dispatcher wiring (#91, #100) ─────────────────────────────────────
     // These mirror the glue TodoApp performs (options from ToLauncherOptions, working dir from
     // ResolveWorkingDirectory, template from settings) at the unit-testable dispatcher seam, since
