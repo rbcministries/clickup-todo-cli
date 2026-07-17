@@ -129,8 +129,9 @@ dotnet publish src/ClickUpTodo/ClickUpTodo.csproj -c Release \
 target, and it's the only OS where the ClickUp token is **encrypted at rest** (Windows DPAPI,
 current-user scope). On non-Windows the token store falls back to an **unencrypted file** and
 macOS is untested end-to-end, so `linux-x64` and `osx-arm64` are held out of the release matrix
-(commented in `release.yml`, one line to re-enable) until they've been alpha-tested on real
-hardware. Contributors on any OS run from source via `dotnet run` regardless. A one-page
+(commented in `release.yml`, one line to re-enable). **Re-enabling them is gated on the
+cross-platform readiness epic (#312)** — see §11. Contributors on any OS run from source via
+`dotnet run` regardless. A one-page
 [beta tester guide](#10-feedback--contribution-loop) tells testers: download, run, paste token,
 known limitations (including the SmartScreen prompt on the unsigned exe).
 
@@ -203,11 +204,24 @@ git push origin v0.1.0-beta.1   # -> workflow builds binaries + tool, publishes 
 
 ## 11. Open decisions / blockers
 
+- **#312 — cross-platform (macOS/Linux) release readiness (gate for non-Windows binaries).**
+  The `linux-x64` / `osx-arm64` release artifacts stay disabled until this epic's
+  investigations are resolved or explicitly accepted as non-blocking. Children:
+  - **#306** — secure token storage at rest (today the token is stored **unencrypted** on
+    non-Windows; DPAPI is Windows-only).
+  - **#307** — agent-dispatch terminal launch (Windows-centric today).
+  - **#308** — open-in-browser (`open` / `xdg-open`).
+  - **#309** — TUI rendering & keybindings (F-keys, Option/Alt, glyph width, color).
+  - **#310** — macOS Gatekeeper/quarantine & Linux exec bit for distributed binaries.
+  - **#311** — clean-machine first-run smoke test on each OS.
+
+  This gate does **not** affect the Windows beta or contributors running from source.
 - **#39 — name/identifier rename.** Decide the public command name, package id, and
   namespace *before* the first public NuGet publish; the id is effectively permanent.
   Not a blocker for GitHub-Release-binary betas.
 - **Code signing.** Windows SmartScreen will warn on an unsigned single-file exe. For beta,
   document "click More info → Run anyway"; consider a signing cert before wide/stable rollout.
+  (macOS notarization is tracked under #310.)
 - **#2 — ClickUp API v3.** A vendor-dependent watch item, **not** a release blocker.
 - **License/attribution.** MIT is set; the OpenAPI-spec provenance note in the README covers
   the generated client. No action needed for release.

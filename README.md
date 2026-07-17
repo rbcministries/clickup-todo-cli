@@ -50,8 +50,12 @@ On first launch the app walks you through a short setup:
 4. **Pick a refresh interval** (default 60 seconds).
 
 Settings are saved to `%APPDATA%\clickup-todo\config.json` (on Windows) or
-`~/.config/clickup-todo/config.json` elsewhere. The token is stored **encrypted at rest** using
-Windows DPAPI (current-user scope); on other platforms it falls back to a base64-obfuscated file.
+`~/.config/clickup-todo/config.json` elsewhere. On **Windows** the token is stored
+**encrypted at rest** using DPAPI (current-user scope). On **other platforms** it currently
+falls back to an **unencrypted file** on disk — strengthening this with the OS secret store
+(macOS Keychain / Linux Secret Service) is tracked in
+[#306](https://github.com/rbcministries/clickup-todo-cli/issues/306) and is a prerequisite for
+publishing pre-built macOS/Linux binaries. Running from source is unaffected.
 
 Run `clickup-todo --reset` to forget the token and settings and start over.
 
