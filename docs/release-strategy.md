@@ -21,19 +21,21 @@ The strategy optimizes for the first group without penalizing the other two.
 ## 2. Release channels & versioning
 
 We use [SemVer](https://semver.org/) with a **pre-1.0** posture (UX and config schema may
-still shift between minors). Two channels, both cut from `main` as git tags — there is **no
-long-lived `develop` branch** (see §3):
+still shift between minors). Both channels are cut by **creating a GitHub Release from the
+repo's Releases UI** — which creates the tag (targeting `main`) and its auto-generated notes —
+and the release workflow then attaches the built binaries. There is **no long-lived `develop`
+branch** (see §3):
 
-- **Beta channel** — prerelease tags `vX.Y.Z-beta.N` (e.g. `v0.1.0-beta.1`).
-  Published as a GitHub Release marked **pre-release** and, for the tool, a NuGet
-  **prerelease** package. This is the channel co-worker testers track.
-- **Stable / "main" channel** — release tags `vX.Y.Z` (e.g. `v0.1.0`).
-  A full GitHub Release + stable NuGet package. Promoted from a beta that has soaked
-  without P1 bugs.
+- **Beta channel** — prerelease tags `vX.Y.Z-beta.N` (e.g. `v0.1.0-beta.1`), created with
+  **"Set as a pre-release"** checked and, for the tool, a NuGet **prerelease** package. This is
+  the channel co-worker testers track.
+- **Stable / "main" channel** — release tags `vX.Y.Z` (e.g. `v0.1.0`), a full (non-pre)
+  GitHub Release + stable NuGet package. Promoted from a beta that has soaked without P1 bugs.
 
-The package/assembly version is **driven from the tag** at release time
-(`dotnet pack -p:Version=${TAG#v}`), so `<Version>` in the csproj stays the in-development
-baseline and never has to be hand-bumped per beta.
+The package/assembly version is **driven from the release tag** at build time
+(`-p:Version=${TAG#v}`), so `<Version>` in the csproj stays the in-development baseline and
+never has to be hand-bumped per beta. Whether a release is a pre-release is decided in the UI
+(the checkbox), not inferred by the workflow.
 
 **Version bumping rule (pre-1.0):**
 - Bug-fix-only beta → bump `-beta.N`.
@@ -154,41 +156,52 @@ Unchanged from the README: `dotnet run --project src/ClickUpTodo`, `dotnet test`
 
 ## 8. Release automation
 
-A tag-triggered [`.github/workflows/release.yml`](../.github/workflows/release.yml) implements
-this, complementing the existing `ci.yml` (build + test on `main`/PRs):
+A release-triggered [`.github/workflows/release.yml`](../.github/workflows/release.yml)
+implements this, complementing the existing `ci.yml` (build + test on `main`/PRs). It matches
+how we release in practice: a maintainer **creates the Release from the Releases UI** (new tag,
+auto-generated notes, pre-release checkbox), and the workflow **attaches the binaries to that
+existing Release**:
 
-- **Trigger:** push of a tag matching `v*`.
+- **Trigger:** a GitHub Release being **published** (`on: release: [published]`). Because
+  `release` events only fire from the workflow on the **default branch**, this is live once
+  merged to `main`.
 - **`test` job (gate):** restore → build → `dotnet test`; the rest of the pipeline never runs
   on a red build.
 - **`build` job (matrix):** one self-contained, single-file executable per RID, each on its
-  **native OS** runner so ReadyToRun is valid; version injected via `-p:Version=${TAG#v}`;
-  staged as `clickup-todo-<version>-<rid>[.exe]`. **Only `win-x64` is active today** —
-  `linux-x64` / `osx-arm64` are commented out in the matrix pending epic #312 (§7a/§11).
-- **`release` job:** `dotnet pack` the global tool → gather all binaries → `gh release create`
-  with `--generate-notes`, marking it **pre-release** when the tag version contains a `-`
-  (e.g. `-beta.1`). `dotnet nuget push` is intentionally left out until the package id is
-  settled (#39).
-- **Release notes:** auto-generated from PR titles since the previous tag; hand-edit a short
-  "highlights + known issues" header before or just after publishing.
+  **native OS** runner so ReadyToRun is valid; version injected via
+  `-p:Version=${release.tag_name#v}`; staged as `clickup-todo-<version>-<rid>[.exe]`. **Only
+  `win-x64` is active today** — `linux-x64` / `osx-arm64` are commented out in the matrix
+  pending epic #312 (§7a/§11).
+- **`release` job:** `dotnet pack` the global tool → gather all binaries →
+  `gh release upload <tag> … --clobber` onto the triggering Release. It does **not** create the
+  release or generate notes (the UI already did) and does **not** set the pre-release flag (the
+  UI checkbox owns that). `--clobber` makes re-runs idempotent. `dotnet nuget push` is left out
+  until the package id is settled (#39).
+- **Release notes:** the UI's "Generate release notes" produces them from merged PRs; hand-edit
+  a short "highlights + known issues" header when creating the release.
 
 **Cutting the first beta** (once this PR is on `main`):
 
-```bash
-git checkout main && git pull
-git tag v0.1.0-beta.1
-git push origin v0.1.0-beta.1   # -> workflow builds binaries + tool, publishes a pre-release
-```
+1. Repo → **Releases → Draft a new release**.
+2. **Choose a tag** → type `v0.1.0-beta.1` → "Create new tag on publish" (target `main`).
+3. Click **Generate release notes**; add a short highlights/known-issues header.
+4. Check **Set as a pre-release**.
+5. **Publish release.** The workflow runs and attaches
+   `clickup-todo-0.1.0-beta.1-win-x64.exe` (+ the `.nupkg`) to it.
 
-## 9. Release checklist (per tag)
+## 9. Release checklist (per release)
 
 1. All intended PRs merged; `main` CI green.
 2. `dotnet test clickup-todo.slnx` green locally; `tui-validate` run for any rendering-touching change.
 3. Close any epics that have hit 100% so the board reflects the shipped scope.
-4. Draft release notes: highlights, known limitations, the ClickUp-token setup reminder,
-   and the mentions-automation caveat (`docs/mention-assignee-automation.md`).
-5. Tag `vX.Y.Z[-beta.N]` on `main` and push → release workflow produces artifacts.
-6. Verify the `win-x64` binary launches and completes first-run setup on a clean machine.
-7. Announce to testers with the download link + tester guide.
+4. In the Releases UI: draft the release, create tag `vX.Y.Z[-beta.N]` (target `main`),
+   **Generate release notes**, and add a highlights/known-limitations header (include the
+   ClickUp-token setup reminder and the mentions-automation caveat,
+   `docs/mention-assignee-automation.md`). Tick **Set as a pre-release** for a beta.
+5. **Publish** the release → the workflow builds and attaches the artifacts.
+6. Confirm the workflow's three jobs go green and the `win-x64` `.exe` (+ `.nupkg`) are attached.
+7. Verify the `win-x64` binary launches and completes first-run setup on a clean machine.
+8. Announce to testers with the download link + tester guide.
 
 ## 10. Feedback & contribution loop
 

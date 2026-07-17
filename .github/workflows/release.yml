@@ -1,24 +1,26 @@
 name: Release
 
-# Cut a release by pushing a tag:
-#   git tag v0.1.0-beta.1 && git push origin v0.1.0-beta.1   # -> pre-release
-#   git tag v0.1.0        && git push origin v0.1.0           # -> stable release
+# How we release: a maintainer creates the GitHub Release from the repo's **Releases UI**
+# — new tag, "Generate release notes", and "Set as a pre-release" for a beta. Publishing it
+# fires this workflow, which builds the artifacts and ATTACHES them to that existing Release.
+# (The Release and its notes already exist by the time this runs — it just has no binaries yet.)
 #
-# The version is derived from the tag (leading "v" stripped) and injected into
-# both the self-contained binaries and the packed .NET global tool, so the csproj
-# <Version> never has to be hand-bumped per release. A tag whose version contains a
-# "-" (SemVer pre-release, e.g. -beta.1) is published as a GitHub pre-release.
+# The version is derived from the release tag (leading "v" stripped) and injected into both the
+# self-contained binaries and the packed .NET global tool, so the csproj <Version> never has to
+# be hand-bumped per release. Whether a release is a pre-release is decided in the UI, not here.
+#
+# Note: `release` events only trigger from the workflow file on the **default branch**, so this
+# takes effect once merged to `main`.
 
 on:
-  push:
-    tags:
-      - "v*"
+  release:
+    types: [published]
 
 permissions:
-  contents: write # required to create the GitHub Release
+  contents: write # required to upload assets to the Release
 
 jobs:
-  # Gate: never publish artifacts from a red build.
+  # Gate: never attach artifacts built from a red build.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -63,9 +65,11 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      - name: Compute version from tag
+      - name: Compute version from the release tag
         id: v
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Publish self-contained single file
         run: |
@@ -92,8 +96,8 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # Pack the framework-dependent global tool, gather every binary, and publish the
-  # GitHub Release with auto-generated notes.
+  # Pack the framework-dependent global tool, gather every binary, and attach them
+  # to the Release that triggered this run.
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -106,9 +110,11 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
-      - name: Compute version from tag
+      - name: Compute version from the release tag
         id: v
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Pack the .NET global tool
         run: |
@@ -130,22 +136,10 @@ jobs:
           echo "Release assets:"
           ls -la dist
 
-      - name: Mark pre-release for SemVer pre-release tags (e.g. -beta.N)
-        id: pre
-        run: |
-          if [[ "${{ steps.v.outputs.version }}" == *-* ]]; then
-            echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
-          else
-            echo "flag=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create GitHub Release
+      - name: Attach assets to the existing Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
+          gh release upload "${{ github.event.release.tag_name }}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes \
-            ${{ steps.pre.outputs.flag }} \
-            dist/*
+            --clobber
