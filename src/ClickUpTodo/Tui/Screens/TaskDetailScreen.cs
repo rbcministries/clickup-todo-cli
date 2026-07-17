@@ -1311,7 +1311,11 @@ public sealed class TaskDetailScreen : Screen
                     _savingDescription = false;
                     if (_disposed)
                         return; // the detail screen was closed mid-save — don't touch torn-down views
-                    UpdateData(_task with { Description = confirmed }, _comments);
+                    // Prefer the server-confirmed value, but fall back to what we sent if the PUT
+                    // response omitted the description text (a partial response would otherwise blank a
+                    // just-saved non-empty body until the next refresh). Safe for the clear case too:
+                    // there `text` is "", which renders "(no description)" exactly as a null would.
+                    UpdateData(_task with { Description = confirmed ?? text }, _comments);
                     HideDescriptionEditor();
                     RequestFlash("Description saved.");
                 });
