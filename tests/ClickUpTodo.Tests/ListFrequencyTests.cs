@@ -256,4 +256,22 @@ public sealed class ListFrequencyTests
 
         Assert.Equal(["L1", "L5"], top.Select(l => l.Id)); // Alpha (count 1) ahead of Newcomer (count 0)
     }
+
+    [Fact]
+    public void Seed_ThenAccumulateSameList_PromotesToCountOne_AndRefreshesName()
+    {
+        // The two-feed interaction: the walk seeds a list at count 0, then a task on that same list
+        // arrives on a later refresh. The seeded entry (empty TaskIds) must promote to count 1 and
+        // adopt the task's list name — not stay stuck at 0 or spawn a duplicate.
+        var acc = new Dictionary<string, ListFrequencyEntry>(StringComparer.Ordinal);
+        ListFrequency.Seed(acc, [new NamedEntity("L1", "Archive")]);
+        Assert.Equal(0, acc["L1"].Count);
+
+        var changed = ListFrequency.Accumulate(acc, [Task("t1", "L1", "Archive (renamed)")]);
+
+        Assert.True(changed);
+        Assert.Single(acc);                          // promoted in place, no duplicate
+        Assert.Equal(1, acc["L1"].Count);            // 0 → 1
+        Assert.Equal("Archive (renamed)", acc["L1"].Name);
+    }
 }

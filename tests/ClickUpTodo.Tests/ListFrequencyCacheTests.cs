@@ -9,7 +9,7 @@ namespace ClickUpTodo.Tests;
 /// <see cref="IStateStore"/> keyed per workspace, and the scheduled-walk (#236) seed feed. The pure
 /// ranking rules are covered by <see cref="ListFrequencyTests"/>. Mirrors
 /// <see cref="AssigneeFrequencyCacheTests"/>, but the cache owns no fetch delegate — the long tail is
-/// pushed in via <see cref="ListFrequencyCache.Seed"/>.
+/// pushed in via <see cref="ListFrequencyCache.SeedLists"/>.
 /// </summary>
 public sealed class ListFrequencyCacheTests : IDisposable
 {
@@ -113,13 +113,13 @@ public sealed class ListFrequencyCacheTests : IDisposable
     }
 
     [Fact]
-    public void Seed_AddsWalkLists_AsCountZeroCandidates_BelowTallied()
+    public void SeedLists_AddsWalkLists_AsCountZeroCandidates_BelowTallied()
     {
         var cache = new ListFrequencyCache(new JsonFileStateStore(_dir), "ws1");
         cache.RecordFromTasks([MakeTask("t1", "L1", "Alpha")]);
 
         // The scheduled walk (#236) discovers lists no task row surfaced — seed them count-0.
-        cache.Seed([new NamedEntity("L1", "Different"), new NamedEntity("L2", "Beta"), new NamedEntity("L3", "Cid")]);
+        cache.SeedLists([new NamedEntity("L1", "Different"), new NamedEntity("L2", "Beta"), new NamedEntity("L3", "Cid")]);
 
         var pool = cache.Match("").ToList();
         Assert.Equal(3, cache.Count);
@@ -130,28 +130,28 @@ public sealed class ListFrequencyCacheTests : IDisposable
     }
 
     [Fact]
-    public void Seed_PersistsOnlyWhenItAddsANewList()
+    public void SeedLists_PersistsOnlyWhenItAddsANewList()
     {
         var store = new CountingStateStore(new JsonFileStateStore(_dir));
         var cache = new ListFrequencyCache(store, "ws1");
 
-        cache.Seed([new NamedEntity("L1", "Alpha")]);
+        cache.SeedLists([new NamedEntity("L1", "Alpha")]);
         Assert.Equal(1, store.Saves);
 
         // Re-seeding an already-known list adds nothing → no extra write. The walk pushes its full
         // known-set every step, so this idempotence keeps it off the hot path.
-        cache.Seed([new NamedEntity("L1", "Alpha")]);
+        cache.SeedLists([new NamedEntity("L1", "Alpha")]);
         Assert.Equal(1, store.Saves);
 
-        cache.Seed([new NamedEntity("L2", "Beta")]);
+        cache.SeedLists([new NamedEntity("L2", "Beta")]);
         Assert.Equal(2, store.Saves);
     }
 
     [Fact]
-    public void Seed_SurvivesWarmRestart_AndTaskRowMergesIntoTheSeededEntry()
+    public void SeedLists_SurvivesWarmRestart_AndTaskRowMergesIntoTheSeededEntry()
     {
         var store = new JsonFileStateStore(_dir);
-        new ListFrequencyCache(store, "ws1").Seed([new NamedEntity("L1", "Alpha"), new NamedEntity("L2", "Beta")]);
+        new ListFrequencyCache(store, "ws1").SeedLists([new NamedEntity("L1", "Alpha"), new NamedEntity("L2", "Beta")]);
 
         // A later instance loads the seeded (count-0) pool, then a task row for L1 lifts it above the
         // still-count-0 L2 — merging into the seeded entry rather than creating a duplicate list.

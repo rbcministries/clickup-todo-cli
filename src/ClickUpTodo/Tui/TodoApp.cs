@@ -352,7 +352,7 @@ public sealed class TodoApp
             // Backfill the list-frequency pool's long tail (#238): seed every list the walk has
             // discovered as a count-0 candidate, so lists no task row surfaced are still searchable.
             // Additive and idempotent — lists already tallied keep their real count.
-            _lists.Seed(resolution.Lists);
+            _lists.SeedLists(resolution.Lists);
             return resolution.PassComplete;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

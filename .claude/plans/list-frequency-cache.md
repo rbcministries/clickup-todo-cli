@@ -53,7 +53,7 @@ step, not fetched by the cache.
 - `RecordFromTasks(IReadOnlyList<TaskItem>)` — the priority tier: `Accumulate` into the in-memory
   map; persists (one `store.Save`, try/catch so a failed write never breaks the refresh loop) only
   when it changed. Idempotent → a no-op on every steady-state poll.
-- `Seed(IReadOnlyList<NamedEntity> lists)` — the long-tail intake the walk pushes each step:
+- `SeedLists(IReadOnlyList<NamedEntity> lists)` — the long-tail intake the walk pushes each step:
   `ListFrequency.Seed` (count 0), persist only if it added a new list. Idempotent and additive, so
   re-pushing the full known-set every step stays off the hot path.
 - Query pass-throughs: `TopMostFrequent(n, exclude)`, `Match(query, exclude)`.
@@ -71,7 +71,7 @@ Add `public const string Lists = "lists";` (file backend → `lists.json`).
   `TodoApp` (and the E2E harness's `TodoApp` construction).
 - `TodoApp`: `_lists` field beside `_assignees`; `OnTasksLoaded` → `RecordFromTasks(tasks)` beside
   the assignee tally; `RunWorkspaceListWalkStepAsync` captures the resolution and calls
-  `_lists.Seed(resolution.Lists)`. No new focusable pane, no keybinding, no render change
+  `_lists.SeedLists(resolution.Lists)`. No new focusable pane, no keybinding, no render change
   (preserves #3 / #12).
 
 ## Tests (`tests/ClickUpTodo.Tests/ListFrequencyTests.cs`, `ListFrequencyCacheTests.cs`)
@@ -82,7 +82,7 @@ Add `public const string Lists = "lists";` (file backend → `lists.json`).
   `Seed` adds count-0 candidates without clobbering real counts/names.
 - Service: round-trips through a temp `JsonFileStateStore` (warm store survives a new instance);
   workspace-mismatch → clean miss; schema-version mismatch → miss; `RecordFromTasks` persists only
-  on change and never inflates across warm restart; `Seed` persists only when it adds a new list,
+  on change and never inflates across warm restart; `SeedLists` persists only when it adds a new list,
   survives a warm restart, and a later task row merges into the seeded entry (no duplicate).
 
 ## Invariants

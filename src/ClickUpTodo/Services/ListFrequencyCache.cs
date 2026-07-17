@@ -86,12 +86,13 @@ public sealed class ListFrequencyCache
         }
     }
 
-    /// <summary>Seed <paramref name="lists"/> as count-0 candidates so the long tail the task feed
-    /// never surfaces is still searchable/selectable. The intake the scheduled list-hierarchy walk
-    /// (#236) pushes into — additive only: lists already tallied keep their real count and name.
-    /// Idempotent (re-seeding already-known lists is a no-op) and cheap to call on every walk step;
-    /// persists only when it added a genuinely new list.</summary>
-    public void Seed(IReadOnlyList<NamedEntity> lists)
+    /// <summary>Seed the long tail: add <paramref name="lists"/> as count-0 candidates so lists the
+    /// task feed never surfaces are still searchable/selectable. The intake the scheduled list-hierarchy
+    /// walk (#236) pushes into — additive only: lists already tallied keep their real count and name.
+    /// Idempotent (the walk republishes its growing known-set each step, and re-seeding already-known
+    /// lists is a no-op) and cheap to call on every walk step; persists only when it added a genuinely
+    /// new list.</summary>
+    public void SeedLists(IReadOnlyList<NamedEntity> lists)
     {
         lock (_gate)
         {
@@ -117,10 +118,10 @@ public sealed class ListFrequencyCache
     }
 
     // Caller holds _gate. Serialising the write under the lock is deliberate: it satisfies IStateStore's
-    // "caller must serialise concurrent access to a key" contract (RecordFromTasks and Seed both run on
-    // the UI thread today, but the lock keeps the store safe regardless). Writes are rare — only on a
-    // genuinely new (list, task) pair, a name change, or a newly-seeded list — so holding the lock
-    // across the write is not a hot path.
+    // "caller must serialise concurrent access to a key" contract (RecordFromTasks runs on the UI
+    // thread, SeedLists completes on the background refresh thread that runs the walk). Writes are rare
+    // — only on a genuinely new (list, task) pair, a name change, or a newly-discovered list — so
+    // holding the lock across the write is not a hot path.
     private void Persist()
     {
         try
