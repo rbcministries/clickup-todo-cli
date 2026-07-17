@@ -192,12 +192,12 @@ git push origin v0.1.0-beta.1   # -> workflow builds binaries + tool, publishes 
 
 ## 10. Feedback & contribution loop
 
-- **Beta tester guide** — add `docs/beta-testing.md` (or `TESTING.md`): download link,
+- **Beta tester guide** — ✅ [`docs/beta-testing.md`](beta-testing.md): download link,
   first-run setup, what works / what's deferred, and how to report a bug.
-- **Contributor guide** — add `CONTRIBUTING.md`: build/test, the `tui-validate` gate,
-  the plan-then-issue workflow (`.claude/plans/`, `implement-issue`), and PR conventions
-  (Conventional-Commit titles, "Closes #N", squash merge).
-- **Issue templates** — `.github/ISSUE_TEMPLATE/` for `bug` and `enhancement`; a
+- **Contributor guide** — ✅ [`CONTRIBUTING.md`](../CONTRIBUTING.md): build/test, the
+  `tui-validate` gate, the plan-then-issue workflow (`.claude/plans/`, `implement-issue`), and
+  PR conventions (Conventional-Commit titles, "Closes #N", squash merge).
+- **Issue templates** — _(next step)_ `.github/ISSUE_TEMPLATE/` for `bug` and `enhancement`; a
   `beta-feedback` label to triage tester reports quickly.
 - **Feedback channel** — a pinned "Beta feedback" issue (or GitHub Discussion) as the
   low-friction catch-all for non-developer testers.
