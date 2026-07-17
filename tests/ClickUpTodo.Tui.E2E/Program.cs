@@ -46,7 +46,8 @@ var taskCache = new TaskCache(cacheStore);
 var feedCache = new FeedCache(cacheStore);
 var assignees = new AssigneeFrequencyCache(
     stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
-new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees).Run("ansi");
+var lists = new ListFrequencyCache(stateStore, config.WorkspaceId);
+new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists).Run("ansi");
 return;
 
 sealed class FakeClickUp(int taskCount) : HttpMessageHandler
