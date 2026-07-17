@@ -68,12 +68,13 @@ agent dispatch — and explicitly defers the in-progress creation/editing surfac
 | Persistent local cache & storage backend (LiteDB, staleness/TTL, closed-task prefetch) | #118 | ✅ 7/7 — close on release |
 | Agent dispatch (interactive + one-off `claude` sessions, working dirs, result posting) | #23, #90 | ✅ closed |
 
-### Land-before-cut (in-flight PRs)
+### Land-before-cut (in-flight PRs) — ✅ merged
 
-- **PR #300** — per-dispatch launch-location override (closes #275).
-- **PR #285** — `ListSelectorView` (closes #239; unblocks the New Task list selector).
+- **PR #300** — per-dispatch launch-location override (closes #275). ✅ merged.
+- **PR #285** — `ListSelectorView` (closes #239; unblocks the New Task list selector). ✅ merged.
 
-Merge both, confirm CI green, then tag `v0.1.0-beta.1`.
+Both are now on `main`. Once the release workflow (§8) lands, confirm CI green and tag
+`v0.1.0-beta.1`.
 
 ### Deferred to a later beta (intentionally out of the first cut)
 
@@ -148,18 +149,30 @@ Unchanged from the README: `dotnet run --project src/ClickUpTodo`, `dotnet test`
 
 ## 8. Release automation
 
-Add a tag-triggered `.github/workflows/release.yml` (sketch — not yet created):
+A tag-triggered [`.github/workflows/release.yml`](../.github/workflows/release.yml) implements
+this, complementing the existing `ci.yml` (build + test on `main`/PRs):
 
 - **Trigger:** push of a tag matching `v*`.
-- **Steps:** checkout → setup .NET 10 → `dotnet test` (gate) → matrix `dotnet publish`
-  for the three RIDs → `dotnet pack -p:Version=${TAG#v}` → create GitHub Release
-  (mark **pre-release** when the tag contains `-beta`) attaching the binaries and `.nupkg`
-  → (optional, once id is settled) `dotnet nuget push` to NuGet.
-- **Release notes:** auto-generate from squashed PR titles since the previous tag
-  (`gh release create --generate-notes` or GitHub's release-notes automation), then hand-edit
-  a short "highlights + known issues" header.
+- **`test` job (gate):** restore → build → `dotnet test`; the rest of the pipeline never runs
+  on a red build.
+- **`build` job (matrix):** one self-contained, single-file executable per RID
+  (`win-x64`, `linux-x64`, `osx-arm64`), each on its **native OS** runner so ReadyToRun is
+  valid; version injected via `-p:Version=${TAG#v}`; staged as
+  `clickup-todo-<version>-<rid>[.exe]`.
+- **`release` job:** `dotnet pack` the global tool → gather all binaries → `gh release create`
+  with `--generate-notes`, marking it **pre-release** when the tag version contains a `-`
+  (e.g. `-beta.1`). `dotnet nuget push` is intentionally left out until the package id is
+  settled (#39).
+- **Release notes:** auto-generated from PR titles since the previous tag; hand-edit a short
+  "highlights + known issues" header before or just after publishing.
 
-This mirrors the existing `ci.yml` (build + test on `main`/PRs) and adds the release leg.
+**Cutting the first beta** (once this PR is on `main`):
+
+```bash
+git checkout main && git pull
+git tag v0.1.0-beta.1
+git push origin v0.1.0-beta.1   # -> workflow builds binaries + tool, publishes a pre-release
+```
 
 ## 9. Release checklist (per tag)
 
