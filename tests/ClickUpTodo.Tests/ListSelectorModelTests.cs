@@ -237,4 +237,49 @@ public sealed class ListSelectorModelTests
     [Fact]
     public void ResolvePrimary_EmptySelection_ReturnsNull()
         => Assert.Null(ListSelectorModel.ResolvePrimary(selection: [], distinguishedSelection: []));
+
+    // ── Membership (Quick Updates List pane seed / confirmed set, #242) ───────────
+
+    [Fact]
+    public void Membership_HomeFirst_ThenAdditional()
+    {
+        var membership = ListSelectorModel.Membership(
+            home: L("home", "Inbox"),
+            additional: [L("1", "Backlog"), L("2", "Sprint")]);
+
+        Assert.Equal([L("home", "Inbox"), L("1", "Backlog"), L("2", "Sprint")], membership);
+    }
+
+    [Fact]
+    public void Membership_CommonSingleListCase_IsJustTheHomeList()
+        => Assert.Equal([L("home", "Inbox")], ListSelectorModel.Membership(L("home", "Inbox"), []));
+
+    [Fact]
+    public void Membership_NullHome_KeepsOnlyAdditional()
+        => Assert.Equal([L("1", "Backlog")], ListSelectorModel.Membership(home: null, [L("1", "Backlog")]));
+
+    [Fact]
+    public void Membership_DropsBlankIdOrName()
+    {
+        var membership = ListSelectorModel.Membership(
+            home: L("home", "Inbox"),
+            additional: [L("", "No id"), L("2", "  "), L("3", "Sprint")]);
+
+        Assert.Equal([L("home", "Inbox"), L("3", "Sprint")], membership);
+    }
+
+    [Fact]
+    public void Membership_DedupesById_FirstWins()
+    {
+        // A location that coincides with the home list (or repeats) appears once, keeping the first name.
+        var membership = ListSelectorModel.Membership(
+            home: L("home", "Inbox"),
+            additional: [L("home", "Inbox (dup)"), L("2", "Sprint"), L("2", "Sprint again")]);
+
+        Assert.Equal([L("home", "Inbox"), L("2", "Sprint")], membership);
+    }
+
+    [Fact]
+    public void Membership_NullHomeAndNoAdditional_IsEmpty()
+        => Assert.Empty(ListSelectorModel.Membership(home: null, []));
 }

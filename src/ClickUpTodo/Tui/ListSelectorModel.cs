@@ -86,6 +86,31 @@ public static class ListSelectorModel
         return selection.Count > 0 ? selection[0] : null;
     }
 
+    /// <summary>
+    /// A task's full list membership — the <paramref name="home"/> list first (when its id is non-blank),
+    /// then the <paramref name="additional"/> "Tasks in Multiple Lists" locations. Ids are deduped
+    /// (ordinal, first wins) and blank-id/blank-name entries dropped, so a location that coincides with
+    /// the home list appears once. Used by the Quick Updates List pane (#242) to seed the selector and to
+    /// compute the server-confirmed set read back from <c>TaskDetail</c> after an add/remove.
+    /// </summary>
+    public static IReadOnlyList<NamedEntity> Membership(
+        NamedEntity? home, IReadOnlyList<NamedEntity> additional)
+    {
+        var result = new List<NamedEntity>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        void Add(NamedEntity? list)
+        {
+            if (list is not { } l || string.IsNullOrWhiteSpace(l.Id) || string.IsNullOrWhiteSpace(l.Name))
+                return;
+            if (seen.Add(l.Id))
+                result.Add(l);
+        }
+        Add(home);
+        foreach (var list in additional ?? [])
+            Add(list);
+        return result;
+    }
+
     // ── list ↔ base conversions ───────────────────────────────────────────────
 
     private static readonly ISet<string> EmptyStringSet = new HashSet<string>(StringComparer.Ordinal);
