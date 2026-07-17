@@ -189,15 +189,37 @@ public sealed class TaskService(
     /// <summary>Merged, de-duplicated, stably-ordered task snapshot.</summary>
     public async Task<IReadOnlyList<TaskItem>> LoadAsync(CancellationToken ct = default)
     {
-        // The two source fetches are independent, so the personal-list fetch overlaps assignee-id
-        // resolution + the assigned fetch (#192): wall-clock is the slower of the two, not their sum.
-        // WhenAll (rather than awaiting in turn) so a fault in one still observes the other.
-        // The F12 completed view (#178/#191) widens both fetches to include closed-type tasks only in
-        // its All state; when narrower, closed-type tasks are dropped server-side and TaskView hides any
-        // that still arrive (e.g. subtask anchors) — plus done-type when in Active — so hiding is
-        // consistent at every level. done-type tasks arrive regardless of this flag, so WithDone needs no
-        // wider fetch than Active.
-        var includeClosed = config.View.IncludesClosedTasks;
+        var snapshot = await FetchMergedAsync(config.View.IncludesClosedTasks, ct);
+
+        // Every full load re-baselines the delta state (#194) — here, not in LoadSnapshotAsync, so a
+        // direct caller can never leave the incremental path merging into a baseline older than what
+        // that caller saw. The watermark only advances: this fetch excludes closed tasks, so its own
+        // newest date_updated can sit behind a delta-advanced watermark (recently-closed churn), and
+        // regressing to it would make every resync re-download that churn window.
+        _lastSnapshot = snapshot;
+        if (MaxUpdatedMs(snapshot) is { } newest && (_watermarkMs is not { } current || newest > current))
+            _watermarkMs = newest;
+        return snapshot;
+    }
+
+    /// <summary>
+    /// Fetches and merges the two source endpoints (assigned-to-me ∪ Personal Tasks) into one
+    /// de-duplicated, stably-ordered snapshot at the requested closed-task breadth. Shared by
+    /// <see cref="LoadAsync"/> (which then re-baselines the delta state) and
+    /// <see cref="PrefetchClosedTasksAsync"/> (which must not touch that state) — so this helper is
+    /// deliberately delta-state-free.
+    /// <para>
+    /// The two source fetches are independent, so the personal-list fetch overlaps assignee-id
+    /// resolution + the assigned fetch (#192): wall-clock is the slower of the two, not their sum.
+    /// WhenAll (rather than awaiting in turn) so a fault in one still observes the other. The F12
+    /// completed view (#178/#191) widens both fetches to include closed-type tasks only in its All
+    /// state; when narrower, closed-type tasks are dropped server-side and TaskView hides any that still
+    /// arrive (e.g. subtask anchors) — plus done-type when in Active — so hiding is consistent at every
+    /// level. done-type tasks arrive regardless of this flag, so WithDone needs no wider fetch than Active.
+    /// </para>
+    /// </summary>
+    private async Task<List<TaskItem>> FetchMergedAsync(bool includeClosed, CancellationToken ct)
+    {
         var personalFetch = client.GetListTasksAsync(config.PersonalTasksListId, includeClosed, ct);
         var assignedFetch = LoadAssignedAsync(includeClosed, ct);
         await Task.WhenAll(assignedFetch, personalFetch);
@@ -210,21 +232,65 @@ public sealed class TaskService(
             byId[task.Id] = task;
 
         // Status exclusion is no longer a separate mechanism — it's ordinary "Status IS NOT" filter
-        // rules applied by TaskView.Filter at render time (#69). LoadAsync only fetches, merges, and
-        // orders; visibility is decided in exactly one place.
-        var snapshot = byId.Values
+        // rules applied by TaskView.Filter at render time (#69). This only fetches, merges, and orders;
+        // visibility is decided in exactly one place.
+        return byId.Values
             .OrderBy(t => t, TaskOrder.Instance)
             .ToList();
+    }
 
-        // Every full load re-baselines the delta state (#194) — here, not in LoadSnapshotAsync, so a
-        // direct caller can never leave the incremental path merging into a baseline older than what
-        // that caller saw. The watermark only advances: this fetch excludes closed tasks, so its own
-        // newest date_updated can sit behind a delta-advanced watermark (recently-closed churn), and
-        // regressing to it would make every resync re-download that churn window.
-        _lastSnapshot = snapshot;
-        if (MaxUpdatedMs(snapshot) is { } newest && (_watermarkMs is not { } current || newest > current))
-            _watermarkMs = newest;
-        return snapshot;
+    // Warm, bounded set of recently-closed tasks kept off the refresh loop (#253) so cycling F12 to
+    // All paints instantly instead of stalling on an on-demand include_closed=true fetch. Read on the
+    // UI thread (SupplementWithClosed / the bridge paint), written from the background prefetch.
+    private readonly ClosedTaskCache _closedCache = new(timeProvider);
+
+    /// <summary>The warm closed-task set (newest first), empty until the first prefetch completes (#253).</summary>
+    public IReadOnlyList<TaskItem> WarmClosedTasks => _closedCache.Snapshot;
+
+    /// <summary>
+    /// Refreshes the warm closed-task cache (#253): fetches the snapshot with <c>include_closed=true</c>,
+    /// keeps only the closed-type tasks, and stores the bounded set. Runs on the slow cadence while the
+    /// view is below All (in All the live snapshot already carries closed tasks, so the caller skips it).
+    /// Deliberately does <b>not</b> touch the delta baseline (<see cref="_lastSnapshot"/> /
+    /// <see cref="_watermarkMs"/>) — a wider closed fetch must never advance the open-task watermark, or
+    /// the next resync would re-download the recently-closed churn window. Returns the count the bounds
+    /// dropped so the caller can surface a truncation note rather than capping silently.
+    /// </summary>
+    public async Task<int> PrefetchClosedTasksAsync(CancellationToken ct = default)
+    {
+        var merged = await FetchMergedAsync(includeClosed: true, ct);
+        var closed = merged.Where(IsClosed).ToList();
+        return _closedCache.Update(closed);
+    }
+
+    /// <summary>
+    /// Merges the warm closed set into <paramref name="snapshot"/> for the F12→All bridge paint (#253):
+    /// the live snapshot wins any id collision (it's the fresher copy), and the union is re-ordered with
+    /// the standard <see cref="TaskOrder"/>. When the cache is empty this returns <paramref name="snapshot"/>
+    /// unchanged. The authoritative on-demand refresh that follows replaces the snapshot with a superset,
+    /// so this is a transient bridge, never a persistent overlay. Pure and unit-testable.
+    /// </summary>
+    public IReadOnlyList<TaskItem> SupplementWithClosed(IReadOnlyList<TaskItem> snapshot)
+    {
+        var closed = _closedCache.Snapshot;
+        if (closed.Count == 0)
+            return snapshot;
+
+        var byId = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
+        foreach (var task in closed)
+        {
+            if (!string.IsNullOrEmpty(task.Id))
+                byId[task.Id] = task;
+        }
+        foreach (var task in snapshot) // snapshot wins collisions
+        {
+            if (!string.IsNullOrEmpty(task.Id))
+                byId[task.Id] = task;
+        }
+
+        return byId.Count == snapshot.Count
+            ? snapshot // every closed task was already present — no bridge needed
+            : byId.Values.OrderBy(t => t, TaskOrder.Instance).ToList();
     }
 
     // Assignee IS rules scope the assigned fetch server-side (#68). The default view's "Assignee IS
