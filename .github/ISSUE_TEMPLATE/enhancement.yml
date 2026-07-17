@@ -1,0 +1,44 @@
+name: 💡 Enhancement / feature request
+description: Suggest an improvement or a new capability.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! Describing the **problem** you're hitting is more useful than a
+        specific solution — it lets us find the best fit.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do, and where does the app get in the way today?
+      placeholder: When triaging, I want to reassign a task without leaving the list…
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like it to do? (Optional — a rough idea is fine.)
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the app does this touch?
+      options:
+        - Task list / triage
+        - Task Detail view
+        - Mentions & Comments feed
+        - Quick Updates (status / priority / assignees)
+        - New Task / writing content
+        - Agent dispatch
+        - Caching / performance
+        - Setup / auth / config
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: Anything you've tried, or other tools that do this well.

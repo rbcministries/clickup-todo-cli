@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 📖 Beta tester guide
+    url: https://github.com/rbcministries/clickup-todo-cli/blob/main/docs/beta-testing.md
+    about: New to the beta? Download, first-run setup, and what to expect.
+  - name: 🛠️ Contributing guide
+    url: https://github.com/rbcministries/clickup-todo-cli/blob/main/CONTRIBUTING.md
+    about: Running from source, tests, and how to send a pull request.

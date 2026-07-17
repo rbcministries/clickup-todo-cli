@@ -1,0 +1,76 @@
+name: 🐛 Bug report
+description: Something isn't working — including beta feedback.
+labels: ["bug", "beta-feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping test **ClickUp Simple CLI**! Small quirks and papercuts are worth
+        reporting too — that's what the beta is for. Please fill in what you can.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What went wrong, and what did you expect instead?
+      placeholder: I pressed Space to change a status and the row disappeared; I expected the status to update in place.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: A numbered list is ideal.
+      placeholder: |
+        1. Open the app
+        2. Move to a task on my Personal Tasks list
+        3. Press Space
+        4. …
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      description: The terminal/console you ran it in.
+      placeholder: Windows Terminal · PowerShell · conhost · iTerm2 · gnome-terminal
+  - type: dropdown
+    id: driver
+    attributes:
+      label: Driver
+      description: Shown in the status line at startup (or set via `--driver` / `CLICKUP_TODO_DRIVER`).
+      options:
+        - "ansi (default)"
+        - windows
+        - dotnet
+        - Not sure
+  - type: dropdown
+    id: install
+    attributes:
+      label: How are you running it?
+      options:
+        - Pre-built beta binary (from Releases)
+        - .NET global tool
+        - From source (dotnet run)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / build
+      description: The release you downloaded, or the commit if running from source.
+      placeholder: v0.1.0-beta.1
+  - type: textarea
+    id: extra
+    attributes:
+      label: Logs, screenshots, or extra context
+      description: Paste any error text or attach a screenshot. Redact any personal task content you'd rather not share.

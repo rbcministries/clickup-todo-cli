@@ -197,10 +197,13 @@ git push origin v0.1.0-beta.1   # -> workflow builds binaries + tool, publishes 
 - **Contributor guide** — ✅ [`CONTRIBUTING.md`](../CONTRIBUTING.md): build/test, the
   `tui-validate` gate, the plan-then-issue workflow (`.claude/plans/`, `implement-issue`), and
   PR conventions (Conventional-Commit titles, "Closes #N", squash merge).
-- **Issue templates** — _(next step)_ `.github/ISSUE_TEMPLATE/` for `bug` and `enhancement`; a
-  `beta-feedback` label to triage tester reports quickly.
-- **Feedback channel** — a pinned "Beta feedback" issue (or GitHub Discussion) as the
-  low-friction catch-all for non-developer testers.
+- **Issue templates** — ✅ `.github/ISSUE_TEMPLATE/` issue forms for `bug` (auto-labels
+  `bug` + `beta-feedback`) and `enhancement`, plus a `config.yml` that disables blank issues and
+  links the tester/contributor guides. **One manual step:** create the **`beta-feedback`** label
+  in the repo (Issues → Labels → New label) — GitHub can't create it from a file, and the bug
+  form starts applying it automatically once it exists.
+- **Feedback channel** — a pinned "Beta feedback" issue as the low-friction catch-all for
+  non-developer testers. _(next step — Discussions is currently disabled on the repo.)_
 
 ## 11. Open decisions / blockers
 
