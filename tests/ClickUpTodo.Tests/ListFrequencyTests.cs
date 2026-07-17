@@ -274,4 +274,54 @@ public sealed class ListFrequencyTests
         Assert.Equal(1, acc["L1"].Count);            // 0 → 1
         Assert.Equal("Archive (renamed)", acc["L1"].Name);
     }
+
+    // --- Merge (#293): union a concurrent tab's document into ours without losing either side --------
+
+    [Fact]
+    public void Merge_UnionsDistinctTaskSets_AndAddsUnknownLists()
+    {
+        var acc = new Dictionary<string, ListFrequencyEntry>(StringComparer.Ordinal);
+        ListFrequency.Accumulate(acc, [Task("t1", "L1", "Alpha")]);   // ours: L1 on {t1}
+
+        var changed = ListFrequency.Merge(acc,
+        [
+            new ListFrequencyEntry("L1", "Alpha", ["t1", "t2"]),      // other tab saw L1 on t2 too
+            new ListFrequencyEntry("L2", "Beta", ["t3"]),             // other tab learned L2
+        ]);
+
+        Assert.True(changed);
+        Assert.Equal(2, acc["L1"].Count);            // {t1} ∪ {t1,t2} = {t1,t2}
+        Assert.Equal(["t1", "t2"], acc["L1"].TaskIds);
+        Assert.Equal(1, acc["L2"].Count);            // Beta adopted
+        Assert.Equal("Beta", acc["L2"].Name);
+    }
+
+    [Fact]
+    public void Merge_IsIdempotent_MergingAnEqualOrSubsetSetChangesNothing()
+    {
+        var acc = new Dictionary<string, ListFrequencyEntry>(StringComparer.Ordinal);
+        ListFrequency.Accumulate(acc, [Task("t1", "L1", "Alpha"), Task("t2", "L1", "Alpha")]);
+
+        Assert.False(ListFrequency.Merge(acc, [new ListFrequencyEntry("L1", "Alpha", ["t1", "t2"])]));
+        Assert.False(ListFrequency.Merge(acc, [new ListFrequencyEntry("L1", "Alpha", ["t1"])]));
+        Assert.Equal(2, acc["L1"].Count);
+    }
+
+    [Fact]
+    public void Merge_KeepsOurKnownName_AndIgnoresInvalidRows()
+    {
+        var acc = new Dictionary<string, ListFrequencyEntry>(StringComparer.Ordinal);
+        ListFrequency.Accumulate(acc, [Task("t1", "L1", "Alpha")]);
+
+        ListFrequency.Merge(acc,
+        [
+            new ListFrequencyEntry("L1", "STALE", ["t1"]), // our non-blank name wins over the incoming one
+            new ListFrequencyEntry("  ", "Blank", ["t9"]), // blank id ignored
+            new ListFrequencyEntry("L3", "  ", ["t9"]),    // nameless new entry ignored
+        ]);
+
+        Assert.Equal("Alpha", acc["L1"].Name);
+        Assert.DoesNotContain("L3", acc.Keys);
+        Assert.Single(acc);
+    }
 }

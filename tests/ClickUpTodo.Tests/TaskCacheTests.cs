@@ -353,9 +353,31 @@ public sealed class TaskCacheTests : IDisposable
         Assert.Equal(TaskCache.KeyFor(Config(view: ab)), TaskCache.KeyFor(Config(view: ba)));
     }
 
+    [Fact]
+    public void Save_SwallowsWriteFailure_DoesNotThrow()
+    {
+        // The task cache is a throwaway warm-paint snapshot; a failed write (read-only/full disk, or
+        // LiteDB contention under multi-tab writes #293) must never break the refresh loop.
+        var cache = new TaskCache(new ThrowOnSaveStore());
+
+        var ex = Record.Exception(() => cache.Save(Config(), [Task("t1", "One")]));
+
+        Assert.Null(ex);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_dir))
             Directory.Delete(_dir, recursive: true);
+    }
+
+    /// <summary>A store whose write always fails — stands in for a read-only/full disk or a LiteDB
+    /// contention error, so a test can assert <see cref="TaskCache.Save"/> swallows it.</summary>
+    private sealed class ThrowOnSaveStore : IStateStore
+    {
+        public bool Exists(string key) => false;
+        public T? Load<T>(string key) where T : class => null;
+        public void Save<T>(string key, T value) where T : class => throw new IOException("disk full");
+        public void Delete(string key) { }
     }
 }

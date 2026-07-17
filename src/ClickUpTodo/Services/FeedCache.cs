@@ -141,12 +141,25 @@ public sealed class FeedCache
     /// just-fetched data under the wrong fingerprint.
     /// </summary>
     public void Save(string key, IReadOnlyList<CommentItem> items)
-        => _store.Save(StateKeys.Feed, new FeedCacheDocument
+    {
+        // A single "last snapshot wins" document by design, safe to leave racing across concurrent tabs
+        // (#293): it's non-authoritative (a throwaway warm-paint cache) and is re-aggregated from the API
+        // on the next launch, so a cross-process overwrite loses nothing but a launch's head-start. A
+        // failed write is swallowed for the same reason — it must never break the feed refresh.
+        try
         {
-            Key = key,
-            CapturedAtMs = _clock.GetUtcNow().ToUnixTimeMilliseconds(),
-            Items = items,
-        });
+            _store.Save(StateKeys.Feed, new FeedCacheDocument
+            {
+                Key = key,
+                CapturedAtMs = _clock.GetUtcNow().ToUnixTimeMilliseconds(),
+                Items = items,
+            });
+        }
+        catch
+        {
+            // Best-effort warm-cache persistence — see above. Non-fatal.
+        }
+    }
 
     /// <summary>Forget the cached feed (used by <c>--reset</c>). A no-op when nothing is cached.</summary>
     public void Clear() => _store.Delete(StateKeys.Feed);

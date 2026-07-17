@@ -63,7 +63,19 @@ public sealed class AssigneeFrequencyCache
 
     private void Load()
     {
-        var doc = _store.Load<AssigneeFrequencyDocument>(StateKeys.Assignees);
+        AssigneeFrequencyDocument? doc;
+        try
+        {
+            doc = _store.Load<AssigneeFrequencyDocument>(StateKeys.Assignees);
+        }
+        catch
+        {
+            // Any read failure — a malformed payload (older/incompatible shape or a torn write from a
+            // concurrent tab), or a LiteDB contention error under multi-tab startup (#293) — is a clean
+            // miss, never a crash: Load() runs synchronously in the constructor, so a throw here would
+            // brick the pane's owner. Start empty; the pool re-warms from the next poll.
+            return;
+        }
         // A missing document, a different workspace, or an incompatible schema all mean "no warm
         // pool" — start empty rather than surface stale/foreign people.
         if (doc is null
@@ -150,6 +162,24 @@ public sealed class AssigneeFrequencyCache
     // (person, task) pair or a name change — so holding the lock across the write is not a hot path.
     private void Persist()
     {
+        // Re-read the current document and union in any entries a concurrent tab learned after we loaded
+        // (#293), so this whole-set write doesn't clobber the other process's additions. A missing,
+        // foreign-workspace, incompatible, or torn/corrupt document is ignored — we then just write our
+        // own set. Merging our own just-written document back is a no-op (Merge is idempotent).
+        try
+        {
+            var disk = _store.Load<AssigneeFrequencyDocument>(StateKeys.Assignees);
+            if (disk is not null
+                && disk.SchemaVersion == CurrentSchemaVersion
+                && string.Equals(disk.WorkspaceId, _workspaceId, StringComparison.Ordinal))
+                AssigneeFrequency.Merge(_entries, disk.Entries);
+        }
+        catch
+        {
+            // A torn/hand-tampered disk document, or a LiteDB contention error on the re-read (#293) —
+            // skip the merge and write our own set. Best-effort; must never crash the refresh loop.
+        }
+
         try
         {
             var doc = new AssigneeFrequencyDocument(

@@ -267,9 +267,143 @@ public sealed class ConfigStoreTests : IDisposable
         Assert.True(new AppConfig { WorkspaceId = "1", PersonalTasksListId = "2" }.IsConfigured);
     }
 
+    [Fact]
+    public void Save_ThreeWayMerges_DoesNotClobberAConcurrentTabsFields()
+    {
+        // The concrete multi-tab clobber (#293): two tabs load the same config, each changes a
+        // different field, then both save. The second save used to overwrite the first tab's field with
+        // its stale startup value — the three-way merge now preserves both.
+        new ConfigStore(new JsonFileStateStore(_dir)).Save(new AppConfig
+        {
+            WorkspaceId = "1",
+            PersonalTasksListId = "2",
+            RefreshSeconds = 60,
+            BadgeDisplay = BadgeDisplay.Icons,
+        });
+
+        var tabA = new ConfigStore(new JsonFileStateStore(_dir));
+        var tabB = new ConfigStore(new JsonFileStateStore(_dir));
+        var a = tabA.Load();
+        var b = tabB.Load();
+
+        b.RefreshSeconds = 30;          // tab B changes the refresh interval
+        b.PinnedTaskIds.Add("pin-b");   // ...and pins a task
+        tabB.Save(b);
+
+        a.BadgeDisplay = BadgeDisplay.Text; // tab A changes only the badge display
+        tabA.Save(a);                       // must not revert refresh to 60 or drop pin-b
+
+        var final = new ConfigStore(new JsonFileStateStore(_dir)).Load();
+        Assert.Equal(30, final.RefreshSeconds);            // tab B's change preserved
+        Assert.Equal(["pin-b"], final.PinnedTaskIds);      // tab B's pin preserved
+        Assert.Equal(BadgeDisplay.Text, final.BadgeDisplay); // tab A's change applied
+    }
+
+    [Fact]
+    public void Save_SwallowsWriteFailure_DoesNotThrow()
+    {
+        // A failed settings write (read-only/full disk, or LiteDB contention when a second tab is
+        // writing #293) must never crash the UI action that triggered it (a pin toggle, an F3 change).
+        var store = new ConfigStore(new ThrowOnSaveStore());
+
+        var ex = Record.Exception(() => store.Save(new AppConfig { WorkspaceId = "1", PersonalTasksListId = "2" }));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void Save_WhenWriteFails_DoesNotAdvanceBaseline_SoTheChangeSurvivesTheNextSave()
+    {
+        // The baseline must advance only after a successful write. If a failed (swallowed) write
+        // advanced it, the un-persisted field would look "unchanged" on the retry and get reverted to
+        // whatever is on disk — silently losing the user's change (#293).
+        new ConfigStore(new JsonFileStateStore(_dir)).Save(new AppConfig
+        {
+            WorkspaceId = "1",
+            PersonalTasksListId = "2",
+            RefreshSeconds = 60,
+            BadgeDisplay = BadgeDisplay.Icons,
+        });
+
+        var faulty = new FaultyStore(new JsonFileStateStore(_dir));
+        var store = new ConfigStore(faulty);
+        var c = store.Load();               // baseline: refresh 60, badge Icons
+        c.BadgeDisplay = BadgeDisplay.Text; // local change
+
+        faulty.FailNextSave = true;
+        store.Save(c);                      // write throws → swallowed; disk unchanged; baseline must hold
+
+        // A concurrent tab changes the refresh on disk in the meantime.
+        new ConfigStore(new JsonFileStateStore(_dir)).Save(new AppConfig
+        {
+            WorkspaceId = "1",
+            PersonalTasksListId = "2",
+            RefreshSeconds = 30,
+            BadgeDisplay = BadgeDisplay.Icons,
+        });
+
+        store.Save(c);                      // retry: badge is still a real local change → must persist
+
+        var final = new ConfigStore(new JsonFileStateStore(_dir)).Load();
+        Assert.Equal(BadgeDisplay.Text, final.BadgeDisplay); // the change survived the failed write
+        Assert.Equal(30, final.RefreshSeconds);              // and the concurrent tab's change is kept
+    }
+
+    [Fact]
+    public void Save_WhenReReadThrows_DoesNotCrash()
+    {
+        // The merge re-read runs before the write, outside its try/catch. A contention/IO error there
+        // (not just a JsonException) must not escape Save and crash the triggering UI action (#293).
+        var faulty = new FaultyStore(new JsonFileStateStore(_dir));
+        var store = new ConfigStore(faulty);
+        store.Save(new AppConfig { WorkspaceId = "1", PersonalTasksListId = "2" }); // sets the baseline
+
+        faulty.FailReads = true; // the next Save's merge re-read will throw
+
+        var ex = Record.Exception(() =>
+            store.Save(new AppConfig { WorkspaceId = "1", PersonalTasksListId = "2", RefreshSeconds = 45 }));
+
+        Assert.Null(ex);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_dir))
             Directory.Delete(_dir, recursive: true);
+    }
+
+    /// <summary>A store whose write always fails — stands in for a read-only/full disk or a LiteDB
+    /// contention error, so a test can assert <see cref="ConfigStore.Save"/> swallows it.</summary>
+    private sealed class ThrowOnSaveStore : IStateStore
+    {
+        public bool Exists(string key) => false;
+        public T? Load<T>(string key) where T : class => null;
+        public void Save<T>(string key, T value) where T : class => throw new IOException("disk full");
+        public void Delete(string key) { }
+    }
+
+    /// <summary>Wraps a real store and can be armed to fail the next write (once) or all reads — lets a
+    /// test drive the failed-write and failed-re-read paths of <see cref="ConfigStore.Save"/> (#293).</summary>
+    private sealed class FaultyStore(IStateStore inner) : IStateStore
+    {
+        public bool FailNextSave;
+        public bool FailReads;
+
+        public bool Exists(string key) => inner.Exists(key);
+
+        public T? Load<T>(string key) where T : class
+            => FailReads ? throw new IOException("read contention") : inner.Load<T>(key);
+
+        public void Save<T>(string key, T value) where T : class
+        {
+            if (FailNextSave)
+            {
+                FailNextSave = false;
+                throw new IOException("disk full");
+            }
+            inner.Save(key, value);
+        }
+
+        public void Delete(string key) => inner.Delete(key);
     }
 }

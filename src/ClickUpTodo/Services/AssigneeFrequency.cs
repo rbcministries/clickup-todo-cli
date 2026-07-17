@@ -97,6 +97,58 @@ public static class AssigneeFrequency
     }
 
     /// <summary>
+    /// Folds an <paramref name="incoming"/> set (typically the pool a concurrent tab persisted after we
+    /// loaded — #293) into <paramref name="acc"/> without losing either side's tallies: for a person
+    /// already tallied, the distinct-task-id sets are <b>unioned</b> (so the count is the true union, not
+    /// last-writer-wins) and our known non-blank name is kept (else the incoming one is adopted); a
+    /// person we don't have is added wholesale. Non-positive ids and nameless new entries are ignored,
+    /// mirroring <see cref="Accumulate"/>/<see cref="Seed"/>. Mutates <paramref name="acc"/> in place and
+    /// returns <see langword="true"/> only when it changed. Idempotent — merging an equal-or-subset set
+    /// is a no-op — so re-reading and merging our own just-written document does nothing.
+    /// </summary>
+    public static bool Merge(
+        IDictionary<long, AssigneeFrequencyEntry> acc, IEnumerable<AssigneeFrequencyEntry> incoming)
+    {
+        var changed = false;
+        foreach (var entry in incoming)
+        {
+            if (entry.Id <= 0)
+                continue;
+            var incomingName = entry.Name?.Trim() ?? "";
+
+            if (acc.TryGetValue(entry.Id, out var existing))
+            {
+                var taskIds = new List<string>(existing.TaskIds);
+                var seen = new HashSet<string>(existing.TaskIds, StringComparer.Ordinal);
+                var added = false;
+                foreach (var taskId in entry.TaskIds)
+                    if (!string.IsNullOrEmpty(taskId) && seen.Add(taskId))
+                    {
+                        taskIds.Add(taskId);
+                        added = true;
+                    }
+
+                var name = !string.IsNullOrEmpty(existing.Name) ? existing.Name : incomingName;
+                if (added || !string.Equals(name, existing.Name, StringComparison.Ordinal))
+                {
+                    acc[entry.Id] = existing with { Name = name, TaskIds = taskIds };
+                    changed = true;
+                }
+            }
+            else if (incomingName.Length > 0)
+            {
+                var taskIds = entry.TaskIds
+                    .Where(t => !string.IsNullOrEmpty(t))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+                acc[entry.Id] = new AssigneeFrequencyEntry(entry.Id, incomingName, taskIds);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    /// <summary>
     /// The top <paramref name="n"/> candidates ranked by distinct-task count (desc), breaking ties by
     /// name (case-insensitive asc) then id — a total, deterministic order. Ids in
     /// <paramref name="exclude"/> (typically the task's current assignees) and blank-named entries are

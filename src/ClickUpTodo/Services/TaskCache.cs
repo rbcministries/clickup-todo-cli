@@ -131,14 +131,30 @@ public sealed class TaskCache
     }
 
     /// <summary>Persist <paramref name="tasks"/> as the cache for <paramref name="config"/>'s context,
-    /// stamped with the current time, replacing any prior document.</summary>
+    /// stamped with the current time, replacing any prior document.
+    /// <para>
+    /// This is a single "last snapshot wins" document by design, safe to leave racing across concurrent
+    /// tabs (#293): it's non-authoritative (a throwaway warm-paint cache) and is re-fetched from the API
+    /// on the next launch, so a cross-process overwrite loses nothing but a launch's head-start. A failed
+    /// write is swallowed for the same reason — it must never break the refresh loop that calls this.
+    /// </para></summary>
     public void Save(AppConfig config, IReadOnlyList<TaskItem> tasks)
-        => _store.Save(StateKeys.Tasks, new TaskCacheDocument
+    {
+        try
         {
-            Key = KeyFor(config),
-            CapturedAtMs = _clock.GetUtcNow().ToUnixTimeMilliseconds(),
-            Tasks = tasks,
-        });
+            _store.Save(StateKeys.Tasks, new TaskCacheDocument
+            {
+                Key = KeyFor(config),
+                CapturedAtMs = _clock.GetUtcNow().ToUnixTimeMilliseconds(),
+                Tasks = tasks,
+            });
+        }
+        catch
+        {
+            // Best-effort warm-cache persistence — see the summary. A read-only/full disk or a LiteDB
+            // contention error is non-fatal; the live working set is unaffected.
+        }
+    }
 
     /// <summary>Forget the cached working set (used by <c>--reset</c>). A no-op when nothing is cached.</summary>
     public void Clear() => _store.Delete(StateKeys.Tasks);

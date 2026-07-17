@@ -77,6 +77,67 @@ public sealed class AssigneeFrequencyCacheTests : IDisposable
     }
 
     [Fact]
+    public void Load_WithCorruptPayload_IsCleanMiss_NotCrash()
+    {
+        // A torn write from a concurrent tab (or a hand-tampered file) leaves malformed JSON under the
+        // key. Load runs in the constructor, so a throw would brick the pane's owner — #293 makes it a
+        // clean miss (empty pool) instead.
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(new JsonFileStateStore(_dir).PathFor(StateKeys.Assignees), "{ not valid json");
+
+        var cache = new AssigneeFrequencyCache(new JsonFileStateStore(_dir), "ws1", NoMembers);
+
+        Assert.Equal(0, cache.Count);
+        Assert.Empty(cache.TopMostFrequent(10));
+    }
+
+    [Fact]
+    public void ConstructorLoad_AndPersistReRead_SwallowNonJsonReadFailure_NotCrash()
+    {
+        // A LiteDB contention error (not a JsonException) — on the constructor load and on the persist
+        // re-read — must degrade to empty/skip, never crash: #293 broadened both guards past JsonException.
+        var cache = new AssigneeFrequencyCache(new ThrowOnLoadStore(), "ws1", NoMembers);
+
+        var ex = Record.Exception(() => cache.RecordFromTasks([MakeTask("t1", (1, "Ada"))]));
+
+        Assert.Null(ex);
+        Assert.Equal(1, cache.Count); // load degraded to empty; the poll's own tally lives on
+    }
+
+    [Fact]
+    public void RecordFromTasks_SwallowsWriteFailure_NotCrash()
+    {
+        // A failed persist (read-only/full disk, or LiteDB contention under multi-tab writes #293) must
+        // never crash the refresh loop that calls RecordFromTasks on the UI thread.
+        var cache = new AssigneeFrequencyCache(new ThrowOnSaveStore(), "ws1", NoMembers);
+
+        var ex = Record.Exception(() => cache.RecordFromTasks([MakeTask("t1", (1, "Ada"))]));
+
+        Assert.Null(ex);
+        Assert.Equal(1, cache.Count); // the pool lives on in memory
+    }
+
+    [Fact]
+    public void Persist_MergesAConcurrentTabsEntries_RatherThanClobbering()
+    {
+        // The concrete multi-tab clobber (#293): two tabs sharing one store both learn a different
+        // person. Tab B's whole-set write used to overwrite tab A's — now B re-reads and unions first.
+        var store = new JsonFileStateStore(_dir);
+        var tabA = new AssigneeFrequencyCache(store, "ws1", NoMembers);
+        var tabB = new AssigneeFrequencyCache(new JsonFileStateStore(_dir), "ws1", NoMembers);
+
+        tabA.RecordFromTasks([MakeTask("t1", (1, "Ada"))]); // disk: { Ada }
+        tabB.RecordFromTasks([MakeTask("t2", (2, "Bo"))]);  // merges disk (Ada) before writing → { Ada, Bo }
+
+        Assert.Equal(2, tabB.Count); // B also picked up Ada in-memory via the merge
+
+        // A fresh reader sees BOTH — tab B's write did not discard tab A's Ada.
+        var reader = new AssigneeFrequencyCache(new JsonFileStateStore(_dir), "ws1", NoMembers);
+        Assert.Equal(2, reader.Count);
+        Assert.Equal([1, 2], reader.TopMostFrequent(10).Select(a => a.Id)); // count tie → name asc
+    }
+
+    [Fact]
     public void RecordFromTasks_PersistsOnlyOnChange()
     {
         var store = new CountingStateStore(new JsonFileStateStore(_dir));
@@ -195,5 +256,25 @@ public sealed class AssigneeFrequencyCacheTests : IDisposable
         public T? Load<T>(string key) where T : class => inner.Load<T>(key);
         public void Save<T>(string key, T value) where T : class { Saves++; inner.Save(key, value); }
         public void Delete(string key) => inner.Delete(key);
+    }
+
+    /// <summary>A store whose write always fails — stands in for a read-only/full disk or a LiteDB
+    /// contention error, so a test can assert the cache swallows it rather than crashing.</summary>
+    private sealed class ThrowOnSaveStore : IStateStore
+    {
+        public bool Exists(string key) => false;
+        public T? Load<T>(string key) where T : class => null;
+        public void Save<T>(string key, T value) where T : class => throw new IOException("disk full");
+        public void Delete(string key) { }
+    }
+
+    /// <summary>A store whose read always fails with a non-JsonException (as a LiteDB contention error
+    /// would) — so a test can assert the constructor load and the persist re-read degrade, not crash.</summary>
+    private sealed class ThrowOnLoadStore : IStateStore
+    {
+        public bool Exists(string key) => false;
+        public T? Load<T>(string key) where T : class => throw new IOException("read contention");
+        public void Save<T>(string key, T value) where T : class { }
+        public void Delete(string key) { }
     }
 }
