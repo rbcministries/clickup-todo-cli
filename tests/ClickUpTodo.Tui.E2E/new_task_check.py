@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Boots the TUI under a PTY and exercises the New Task screen (#213 + #215):
+"""Boots the TUI under a PTY and exercises the New Task screen (#213 + #215 + #240):
 Ctrl+N opens it → the fields render with the current user seeded as a locked ✓
-default → the locked default refuses removal → the optional Priority selector (four
-canonical priorities + "(no priority)") and Due-date field (#215) render and accept
-input → typing a name + setting priority/due + Save creates (round-trips through the
-create facade) and returns to the list. Asserts each step on the pyte screen."""
+default → the List selector is seeded with the cursor's list as the ✓ (home) primary
+(#240) → the locked default assignee refuses removal → the optional Priority selector
+(four canonical priorities + "(no priority)") and Due-date field (#215) render and
+accept input → typing a name + setting priority/due + Save creates in the primary list
+(round-trips through the create facade) and returns to the list. Asserts each step on
+the pyte screen."""
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte
 
@@ -59,12 +61,17 @@ try:
     # Ctrl+N opens the New Task screen.
     send(b"\x0e", 2.0)
     v = visible()
-    for token in ("New task", "Name", "Description", "Assignees"):
+    for token in ("New task", "Name", "Description", "Assignees", "List"):
         assert token in v, f"missing {token!r} after Ctrl+N:\n{v}"
     # The current user is seeded as a locked ✓ default assignee.
     assert "Ben Seymour" in v, f"locked self assignee not seeded:\n{v}"
     assert "✓ Ben Seymour" in v, f"self not shown as a selected (✓) assignee:\n{v}"
-    print("OPEN ok — New task screen with locked ✓ self assignee")
+    # The List selector is seeded with the cursor's list as the ✓ (home) primary (#240). The default
+    # snapshot's tasks live in "Personal Tasks" (and the personal-list fallback is "Personal Tasks" too),
+    # so either way the home create target renders as the selected primary.
+    assert "Personal Tasks (home)" in v, f"seeded primary/home list not shown (#240):\n{v}"
+    assert "✓ Personal Tasks (home)" in v, f"home list not shown as a selected (✓) list (#240):\n{v}"
+    print("OPEN ok — New task screen with locked ✓ self assignee + ✓ (home) list seed")
 
     # Type a task name into the focused Name field.
     send(b"Buy milk from Ctrl+N", 1.0)
@@ -87,10 +94,12 @@ try:
         assert token in v, f"missing optional field {token!r} (#215):\n{v}"
     print("OPTIONAL ok — Priority selector + Due-date field render")
 
-    # Back up to the selector's search box (its single tab stop), then Tab through the two optional
-    # fields to the Save button. Tab order is Assignees -> Priority -> Due date -> Save (#215).
-    send(b"\x1b[A", 0.6)  # Up: list -> search box
-    send(b"\t", 0.6)      # search box -> Priority list (Tab bubbles out of the composite)
+    # Back up to the Assignees selector's search box (its single tab stop), then Tab through the List
+    # selector and the two optional fields to the Save button. Tab order is Assignees -> List -> Priority
+    # -> Due date -> Save (#215/#240).
+    send(b"\x1b[A", 0.6)  # Up: Assignees list -> its search box
+    send(b"\t", 0.6)      # Assignees search box -> List selector search box (Tab bubbles out of composite)
+    send(b"\t", 0.6)      # List selector search box -> Priority list
     send(b"\x1b[A", 0.6)  # Up: move off "(no priority)" onto a real priority (Low)
     send(b"\t", 0.6)      # Priority -> Due date field
     send(b"2026-12-31", 0.8)  # type a valid due date
