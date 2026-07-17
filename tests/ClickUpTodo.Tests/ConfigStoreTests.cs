@@ -268,6 +268,38 @@ public sealed class ConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public void Save_ThreeWayMerges_DoesNotClobberAConcurrentTabsFields()
+    {
+        // The concrete multi-tab clobber (#293): two tabs load the same config, each changes a
+        // different field, then both save. The second save used to overwrite the first tab's field with
+        // its stale startup value — the three-way merge now preserves both.
+        new ConfigStore(new JsonFileStateStore(_dir)).Save(new AppConfig
+        {
+            WorkspaceId = "1",
+            PersonalTasksListId = "2",
+            RefreshSeconds = 60,
+            BadgeDisplay = BadgeDisplay.Icons,
+        });
+
+        var tabA = new ConfigStore(new JsonFileStateStore(_dir));
+        var tabB = new ConfigStore(new JsonFileStateStore(_dir));
+        var a = tabA.Load();
+        var b = tabB.Load();
+
+        b.RefreshSeconds = 30;          // tab B changes the refresh interval
+        b.PinnedTaskIds.Add("pin-b");   // ...and pins a task
+        tabB.Save(b);
+
+        a.BadgeDisplay = BadgeDisplay.Text; // tab A changes only the badge display
+        tabA.Save(a);                       // must not revert refresh to 60 or drop pin-b
+
+        var final = new ConfigStore(new JsonFileStateStore(_dir)).Load();
+        Assert.Equal(30, final.RefreshSeconds);            // tab B's change preserved
+        Assert.Equal(["pin-b"], final.PinnedTaskIds);      // tab B's pin preserved
+        Assert.Equal(BadgeDisplay.Text, final.BadgeDisplay); // tab A's change applied
+    }
+
+    [Fact]
     public void Save_SwallowsWriteFailure_DoesNotThrow()
     {
         // A failed settings write (read-only/full disk, or LiteDB contention when a second tab is

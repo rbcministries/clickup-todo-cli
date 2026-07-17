@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace ClickUpTodo.Configuration;
 
 /// <summary>
@@ -6,10 +8,22 @@ namespace ClickUpTodo.Configuration;
 /// default via <see cref="JsonFileStateStore"/>; the #119 verdict LiteDB drops in later). This class
 /// adds the config-specific concerns on top of the raw store: the <see cref="StateKeys.Config"/> key,
 /// the unconfigured-default fallback, and schema migration on load.
+/// <para>
+/// It also holds the last-synced <b>baseline</b> so a save can three-way merge against a fresh disk
+/// read (#293): with multiple tabs writing the shared store, a whole-document rewrite would otherwise
+/// clobber a field another tab changed after this one loaded. <see cref="Save"/> re-reads, merges
+/// per-field (last-writer-wins on a fresh read — see <see cref="ConfigMerge"/>), and swallows a failed
+/// write so it never crashes the triggering UI action.
+/// </para>
 /// </summary>
 public sealed class ConfigStore
 {
     private readonly IStateStore _store;
+
+    // A clone of the config as this process last synced it (set on Load, refreshed after each Save).
+    // The merge uses it to tell which top-level fields this process changed vs. left untouched. Null
+    // until the first Load/Save, in which case Save writes the config as-is (nothing to merge against).
+    private AppConfig? _baseline;
 
     /// <summary>Primary constructor — inject the persistence backend (composition root / tests).</summary>
     public ConfigStore(IStateStore store) => _store = store;
@@ -37,14 +51,16 @@ public sealed class ConfigStore
         // Bring older (or freshly-created) configs up to the current schema — e.g. seed the default
         // Assignee rule (#68). Runs on the in-memory config; it's persisted on the next Save.
         ConfigMigrations.Apply(config);
+        _baseline = Clone(config);
         return config;
     }
 
     public void Save(AppConfig config)
     {
+        var toWrite = MergeWithDisk(config);
         try
         {
-            _store.Save(StateKeys.Config, config);
+            _store.Save(StateKeys.Config, toWrite);
         }
         catch
         {
@@ -52,8 +68,51 @@ public sealed class ConfigStore
             // second tab is writing #293) must never crash the UI action that triggered it (a pin
             // toggle, an F3 view change). The in-memory config lives on; the next save retries.
         }
+        // Baseline mirrors THIS process's in-memory config (not the merged doc): only a genuine future
+        // local edit should read as a change; a field another tab owns stays deferred to disk.
+        _baseline = Clone(config);
     }
 
+    /// <summary>
+    /// Three-way merges <paramref name="config"/> over the freshly re-read on-disk config so a
+    /// concurrent tab's field change isn't clobbered (#293). Returns <paramref name="config"/> unchanged
+    /// when there's nothing to merge against — no baseline yet, or no (or a torn) on-disk document.
+    /// </summary>
+    private AppConfig MergeWithDisk(AppConfig config)
+    {
+        if (_baseline is null)
+            return config;
+
+        AppConfig? onDisk;
+        try
+        {
+            onDisk = _store.Load<AppConfig>(StateKeys.Config);
+        }
+        catch (JsonException)
+        {
+            // A torn write from another tab mid-save — skip the merge and write ours; best-effort.
+            return config;
+        }
+        if (onDisk is null)
+            return config;
+
+        // Normalise the on-disk copy to the current schema before merging so a legacy shim (e.g. the
+        // pre-#69 excludedStatuses array, dropped by migration) can't resurrect through the merge.
+        ConfigMigrations.Apply(onDisk);
+
+        var mergedJson = ConfigMerge.ThreeWay(Serialize(_baseline), Serialize(config), Serialize(onDisk));
+        return JsonSerializer.Deserialize<AppConfig>(mergedJson, StateJson.Options) ?? config;
+    }
+
+    private static string Serialize(AppConfig config) => JsonSerializer.Serialize(config, StateJson.Options);
+
+    private static AppConfig Clone(AppConfig config)
+        => JsonSerializer.Deserialize<AppConfig>(Serialize(config), StateJson.Options)!;
+
     /// <summary>Forget the persisted settings (used by <c>--reset</c>). Backend-agnostic.</summary>
-    public void Delete() => _store.Delete(StateKeys.Config);
+    public void Delete()
+    {
+        _store.Delete(StateKeys.Config);
+        _baseline = null; // nothing on disk to merge against after a reset.
+    }
 }
