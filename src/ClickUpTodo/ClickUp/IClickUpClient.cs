@@ -49,6 +49,21 @@ public interface IClickUpClient
         => throw new NotSupportedException($"{GetType().Name} does not implement the description write.");
     Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskAssignee>> RemoveTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
+
+    /// <summary>Add a task to an <b>additional</b> list — ClickUp's "Tasks in Multiple Lists" feature
+    /// (#237). The home list is unchanged; the extra membership surfaces in
+    /// <see cref="TaskDetail.Lists"/>. Requires the "Tasks in Multiple Lists" ClickApp; when disabled the
+    /// call fails with a caught <see cref="ClickUpApiException"/> (HTTP 4xx, ClickUp <c>OV_016</c>). Default
+    /// throwing implementation so read-only fakes needn't implement a write they never call (mirrors the
+    /// other writes); <see cref="ClickUpClient"/> overrides it. See <see cref="ClickUpClient.AddTaskToListAsync"/>.</summary>
+    Task AddTaskToListAsync(string taskId, string listId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement task↔list membership writes.");
+
+    /// <summary>Remove a task from an additional list (#237) — the inverse of
+    /// <see cref="AddTaskToListAsync"/>. The home list is unaffected. Default throwing implementation as
+    /// above; <see cref="ClickUpClient"/> overrides it.</summary>
+    Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement task↔list membership writes.");
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default);
