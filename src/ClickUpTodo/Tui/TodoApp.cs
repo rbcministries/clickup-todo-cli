@@ -1408,7 +1408,10 @@ public sealed class TodoApp
                         workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, detail.Id),
                         // Ctrl+N (#216) composes + posts a plain-text comment; the screen owns the
                         // optimistic append/revert, the host owns the off-thread ClickUp write.
-                        postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(taskId, text, ct));
+                        postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(taskId, text, ct),
+                        // Ctrl+E (#217) edits the plain-text description; the screen owns the editor +
+                        // dirty-check + in-place reflection, the host owns the off-thread ClickUp write.
+                        setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(taskId, text, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), and the

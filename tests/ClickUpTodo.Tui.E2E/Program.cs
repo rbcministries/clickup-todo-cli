@@ -79,6 +79,13 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
     private readonly HashSet<long> _assignees = SeedQuAssignee ? [SeededAssigneeId] : [];
     private readonly object _gate = new();
 
+    // The task's current plain-text description, mutated by a description PUT (#217) so the write
+    // response — and later detail GETs — echo the edited text (open → edit → save → reflected round-trip).
+    // Guarded by _gate like _assignees. Seeded with the default that DetailJson used to hard-code (wide/
+    // multi-byte prose so per-cell rendering has something to bite).
+    private string _description =
+        "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed";
+
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         var path = request.RequestUri!.AbsolutePath;
@@ -103,6 +110,7 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
             lock (_gate)
             {
                 ApplyAssigneeMutation(reqBody);
+                ApplyDescriptionMutation(reqBody);
                 body = DetailJson(path, _assignees);
             }
         }
@@ -192,12 +200,33 @@ sealed class FakeClickUp(int taskCount) : HttpMessageHandler
     /// <summary>Detail for the Enter → detail screen (and the echo for a task PUT). The description
     /// deliberately mixes plain prose with wide/multi-byte graphemes so per-cell rendering issues have
     /// something to bite; the assignees reflect the current mutable set so an assignee write round-trips.</summary>
-    private static string DetailJson(string path, HashSet<long> assignees)
+    private string DetailJson(string path, HashSet<long> assignees)
     {
         var id = path[(path.LastIndexOf('/') + 1)..];
+        // JSON-encode the (mutable, possibly user-edited) description so quotes/newlines/emoji round-trip.
+        var description = JsonSerializer.Serialize(_description);
         return $$"""
-        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"description":"Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed"}
+        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"description":{{description}}}
         """;
+    }
+
+    /// <summary>Applies a description PUT body (<c>{"description":"..."}</c>) to the shared field so the
+    /// write response — and later detail GETs — echo the edited text (#217). A body without a string
+    /// <c>description</c> (a status/priority/assignee PUT) leaves it untouched.</summary>
+    private void ApplyDescriptionMutation(string requestBody)
+    {
+        if (string.IsNullOrWhiteSpace(requestBody))
+            return;
+        try
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            if (doc.RootElement.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String)
+                _description = d.GetString() ?? "";
+        }
+        catch (JsonException)
+        {
+            // A non-JSON / unexpected body is not this fake's concern — leave the description untouched.
+        }
     }
 
     /// <summary>The workspace <c>members</c> array (each wrapped as <c>{ user }</c>) from <see cref="Members"/>.</summary>
