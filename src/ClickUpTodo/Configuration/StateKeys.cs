@@ -59,4 +59,15 @@ public static class StateKeys
     /// <c>listColors.json</c>.
     /// </summary>
     public const string ListColors = "listColors";
+
+    /// <summary>
+    /// The warm closed-task set (#280, follow-up to #253) — the bounded, recently-closed tasks
+    /// <see cref="Services.ClosedTaskCache"/> bridge-paints at the F12→All transition, persisted so the
+    /// very first transition after a fresh launch is instant too (rather than stalling one poll interval
+    /// until the background prefetch warms the in-memory set). One document; the stored payload carries
+    /// the workspace/list/assignee fingerprint it was captured under (a context switch is a clean miss),
+    /// and the per-task age window is re-applied on load so a stale set self-prunes. Maps to
+    /// <c>closed.json</c> in the file backend.
+    /// </summary>
+    public const string Closed = "closed";
 }

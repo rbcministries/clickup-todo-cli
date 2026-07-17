@@ -241,8 +241,12 @@ public sealed class TaskService(
 
     // Warm, bounded set of recently-closed tasks kept off the refresh loop (#253) so cycling F12 to
     // All paints instantly instead of stalling on an on-demand include_closed=true fetch. Read on the
-    // UI thread (SupplementWithClosed / the bridge paint), written from the background prefetch.
-    private readonly ClosedTaskCache _closedCache = new(timeProvider);
+    // UI thread (SupplementWithClosed / the bridge paint), written from the background prefetch. With a
+    // state store it also persists across restarts (#280), warming from the last session's set (keyed on
+    // the same workspace/list/assignee fetch scope as TaskCache) so even the first post-launch F12→All
+    // is instant; the per-task age window is re-applied on load so a stale set self-prunes.
+    private readonly ClosedTaskCache _closedCache = new(
+        timeProvider, store: stateStore, contextKey: () => TaskCache.KeyFor(config));
 
     /// <summary>The warm closed-task set (newest first), empty until the first prefetch completes (#253).</summary>
     public IReadOnlyList<TaskItem> WarmClosedTasks => _closedCache.Snapshot;
