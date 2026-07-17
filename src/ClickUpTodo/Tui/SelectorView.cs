@@ -166,6 +166,15 @@ public class SelectorView : View
     /// <summary>The current selection, in add order (the seeded defaults, then any others).</summary>
     public IReadOnlyList<SelectorItem> SelectedItems => _selected.ToList();
 
+    /// <summary>The currently-selected distinguished entries — exactly the items rendered with the
+    /// distinguished suffix (the primary/home marker), in selection order; empty when none is marked.
+    /// The distinguished set is pruned on reconcile (a server-dropped entry stops being marked) and an
+    /// item re-added by search is never re-marked, so this is the authoritative source for a
+    /// specialization's primary/home accessor to stay in lockstep with what's on screen across
+    /// add/remove/reconcile/revert (see <see cref="ListSelectorView.Primary"/>).</summary>
+    protected IReadOnlyList<SelectorItem> DistinguishedSelection
+        => _selected.Where(i => _distinguishedIds.Contains(i.Id)).ToList();
+
     /// <summary>Raised whenever the selection changes (add/remove/reconcile), so the host can react.</summary>
     public event EventHandler? SelectionChanged;
 
