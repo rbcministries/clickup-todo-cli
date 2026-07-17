@@ -83,6 +83,16 @@ public sealed class ListSelectorView : SelectorView
         => ListSelectorModel.ResolvePrimary(
             Selection, DistinguishedSelection.Select(ListSelectorModel.ToEntity).ToList());
 
+    /// <summary>
+    /// Merges the task's already-existing additional list memberships into the selection without firing a
+    /// server write — the Quick Updates List pane (#242) opens seeded with the home list instantly, then
+    /// enriches the rare "Tasks in Multiple Lists" locations from a background <c>GetTaskDetailAsync</c>
+    /// when it returns. Additive and idempotent; no-ops once the user has started editing. Must run on the
+    /// UI thread. See <see cref="SelectorView.AddExistingSelections"/>.
+    /// </summary>
+    public void SeedExistingMemberships(IReadOnlyList<NamedEntity> lists)
+        => AddExistingSelections(ToItems(lists));
+
     // ── list ↔ base adapters (near-identity: lists are natively string-id'd) ────
 
     private static IReadOnlyList<SelectorItem> ToItems(IReadOnlyList<NamedEntity>? lists)

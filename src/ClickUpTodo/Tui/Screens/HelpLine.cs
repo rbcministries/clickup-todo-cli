@@ -156,12 +156,12 @@ public static class HelpItemSets
         new("Esc", "cancels"),
     ];
 
-    /// <summary>The Quick Updates screen (Space, #156): Tab cycles Status → Priority → Assignees,
+    /// <summary>The Quick Updates screen (Space, #156): Tab cycles Status → Priority → Assignees → Lists,
     /// ↑/↓ move within a pane, Enter applies the highlighted status/priority (#157; assignee apply is
-    /// #158).</summary>
+    /// #158, list membership #242).</summary>
     public static readonly IReadOnlyList<HelpItem> QuickUpdates =
     [
-        new("Tab", "Status/Priority/Assignees"),
+        new("Tab", "Status/Priority/Assignees/Lists"),
         new("↑/↓", "move"),
         new("Enter", "apply status/priority"),
         new("F1", "help"),

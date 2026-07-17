@@ -2,12 +2,13 @@ using ClickUpTodo.ClickUp;
 
 namespace ClickUpTodo.Tui.Screens;
 
-/// <summary>The three Tab-navigable controls of the Quick Updates screen (#153/#156), in focus order.</summary>
+/// <summary>The four Tab-navigable controls of the Quick Updates screen (#153/#156), in focus order.</summary>
 public enum QuickUpdatesPane
 {
     Status = 0,
     Priority = 1,
     Assignees = 2,
+    Lists = 3,
 }
 
 /// <summary>
@@ -16,12 +17,14 @@ public enum QuickUpdatesPane
 /// the pane cycle order + wrap and the Status/Priority rows with their leading <c>✓</c> current-value
 /// marker + preselection (#157). The Assignees pane's own row/search/toggle logic lives in
 /// <see cref="AssigneeSelectorModel"/> (#212), embedded by the screen as an
-/// <see cref="AssigneeSelectorView"/> in immediate-apply mode (#158).
+/// <see cref="AssigneeSelectorView"/> in immediate-apply mode (#158); the Lists pane's logic lives in
+/// <see cref="ListSelectorModel"/> (#239), embedded as a <see cref="ListSelectorView"/> in immediate-apply
+/// mode (#242).
 /// </summary>
 public static class QuickUpdatesModel
 {
-    /// <summary>The number of panes (Status, Priority, Assignees).</summary>
-    public const int PaneCount = 3;
+    /// <summary>The number of panes (Status, Priority, Assignees, Lists).</summary>
+    public const int PaneCount = 4;
 
     /// <summary>The 2-column prefix on the currently-effective row: a check mark then a space.</summary>
     public const string CurrentMarker = "✓ ";
@@ -34,8 +37,8 @@ public static class QuickUpdatesModel
 
     /// <summary>
     /// The pane focus lands on when Tab (<paramref name="forward"/> = true) or Shift+Tab
-    /// (<paramref name="forward"/> = false) is pressed, cycling Status → Priority → Assignees and
-    /// wrapping in both directions.
+    /// (<paramref name="forward"/> = false) is pressed, cycling Status → Priority → Assignees → Lists
+    /// and wrapping in both directions.
     /// </summary>
     public static QuickUpdatesPane Cycle(QuickUpdatesPane current, bool forward)
     {
