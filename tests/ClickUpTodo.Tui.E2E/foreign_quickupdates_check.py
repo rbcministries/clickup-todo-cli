@@ -23,6 +23,9 @@ ROWS, COLS = 50, 200
 DLL = sys.argv[1]
 
 FS1 = "Foreign teammate subtask ZZ"     # the foreign-subtask row / its Quick Updates title
+CP1 = "Context parent PP"               # the context-parent row / its Quick Updates title
+PT1 = "Assigned parent — my task AA"    # the assigned parent (a normal, mine row)
+CT1 = "My nested subtask BB"            # the assigned child under the context parent
 FOREIGN_MARKER = "· (not assigned to you)"
 CONTEXT_MARKER = "· (parent — not assigned to you)"
 
@@ -99,18 +102,18 @@ CTRL_RIGHT = b"\x1b[1;5C"    # expand-all (bulk counterpart to the per-parent �
 F5 = b"\x1b[15~"             # manual refresh — never a delta, so it re-runs the foreign resolve
 
 
-def open_qu_on_fs1(what):
-    """Open Quick Updates on the foreign subtask. Space opens QU on the selected row; if the open
-    screen's title isn't fs1, Esc + Down and retry (robust to row ordering). QU is a full-window screen,
-    so while it's open the fs1 name can only be the title — a reliable oracle for "on fs1"."""
+def open_qu_on(name, what):
+    """Open Quick Updates on the row named `name`. Space opens QU on the selected row; if the open
+    screen's title isn't that task, Esc + Down and retry (robust to row ordering). QU is a full-window
+    screen, so while it's open `name` can only be the title — a reliable oracle for "on this row"."""
     for _ in range(12):
         send(SPACE, 2.5)
-        if qu_open() and FS1 in visible():
+        if qu_open() and name in visible():
             return
         if qu_open():
             send(ESC, 1.5)
         send(DOWN, 0.8)
-    require(False, f"could not open Quick Updates on the foreign subtask ({what}) — "
+    require(False, f"could not open Quick Updates on {name!r} ({what}) — "
                    "a not-mine row should be editable since #160")
 
 
@@ -138,7 +141,7 @@ try:
 
     # 2. Opening Quick Updates on the foreign subtask is the #160 headline: the pre-#160 build flashed
     #    "not assigned to you — unchanged" and never opened.
-    open_qu_on_fs1("initial open")
+    open_qu_on(FS1, "initial open")
     print("OPEN ok — Quick Updates opened on the foreign subtask (not blocked)")
 
     # 3. Commit a changed Status and Priority while the screen stays open (#207 apply-on-Enter):
@@ -161,19 +164,20 @@ try:
     require(marked("Urgent"), "priority ✓ did not move to 'Urgent' after commit")
     print("COMMIT ok — status 'in progress' + priority 'Urgent' committed (optimistic ✓)")
 
-    # 4. Esc back to the list; the foreign row is still there (stays in place, not dropped) and reflects
-    #    the committed status in place — "in progress" → the (IP) abbreviation chip, unique to fs1
-    #    (pt1/ct1 are (TD), cp1 is (IR)).
-    #    (Note: the in-place row update — UpdateTaskRow → BuildRow — re-formats without the
-    #    isForeignSubtask flag, so the "(not assigned to you)" marker transiently drops until the next
-    #    full re-render. Pre-existing #160/#179 behaviour, outside #160's acceptance ("shows the confirmed
-    #    status in place and isn't dropped"), tracked in #264 — so this does NOT assert the marker here.)
+    # 4. Esc back to the list; the foreign row is still there (stays in place, not dropped), reflects the
+    #    committed status in place — "in progress" → the (IP) abbreviation chip, unique to fs1 (pt1/ct1
+    #    are (TD), cp1 is (IR)) — AND keeps its "(not assigned to you)" marker. The in-place update
+    #    (UpdateTaskRow → ClassifyRowMarker → BuildRow) re-derives that flag exactly as the full Render
+    #    path does (the #264 fix, PR #277 on main); #160 lifts only the write restriction, not the
+    #    context labelling, so an edit must not drop the marker.
     send(ESC, 2.0)
     require(not qu_open(), "Esc did not close Quick Updates")
     row = fs1_row()
     require(row is not None, "the foreign-subtask row was dropped from the list after the edit")
     require("(IP)" in row, f"the committed status is not reflected on the foreign row in place: {row!r}")
-    print("STAYS ok — foreign row still present and shows the committed status in place")
+    require(FOREIGN_MARKER in row,
+            f"the in-place edit dropped the foreign row's '(not assigned to you)' marker (#264): {row!r}")
+    print("STAYS ok — foreign row present, shows the committed status in place, keeps its marker")
 
     # 5. THE ROUND-TRIP PROOF. Force a manual refresh (F5 — never a delta) so the per-parent foreign fetch
     #    (GET /task/{id}?include_subtasks=true) re-serves fs1 from the fake's PERSISTED model
@@ -189,7 +193,7 @@ try:
             f"foreign marker did not return on the full re-render after refresh: {row!r}")
     require("(IP)" in row,
             f"status did NOT round-trip: after a model-sourced re-fetch fs1 is not 'in progress': {row!r}")
-    open_qu_on_fs1("reopen after refresh")
+    open_qu_on(FS1, "reopen after refresh")
     require(marked("in progress"),
             "status did NOT round-trip: reopened Quick Updates (seeded from the re-fetched task) "
             "does not mark 'in progress' as current")
@@ -197,6 +201,18 @@ try:
             "priority did NOT round-trip: reopened Quick Updates does not mark 'Urgent' as current")
     send(ESC, 1.5)
     print("ROUND-TRIP ok — status + priority persisted through the modelled PUT and re-served on refresh")
+
+    # 6. The context parent is a not-mine row too (#46): Quick Updates must open on it as well (the #160
+    #    guard is gone for both kinds). Then confirm the edits left every other seeded row in place.
+    open_qu_on(CP1, "context parent")
+    require(CP1 in visible(), "Quick Updates did not open on the context parent")
+    send(ESC, 1.5)
+    require(not qu_open(), "Esc did not close the context-parent Quick Updates")
+    v = visible()
+    for name in (PT1, CT1, CP1):
+        require(name in v, f"a seeded row was dropped from the list after the edits: {name!r}")
+    require(FS1 in v, "the foreign-subtask row was dropped from the list after the edits")
+    print("CONTEXT-PARENT ok — Quick Updates opens on the context parent; no rows dropped")
 
     print("FOREIGN QUICK UPDATES E2E: PASS")
 finally:

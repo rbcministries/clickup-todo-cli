@@ -71,8 +71,11 @@ default path stays byte-identical.
    `ApplyStatus`/`ApplyPriority` set it before the server responds and reconcile to
    `confirmed ?? committed`, so a *null* echo still leaves the optimistic value in place — hence
    this step does **not** by itself prove the round-trip; it confirms the commit path fired.
-4. Esc → back to the list; assert the fs1 row is still present and shows the committed status in
-   place (`(IP)` — "the row stays in place and isn't dropped").
+4. Esc → back to the list; assert the fs1 row is still present, shows the committed status in place
+   (`(IP)`), **and keeps its `(not assigned to you)` marker** — the in-place update
+   (`UpdateTaskRow` → `ClassifyRowMarker` → `BuildRow`) re-derives that flag as the full Render path
+   does (the #264 fix, PR #277, now on `main`); #160 lifts only the write restriction, not the
+   context labelling, so the edit must not drop the marker.
 5. **Round-trip proof:** force a manual refresh (`F5`, never a delta) so the per-parent foreign
    fetch re-serves `fs1` from the fake's **persisted** model (`_foreignStatus`/`_foreignPriority`),
    replacing every optimistic value. Assert the re-rendered row is `(IP)` (and the foreign marker
@@ -81,6 +84,9 @@ default path stays byte-identical.
    `PUT` not persisted the commit, `fs1` would re-serve its seed (`to do`, no priority) and these
    would fail — so this is what actually establishes the Status **and** Priority round-trip through
    the modelled write.
+6. Open Quick Updates on the **context parent** too (the other not-mine row kind, #46) — it must
+   open (the #160 guard is gone for both kinds) — then confirm every seeded row (`pt1`, `ct1`,
+   `cp1`, `fs1`) is still present, i.e. the edits dropped nothing.
 
 ## Files
 
