@@ -2103,13 +2103,13 @@ public sealed class TodoApp
         var groupedBy = inFocus ? (TaskField?)null : _config.View.GroupField;
         // Reproduce the row's ▶/▼ fold marker from its stored state so an in-place update keeps it (#76).
         var marker = FoldMarker(index < _folds.Count ? _folds[index] : FoldState.None, _config.View.ShowSubtasks);
-        // Reproduce the row's not-mine / context classification (#264): without these flags BuildRow
-        // drops the trailing "(not assigned to you)" (#70/#179) / "(parent — not assigned to you)"
-        // (#46) / "(unassigned)" (#179) marker until the next full Render, mirroring how the render
-        // path (Render → AddTask → BuildRow) sets them per row.
+        // Reproduce the row's not-mine / context classification (#264): without these flags the row
+        // render drops the trailing "(not assigned to you)" (#70/#179) / "(parent — not assigned to
+        // you)" (#46) / "(unassigned)" (#179) marker until the next full Render, mirroring how the
+        // render path (Render → AddTask → TaskRowRenderer.Render) sets them per row.
         var (isContextParent, isForeignSubtask, isUnassignedSubtask) =
             ClassifyRowMarker(updated, _contextParents, VisibleForeignSubtasks());
-        var (text, badges) = BuildRow(
+        var (text, badges) = TaskRowRenderer.Render(
             updated, _config.BadgeDisplay, _tasks.UserId, index < _depths.Count ? _depths[index] : 0,
             isContextParent, groupedBy: groupedBy, marker: marker,
             isForeignSubtask: isForeignSubtask, isUnassignedSubtask: isUnassignedSubtask);
@@ -2425,7 +2425,7 @@ public sealed class TodoApp
 
     private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None, bool isForeignSubtask = false, bool isUnassignedSubtask = false)
     {
-        var (text, badges) = BuildRow(task, _config.BadgeDisplay, _tasks.UserId, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask, isUnassignedSubtask);
+        var (text, badges) = TaskRowRenderer.Render(task, _config.BadgeDisplay, _tasks.UserId, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask, isUnassignedSubtask);
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);
@@ -2446,46 +2446,6 @@ public sealed class TodoApp
             FoldState.Collapsed => "▶ ",
             _ => "  ",
         };
-
-    /// <summary>Fixed white background for the trailing assignees badge (#161) — not tinted by a
-    /// ClickUp field colour like Status/Priority; the readable dark foreground follows from
-    /// <see cref="StatusBadgeColor.PreferDarkText"/> (black on white).</summary>
-    private const string AssigneesBadgeColor = "ffffff";
-
-    /// <summary>Fixed muted-gray background for the leading custom-id (or fallback task-id) chip — a
-    /// neutral identifier tint, deliberately not a ClickUp field colour, so the id reads as metadata
-    /// beside the Status/Priority badges rather than as another status. The light foreground follows
-    /// from <see cref="StatusBadgeColor.PreferDarkText"/> (white on dark gray).</summary>
-    private const string CustomIdBadgeColor = "5a5a5a";
-
-    /// <summary>The display text and the row's color badge overlays (status, then priority when set,
-    /// the leading custom-id/task-id chip, then the trailing assignees badge, #161).
-    /// <paramref name="groupedBy"/> omits the grouped field's
-    /// segment (its header already conveys it, #67). <paramref name="marker"/> is the leading ▶/▼ fold
-    /// marker or gutter (#76). <paramref name="badges"/> selects how the badges render (F6).
-    /// <paramref name="currentUserId"/> decides the trailing assignees badge (shown when a non-current
-    /// user is assigned).</summary>
-    private static (string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges) BuildRow(
-        TaskItem task, BadgeDisplay badgeDisplay, long currentUserId, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, string marker = "", bool isForeignSubtask = false, bool isUnassignedSubtask = false)
-    {
-        var row = TaskRowFormatter.Format(task, depth, isContextParent, groupedBy, marker, isForeignSubtask, badgeDisplay, currentUserId, isUnassignedSubtask);
-        var badges = new List<StatusBadgeListSource.Badge>(4);
-        // The Status/Priority badges (icon chip or bracketed text) are tinted with their field colours;
-        // an absent/hidden badge carries no span, so TryCreate returns null and nothing is shaded.
-        if (StatusBadgeListSource.TryCreate(row.StatusStart, row.StatusLength, task.StatusColor) is { } status)
-            badges.Add(status);
-        if (StatusBadgeListSource.TryCreate(row.PriorityStart, row.PriorityLength, task.PriorityColor) is { } priority)
-            badges.Add(priority);
-        // The leading custom-id (or fallback task-id) chip is muted-gray, not field-tinted; a hidden-mode
-        // row carries no span, so TryCreate returns null and nothing is shaded.
-        if (StatusBadgeListSource.TryCreate(row.CustomIdStart, row.CustomIdLength, CustomIdBadgeColor) is { } customId)
-            badges.Add(customId);
-        // The trailing assignees badge (#161) is white-backed, not field-tinted; the same absent/hidden
-        // span sentinel makes TryCreate return null so nothing is shaded when it's not shown.
-        if (StatusBadgeListSource.TryCreate(row.AssigneesStart, row.AssigneesLength, AssigneesBadgeColor) is { } assignees)
-            badges.Add(assignees);
-        return (row.Text, badges);
-    }
 
     private void Flash(string message)
     {
