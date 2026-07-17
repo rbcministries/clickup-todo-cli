@@ -55,6 +55,11 @@ Windows DPAPI (current-user scope); on other platforms it falls back to a base64
 
 Run `clickup-todo --reset` to forget the token and settings and start over.
 
+> **Optional (`config.json`):** set `"feedActivityLookbackDays"` to a positive number to narrow the
+> mentions/comments feed to tasks updated in the last _N_ days (a `date_updated_gt` server-side
+> window that shrinks the fetch on a busy workspace). `0` (the default) disables it and fetches as
+> before. A task with a recent comment stays in the window, since a new comment bumps its update time.
+
 > **Why a personal token by default?** ClickUp's OAuth flow requires a client **secret**, which
 > can't be safely shipped in a public repo (there's no PKCE/public-client flow). A personal token is
 > equally capable for your own tasks and keeps nothing secret in the repo, so it's the default path.

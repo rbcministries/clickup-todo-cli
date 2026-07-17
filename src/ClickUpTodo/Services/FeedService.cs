@@ -31,8 +31,11 @@ public sealed record FeedResult(
 /// <c>internal static</c> <see cref="Aggregate"/> / <see cref="GatherAsync"/> so it is unit-testable
 /// offline (via <c>InternalsVisibleTo</c>) without a live ClickUp client.
 /// </remarks>
-public sealed class FeedService(ClickUpClient client, TaskService taskService, AppConfig config)
+public sealed class FeedService(IClickUpClient client, TaskService taskService, AppConfig config, TimeProvider? timeProvider = null)
 {
+    // Clock for the look-back window (#244); injectable so ComputeUpdatedAfterMs's caller is testable.
+    private readonly TimeProvider _clock = timeProvider ?? TimeProvider.System;
+
     /// <summary>Default number of tasks whose comments are fetched concurrently. Bounded so a large
     /// assigned-task set doesn't open a fetch per task all at once, while still hiding per-call latency.</summary>
     public const int DefaultMaxConcurrency = 8;
@@ -68,8 +71,16 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
         bool includeClosed, bool mentionsOnly = false, CancellationToken ct = default)
     {
         var assigneeIds = await taskService.ResolveAssigneeIdsAsync(config.View, ct);
+        // Optional server-side look-back window (#244): when configured, shrink the fetch to tasks
+        // updated in the last N days. Null (the default) leaves the full-set fetch unchanged.
+        //
+        // The window is intentionally NOT part of FeedCache.KeyFor: it is time-relative (now − N days),
+        // so keying on it would make the cache key perpetually unstable (never a hit) for no benefit.
+        // The bounded instant-paint is reconciled by the near-immediate live refresh; workspace/
+        // assignees/completed are still keyed, so the cache can never surface a wrong feed.
+        var updatedAfterMs = ComputeUpdatedAfterMs(config.FeedActivityLookbackDays, _clock.GetUtcNow());
         var tasks = await client.GetAssignedTasksAsync(
-            config.WorkspaceId, assigneeIds, includeClosed: includeClosed, ct: ct);
+            config.WorkspaceId, assigneeIds, includeClosed: includeClosed, updatedAfterMs: updatedAfterMs, ct: ct);
 
         var taskIds = tasks
             .Select(t => t.Id)
@@ -89,6 +100,24 @@ public sealed class FeedService(ClickUpClient client, TaskService taskService, A
         var activity = BuildActivity(tasks, DefaultMaxEntries, includeCompleted: includeClosed);
         return new FeedResult(comments, activity);
     }
+
+    /// <summary>Defensive upper bound (~100 years) on the look-back window (#244). The F2 settings
+    /// field already clamps to <see cref="Tui.Screens.SettingsForm.MaxLookbackDays"/>, but a
+    /// hand-edited config can carry any value; capping here keeps <see cref="ComputeUpdatedAfterMs"/>
+    /// from overflowing <see cref="DateTimeOffset"/> (subtracting more than ~730k days throws). Any
+    /// value this large already means "effectively everything", so the cap changes no real behaviour.</summary>
+    internal const int MaxLookbackDays = 36_500;
+
+    /// <summary>
+    /// Computes the <c>date_updated_gt</c> window (epoch ms) for the feed's assigned-task fetch (#244)
+    /// from the configured look-back <paramref name="lookbackDays"/> and the current time
+    /// <paramref name="now"/>. Returns null when the window is disabled (<c>0</c>) or non-positive
+    /// (defensive against a hand-edited config), so the caller omits the filter and fetches the full
+    /// set. A positive value is clamped to <see cref="MaxLookbackDays"/> so an out-of-range
+    /// hand-edited config can't overflow <see cref="DateTimeOffset"/>. Pure and unit-testable.
+    /// </summary>
+    internal static long? ComputeUpdatedAfterMs(int lookbackDays, DateTimeOffset now)
+        => lookbackDays > 0 ? now.AddDays(-Math.Min(lookbackDays, MaxLookbackDays)).ToUnixTimeMilliseconds() : null;
 
     /// <summary>
     /// Projects the assigned tasks into the recent-activity feed (#117): each task with a non-empty id

@@ -23,6 +23,21 @@ public static class SettingsForm
             ? Math.Clamp(s, MinRefreshSeconds, MaxRefreshSeconds)
             : fallback;
 
+    /// <summary>The allowed feed look-back window (#244), in days. <c>0</c> = disabled (fetch the full
+    /// assigned set); the upper bound caps a fat-fingered entry rather than reflecting any API limit.</summary>
+    public const int MinLookbackDays = 0;
+    public const int MaxLookbackDays = 3650;
+
+    /// <summary>
+    /// Parses the feed activity look-back field (#244), clamping to [<see cref="MinLookbackDays"/>,
+    /// <see cref="MaxLookbackDays"/>] — <c>0</c> disables the window. Falls back to
+    /// <paramref name="fallback"/> when the text isn't a valid integer.
+    /// </summary>
+    public static int ParseLookbackDays(string? text, int fallback)
+        => int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var d)
+            ? Math.Clamp(d, MinLookbackDays, MaxLookbackDays)
+            : fallback;
+
     /// <summary>
     /// Parses the agent-dispatch "extra args" field (#27) into a list of arguments, splitting on
     /// whitespace and dropping blanks. This keeps the settings UI simple; args that themselves

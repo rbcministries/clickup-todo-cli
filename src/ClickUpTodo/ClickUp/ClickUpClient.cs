@@ -144,8 +144,16 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// <b>empty</b> set omits the <c>assignees</c> filter entirely, so ClickUp returns tasks for
     /// everyone in the workspace — a deliberately broad (and slower) fetch the caller opts into by
     /// clearing the Assignee rule (#68).
+    /// <para>
+    /// <paramref name="updatedAfterMs"/> is an optional server-side <c>date_updated_gt</c> window
+    /// (epoch ms): when set, only tasks updated after it are returned, so a busy workspace fetches a
+    /// smaller set (#244 — the feed's look-back window). Null (the default) omits the filter, leaving
+    /// today's full-set behaviour untouched. It composes with <paramref name="includeClosed"/> exactly
+    /// as the delta path does (see <see cref="GetAssignedTasksDeltaAsync"/>): the two query params are
+    /// independent.
+    /// </para>
     /// </summary>
-    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, CancellationToken ct = default)
+    public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, long? updatedAfterMs = null, CancellationToken ct = default)
         => Guard("GetFilteredTeamTasks", () => PageAsync(page =>
             _client.V2.Team[workspaceId].Task.GetAsync(cfg =>
             {
@@ -157,6 +165,8 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 // any that still arrive as subtask anchors are hidden client-side by TaskView).
                 cfg.QueryParameters.IncludeClosed = includeClosed;
                 cfg.QueryParameters.Subtasks = true;
+                if (updatedAfterMs is { } after)
+                    cfg.QueryParameters.DateUpdatedGt = after;
             }, ct), ct));
 
     /// <summary>
@@ -336,6 +346,34 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             };
             var updated = await _client.V2.Task[taskId].PutAsync(request, cancellationToken: ct);
             return MapAssignees(updated?.Assignees);
+        });
+
+    /// <summary>
+    /// Add a task to an <b>additional</b> list — ClickUp's "Tasks in Multiple Lists" feature
+    /// (<c>POST /list/{list_id}/task/{task_id}</c>). The task keeps its home list (set at creation)
+    /// and gains <paramref name="listId"/> as an extra location, surfaced by
+    /// <see cref="GetTaskDetailAsync"/> in <see cref="TaskDetail.Lists"/>. ClickUp returns an empty
+    /// body, so this returns no value.
+    /// <para><b>Workspace prerequisite:</b> "Tasks in Multiple Lists" is an opt-in ClickApp; when it is
+    /// disabled the call fails with an HTTP 4xx (ClickUp error <c>OV_016</c>), surfaced here as a caught
+    /// <see cref="ClickUpApiException"/> so a caller (e.g. the New Task screen #241 or Quick Updates
+    /// #242) can flash it rather than crash.</para>
+    /// </summary>
+    public Task AddTaskToListAsync(string taskId, string listId, CancellationToken ct = default)
+        => Guard("AddTaskToList", async () =>
+        {
+            using var _ = await _client.V2.List[listId].Task[taskId].PostAsync(cancellationToken: ct);
+        });
+
+    /// <summary>
+    /// Remove a task from an additional list (<c>DELETE /list/{list_id}/task/{task_id}</c>) — the
+    /// inverse of <see cref="AddTaskToListAsync"/>. The task's home list is unaffected; ClickUp returns
+    /// an empty body. Errors surface as a caught <see cref="ClickUpApiException"/>.
+    /// </summary>
+    public Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
+        => Guard("RemoveTaskFromList", async () =>
+        {
+            using var _ = await _client.V2.List[listId].Task[taskId].DeleteAsync(cancellationToken: ct);
         });
 
     /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>
@@ -701,6 +739,22 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         try
         {
             return await call();
+        }
+        catch (ApiException ex)
+        {
+            throw new ClickUpApiException(ex.ResponseStatusCode, operation, ex);
+        }
+    }
+
+    /// <summary>
+    /// Non-generic <see cref="Guard{T}"/> for writes whose response carries nothing useful (an empty
+    /// <c>{}</c> body): still translates Kiota <see cref="ApiException"/> into <see cref="ClickUpApiException"/>.
+    /// </summary>
+    private static async Task Guard(string operation, Func<Task> call)
+    {
+        try
+        {
+            await call();
         }
         catch (ApiException ex)
         {

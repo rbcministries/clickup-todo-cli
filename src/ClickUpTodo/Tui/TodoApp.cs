@@ -960,7 +960,7 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.DefaultWorkingDirectory, _config.AgentDispatch, _config.DetailView);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.AgentDispatch, _config.DetailView);
 
         // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
         // save it folds the edited template back into the settings screen via the request's callback, so
@@ -985,6 +985,9 @@ public sealed class TodoApp
             // The feed screen reads FeedRefreshSeconds when it opens (#123), so a reopened feed picks
             // up the new cadence — no live retiming of an already-open feed's timer is needed.
             _config.FeedRefreshSeconds = result.FeedRefreshSeconds;
+            // The look-back window (#244) is read live by FeedService on the next load, so a reopened
+            // (or next-polled) feed picks up the new window with no extra wiring.
+            _config.FeedActivityLookbackDays = result.FeedActivityLookbackDays;
             _config.DefaultWorkingDirectory = result.DefaultWorkingDirectory;
             _config.AgentDispatch = result.AgentDispatch;
             _config.DetailView = result.DetailView;
@@ -1361,6 +1364,20 @@ public sealed class TodoApp
     private static bool IsForeignOthers(TaskItem task, IReadOnlyDictionary<string, TaskItem> visibleForeign)
         => visibleForeign.ContainsKey(task.Id) && !SubtaskVisibility.IsUnassigned(task);
 
+    /// <summary>The not-mine / context classification for a single row — the three trailing-marker
+    /// flags <see cref="TaskRowFormatter.Format"/> reads (#264). Pure so the in-place
+    /// <see cref="UpdateTaskRow"/> derives the same marker the full render path gives the row,
+    /// instead of silently dropping it. <paramref name="contextParents"/> keys are disjoint from the
+    /// snapshot (a context parent is never in <c>_all</c>), so <c>ContainsKey</c> reproduces the
+    /// render path's <c>row.IsContextParent</c> for the one row an in-place update touches.</summary>
+    internal static (bool IsContextParent, bool IsForeignSubtask, bool IsUnassignedSubtask) ClassifyRowMarker(
+        TaskItem task,
+        IReadOnlyDictionary<string, TaskItem> contextParents,
+        IReadOnlyDictionary<string, TaskItem> visibleForeign)
+        => (contextParents.ContainsKey(task.Id),
+            IsForeignOthers(task, visibleForeign),
+            IsForeignUnassigned(task, visibleForeign));
+
     // ── Actions ────────────────────────────────────────────────────────────
 
     private void TogglePin()
@@ -1481,7 +1498,10 @@ public sealed class TodoApp
                         workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, detail.Id),
                         // Ctrl+N (#216) composes + posts a plain-text comment; the screen owns the
                         // optimistic append/revert, the host owns the off-thread ClickUp write.
-                        postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(taskId, text, ct));
+                        postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(taskId, text, ct),
+                        // Ctrl+E (#217) edits the plain-text description; the screen owns the editor +
+                        // dirty-check + in-place reflection, the host owns the off-thread ClickUp write.
+                        setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(taskId, text, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), and the
@@ -2067,7 +2087,16 @@ public sealed class TodoApp
         var groupedBy = inFocus ? (TaskField?)null : _config.View.GroupField;
         // Reproduce the row's ▶/▼ fold marker from its stored state so an in-place update keeps it (#76).
         var marker = FoldMarker(index < _folds.Count ? _folds[index] : FoldState.None, _config.View.ShowSubtasks);
-        var (text, badges) = BuildRow(updated, _config.BadgeDisplay, _tasks.UserId, index < _depths.Count ? _depths[index] : 0, groupedBy: groupedBy, marker: marker);
+        // Reproduce the row's not-mine / context classification (#264): without these flags BuildRow
+        // drops the trailing "(not assigned to you)" (#70/#179) / "(parent — not assigned to you)"
+        // (#46) / "(unassigned)" (#179) marker until the next full Render, mirroring how the render
+        // path (Render → AddTask → BuildRow) sets them per row.
+        var (isContextParent, isForeignSubtask, isUnassignedSubtask) =
+            ClassifyRowMarker(updated, _contextParents, VisibleForeignSubtasks());
+        var (text, badges) = BuildRow(
+            updated, _config.BadgeDisplay, _tasks.UserId, index < _depths.Count ? _depths[index] : 0,
+            isContextParent, groupedBy: groupedBy, marker: marker,
+            isForeignSubtask: isForeignSubtask, isUnassignedSubtask: isUnassignedSubtask);
         _badges[index] = badges;
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.

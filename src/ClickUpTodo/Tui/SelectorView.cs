@@ -184,13 +184,19 @@ public class SelectorView : View
                 _list.SetFocus();
                 break;
             case KeyCode.Enter:
-                // Pick the highlighted result (top row by default) so the user can add without leaving
-                // the box; no-op when the list is empty.
-                if (_rowItems.Count > 0)
-                {
-                    key.Handled = true;
-                    Pick(_list.SelectedItem ?? 0);
-                }
+                // Enter in the search box is strictly add-only: pick the highlighted row so the user can
+                // add without leaving the box, but only when there's an active query AND that row is an
+                // addable (not already-selected) candidate. Picking a ✓ selected row would remove it —
+                // and that row can still be the highlighted one under a non-blank query during the
+                // type-ahead debounce window (rows haven't re-rendered yet), so gating on query text alone
+                // would reintroduce #234. Removal stays an explicit ✓-row pick (Cursor Down into the list,
+                // then Enter — see OnListKey). Enter is always Handled so it never falls through to a host
+                // default action (e.g. New Task's IsDefault Save button).
+                key.Handled = true;
+                var row = _list.SelectedItem ?? 0;
+                if (row >= 0 && row < _rowItems.Count
+                    && SelectorModel.ShouldPickFromSearchBox(_search.Text, _rowItems[row].Id, _selectedIds))
+                    Pick(row);
                 break;
         }
         // Tab / Shift+Tab / Esc / F1 fall through to the host screen (pane cycle, exit, help).

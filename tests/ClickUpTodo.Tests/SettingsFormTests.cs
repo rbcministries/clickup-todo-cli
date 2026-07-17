@@ -31,6 +31,35 @@ public sealed class SettingsFormTests
     public void ParseRefreshSeconds_AcceptsWhitespacePaddedIntegers()
         => Assert.Equal(60, SettingsForm.ParseRefreshSeconds("  60  ", fallback: 99));
 
+    // ── feed look-back window (#244) ────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("0", 0)]        // 0 = disabled (fetch the full set)
+    [InlineData("7", 7)]
+    [InlineData("30", 30)]
+    [InlineData("3650", 3650)]  // at max
+    public void ParseLookbackDays_KeepsValidInRangeValues(string text, int expected)
+        => Assert.Equal(expected, SettingsForm.ParseLookbackDays(text, fallback: 99));
+
+    [Theory]
+    [InlineData("-1", 0)]        // below min → clamped to 0 (off)
+    [InlineData("-365", 0)]
+    [InlineData("100000", 3650)] // above max → clamped down
+    public void ParseLookbackDays_ClampsOutOfRangeValues(string text, int expected)
+        => Assert.Equal(expected, SettingsForm.ParseLookbackDays(text, fallback: 99));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("abc")]
+    [InlineData(null)]
+    public void ParseLookbackDays_FallsBackWhenNotAnInteger(string? text)
+        => Assert.Equal(14, SettingsForm.ParseLookbackDays(text, fallback: 14));
+
+    [Fact]
+    public void ParseLookbackDays_AcceptsWhitespacePaddedIntegers()
+        => Assert.Equal(30, SettingsForm.ParseLookbackDays("  30  ", fallback: 99));
+
     // ── agent-dispatch extra args (#27) ─────────────────────────────────────────
 
     [Theory]
