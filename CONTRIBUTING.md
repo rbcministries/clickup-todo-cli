@@ -73,7 +73,9 @@ non-negotiables (see `CLAUDE.md` and `.claude/commands/implement-issue.md` for t
 ## How work is organized
 
 - Work is tracked as **GitHub issues**, often grouped under an **`Epic: …`** issue with native
-  sub-issues. Larger features carry a short design note in **`.claude/plans/`**.
+  sub-issues. Larger features carry a short design note in **`docs/plans/`**
+  (see [`docs/plans/README.md`](docs/plans/README.md)); notes for shipped work
+  move to `docs/plans/completed/`.
 - Before starting something non-trivial, comment on the issue (or open one) so effort isn't
   duplicated.
 

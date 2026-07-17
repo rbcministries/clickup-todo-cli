@@ -208,7 +208,7 @@ existing Release**:
 - **Beta tester guide** — ✅ [`docs/beta-testing.md`](beta-testing.md): download link,
   first-run setup, what works / what's deferred, and how to report a bug.
 - **Contributor guide** — ✅ [`CONTRIBUTING.md`](../CONTRIBUTING.md): build/test, the
-  `tui-validate` gate, the plan-then-issue workflow (`.claude/plans/`, `implement-issue`), and
+  `tui-validate` gate, the plan-then-issue workflow (`docs/plans/`, `implement-issue`), and
   PR conventions (Conventional-Commit titles, "Closes #N", squash merge).
 - **Issue templates** — ✅ `.github/ISSUE_TEMPLATE/` issue forms for `bug` (auto-labels
   `bug` + `beta-feedback`) and `enhancement`, plus a `config.yml` that disables blank issues and
