@@ -389,7 +389,7 @@ public sealed class NotificationsFeedScreen : Screen
     /// row carries the cool-blue ` ~ ` chip; a plain comment carries none), and the type-ahead search
     /// keys (comment author / task name). The chip colour is fixed per row-kind (not a ClickUp field
     /// colour), built here in the view layer via <see cref="StatusBadgeListSource.TryCreate"/> —
-    /// mirroring how <c>TodoApp.BuildRow</c> colours task badges from a hex string.</summary>
+    /// mirroring how <see cref="TaskRowRenderer"/> colours task badges from a hex string.</summary>
     internal static (ObservableCollection<string> Text,
                      IReadOnlyList<IReadOnlyList<StatusBadgeListSource.Badge>> Badges,
                      IReadOnlyList<string> Keys)
