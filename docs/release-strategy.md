@@ -125,10 +125,14 @@ dotnet publish src/ClickUpTodo/ClickUpTodo.csproj -c Release \
   -p:PublishSingleFile=true -p:Version=${TAG#v}
 ```
 
-Target runtimes: **`win-x64`** (primary — ODB is Windows-heavy and token storage uses
-Windows DPAPI), plus `linux-x64` and `osx-arm64` for completeness. Attach the produced
-executables to the GitHub Release. A one-page [beta tester guide](#8-feedback--contribution-loop)
-tells them: download, run, paste token, known limitations.
+**Beta.1 ships `win-x64` only.** It's the primary (Windows) audience, it's the best-tested
+target, and it's the only OS where the ClickUp token is **encrypted at rest** (Windows DPAPI,
+current-user scope). On non-Windows the token store falls back to an **unencrypted file** and
+macOS is untested end-to-end, so `linux-x64` and `osx-arm64` are held out of the release matrix
+(commented in `release.yml`, one line to re-enable) until they've been alpha-tested on real
+hardware. Contributors on any OS run from source via `dotnet run` regardless. A one-page
+[beta tester guide](#10-feedback--contribution-loop) tells testers: download, run, paste token,
+known limitations (including the SmartScreen prompt on the unsigned exe).
 
 ### 7b. Dev-machine users — .NET global tool
 
