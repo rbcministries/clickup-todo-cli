@@ -43,7 +43,7 @@ public sealed class TaskServiceClosedPrefetchTests
         public List<long> AssignedDeltaSince { get; } = [];
         public List<long> PersonalDeltaSince { get; } = [];
 
-        public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, CancellationToken ct = default)
+        public Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, long? updatedAfterMs = null, CancellationToken ct = default)
         {
             AssignedIncludeClosedCalls.Add(includeClosed);
             return Task.FromResult(includeClosed ? AssignedAll : AssignedOpen);
