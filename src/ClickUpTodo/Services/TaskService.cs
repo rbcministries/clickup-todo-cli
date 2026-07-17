@@ -265,10 +265,11 @@ public sealed class TaskService(
 
     /// <summary>
     /// Merges the warm closed set into <paramref name="snapshot"/> for the F12→All bridge paint (#253):
-    /// the live snapshot wins any id collision (it's the fresher copy), and the union is re-ordered with
-    /// the standard <see cref="TaskOrder"/>. When the cache is empty this returns <paramref name="snapshot"/>
-    /// unchanged. The authoritative on-demand refresh that follows replaces the snapshot with a superset,
-    /// so this is a transient bridge, never a persistent overlay. Pure and unit-testable.
+    /// every snapshot row is kept (the live copy wins any id collision — it's fresher), and only the
+    /// closed tasks not already present are appended, then the union is re-ordered with the standard
+    /// <see cref="TaskOrder"/>. Returns <paramref name="snapshot"/> unchanged when the cache is empty or
+    /// adds nothing. The authoritative on-demand refresh that follows replaces the snapshot with a
+    /// superset, so this is a transient bridge, never a persistent overlay. Pure and unit-testable.
     /// </summary>
     public IReadOnlyList<TaskItem> SupplementWithClosed(IReadOnlyList<TaskItem> snapshot)
     {
@@ -276,21 +277,23 @@ public sealed class TaskService(
         if (closed.Count == 0)
             return snapshot;
 
-        var byId = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
-        foreach (var task in closed)
+        var present = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var task in snapshot)
         {
             if (!string.IsNullOrEmpty(task.Id))
-                byId[task.Id] = task;
-        }
-        foreach (var task in snapshot) // snapshot wins collisions
-        {
-            if (!string.IsNullOrEmpty(task.Id))
-                byId[task.Id] = task;
+                present.Add(task.Id);
         }
 
-        return byId.Count == snapshot.Count
-            ? snapshot // every closed task was already present — no bridge needed
-            : byId.Values.OrderBy(t => t, TaskOrder.Instance).ToList();
+        // Append only genuinely-new closed tasks; skip any already in the snapshot (the live copy wins)
+        // and any blank id. Building on top of the full snapshot — rather than a keyed union — keeps
+        // every snapshot row regardless of id shape, so the no-op check can't ever drop a row.
+        var additions = closed
+            .Where(t => !string.IsNullOrEmpty(t.Id) && !present.Contains(t.Id))
+            .ToList();
+        if (additions.Count == 0)
+            return snapshot; // every closed task was already present — no bridge needed
+
+        return snapshot.Concat(additions).OrderBy(t => t, TaskOrder.Instance).ToList();
     }
 
     // Assignee IS rules scope the assigned fetch server-side (#68). The default view's "Assignee IS

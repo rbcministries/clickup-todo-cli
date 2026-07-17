@@ -114,24 +114,29 @@ public sealed class TaskServiceClosedPrefetchTests
     [Fact]
     public async Task Prefetch_DoesNotAdvanceDeltaWatermark()
     {
-        // Baseline the delta state from an open-only full load whose newest task is at t=1000.
+        // Baseline the delta state from an open-only full load whose newest task is at t=5_000_000.
+        // Both timestamps sit comfortably above DeltaSkewMs (60_000) so the correct and the leaked
+        // watermarks produce *different* delta `since` values — otherwise both would floor to 0 and the
+        // assertion couldn't tell them apart (the whole point of this test).
+        const long openMs = 5_000_000;
+        const long closedMs = 9_000_000;
         var fake = new FakeClient
         {
-            AssignedOpen = [Open("a", 1000)],
+            AssignedOpen = [Open("a", openMs)],
             // The closed set is *newer* (closing bumps date_updated); if the prefetch leaked into the
-            // watermark, the next delta would query from ~9000 instead of ~1000 and skip real churn.
-            AssignedAll = [Open("a", 1000), Closed("c1", 9000)],
+            // watermark, the next delta would query from ~closedMs instead of ~openMs and skip real churn.
+            AssignedAll = [Open("a", openMs), Closed("c1", closedMs)],
         };
         var service = Service(fake);
-        await service.LoadAsync(); // sets watermark to 1000
+        await service.LoadAsync(); // sets watermark to openMs
 
-        await service.PrefetchClosedTasksAsync(); // must NOT move the watermark
+        await service.PrefetchClosedTasksAsync(); // must NOT move the watermark to closedMs
 
         await service.LoadSnapshotAsync(preferDelta: true);
 
-        // since = watermark(1000) - DeltaSkewMs(60_000), floored at 0 → 0. The point: it derives from the
-        // open watermark (1000), never the closed task's 9000.
-        var expectedSince = Math.Max(0, 1000 - TaskService.DeltaSkewMs);
+        // since derives from the open watermark (openMs), never the closed task's closedMs. A leak would
+        // make this closedMs - DeltaSkewMs = 8_940_000 instead.
+        var expectedSince = openMs - TaskService.DeltaSkewMs; // 4_940_000
         Assert.Equal(expectedSince, Assert.Single(fake.AssignedDeltaSince));
         Assert.Equal(expectedSince, Assert.Single(fake.PersonalDeltaSince));
     }
