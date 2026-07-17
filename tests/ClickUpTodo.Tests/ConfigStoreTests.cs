@@ -267,9 +267,31 @@ public sealed class ConfigStoreTests : IDisposable
         Assert.True(new AppConfig { WorkspaceId = "1", PersonalTasksListId = "2" }.IsConfigured);
     }
 
+    [Fact]
+    public void Save_SwallowsWriteFailure_DoesNotThrow()
+    {
+        // A failed settings write (read-only/full disk, or LiteDB contention when a second tab is
+        // writing #293) must never crash the UI action that triggered it (a pin toggle, an F3 change).
+        var store = new ConfigStore(new ThrowOnSaveStore());
+
+        var ex = Record.Exception(() => store.Save(new AppConfig { WorkspaceId = "1", PersonalTasksListId = "2" }));
+
+        Assert.Null(ex);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_dir))
             Directory.Delete(_dir, recursive: true);
+    }
+
+    /// <summary>A store whose write always fails — stands in for a read-only/full disk or a LiteDB
+    /// contention error, so a test can assert <see cref="ConfigStore.Save"/> swallows it.</summary>
+    private sealed class ThrowOnSaveStore : IStateStore
+    {
+        public bool Exists(string key) => false;
+        public T? Load<T>(string key) where T : class => null;
+        public void Save<T>(string key, T value) where T : class => throw new IOException("disk full");
+        public void Delete(string key) { }
     }
 }

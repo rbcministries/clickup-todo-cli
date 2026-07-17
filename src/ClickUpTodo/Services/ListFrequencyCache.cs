@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 
@@ -59,7 +60,19 @@ public sealed class ListFrequencyCache
 
     private void Load()
     {
-        var doc = _store.Load<ListFrequencyDocument>(StateKeys.Lists);
+        ListFrequencyDocument? doc;
+        try
+        {
+            doc = _store.Load<ListFrequencyDocument>(StateKeys.Lists);
+        }
+        catch (JsonException)
+        {
+            // A malformed payload (an older/incompatible shape, or a torn write from a concurrent tab
+            // — #293) is a clean miss, never a crash: Load() runs synchronously in the constructor, so
+            // a throw here would brick the selector's owner. Start empty; the pool re-warms from the
+            // next poll. Mirrors the corrupt-cache handling in TaskCache/FeedCache.
+            return;
+        }
         // A missing document, a different workspace, or an incompatible schema all mean "no warm pool"
         // — start empty rather than surface stale/foreign lists.
         if (doc is null

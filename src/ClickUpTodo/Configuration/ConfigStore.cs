@@ -40,7 +40,19 @@ public sealed class ConfigStore
         return config;
     }
 
-    public void Save(AppConfig config) => _store.Save(StateKeys.Config, config);
+    public void Save(AppConfig config)
+    {
+        try
+        {
+            _store.Save(StateKeys.Config, config);
+        }
+        catch
+        {
+            // A failed settings write (read-only / full disk, or a LiteDB contention error when a
+            // second tab is writing #293) must never crash the UI action that triggered it (a pin
+            // toggle, an F3 view change). The in-memory config lives on; the next save retries.
+        }
+    }
 
     /// <summary>Forget the persisted settings (used by <c>--reset</c>). Backend-agnostic.</summary>
     public void Delete() => _store.Delete(StateKeys.Config);

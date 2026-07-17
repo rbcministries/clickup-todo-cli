@@ -351,9 +351,31 @@ public sealed class FeedCacheTests : IDisposable
         Assert.Equal(FeedCache.KeyFor(Config(view: upper)), FeedCache.KeyFor(Config(view: lower)));
     }
 
+    [Fact]
+    public void Save_SwallowsWriteFailure_DoesNotThrow()
+    {
+        // The feed cache is a throwaway warm-paint snapshot; a failed write (read-only/full disk, or
+        // LiteDB contention under multi-tab writes #293) must never break the feed refresh.
+        var cache = new FeedCache(new ThrowOnSaveStore());
+
+        var ex = Record.Exception(() => cache.Save(Config(), [Comment("c1")]));
+
+        Assert.Null(ex);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_dir))
             Directory.Delete(_dir, recursive: true);
+    }
+
+    /// <summary>A store whose write always fails — stands in for a read-only/full disk or a LiteDB
+    /// contention error, so a test can assert <see cref="FeedCache.Save"/> swallows it.</summary>
+    private sealed class ThrowOnSaveStore : IStateStore
+    {
+        public bool Exists(string key) => false;
+        public T? Load<T>(string key) where T : class => null;
+        public void Save<T>(string key, T value) where T : class => throw new IOException("disk full");
+        public void Delete(string key) { }
     }
 }
