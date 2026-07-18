@@ -240,10 +240,12 @@ public class SelectorView : View
     /// </summary>
     private void OnListMouse(object? sender, Mouse e)
     {
-        if (!e.Flags.HasFlag(MouseFlags.LeftButtonClicked) || e.Position is not { } pos)
+        // A negative Y (above the list) is guarded before adding the scroll offset — matching
+        // QuickUpdatesModel.RowIndexAt — so it can't resolve to a valid-but-wrong row.
+        if (!e.Flags.HasFlag(MouseFlags.LeftButtonClicked) || e.Position is not { Y: >= 0 } pos)
             return;
         var row = _list.Viewport.Y + pos.Y;
-        if (row < 0 || row >= _rowItems.Count)
+        if (row >= _rowItems.Count)
             return;
         e.Handled = true;
         _list.SetFocus();
