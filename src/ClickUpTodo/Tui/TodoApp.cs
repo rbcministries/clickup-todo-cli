@@ -47,10 +47,6 @@ public sealed class TodoApp
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
-    // Opens a task URL in the system browser (#304). Injected so the E2E harness can swap in a
-    // recording launcher; defaults to the OS shell association (SystemBrowserLauncher). The Ctrl+B
-    // rewrite to the workspace subdomain host is applied before the URL reaches this.
-    private readonly IBrowserLauncher _browserLauncher;
     // Persists the last loaded working set for an instant first paint on the next launch (#122). Read
     // once at startup (TryPaintCachedTasks) and written after each changed live load (OnTasksLoaded).
     private readonly TaskCache _taskCache;
@@ -65,6 +61,11 @@ public sealed class TodoApp
     // set's home lists and backfilled (count-0) from the scheduled list-hierarchy walk (#236). Never
     // touches rendering or input — no #3/#12 impact.
     private readonly ListFrequencyCache _lists;
+    // Cross-platform open-in-browser (#308): Windows shell association, macOS `open`, Linux `xdg-open`
+    // & friends, resolved by BrowserLaunchPlanner. The TUI isn't unit-tested; the launch logic lives
+    // in the planner and is covered there. Injected (#304) so the E2E harness can swap in a recording
+    // launcher; defaults to the real OS launcher.
+    private readonly IBrowserLauncher _browser;
     // How many candidates the Assignees pane wants available before it stops needing the deferred
     // workspace-members top-up (it fills its empty state up to 10 rows).
     private const int AssigneeCandidateTarget = 10;
@@ -174,7 +175,7 @@ public sealed class TodoApp
         _feedCache = feedCache;
         _assignees = assignees;
         _lists = lists;
-        _browserLauncher = browserLauncher ?? new SystemBrowserLauncher();
+        _browser = browserLauncher ?? new SystemBrowserLauncher();
         _agent = BuildAgentDispatcher();
     }
 
@@ -1461,18 +1462,18 @@ public sealed class TodoApp
         var target = ClickUpUrl.RewriteHost(url, _config.WorkspaceSubdomain);
         if (!Uri.TryCreate(target, UriKind.Absolute, out var uri))
         {
-            Flash("Task URL is not a valid link.");
+            Flash($"Not a valid URL: {target}");
             return;
         }
 
-        try
+        if (_browser.TryOpen(uri))
         {
-            Flash(_browserLauncher.TryOpen(uri) ? $"Opened: {name}" : "Could not open browser.");
+            Flash($"Opened: {name}");
+            return;
         }
-        catch (Exception ex)
-        {
-            Flash($"Could not open browser: {Short(ex)}");
-        }
+
+        var hint = BrowserLaunchPlanner.OpenerHint(BrowserLaunchPlanner.CurrentOS());
+        Flash(hint is null ? $"Couldn't open a browser — copy the URL: {target}" : $"Couldn't open a browser ({hint}) — copy the URL: {target}");
     }
 
     private void OpenDetail()
@@ -1771,7 +1772,7 @@ public sealed class TodoApp
         // Fast path: statuses were warmed by the background prefetch — open instantly, no round-trip.
         if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
         {
-            ShowQuickUpdates(task, cached);
+            ShowQuickUpdates(task, cached, ListTarget);
             return;
         }
 
@@ -1782,7 +1783,7 @@ public sealed class TodoApp
             try
             {
                 var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
-                Application.Invoke(() => ShowQuickUpdates(task, statuses));
+                Application.Invoke(() => ShowQuickUpdates(task, statuses, ListTarget));
             }
             catch (Exception ex)
             {
@@ -1813,9 +1814,20 @@ public sealed class TodoApp
             return;
         }
 
+        // Decouple the write path from `_all` (#297): if the detail's task has a row/snapshot entry the
+        // list target repaints it (unchanged behaviour); otherwise — a feed-opened task (#115), and every
+        // task in single-task launch mode (#296) — the commit runs against the loaded task itself, so it
+        // no longer dead-ends at "no longer in the list" with no `_all` present.
+        // Frozen here, before the cold-path status fetch below: if an absent task materialised in `_all`
+        // during that await it would commit against the single-task target and not repaint the now-present
+        // row — benign (the write still lands; the next background refresh reconciles the row).
+        var target = QuickUpdatesTaskById(task.Id) is not null
+            ? ListTarget
+            : new SingleTaskUpdateTarget(task);
+
         if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
         {
-            ShowQuickUpdates(task, cached, detailScreen);
+            ShowQuickUpdates(task, cached, target, detailScreen);
             return;
         }
 
@@ -1825,7 +1837,7 @@ public sealed class TodoApp
             try
             {
                 var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
-                Application.Invoke(() => ShowQuickUpdates(task, statuses, detailScreen));
+                Application.Invoke(() => ShowQuickUpdates(task, statuses, target, detailScreen));
             }
             catch (Exception ex)
             {
@@ -1844,7 +1856,8 @@ public sealed class TodoApp
     /// each committed status/priority so the popped-back detail shows the change.
     /// </para>
     /// </summary>
-    private void ShowQuickUpdates(TaskItem task, IReadOnlyList<StatusOption> statuses, TaskDetailScreen? detailOrigin = null)
+    private void ShowQuickUpdates(TaskItem task, IReadOnlyList<StatusOption> statuses,
+        IQuickUpdateTarget target, TaskDetailScreen? detailOrigin = null)
     {
         if (statuses.Count == 0)
         {
@@ -1863,12 +1876,14 @@ public sealed class TodoApp
             // Assignees pane (#158): candidate pool from the frequency cache (#155); add/remove apply
             // immediately via ApplyAssigneeAsync (the selector owns the optimistic update + revert).
             _assignees.Match, _assignees.TopMostFrequent,
-            (kind, person, ct) => ApplyAssigneeAsync(task.Id, kind, person, ct));
+            (kind, person, ct) => ApplyAssigneeAsync(task.Id, kind, person, target, ct));
         // Status/Priority apply on Enter and reconcile the screen's ✓ from the server-confirmed value.
+        // The commit resolves against and writes back to `target` (#297) — the list snapshot in list mode,
+        // the loaded task with no list in single-task mode — decoupling the write path from `_all`.
         // A detail-origin launch (#159) also reflects each committed value onto the detail so the
         // popped-back detail shows it; `statuses` supplies the colour for a reflected status.
-        screen.StatusCommitted += status => ApplyStatus(task.Id, status, screen, detailOrigin, statuses);
-        screen.PriorityCommitted += level => ApplyPriority(task.Id, level, screen, detailOrigin);
+        screen.StatusCommitted += status => ApplyStatus(task.Id, status, screen, target, detailOrigin, statuses);
+        screen.PriorityCommitted += level => ApplyPriority(task.Id, level, screen, target, detailOrigin);
         ShowScreen(screen, static () => { });
     }
 
@@ -1884,7 +1899,7 @@ public sealed class TodoApp
     /// same-task writes settle on the last-returning confirmed set and self-heal on the next refresh.
     /// </summary>
     private async Task<IReadOnlyList<TaskAssignee>> ApplyAssigneeAsync(
-        string taskId, ToggleKind kind, TaskAssignee person, CancellationToken ct)
+        string taskId, ToggleKind kind, TaskAssignee person, IQuickUpdateTarget target, CancellationToken ct)
     {
         // Deliberately do NOT thread the selector's cancellation token into the write: that token is
         // cancelled when the screen is disposed (Esc), so forwarding it would cancel an in-flight
@@ -1899,10 +1914,11 @@ public sealed class TodoApp
             : await _tasks.RemoveAssigneeAsync(taskId, person.Id).ConfigureAwait(false);
         Application.Invoke(() =>
         {
-            // QuickUpdatesTaskById (not TaskById) so an assignee edit on a foreign subtask / context
-            // parent — now editable (#160) — reconciles its row in place too, not just tasks in _all.
-            if (QuickUpdatesTaskById(taskId) is { } t)
-                UpdateTaskRow(t with { Assignees = confirmed }, sending: false);
+            // Resolve/apply through the target (#297): the list target reconciles the row in place — for a
+            // foreign subtask / context parent too (#160), not just tasks in _all — while a single-task
+            // target updates the loaded task with no list present.
+            if (target.Resolve(taskId) is { } t)
+                target.Apply(t with { Assignees = confirmed }, sending: false);
         });
         return confirmed;
     }
@@ -1917,6 +1933,19 @@ public sealed class TodoApp
     /// user's own work (#160). <see cref="UpdateTaskRow"/> keeps both in sync, so consecutive edits
     /// compose regardless of which side holds the row.</summary>
     private TaskItem? QuickUpdatesTaskById(string taskId) => TaskService.FindById(_all, _rows, taskId);
+
+    // The list-backed Quick Updates write target (#297): resolves against the canonical snapshot + visible
+    // rows and repaints the on-screen row via UpdateTaskRow — i.e. the unchanged list-mode behaviour. It
+    // holds no state of its own (it delegates to the host's live snapshot), so one shared instance serves
+    // every list-origin launch; single-task launches get a fresh SingleTaskUpdateTarget instead.
+    private sealed class ListUpdateTarget(TodoApp app) : IQuickUpdateTarget
+    {
+        public TaskItem? Resolve(string taskId) => app.QuickUpdatesTaskById(taskId);
+        public void Apply(TaskItem updated, bool sending) => app.UpdateTaskRow(updated, sending);
+    }
+
+    private IQuickUpdateTarget? _listTarget;
+    private IQuickUpdateTarget ListTarget => _listTarget ??= new ListUpdateTarget(this);
 
     // Monotonic per-field commit counters. The Quick Updates screen stays open, so the user can fire a
     // second write for the same field before the first returns; each commit stamps its generation and a
@@ -1938,9 +1967,9 @@ public sealed class TodoApp
     /// </para>
     /// </summary>
     private void ApplyStatus(string taskId, string status, QuickUpdatesScreen screen,
-        TaskDetailScreen? detailOrigin = null, IReadOnlyList<StatusOption>? statuses = null)
+        IQuickUpdateTarget target, TaskDetailScreen? detailOrigin = null, IReadOnlyList<StatusOption>? statuses = null)
     {
-        var task = QuickUpdatesTaskById(taskId);
+        var task = target.Resolve(taskId);
         if (task is null)
         {
             // The screen hasn't moved its ✓ yet (it defers that to us), so just report and bail.
@@ -1953,7 +1982,7 @@ public sealed class TodoApp
 
         ReconcileScreenStatus(screen, status); // optimistic ✓
         ReflectDetailStatus(detailOrigin, status, ColorForStatus(statuses, status));
-        UpdateTaskRow(task with { StatusName = status }, sending: true);
+        target.Apply(task with { StatusName = status }, sending: true);
         Flash($"Setting '{status}'…");
 
         _ = Task.Run(async () =>
@@ -1966,8 +1995,8 @@ public sealed class TodoApp
                     if (gen != _statusCommitGen)
                         return; // a newer status commit superseded this one
                     var final = confirmed ?? status;
-                    if (QuickUpdatesTaskById(taskId) is { } t)
-                        UpdateTaskRow(t with { StatusName = final }, sending: false);
+                    if (target.Resolve(taskId) is { } t)
+                        target.Apply(t with { StatusName = final }, sending: false);
                     ReconcileScreenStatus(screen, final);
                     ReflectDetailStatus(detailOrigin, final, ColorForStatus(statuses, final));
                     Flash($"Set status to '{final}'.");
@@ -1979,8 +2008,8 @@ public sealed class TodoApp
                 {
                     if (gen != _statusCommitGen)
                         return;
-                    if (QuickUpdatesTaskById(taskId) is { } t)
-                        UpdateTaskRow(t with { StatusName = previousStatus }, sending: false); // revert
+                    if (target.Resolve(taskId) is { } t)
+                        target.Apply(t with { StatusName = previousStatus }, sending: false); // revert
                     ReconcileScreenStatus(screen, previousStatus);
                     ReflectDetailStatus(detailOrigin, previousStatus, previousColor);
                     Flash($"Could not set status: {Short(ex)}");
@@ -1995,9 +2024,9 @@ public sealed class TodoApp
     /// confirm-from-server on success, revert-the-row on failure, drop a superseded continuation.
     /// </summary>
     private void ApplyPriority(string taskId, int? level, QuickUpdatesScreen screen,
-        TaskDetailScreen? detailOrigin = null)
+        IQuickUpdateTarget target, TaskDetailScreen? detailOrigin = null)
     {
-        var task = QuickUpdatesTaskById(taskId);
+        var task = target.Resolve(taskId);
         if (task is null)
         {
             Flash("This task is no longer in the list — priority unchanged.");
@@ -2008,7 +2037,7 @@ public sealed class TodoApp
 
         ReconcileScreenPriority(screen, level); // optimistic ✓
         ReflectDetailPriority(detailOrigin, level);
-        UpdateTaskRow(WithPriority(task, level), sending: true);
+        target.Apply(WithPriority(task, level), sending: true);
         Flash($"Setting priority '{ClickUpPriority.NameFromLevel(level) ?? "none"}'…");
 
         _ = Task.Run(async () =>
@@ -2020,8 +2049,8 @@ public sealed class TodoApp
                 {
                     if (gen != _priorityCommitGen)
                         return; // a newer priority commit superseded this one
-                    if (QuickUpdatesTaskById(taskId) is { } t)
-                        UpdateTaskRow(WithPriority(t, confirmed), sending: false);
+                    if (target.Resolve(taskId) is { } t)
+                        target.Apply(WithPriority(t, confirmed), sending: false);
                     ReconcileScreenPriority(screen, confirmed);
                     ReflectDetailPriority(detailOrigin, confirmed);
                     Flash($"Set priority to '{ClickUpPriority.NameFromLevel(confirmed) ?? "none"}'.");
@@ -2033,8 +2062,8 @@ public sealed class TodoApp
                 {
                     if (gen != _priorityCommitGen)
                         return;
-                    if (QuickUpdatesTaskById(taskId) is { } t)
-                        UpdateTaskRow(WithPriority(t, previousLevel), sending: false); // revert
+                    if (target.Resolve(taskId) is { } t)
+                        target.Apply(WithPriority(t, previousLevel), sending: false); // revert
                     ReconcileScreenPriority(screen, previousLevel);
                     ReflectDetailPriority(detailOrigin, previousLevel);
                     Flash($"Could not set priority: {Short(ex)}");
@@ -2098,14 +2127,11 @@ public sealed class TodoApp
     /// </summary>
     private void UpdateTaskRow(TaskItem updated, bool sending)
     {
-        _all = TaskService.ApplyStatusChange(_all, updated.Id, updated.StatusName);
-        _all = TaskService.ApplyPriorityChange(
-            _all, updated.Id, updated.PriorityLevel, updated.PriorityName, updated.PriorityColor);
         // Per-field sync (#158): the `updated` record always carries the current value for the fields a
-        // given caller didn't touch, so applying all three never clobbers — a status/priority commit
+        // given caller didn't touch, so folding all three never clobbers — a status/priority commit
         // re-applies the task's existing assignees (a no-op) and an assignee change re-applies its
-        // existing status/priority.
-        _all = TaskService.ApplyAssigneesChange(_all, updated.Id, updated.Assignees);
+        // existing status/priority. This is the same pure reconcile the single-task target uses (#297).
+        _all = TaskService.ApplyFieldChanges(_all, updated);
         _signature = CurrentSignature(_all);
 
         var index = _rows.FindIndex(r => r?.Id == updated.Id);

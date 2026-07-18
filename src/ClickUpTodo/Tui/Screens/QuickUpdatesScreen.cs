@@ -129,6 +129,11 @@ public sealed class QuickUpdatesScreen : Screen
         foreach (var pane in _panes)
             pane.KeyDown += OnPaneKey;
 
+        // Mouse click-to-apply (#288): a left-click on a Status/Priority row selects and commits it in
+        // one gesture. The Assignees pane owns its own click (SelectorView.OnListMouse).
+        _statusList.MouseEvent += (_, e) => OnListClick(e, _statusList, _statuses.Count, CommitStatus);
+        _priorityList.MouseEvent += (_, e) => OnListClick(e, _priorityList, QuickUpdatesModel.PriorityLabels.Count, CommitPriority);
+
         Add([statusFrame, priorityFrame, assigneesFrame]);
     }
 
@@ -187,6 +192,28 @@ public sealed class QuickUpdatesScreen : Screen
                 Close();
                 break;
         }
+    }
+
+    /// <summary>
+    /// A left-click on a Status/Priority row is select-and-apply in one gesture (#288): resolve the
+    /// clicked row (via the pure <see cref="QuickUpdatesModel.RowIndexAt"/>, using the list's scroll
+    /// offset), move the highlight and focus there, then run the same commit path Enter uses — which
+    /// keeps the "unchanged → flash, no-op" guard and the host's optimistic-apply + revert + ✓ reconcile.
+    /// Only the single left-click is handled; a click on empty space below a short list resolves to
+    /// <c>-1</c> and is left unhandled (native select behaviour intact), so it can never apply the
+    /// nearest row.
+    /// </summary>
+    private static void OnListClick(Mouse e, ListView list, int rowCount, Action commit)
+    {
+        if (!e.Flags.HasFlag(MouseFlags.LeftButtonClicked) || e.Position is not { } pos)
+            return;
+        var row = QuickUpdatesModel.RowIndexAt(pos.Y, list.Viewport.Y, rowCount);
+        if (row < 0)
+            return;
+        e.Handled = true;
+        list.SetFocus();
+        list.SelectedItem = row;
+        commit();
     }
 
     private void CommitStatus()

@@ -277,6 +277,38 @@
           }
         }
       }
+    },
+    "/v2/comment/{comment_id}/reply": {
+      "get": {
+        "operationId": "GetThreadedComments",
+        "summary": "Get the replies in a comment's thread (most recent first).",
+        "parameters": [
+          { "name": "comment_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The comment's reply thread. Replies use the same comment shape as the flat task-comment list; unlike /task/{id}/comment this endpoint is not cursor-paginated (a thread is bounded by its parent).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CommentsResponse" } } }
+          }
+        }
+      },
+      "post": {
+        "operationId": "CreateThreadedComment",
+        "summary": "Post a plain-text reply into a comment's thread.",
+        "parameters": [
+          { "name": "comment_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCommentRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The created reply (ClickUp returns only its id, hist_id, and date — not the text/author/blocks).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateCommentResponse" } } }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -426,7 +458,8 @@
           "comment": { "type": "array", "nullable": true, "items": { "$ref": "#/components/schemas/CommentBlock" } },
           "user": { "$ref": "#/components/schemas/User" },
           "date": { "type": "string", "nullable": true },
-          "resolved": { "type": "boolean", "nullable": true }
+          "resolved": { "type": "boolean", "nullable": true },
+          "reply_count": { "type": "string", "nullable": true, "description": "Number of replies in this comment's thread, as a string (ClickUp returns numeric comment fields as strings, like 'date'). Absent/unparseable ⇒ 0." }
         }
       },
       "CommentsResponse": {
@@ -435,7 +468,7 @@
       },
       "CreateCommentRequest": {
         "type": "object",
-        "description": "Body for POST /task/{task_id}/comment. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.",
+        "description": "Plain-text comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.",
         "required": ["comment_text"],
         "properties": {
           "comment_text": { "type": "string" },
