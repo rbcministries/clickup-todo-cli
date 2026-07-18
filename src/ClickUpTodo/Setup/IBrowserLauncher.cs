@@ -67,7 +67,11 @@ public sealed class SystemBrowserLauncher : IBrowserLauncher
         }
     }
 
-    /// <summary>True if <paramref name="name"/> resolves to an executable on the current PATH.</summary>
+    /// <summary>
+    /// True if <paramref name="name"/> resolves to an executable on the current PATH. Mirrors
+    /// <c>TerminalLauncher.ExecutableOnPath</c>; browser openers are POSIX-only (Windows uses the
+    /// shell association, never this probe), so the Windows-extension handling is defensive parity.
+    /// </summary>
     private static bool ExecutableOnPath(string name)
     {
         if (string.IsNullOrWhiteSpace(name))

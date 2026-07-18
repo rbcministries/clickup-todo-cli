@@ -86,6 +86,27 @@ public sealed class BrowserLaunchTests
     }
 
     [Fact]
+    public void Linux_BrowserEnvVar_ColonSeparatedList_HonoursEachPresentEntry()
+    {
+        Func<string, string?> env = v => v == "BROWSER" ? "firefox:chromium" : null;
+        var specs = Plan(OSPlatformKind.Linux, Present("chromium", "xdg-open"), env); // firefox absent
+
+        Assert.Equal(["chromium", "xdg-open"], specs.Select(s => s.FileName));
+        Assert.Equal([Url.ToString()], specs[0].Arguments);
+    }
+
+    [Fact]
+    public void Linux_BrowserEnvVar_StripsPlaceholderToExecutable()
+    {
+        Func<string, string?> env = v => v == "BROWSER" ? "firefox %s" : null;
+        var specs = Plan(OSPlatformKind.Linux, Present("firefox"), env);
+
+        var cmd = Assert.Single(specs);
+        Assert.Equal("firefox", cmd.FileName);
+        Assert.Equal([Url.ToString()], cmd.Arguments); // URL appended, %s not left in the vector
+    }
+
+    [Fact]
     public void Linux_GioTakesOpenSubcommand()
     {
         var specs = Plan(OSPlatformKind.Linux, Present("gio"));

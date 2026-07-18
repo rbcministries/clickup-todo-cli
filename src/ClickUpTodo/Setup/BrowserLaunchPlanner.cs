@@ -81,9 +81,21 @@ public static class BrowserLaunchPlanner
     {
         var specs = new List<BrowserCommand>();
 
+        // $BROWSER is an XDG-convention colon-separated list of commands, each of which may carry a
+        // `%s`/`%c` placeholder (e.g. "firefox %s:chromium"). Honour the executable of every entry
+        // that's on PATH, passing the URL as its argument — placeholder *position* isn't substituted
+        // (the URL is appended), which is what browsers expect anyway. Malformed / not-found entries
+        // are skipped; if that empties $BROWSER we still fall through to xdg-open (which re-reads it).
         var configured = getEnv("BROWSER");
-        if (!string.IsNullOrWhiteSpace(configured) && exists(configured))
-            specs.Add(new BrowserCommand(configured, [target], false, configured));
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            foreach (var entry in configured.Split(':', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var exe = entry.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+                if (!string.IsNullOrEmpty(exe) && !exe.Contains('%') && exists(exe))
+                    specs.Add(new BrowserCommand(exe, [target], false, exe));
+            }
+        }
 
         foreach (var opener in new[] { "xdg-open", "gio", "x-www-browser", "www-browser", "sensible-browser" })
         {
