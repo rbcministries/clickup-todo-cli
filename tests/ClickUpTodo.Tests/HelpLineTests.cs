@@ -27,12 +27,22 @@ public sealed class HelpLineTests
     public void Format_MainList_RendersTheFullFooter()
     {
         const string expected =
-            "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+N new task · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
+            "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+O open by id · Ctrl+N new task · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
             + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 ↻ · F6 badges · F12 completed · "
             + "→/← expand/collapse · Ctrl+→/← all · Ctrl+Q quit · type to search";
 
         Assert.Equal(expected, HelpLine.Format(HelpItemSets.MainList));
     }
+
+    [Fact]
+    public void MainList_CarriesCtrlOQuickOpen()
+        => Assert.Contains(new HelpItem("Ctrl+O", "open by id"), HelpItemSets.MainList);
+
+    [Fact]
+    public void Format_QuickOpen_RendersOpenHelpCancel()
+        => Assert.Equal(
+            "Enter/Open open · F1 help · Esc cancel",
+            HelpLine.Format(HelpItemSets.QuickOpen));
 
     [Fact]
     public void MainList_CarriesCtrlNNewTask()
@@ -81,6 +91,7 @@ public sealed class HelpLineTests
         HelpItemSets.Settings,
         HelpItemSets.FilterSortGroup,
         HelpItemSets.QuickUpdates,
+        HelpItemSets.QuickOpen,
         HelpItemSets.NotificationsFeed,
         HelpItemSets.Help,
     };
@@ -98,6 +109,7 @@ public sealed class HelpLineTests
         HelpItemSets.Settings,
         HelpItemSets.FilterSortGroup,
         HelpItemSets.QuickUpdates,
+        HelpItemSets.QuickOpen,
         HelpItemSets.NotificationsFeed,
     };
 
