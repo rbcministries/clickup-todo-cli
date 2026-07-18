@@ -762,12 +762,21 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // Ctrl+→ / Ctrl+← cycle the detail tabs (#315), moving tab-switch off bare Tab/Shift+Tab so
+        // those free up for in-pane link focus traversal (#319, E). Ctrl-modified so they never collide
+        // with the panes' bare cursor movement; DetailTabNav keeps it inert while the Dispatch prompt is
+        // open (its dir-browser owns bare ←/→ and its fields own cursor movement) — the same reason the
+        // open Dispatch pane used to consume Tab before it reached the tab cycle.
+        var tabNav = DetailTabNav.Route(ClassifyTabNav(key), _promptBox.Visible);
+        if (tabNav != DetailTabNav.NavAction.None)
+        {
+            key.Handled = true;
+            CycleTab(forward: tabNav == DetailTabNav.NavAction.CycleForward);
+            return;
+        }
+
         switch (key.KeyCode)
         {
-            case KeyCode.Tab:
-                key.Handled = true;
-                CycleTab(forward: !key.IsShift);
-                break;
             case KeyCode.F5:
                 key.Handled = true;
                 RequestRefresh();
@@ -814,6 +823,20 @@ public sealed class TaskDetailScreen : Screen
                 ScrollActiveTab(Command.PageDown);
                 break;
         }
+    }
+
+    /// <summary>Classifies a Terminal.Gui key into <see cref="DetailTabNav"/>'s chord vocabulary:
+    /// <c>Ctrl+→</c>/<c>Ctrl+←</c> cycle tabs (#315), everything else falls through.</summary>
+    private static DetailTabNav.NavKey ClassifyTabNav(Key key)
+    {
+        if (!key.IsCtrl)
+            return DetailTabNav.NavKey.Other;
+        return (key.KeyCode & ~KeyCode.CtrlMask) switch
+        {
+            KeyCode.CursorRight => DetailTabNav.NavKey.CtrlRight,
+            KeyCode.CursorLeft => DetailTabNav.NavKey.CtrlLeft,
+            _ => DetailTabNav.NavKey.Other,
+        };
     }
 
     /// <summary>Classifies a Terminal.Gui key into the pane's key vocabulary. Shift+Tab arrives as a
@@ -1440,7 +1463,7 @@ public sealed class TaskDetailScreen : Screen
         var current = Array.IndexOf(_tabContents, _tabs.Value);
         if (current < 0)
             current = 0;
-        var next = ((current + (forward ? 1 : -1)) % _tabContents.Length + _tabContents.Length) % _tabContents.Length;
+        var next = DetailTabNav.NextTab(current, _tabContents.Length, forward);
         _tabs.Value = _tabContents[next];
         _scrollTargets[next].SetFocus();
         // If the Stream tab wasn't the default, its auto-scroll (#107) was deferred until it's shown —
