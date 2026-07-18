@@ -494,6 +494,13 @@ public sealed class TodoApp
                     key.Handled = true;
                     OpenNewTask();
                     break;
+                case KeyCode.U:
+                    // Ctrl+U opens Quick Updates (#159). Standardized to match Task Detail's Ctrl+U so
+                    // the same action uses the same key everywhere (#290); the old bare-Space launcher is
+                    // retired, freeing Space for the ListView type-ahead (#12).
+                    key.Handled = true;
+                    OpenQuickUpdates();
+                    break;
                 case KeyCode.E:
                     // Ctrl+E toggles to the mentions & comments feed — List ↔ Feed navigation.
                     key.Handled = true;
@@ -531,10 +538,6 @@ public sealed class TodoApp
 
         switch (key.KeyCode)
         {
-            case KeyCode.Space:
-                key.Handled = true;
-                OpenQuickUpdates();
-                break;
             case KeyCode.Enter:
                 key.Handled = true;
                 OpenDetail();
