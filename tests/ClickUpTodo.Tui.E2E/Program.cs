@@ -55,6 +55,21 @@ var feedCache = new FeedCache(cacheStore);
 var assignees = new AssigneeFrequencyCache(
     stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
 var lists = new ListFrequencyCache(stateStore, config.WorkspaceId);
+
+// #333 bridge-paint scenario: warm the closed-task cache *before* the TUI boots, so the F12→All
+// bridge (TaskService.SupplementWithClosed) has a set to splice and paints closed rows on the
+// pre-refresh frame. Exercises the real fetch→map→ClosedTaskCache.Update path (no synthetic inject);
+// no state store is needed since Update sets the in-memory snapshot regardless of persistence. Off by
+// default so every other scenario keeps its cold, empty warm set (byte-identical A/B first paint).
+if (Environment.GetEnvironmentVariable("E2E_WARM_CLOSED") == "1")
+    await tasks.PrefetchClosedTasksAsync();
+
+// Arm the closed-refresh stall (#333) only now — after any warm prefetch has already run unstalled —
+// so the delay hits the *authoritative* F12→All include_closed=true refresh (opening a deterministic
+// window to observe the pre-refresh bridge frame) but never the pre-boot warm prefetch above. A no-op
+// unless E2E_STALL_CLOSED_MS > 0.
+FakeClickUp.ArmClosedStall();
+
 new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists).Run("ansi");
 return;
 
@@ -83,6 +98,29 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
     // (which don't set it) see the original empty assignee set.
     private const long SeededAssigneeId = 101; // Ada Lovelace (Members[0])
     private static bool SeedQuAssignee => Environment.GetEnvironmentVariable("E2E_QU_SEED_ASSIGNEE") == "1";
+
+    // #333 closed-task bridge-paint scenario knobs (default off, so no other check is affected):
+    //  • E2E_WARM_CLOSED=1 — the completed task (tclosed) is served with a *recent* date_updated so it
+    //    survives ClosedTaskCache's 30-day age window when the warm-now hook (Program.cs) prefetches it.
+    //    Off ⇒ the original fixed date (which the feed checks rely on for comment-sort order) is kept.
+    //  • E2E_STALL_CLOSED_MS=<ms> — delay the *authoritative* include_closed=true team-task refresh by
+    //    this many ms once armed (see ArmClosedStall), so the F12→All pre-refresh bridge frame is
+    //    deterministically observable before the superset lands.
+    private static bool WarmClosed => Environment.GetEnvironmentVariable("E2E_WARM_CLOSED") == "1";
+    private static readonly int ClosedStallMs =
+        int.TryParse(Environment.GetEnvironmentVariable("E2E_STALL_CLOSED_MS"), out var ms) ? ms : 0;
+    private static volatile bool _closedStallArmed;
+
+    /// <summary>Arms the include_closed refresh stall (#333). Called by <c>Program.cs</c> right before
+    /// <c>Run()</c>, i.e. after any pre-boot warm prefetch — so the stall hits the authoritative F12→All
+    /// refresh but never the warm prefetch that seeds the bridge. A no-op unless E2E_STALL_CLOSED_MS &gt; 0.</summary>
+    public static void ArmClosedStall() => _closedStallArmed = true;
+
+    /// <summary>The completed task's <c>date_updated</c>: recent (so the warm cache's age window keeps it)
+    /// only under E2E_WARM_CLOSED, otherwise the original fixed timestamp the feed checks depend on.</summary>
+    private static string ClosedTaskDateUpdated => WarmClosed
+        ? DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds().ToString()
+        : "1751500000000";
 
     // The current assignee set of any task the Assignees pane writes to, mutated by the PUT so the
     // add/remove round-trip is truthful (the write response echoes the new set, which the pane and the
@@ -141,7 +179,15 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
                 lock (_gate) body = DetailJson(path, _assignees);
         }
         else if (path.Contains("/team/") && path.EndsWith("/task"))
+        {
+            // #333: stall the authoritative F12→All include_closed=true refresh (once armed) so the
+            // pre-refresh bridge frame is observable before this superset replaces it. The pre-boot warm
+            // prefetch's include_closed fetch runs unarmed, so it is never delayed; the default
+            // include_closed=false boot/poll fetches never match this gate.
+            if (!_foreign && ClosedStallMs > 0 && _closedStallArmed && IncludeClosed(query))
+                await Task.Delay(ClosedStallMs, ct);
             body = _foreign ? ForeignTeamTasks() : TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
+        }
         else if (request.Method == HttpMethod.Post && path.Contains("/list/") && path.EndsWith("/task"))
             // Create-task (#209/#213): echo a created task so the New Task screen's Save round-trips
             // through the facade and closes back to the list. (Not persisted into the team-tasks list.)
@@ -213,8 +259,8 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
         if (includeClosed && lastPage)
         {
             if (count > 0) sb.Append(',');
-            sb.Append("""
-            {"id":"tclosed","name":"Closed ticket — shipped and done ✅","status":{"status":"complete","type":"closed","color":"#6bc950"},"list":{"id":"plist","name":"Personal Tasks"},"date_updated":"1751500000000","url":"https://app.clickup.com/t/tclosed"}
+            sb.Append($$"""
+            {"id":"tclosed","name":"Closed ticket — shipped and done ✅","status":{"status":"complete","type":"closed","color":"#6bc950"},"list":{"id":"plist","name":"Personal Tasks"},"date_updated":"{{ClosedTaskDateUpdated}}","url":"https://app.clickup.com/t/tclosed"}
             """);
         }
         sb.Append($"],\"last_page\":{(lastPage ? "true" : "false")}}}");
