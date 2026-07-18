@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Opens the task detail screen (Enter), cycles tabs (Tab) the way a user browsing
-Description/Comments would, and dumps the pyte-rendered screen text after each stage.
+"""Opens the task detail screen (Enter), cycles tabs (Ctrl+→, #315) the way a user
+browsing Description/Comments would, and dumps the pyte-rendered screen text after each stage.
 Run once normally and once with CLICKUP_TODO_NO_DIFF=1, then diff the dumps: the
 detail screen mixes emoji/em-dash/curly-quote graphemes with auto-hyperlinked URLs,
 which is exactly where sparse (diffed) flushing can drift the cursor."""
@@ -73,7 +73,7 @@ try:
     stages = []
     stages.append(("detail:description", visible()))
     for i, name in enumerate(["comments", "other", "description2", "comments2"]):
-        os.write(master, b"\t")      # Tab → next tab
+        os.write(master, b"\x1b[1;5C")  # Ctrl+→ → next tab (#315; was Tab)
         pump(1.2)
         stages.append((f"detail:{name}", visible()))
 
