@@ -55,7 +55,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Comment.Item.Reply
         /// Post a plain-text reply into a comment&apos;s thread.
         /// </summary>
         /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentResponse"/></returns>
-        /// <param name="body">Body for POST /task/{task_id}/comment. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.</param>
+        /// <param name="body">Plain-text comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.</param>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
@@ -94,7 +94,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Comment.Item.Reply
         /// Post a plain-text reply into a comment&apos;s thread.
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
-        /// <param name="body">Body for POST /task/{task_id}/comment. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.</param>
+        /// <param name="body">Plain-text comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable

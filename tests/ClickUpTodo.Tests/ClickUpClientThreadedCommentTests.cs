@@ -106,16 +106,19 @@ public sealed class ClickUpClientThreadedCommentTests
     }
 
     [Theory]
+    [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public async Task CreateThreadedComment_RejectsEmptyText_WithoutHittingTheNetwork(string text)
+    public async Task CreateThreadedComment_RejectsEmptyText_WithoutHittingTheNetwork(string? text)
     {
         // Empty comment_text is a 400 at ClickUp; the facade guards it at the boundary so the request
         // is never sent (the handler would record a Method if reached, proving the guard fires first).
         var handler = new CapturingHandler("""{ "id": "r1" }""");
         using var client = new ClickUpClient("pk_x", new HttpClient(handler));
 
-        await Assert.ThrowsAsync<ArgumentException>(() => client.CreateThreadedCommentAsync("c1", text));
+        // null → ArgumentNullException, empty/whitespace → ArgumentException; both derive from
+        // ArgumentException, so ThrowsAny accepts either.
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.CreateThreadedCommentAsync("c1", text!));
 
         Assert.Null(handler.Method);
     }
