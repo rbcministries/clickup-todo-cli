@@ -84,7 +84,26 @@ public sealed record ClickUpUser(long Id, string DisplayName);
 
 /// <summary>A member of a Workspace: the numeric ClickUp id plus the username/email a user can type in
 /// an <c>Assignee IS</c> filter, so a typed name/email resolves to an id for the server-side fetch (#73).</summary>
-public sealed record WorkspaceMember(long Id, string? Username, string? Email);
+public sealed record WorkspaceMember(long Id, string? Username, string? Email)
+{
+    /// <summary>A guaranteed-non-blank, human-friendly name for the @-mention picker (#323): ClickUp's
+    /// spaced display name (<see cref="Username"/> — ClickUp has no separate first/last field, the
+    /// username <em>is</em> the display name, e.g. "Ben Seymour"), else the email's local part, else
+    /// <c>User {Id}</c> as a last resort so the picker never renders a blank row. Computed, so it isn't
+    /// part of record equality and adds no constructor parameter.</summary>
+    public string DisplayName
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(Username))
+                return Username.Trim();
+            var email = Email?.Trim() ?? "";
+            var at = email.IndexOf('@');
+            var local = at >= 0 ? email[..at] : email;
+            return local.Length > 0 ? local : $"User {Id}";
+        }
+    }
+}
 
 /// <summary>An id+name pair: a workspace, space, folder, or list in the setup hierarchy.</summary>
 public sealed record NamedEntity(string Id, string Name);
