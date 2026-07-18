@@ -1075,8 +1075,15 @@ public sealed class TodoApp
         var screen = new QuickOpenScreen();
         ShowScreen(screen, () =>
         {
+            // Defer to a later main-loop iteration (Application.Invoke runs inline on the UI thread) so the
+            // entry surface is fully torn down before we open Task Detail — otherwise OpenTaskDetail would
+            // capture the still-mounted modal as its "requester" and skip the mount once the modal closes.
             if (screen.Result is { } text)
-                Application.Invoke(() => ResolveAndOpen(text));
+                Application.AddTimeout(TimeSpan.FromMilliseconds(1), () =>
+                {
+                    ResolveAndOpen(text);
+                    return false;
+                });
         });
     }
 
