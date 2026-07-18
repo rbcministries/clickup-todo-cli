@@ -1461,7 +1461,7 @@ public sealed class TodoApp
         var target = ClickUpUrl.RewriteHost(url, _config.WorkspaceSubdomain);
         if (!Uri.TryCreate(target, UriKind.Absolute, out var uri))
         {
-            Flash("No URL for this task.");
+            Flash("Task URL is not a valid link.");
             return;
         }
 

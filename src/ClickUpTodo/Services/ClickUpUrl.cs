@@ -54,6 +54,10 @@ public static class ClickUpUrl
         if (label.Length == 0 || label is "app" or "api")
             return "";
 
+        // A valid DNS label is [a-z0-9-] and neither starts nor ends with a hyphen (a leading/trailing
+        // hyphen would yield an unresolvable host like `-odbm.clickup.com`).
+        if (label[0] == '-' || label[^1] == '-')
+            return "";
         foreach (var c in label)
             if (!(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-'))
                 return "";
@@ -84,12 +88,14 @@ public static class ClickUpUrl
         if (!string.Equals(uri.Host, AppHost, StringComparison.OrdinalIgnoreCase))
             return url;
 
-        var builder = new UriBuilder(uri) { Host = $"{label}.{BaseDomain}" };
-        // UriBuilder(uri) fills Port with the scheme default (e.g. 443), which would surface as an explicit
-        // ":443" in the output; drop it back to -1 when the original used the default port so the rewritten
-        // URL stays byte-for-byte apart from the host.
-        if (uri.IsDefaultPort)
-            builder.Port = -1;
-        return builder.Uri.ToString();
+        // Reconstruct swapping only the host, preserving the scheme, any userinfo, an explicit non-default
+        // port, and the path/query/fragment byte-for-byte. Deliberately not UriBuilder: it re-encodes the
+        // path (a percent-escaped segment would be decoded, corrupting the URL) and would surface the
+        // scheme's default port as an explicit ":443". GetComponents with UriFormat.UriEscaped keeps the
+        // already-escaped path/query/fragment intact for the reusable seam (#303).
+        var userInfo = string.IsNullOrEmpty(uri.UserInfo) ? "" : uri.UserInfo + "@";
+        var port = uri.IsDefaultPort ? "" : ":" + uri.Port.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var rest = uri.GetComponents(UriComponents.PathAndQuery | UriComponents.Fragment, UriFormat.UriEscaped);
+        return $"{uri.Scheme}://{userInfo}{label}.{BaseDomain}{port}{rest}";
     }
 }

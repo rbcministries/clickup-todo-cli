@@ -30,6 +30,9 @@ public sealed class ClickUpUrlTests
     [InlineData("bad_label")]           // underscore isn't a valid DNS-label char
     [InlineData("has space")]
     [InlineData("emoji😀")]
+    [InlineData("-odbm")]               // a DNS label can't start with a hyphen
+    [InlineData("odbm-")]               // …or end with one
+    [InlineData("-")]
     public void NormalizeSubdomain_ReturnsBlankForUnsetOrInvalid(string? input)
         => Assert.Equal("", ClickUpUrl.NormalizeSubdomain(input));
 
@@ -50,6 +53,24 @@ public sealed class ClickUpUrlTests
     [Fact]
     public void RewriteHost_DoesNotIntroduceAnExplicitDefaultPort()
         => Assert.DoesNotContain(":443", ClickUpUrl.RewriteHost("https://app.clickup.com/t/x", "odbm"));
+
+    [Fact]
+    public void RewriteHost_PreservesAPercentEncodedPathByteForByte()
+        => Assert.Equal(
+            "https://odbm.clickup.com/t/a%20b",
+            ClickUpUrl.RewriteHost("https://app.clickup.com/t/a%20b", "odbm"));
+
+    [Fact]
+    public void RewriteHost_PreservesAnExplicitNonDefaultPort()
+        => Assert.Equal(
+            "https://odbm.clickup.com:8443/t/x?q=1",
+            ClickUpUrl.RewriteHost("https://app.clickup.com:8443/t/x?q=1", "odbm"));
+
+    [Fact]
+    public void RewriteHost_PreservesUserInfo()
+        => Assert.Equal(
+            "https://user@odbm.clickup.com/t/x",
+            ClickUpUrl.RewriteHost("https://user@app.clickup.com/t/x", "odbm"));
 
     [Fact]
     public void RewriteHost_AcceptsAHostOrUrlAsTheSubdomain()

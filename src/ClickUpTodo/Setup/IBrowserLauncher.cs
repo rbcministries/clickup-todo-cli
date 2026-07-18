@@ -21,7 +21,11 @@ public sealed class SystemBrowserLauncher : IBrowserLauncher
         ArgumentNullException.ThrowIfNull(url);
         try
         {
-            return Process.Start(new ProcessStartInfo(url.ToString()) { UseShellExecute = true }) is not null;
+            // A shell-execute start can legitimately return null when the OS hands the URL to an already
+            // running browser (common on Windows). That's a successful launch, so treat "did not throw" as
+            // success — only a thrown exception (no handler / disabled) is a real failure.
+            Process.Start(new ProcessStartInfo(url.ToString()) { UseShellExecute = true });
+            return true;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or PlatformNotSupportedException or ObjectDisposedException)
         {
