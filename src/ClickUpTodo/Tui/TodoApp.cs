@@ -447,6 +447,7 @@ public sealed class TodoApp
         };
         _list = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
         _list.KeyDown += OnListKey;
+        _list.MouseEvent += OnListMouse;
         _frame.Add(_list);
 
         _statusLabel = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = _status };
@@ -593,6 +594,30 @@ public sealed class TodoApp
                 CycleShowCompleted();
                 break;
         }
+    }
+
+    /// <summary>
+    /// Double-click a task row → open its Task Detail, the mouse equivalent of Enter (#286). We handle
+    /// only the double-click and leave every other mouse event unhandled, so the ListView's native
+    /// single-click select and drag-scroll are untouched. A double-click on a header/spacer row or in the
+    /// empty space beneath a short list resolves to a null task and no-ops, exactly like Enter there.
+    /// Guarded on <see cref="ActiveScreen"/> so a click can't fire while a screen is stacked over the
+    /// list. The click's viewport-relative Y plus the list's scroll offset (<c>Viewport.Y</c>) resolves
+    /// the row via the shared <see cref="RowHitTester"/> (reused by B/F, #287/#291).
+    /// </summary>
+    private void OnListMouse(object? sender, Mouse e)
+    {
+        if (!e.Flags.HasFlag(MouseFlags.LeftButtonDoubleClicked) || e.Position is not { } pos)
+            return;
+        if (ActiveScreen is not null)
+            return;
+
+        var task = RowHitTester.TaskAt(pos.Y, _list.Viewport.Y, _rows);
+        if (task is null)
+            return;
+
+        e.Handled = true;
+        OpenTaskDetail(task.Id);
     }
 
     /// <summary>F6 — cycles how Status/Priority badges render (icons → text → hidden → icons), persists
