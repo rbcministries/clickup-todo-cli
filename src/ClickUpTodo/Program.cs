@@ -79,9 +79,16 @@ if (string.IsNullOrWhiteSpace(token) || !config.IsConfigured)
     config = configStore.Load();
 }
 
+// The cross-process nudge channel (#294): a per-process id stamped on every change marker this
+// instance writes, so a consumer (#295) can skip its own nudges. The marker store rides the same
+// state.db connection the rest of the app's state uses.
+var instanceId = Guid.NewGuid().ToString("N");
+var changeMarkers = liteStore.CreateChangeMarkerStore(instanceId);
+
 // Build the client with the provider that matches how the saved token was obtained (raw personal
-// token vs OAuth Bearer), recorded in config.AuthMode.
-using var client = ClickUpClientFactory.Create(config, token!);
+// token vs OAuth Bearer), recorded in config.AuthMode. The client nudges the change channel after
+// each confirmed write so other running instances can re-fetch the changed task (#294).
+using var client = ClickUpClientFactory.Create(config, token!, changeMarkers: changeMarkers);
 
 long userId;
 string userName;
