@@ -90,6 +90,12 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
     // (or pre-seeded with the #234 member so a remove would round-trip truthfully).
     // Guarded by _gate since SendAsync is async and a detail GET can race an assignee PUT.
     private readonly HashSet<long> _assignees = SeedQuAssignee ? [SeededAssigneeId] : [];
+
+    // The task's current *additional* list memberships ("Tasks in Multiple Lists", #237), mutated by the
+    // membership POST/DELETE (#242) so an add/remove from the Quick Updates List pane round-trips: a later
+    // detail GET reflects the change via the detail's `locations` array. Ids index into Lists/ListNames.
+    // Starts empty (the common single-list case — the pane shows only the home "plist"). Guarded by _gate.
+    private readonly HashSet<string> _locations = [];
     private readonly object _gate = new();
 
     // The task's current plain-text description, mutated by a description PUT (#217) so the write
@@ -107,6 +113,22 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
 
         if (path.EndsWith("/user"))
             body = """{"user":{"id":1,"username":"bench","email":"bench@example.com"}}""";
+        // POST/DELETE /v2/list/{listId}/task/{taskId} (#237): task↔list membership writes, consumed by
+        // the Quick Updates List pane (#242). Mutate the shared additional-locations set so a later detail
+        // GET reflects the change; ClickUp echoes an empty body. Must precede the /task/ branches below,
+        // since this path also contains "/task/". Create-task is POST .../task (no trailing id) and stays
+        // on its own branch further down.
+        else if (path.Contains("/list/") && path.Contains("/task/")
+                 && (request.Method == HttpMethod.Post || request.Method == HttpMethod.Delete))
+        {
+            var listId = ListIdOfMembership(path);
+            lock (_gate)
+            {
+                if (request.Method == HttpMethod.Post) _locations.Add(listId);
+                else _locations.Remove(listId);
+            }
+            body = "{}";
+        }
         // POST /task/{id}/comment (#216): the create-comment write returns the minimal created-comment
         // shape (id + date + hist_id) the CreateCommentResponse deserializer reads, so a comment posted
         // from the detail composer round-trips truthfully. Must precede the GET /comment branch below.
@@ -229,9 +251,31 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
         var id = path[(path.LastIndexOf('/') + 1)..];
         // JSON-encode the (mutable, possibly user-edited) description so quotes/newlines/emoji round-trip.
         var description = JsonSerializer.Serialize(_description);
+        // `locations` are the task's additional list memberships (#242), mutated by the membership
+        // POST/DELETE so an add/remove from the List pane round-trips; empty in the common single-list case.
         return $$"""
-        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"description":{{description}}}
+        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"locations":[{{LocationsJson()}}],"description":{{description}}}
         """;
+    }
+
+    /// <summary>The <c>locations</c> array (additional list memberships, #242) for the current
+    /// <see cref="_locations"/> set, mapped to the seeded list names. Called under <c>_gate</c>.</summary>
+    private string LocationsJson()
+        => string.Join(",", _locations.Select(lid =>
+        {
+            var idx = Array.IndexOf(Lists, lid);
+            var name = idx >= 0 ? ListNames[idx] : lid;
+            return $"{{\"id\":\"{lid}\",\"name\":\"{name}\"}}";
+        }));
+
+    /// <summary>The list id from a <c>/v2/list/{listId}/task/{taskId}</c> membership path.</summary>
+    private static string ListIdOfMembership(string path)
+    {
+        const string listSeg = "/list/";
+        const string taskSeg = "/task/";
+        var start = path.IndexOf(listSeg, StringComparison.Ordinal) + listSeg.Length;
+        var end = path.IndexOf(taskSeg, StringComparison.Ordinal);
+        return end > start ? path[start..end] : "";
     }
 
     /// <summary>Applies a description PUT body (<c>{"description":"..."}</c>) to the shared field so the
