@@ -41,7 +41,7 @@ the formatter:
 `Tui/TaskLinkExtractor.cs`
 
 ```csharp
-public enum LinkKind { Task, Web }
+public enum LinkKind { Web, Task } // Web is default(LinkKind) — the safe fallback
 
 public readonly record struct LinkSpan(
     int Start, int Length, LinkKind Kind, string Url, string? TaskId = null)
@@ -63,9 +63,13 @@ public static class TaskLinkExtractor
 
 ### URL detection
 
-- Match bare `http(s)://…` URLs via a single regex (`https?://[^\s]+`), scanning
-  the whole string so multi-line bodies and multiple links per line work with
-  correct offsets.
+- Match bare `http(s)://…` URLs via a single case-insensitive regex
+  (`https?://[^\s]+`), scanning the whole string so multi-line bodies and
+  multiple links per line work with correct offsets.
+- **Well-formedness guard:** after trimming, a match is only emitted when it
+  parses as an absolute http(s) `Uri` with a non-empty host, so a degenerate
+  leftover like `https://` (from trimming `https://.`) is dropped rather than
+  emitted as a host-less span. Every `LinkSpan.Url` is therefore navigable.
 - **Trailing-punctuation trim:** strip a trailing run of sentence punctuation
   (`. , ; : ! ? " '` and closing brackets `) ] }`) from the matched URL so
   `see https://x.com.` and `(https://x.com)` yield the bare URL. A closing `)`
@@ -74,10 +78,13 @@ public static class TaskLinkExtractor
 
 ### Task classification
 
-- Parse each matched URL with `Uri.TryCreate`. Classify as `Task` when the host
-  is `clickup.com` or a `*.clickup.com` subdomain **and** the path matches
-  `/t/{id}` or `/{workspaceId}/t/{id}` (`id = [^/?#]+`). Extract `id` as
-  `TaskId`. Everything else is `Web` (TaskId null).
+- Classify as `Task` when the host is `app.clickup.com` (or bare `clickup.com`)
+  **and** the path matches `/t/{id}` or `/{workspaceId}/t/{id}` (`id` = one path
+  segment). Extract `id` as `TaskId`. Everything else is `Web` (TaskId null). The
+  host check is deliberately not "any `*.clickup.com`" — help/marketing
+  subdomains can carry an unrelated `/t/` path and must not be mistaken for tasks.
+  Query strings and fragments live on the `Uri` outside `AbsolutePath`, so a task
+  URL with `?…`/`#…` still classifies correctly.
 
 ### Offsets
 

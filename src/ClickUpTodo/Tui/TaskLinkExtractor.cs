@@ -35,7 +35,8 @@ public readonly record struct LinkSpan(int Start, int Length, LinkKind Kind, str
 /// <para>
 /// No Terminal.Gui dependency (mirrors <see cref="TaskDetailFormatter"/>), so the detection and
 /// classification are covered by unit tests while the render/activation glue stays thin. The task-URL
-/// parser mirrors the style of <c>SetupWizard.ExtractListId</c>.
+/// parser mirrors the style of <c>SetupWizard.ExtractListId</c>. Body text is short (a description or a
+/// comment), so the per-URL <see cref="Uri"/> parse and <see cref="Regex"/> match are inconsequential.
 /// </para>
 /// <para>
 /// Scope for this slice: bare <c>http(s)://</c> URLs and the API-id <c>/t/{id}</c> task-URL form (and its
@@ -47,9 +48,10 @@ public static class TaskLinkExtractor
 {
     // Bare http/https URLs: the scheme, then a run of non-whitespace. Trailing sentence punctuation is
     // trimmed afterwards (TrimUrl) rather than excluded here, so a URL followed by "." or wrapped in "()"
-    // is captured then tidied. Compiled once — the panes re-extract on every (re)render.
+    // is captured then tidied. Case-insensitive so an upper-cased scheme ("HTTPS://…", as some clients
+    // emit) is still detected. Compiled once — the panes re-extract on every (re)render.
     private static readonly Regex UrlPattern =
-        new(@"https?://[^\s]+", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        new(@"https?://[^\s]+", RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     // Trailing characters trimmed off a matched URL: sentence punctuation and closing brackets. A closing
     // ')' is only trimmed when the URL has no matching '(' (see TrimUrl), so balanced parenthetical URLs
@@ -71,10 +73,13 @@ public static class TaskLinkExtractor
         foreach (Match m in UrlPattern.Matches(text))
         {
             var url = TrimUrl(m.Value);
-            if (url.Length == 0)
+            // Only emit well-formed http(s) links with a real host. This rejects a degenerate match left
+            // by trimming (e.g. "https://." → "https://", which has no host), so every LinkSpan.Url is a
+            // navigable absolute URL the render/activation layers can rely on.
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || !IsHttpUrl(uri))
                 continue;
 
-            var kind = TryParseTaskUrl(url, out var taskId) ? LinkKind.Task : LinkKind.Web;
+            var kind = TryParseTaskUri(uri, out var taskId) ? LinkKind.Task : LinkKind.Web;
             spans.Add(new LinkSpan(m.Index, url.Length, kind, url, kind == LinkKind.Task ? taskId : null));
         }
 
@@ -91,15 +96,20 @@ public static class TaskLinkExtractor
     public static bool TryParseTaskUrl(string url, out string taskId)
     {
         taskId = string.Empty;
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
-            return false;
-        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-            return false;
-        if (!IsClickUpHost(uri.Host))
+        return Uri.TryCreate(url, UriKind.Absolute, out var uri) && TryParseTaskUri(uri, out taskId);
+    }
+
+    // The Uri-based core shared by TryParseTaskUrl and Extract (which already holds a parsed Uri), so a URL
+    // is parsed once. A task URL is an http(s) ClickUp host whose path is "/t/{id}" or "/{workspaceId}/t/{id}".
+    private static bool TryParseTaskUri(Uri uri, out string taskId)
+    {
+        taskId = string.Empty;
+        if (!IsHttpUrl(uri) || !IsClickUpTaskHost(uri.Host))
             return false;
 
-        // AbsolutePath is percent-encoded and always starts with '/'. The task id is the segment after
-        // "/t/", allowing an optional numeric workspace-id segment before it.
+        // AbsolutePath is percent-encoded and always starts with '/' (query/fragment live elsewhere on the
+        // Uri, so they don't reach here). The task id is the segment after "/t/", allowing an optional
+        // numeric workspace-id segment before it.
         var match = Regex.Match(
             uri.AbsolutePath, @"^(?:/\d+)?/t/([^/]+)/?$", RegexOptions.CultureInvariant);
         if (!match.Success)
@@ -113,10 +123,17 @@ public static class TaskLinkExtractor
         return true;
     }
 
-    // A ClickUp host is clickup.com itself or any subdomain of it (app.clickup.com, etc.), case-insensitive.
-    private static bool IsClickUpHost(string host)
-        => host.Equals("clickup.com", StringComparison.OrdinalIgnoreCase)
-        || host.EndsWith(".clickup.com", StringComparison.OrdinalIgnoreCase);
+    // A navigable web link: an absolute http/https URL with a non-empty host.
+    private static bool IsHttpUrl(Uri uri)
+        => (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+        && !string.IsNullOrEmpty(uri.Host);
+
+    // ClickUp task URLs live on app.clickup.com (or bare clickup.com), case-insensitive. Deliberately not
+    // any "*.clickup.com" subdomain: help/marketing subdomains can carry an unrelated "/t/" path and must
+    // not be mistaken for task links.
+    private static bool IsClickUpTaskHost(string host)
+        => host.Equals("app.clickup.com", StringComparison.OrdinalIgnoreCase)
+        || host.Equals("clickup.com", StringComparison.OrdinalIgnoreCase);
 
     // Trims trailing sentence punctuation / closing brackets from a captured URL. A trailing ')' is kept
     // when the remaining URL still contains an unmatched '(' so balanced parenthetical URLs are preserved;

@@ -71,6 +71,96 @@ public sealed class TaskLinkExtractorTests
     }
 
     [Fact]
+    public void Extract_ClickUpSubdomainWithSlashT_IsWebNotTask()
+    {
+        // Only app.clickup.com / clickup.com are task hosts — a help/marketing subdomain with a "/t/"
+        // path (a help-centre article, say) must stay a plain web link.
+        const string text = "https://help.clickup.com/t/some-article";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal(LinkKind.Web, span.Kind);
+        Assert.Null(span.TaskId);
+    }
+
+    [Theory]
+    [InlineData("see https://. done")]
+    [InlineData("https://,")]
+    [InlineData("wrapped (https://)")]
+    public void Extract_DegenerateSchemeOnly_IsNotEmittedAsSpan(string text)
+    {
+        // Trimming a match like "https://." leaves the bare scheme "https://", which has no host and is
+        // not a navigable link — it must be dropped, not emitted as a host-less span.
+        Assert.Empty(TaskLinkExtractor.Extract(text));
+    }
+
+    [Fact]
+    public void Extract_TaskUrlWithQueryAndFragment_ClassifiesAndKeepsFullUrl()
+    {
+        // A query string / fragment lives outside AbsolutePath, so classification still works; the whole
+        // URL (query included) is preserved in the span.
+        const string text = "here: https://app.clickup.com/t/86c1abced?comment=99#c";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal(LinkKind.Task, span.Kind);
+        Assert.Equal("86c1abced", span.TaskId);
+        Assert.Equal("https://app.clickup.com/t/86c1abced?comment=99#c", span.Url);
+        Assert.Equal(span.Url, text.Substring(span.Start, span.Length));
+    }
+
+    [Fact]
+    public void Extract_WebUrlWithQuery_KeepsQueryIntact()
+    {
+        const string text = "search https://example.com/find?q=hello&n=2 now";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal(LinkKind.Web, span.Kind);
+        Assert.Equal("https://example.com/find?q=hello&n=2", span.Url);
+    }
+
+    [Fact]
+    public void Extract_HttpNonTlsWebUrl_IsDetected()
+    {
+        const string text = "legacy http://example.com/x end";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal(LinkKind.Web, span.Kind);
+        Assert.Equal("http://example.com/x", span.Url);
+    }
+
+    [Fact]
+    public void Extract_UppercaseScheme_IsDetected()
+    {
+        const string text = "HTTPS://example.com/x";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal(LinkKind.Web, span.Kind);
+        Assert.Equal("HTTPS://example.com/x", span.Url);
+    }
+
+    [Fact]
+    public void Extract_StackedTrailingPunctuation_AllTrimmed()
+    {
+        const string text = "(https://example.com/page).";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal("https://example.com/page", span.Url);
+        Assert.Equal(span.Url, text.Substring(span.Start, span.Length));
+    }
+
+    [Fact]
+    public void Extract_OffsetsAreCharAccurateAfterAstralCharacter()
+    {
+        // The offsets are UTF-16 char indices; an emoji (a surrogate pair) before the link must not throw
+        // Start/Length off — the span must still slice back to the exact URL.
+        const string text = "😀 https://app.clickup.com/t/ZZ";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal(LinkKind.Task, span.Kind);
+        Assert.Equal("ZZ", span.TaskId);
+        Assert.Equal(span.Url, text.Substring(span.Start, span.Length));
+    }
+
+    [Fact]
     public void Extract_MultipleLinksOnOneLine_InOrderWithAccurateOffsets()
     {
         const string text = "a https://one.example.com b https://app.clickup.com/t/T2 c";
