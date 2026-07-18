@@ -90,6 +90,9 @@ public sealed class TodoApp
     // The single window-owned contextual help line (#103): shows the active screen's shortcuts, or the
     // list's when no screen is open. One shared bottom row — screens no longer hand-roll their own.
     private Label _helpLabel = null!;
+    // The items currently rendered on _helpLabel (post-Fit), cached so a footer click (#289) can
+    // hit-test the click column against exactly what's on screen at the present width.
+    private IReadOnlyList<HelpItem> _helpFooter = HelpItemSets.MainList;
     private RefreshService _refresh = null!;
     // The stack of full-window screens swapped in over the list (Settings / status picker / detail /
     // Help). The top is visible + focused; any beneath it are mounted-but-hidden so we can return to
@@ -460,6 +463,9 @@ public sealed class TodoApp
             Width = Dim.Fill(1),
             Text = HelpLine.Format(HelpItemSets.MainList),
         };
+        // Clicking an action hint on the footer fires its shortcut (#289). The Label stays
+        // CanFocus=false, so this adds a mouse affordance without a second focusable pane (#3/#38).
+        _helpLabel.MouseEvent += OnHelpBarMouse;
 
         _window.Add(_frame, _statusLabel, _helpLabel);
         // Re-fit the help line whenever the window re-lays out (i.e. on terminal resize). Terminal.Gui
@@ -1173,11 +1179,39 @@ public sealed class TodoApp
         // The label's laid-out content width. Before the first layout it's 0 — render the full set and
         // let the first SubViewsLaidOut re-fit it.
         var width = _helpLabel.Frame.Width;
-        var text = width > 0
-            ? HelpLine.Format(HelpLine.Fit(items, width, static s => s.GetColumns()))
-            : HelpLine.Format(items);
+        var fitted = width > 0
+            ? HelpLine.Fit(items, width, static s => s.GetColumns())
+            : items;
+        // Cache exactly what's rendered so a footer click hit-tests against the on-screen items (#289).
+        _helpFooter = fitted;
+        var text = HelpLine.Format(fitted);
         if (_helpLabel.Text != text)
             _helpLabel.Text = text;
+    }
+
+    /// <summary>
+    /// A left-click on the contextual footer (#289): resolves the clicked item via
+    /// <see cref="HelpLine.HitTest"/> and, when it lands on a clickable <em>action</em> hint, re-raises
+    /// that hint's keyboard chord through <c>Application.RaiseKeyDownEvent</c> — so the click converges
+    /// on the same handler as the keypress (on the focused ListView or the active screen's control) with
+    /// no duplicated action logic. A click on a movement/informational hint, a separator, or the empty
+    /// space beyond the text is left unhandled (native behaviour; the footer never takes focus).
+    /// </summary>
+    private void OnHelpBarMouse(object? sender, Terminal.Gui.Input.Mouse e)
+    {
+        if (!e.Flags.HasFlag(MouseFlags.LeftButtonClicked) || e.Position is not { } pos)
+            return;
+
+        var index = HelpLine.HitTest(_helpFooter, pos.X, static s => s.GetColumns());
+        if (index < 0)
+            return;
+
+        var item = _helpFooter[index];
+        if (!item.IsAction || !Key.TryParse(item.ActionKey, out var key))
+            return;
+
+        e.Handled = true;
+        Application.RaiseKeyDownEvent(key);
     }
 
     /// <summary>The task on the selected row, or null if a header row (or nothing) is selected.</summary>
