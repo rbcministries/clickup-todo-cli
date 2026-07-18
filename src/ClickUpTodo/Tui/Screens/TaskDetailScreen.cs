@@ -679,8 +679,8 @@ public sealed class TaskDetailScreen : Screen
         // While the comment composer (#216) or the description editor (#217) is open it owns the
         // keyboard: its own handler (OnCommentKey / OnDescriptionKey) processes Ctrl+Enter/Esc/Tab and
         // lets the rest fall through to the editor. Don't let the screen's chords (Ctrl+B close,
-        // Ctrl+A/U/N/E openers, Tab tab-cycle, F5 refresh) fire underneath and disrupt (or discard) the
-        // draft.
+        // Ctrl+A/U/N/E openers, Ctrl+←/→ tab-cycle, F5 refresh) fire underneath and disrupt (or discard)
+        // the draft.
         if (_commentBox.Visible || _descriptionBox.Visible)
             return;
 

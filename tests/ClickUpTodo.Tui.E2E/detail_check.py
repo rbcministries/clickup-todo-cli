@@ -76,6 +76,9 @@ try:
         os.write(master, b"\x1b[1;5C")  # Ctrl+→ → next tab (#315; was Tab)
         pump(1.2)
         stages.append((f"detail:{name}", visible()))
+    os.write(master, b"\x1b[1;5D")      # Ctrl+← → previous tab (#315; exercises the backward chord)
+    pump(1.2)
+    stages.append(("detail:back", visible()))
 
     with open(OUT, "w") as f:
         for name, text in stages:
