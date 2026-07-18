@@ -1800,6 +1800,9 @@ public sealed class TodoApp
         // list target repaints it (unchanged behaviour); otherwise — a feed-opened task (#115), and every
         // task in single-task launch mode (#296) — the commit runs against the loaded task itself, so it
         // no longer dead-ends at "no longer in the list" with no `_all` present.
+        // Frozen here, before the cold-path status fetch below: if an absent task materialised in `_all`
+        // during that await it would commit against the single-task target and not repaint the now-present
+        // row — benign (the write still lands; the next background refresh reconciles the row).
         var target = QuickUpdatesTaskById(task.Id) is not null
             ? ListTarget
             : new SingleTaskUpdateTarget(task);

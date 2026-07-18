@@ -160,5 +160,10 @@ public sealed class QuickUpdateTargetTests
         var viaSingle = single.Current;
 
         Assert.Equal(viaSnapshot, viaSingle);
+        // Assignees are an IReadOnlyList (reference equality under record ==), so assert the element
+        // values explicitly — the parity guarantee must survive a future change that copies the list.
+        Assert.Equal(
+            viaSnapshot.Assignees.Select(a => (a.Id, a.Name)),
+            viaSingle.Assignees.Select(a => (a.Id, a.Name)));
     }
 }
