@@ -224,10 +224,13 @@ public sealed record CustomFieldItem(
 /// it defaults to <c>false</c> so the mapper and non-feed callers are unaffected.
 /// <see cref="MentionedUserIds"/> carries the numeric ids of members @-mentioned in the comment's
 /// structured blocks (#167), enabling id-based mention detection alongside the <c>@handle</c> text match.
+/// <see cref="ReplyCount"/> is the number of replies in the comment's thread (#327), letting a caller
+/// tell a comment has a thread worth fetching without a probe request; it defaults to 0 (no thread, or a
+/// reply/create item that doesn't carry the count).
 /// </summary>
 public sealed record CommentItem(
     string Id, string Author, long? DateMs, string Text, bool Resolved, string? TaskId = null,
-    bool MentionsMe = false, IReadOnlyList<long>? MentionedUserIds = null)
+    bool MentionsMe = false, IReadOnlyList<long>? MentionedUserIds = null, int ReplyCount = 0)
 {
     /// <summary>The numeric ids of members @-mentioned in the comment's structured <c>comment</c> blocks
     /// (#167); never null (empty when the comment mentions no one, or the blocks weren't mapped).

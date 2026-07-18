@@ -464,6 +464,52 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         });
     }
 
+    /// <summary>
+    /// The replies in a comment's thread (<c>GET /comment/{comment_id}/reply</c>, #327), mapped to the
+    /// stable <see cref="CommentItem"/> shape. Unlike the flat task-comment endpoint this one is
+    /// <b>not cursor-paginated</b> — ClickUp returns a thread's replies in a single response (a thread is
+    /// bounded by its parent comment) — so this does one fetch and maps via <see cref="MapComment"/>.
+    /// A reply payload carries no task context, so <see cref="CommentItem.TaskId"/> is left null for the
+    /// caller (the thread loader, #328) to stamp from the parent comment. Empty when the comment has no
+    /// replies.
+    /// </summary>
+    public Task<IReadOnlyList<CommentItem>> GetThreadedCommentsAsync(string commentId, CancellationToken ct = default)
+        => Guard("GetThreadedComments", async () =>
+        {
+            var resp = await _client.V2.Comment[commentId].Reply.GetAsync(cancellationToken: ct);
+            return (IReadOnlyList<CommentItem>)(resp?.Comments?
+                .Select(c => MapComment(c, null))
+                .ToList() ?? []);
+        });
+
+    /// <summary>
+    /// Post a <b>plain-text</b> reply into a comment's thread (<c>POST /comment/{comment_id}/reply</c>,
+    /// #327) and return it as a <see cref="CommentItem"/> for optimistic append. Mirrors
+    /// <see cref="CreateTaskCommentAsync"/>: only <c>comment_text</c> is sent (rich content — @-mentions,
+    /// task links — is a later epic) with <c>notify_all=false</c>, and because ClickUp's create response
+    /// is minimal (<c>id</c>/<c>hist_id</c>/<c>date</c> only, no text/author/blocks) the returned item
+    /// echoes the posted <paramref name="text"/> and leaves <see cref="CommentItem.Author"/> empty for the
+    /// caller's optimistic row to stamp. <see cref="CommentItem.TaskId"/> is null — the reply endpoint is
+    /// keyed by comment, not task.
+    /// </summary>
+    public Task<CommentItem> CreateThreadedCommentAsync(string commentId, string text, CancellationToken ct = default)
+    {
+        // ClickUp rejects an empty comment_text with a 400; fail faster and clearer at the boundary.
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        return Guard("CreateThreadedComment", async () =>
+        {
+            var request = new CreateCommentRequest { CommentText = text, NotifyAll = false };
+            var created = await _client.V2.Comment[commentId].Reply.PostAsync(request, cancellationToken: ct);
+            return new CommentItem(
+                Id: created?.Id ?? "",
+                Author: "",
+                DateMs: created?.Date,
+                Text: text,
+                Resolved: false,
+                TaskId: null);
+        });
+    }
+
     // ── Mapping & plumbing ──────────────────────────────────────────────────
 
     // internal (not private) so the mapping can be unit-tested without hitting the live API.
@@ -526,7 +572,8 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         Text: c.CommentText ?? "",
         Resolved: c.Resolved == true,
         TaskId: taskId,
-        MentionedUserIds: MapMentionedUserIds(c.CommentProp));
+        MentionedUserIds: MapMentionedUserIds(c.CommentProp),
+        ReplyCount: ParseCount(c.ReplyCount));
 
     /// <summary>Extracts the distinct numeric ids of members @-mentioned in a comment's structured
     /// blocks — the runs carrying a <c>user</c> with a positive id (a mention/tag block, per #167).
@@ -618,6 +665,11 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// <summary>Parses a ClickUp epoch-milliseconds string, or null when absent/unparseable.</summary>
     private static long? ParseMs(string? value)
         => long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms) ? ms : null;
+
+    /// <summary>Parses ClickUp's string-typed <c>reply_count</c> to a non-negative int; a missing,
+    /// unparseable, or negative value yields 0 (#327).</summary>
+    private static int ParseCount(string? value)
+        => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) && n > 0 ? n : 0;
 
     /// <summary>Walks a paginated task endpoint until ClickUp reports the last page.</summary>
     private static async Task<List<TaskItem>> PageAsync(Func<int, Task<TasksResponse?>> fetchPage, CancellationToken ct)
