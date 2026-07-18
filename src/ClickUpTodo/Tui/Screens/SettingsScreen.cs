@@ -1,6 +1,7 @@
 using System.Globalization;
 using ClickUpTodo.Agent;
 using ClickUpTodo.Configuration;
+using ClickUpTodo.Services;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
@@ -13,7 +14,7 @@ using Terminal.Gui.Views;
 namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>The result of editing settings, or null when the user cancels.</summary>
-public sealed record SettingsResult(int RefreshSeconds, int FeedRefreshSeconds, int FeedActivityLookbackDays, string DefaultWorkingDirectory, AgentDispatchSettings AgentDispatch, DetailViewSettings DetailView);
+public sealed record SettingsResult(int RefreshSeconds, int FeedRefreshSeconds, int FeedActivityLookbackDays, string DefaultWorkingDirectory, string WorkspaceSubdomain, AgentDispatchSettings AgentDispatch, DetailViewSettings DetailView);
 
 /// <summary>
 /// Carries a prompt-template edit request from the settings screen to the host (#100): the current
@@ -62,7 +63,7 @@ public sealed class SettingsScreen : Screen
     /// </summary>
     public event EventHandler<PromptTemplateEditRequest>? EditPromptTemplateRequested;
 
-    public SettingsScreen(int refreshSeconds, int feedRefreshSeconds, int feedActivityLookbackDays, string defaultWorkingDirectory, AgentDispatchSettings dispatch, DetailViewSettings detailView)
+    public SettingsScreen(int refreshSeconds, int feedRefreshSeconds, int feedActivityLookbackDays, string defaultWorkingDirectory, string workspaceSubdomain, AgentDispatchSettings dispatch, DetailViewSettings detailView)
     {
         Title = "Settings";
         _promptTemplate = dispatch.PromptTemplate;
@@ -123,6 +124,18 @@ public sealed class SettingsScreen : Screen
             Y = 7,
             Width = Dim.Percent(48),
             Text = "Blank = ~/ClickUp-Tasks (≠ Fixed dir).",
+        };
+
+        // Workspace subdomain (#304): when set, Ctrl+B rewrites an app.clickup.com task URL onto
+        // {subdomain}.clickup.com so the browser skips the app→subdomain redirect. Blank = off (open the
+        // URL as ClickUp returns it). Normalized on Save so a pasted host/URL reduces to the bare label.
+        var subdomainLabel = new Label { X = 1, Y = 8, Text = "ClickUp subdomain:" };
+        var subdomainField = new TextField
+        {
+            X = Pos.Right(subdomainLabel) + 1,
+            Y = 8,
+            Width = 14,
+            Text = workspaceSubdomain,
         };
 
         // ── Detail view (#108): default tab, activity order, auto-scroll ────────
@@ -228,6 +241,7 @@ public sealed class SettingsScreen : Screen
                 SettingsForm.ParseRefreshSeconds(_feedRefreshField.Text, feedRefreshSeconds),
                 SettingsForm.ParseLookbackDays(_feedLookbackField.Text, feedActivityLookbackDays),
                 SettingsForm.ExpandHomePath(workingDirField.Text, home),
+                ClickUpUrl.NormalizeSubdomain(subdomainField.Text),
                 new AgentDispatchSettings
                 {
                     PreferredTerminal = terminal,
@@ -270,6 +284,7 @@ public sealed class SettingsScreen : Screen
             refreshLabel, _refreshField, feedRefreshLabel, _feedRefreshField,
             feedLookbackLabel, _feedLookbackField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
+            subdomainLabel, subdomainField,
             detailHeader, defaultTabButton, activityOrderButton, autoScrollButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, templateButton,
