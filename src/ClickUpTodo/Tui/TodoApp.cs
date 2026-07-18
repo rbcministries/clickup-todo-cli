@@ -1844,9 +1844,13 @@ public sealed class TodoApp
         // List pane (#242): seed the home list as the removable primary; additional "Tasks in Multiple
         // Lists" locations come from the detail on a detail-origin launch, else are enriched in the
         // background below (the snapshot TaskItem carries only the home list). task.ListId is non-blank
-        // here (the open guards bail on a listless task).
+        // here (the open guards bail on a listless task). ClickUp's `locations` can include the home list,
+        // so drop it from the additional set — it's already seeded as the primary, and leaving it in
+        // initialSelected would render it mid-list (before the primary) until the first reconcile.
         var homeList = new NamedEntity(task.ListId!, task.ListName ?? task.ListId!);
-        var additionalLists = detailOrigin?.Task.Lists ?? [];
+        var additionalLists = (IReadOnlyList<NamedEntity>)(detailOrigin?.Task.Lists ?? [])
+            .Where(l => !string.Equals(l.Id, task.ListId, StringComparison.Ordinal))
+            .ToList();
 
         var screen = new QuickUpdatesScreen(
             task.Name, statuses, task.StatusName, task.PriorityLevel, task.Assignees,
