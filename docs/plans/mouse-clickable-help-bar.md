@@ -100,12 +100,12 @@ Everything else keeps `IsAction: true` implicitly.
   standardization)* so buttons reflect the final unified keys rather than being
   churned twice. Keeping the labels as-is also preserves the #103 byte-for-byte
   footer guarantee (and its pinned test). Deferred to **#290**; noted in the PR.
-- **`tui-validate` mouse E2E** for a help-bar click: SGR-1006 mouse injection is
-  being introduced to the harness by the sibling mouse PR **#340**. Rather than
-  add a conflicting second copy, the E2E scenario lands once that harness
-  support is on `main`; behavior here is verified by build + reasoning +
-  manual steps (repo rule: the TUI is not unit-testable in CI). Tracked by
-  #340's harness work / epic #283.
+- (No further deferrals.) A self-contained `tui-validate` scenario
+  (`tests/ClickUpTodo.Tui.E2E/help_bar_click_check.py`) is committed with this
+  change — it injects SGR-1006 clicks and asserts an action fires, a movement
+  hint no-ops, and a double-click fires exactly once. It uses inline SGR bytes
+  (like the existing `drive.py`), so it doesn't depend on or conflict with the
+  mouse-injection helper the sibling PR **#340** adds to the harness.
 
 ## Phases
 
