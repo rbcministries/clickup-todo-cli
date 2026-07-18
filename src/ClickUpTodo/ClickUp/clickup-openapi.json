@@ -217,7 +217,9 @@
         "summary": "Get a single task with its full detail (description, tags, assignees, dates, custom fields).",
         "parameters": [
           { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } },
-          { "name": "include_subtasks", "in": "query", "schema": { "type": "boolean" } }
+          { "name": "include_subtasks", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "custom_task_ids", "in": "query", "schema": { "type": "boolean" }, "description": "When true, task_id is treated as a workspace custom task id; team_id must also be supplied." },
+          { "name": "team_id", "in": "query", "schema": { "type": "string" }, "description": "The workspace (team) id, required when custom_task_ids is true." }
         ],
         "responses": {
           "200": {
