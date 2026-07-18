@@ -89,7 +89,11 @@ def run_leg(name, warm):
         v = visible()
         if "Task" not in v:
             fail("dashboard did not boot", v)
-        # Below All (default Active view) the closed task is never in the snapshot.
+        # Below All (default Active view) the closed task is never in the snapshot. This
+        # precondition relies on the harness building a fresh Active AppConfig every boot
+        # (Program.cs) and TodoApp not reloading persisted config — the warm leg does
+        # Save(Completed=All) via the shared ConfigStore, so a future boot-time config
+        # reload would break this line, not the bridge itself.
         if CLOSED_ROW in v:
             fail("closed row showed before F12 reached All", v)
 
