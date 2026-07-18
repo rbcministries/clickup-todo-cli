@@ -3,8 +3,29 @@ namespace ClickUpTodo.Tui.Screens;
 /// <summary>
 /// One shortcut on the contextual help footer (#103): a <paramref name="Key"/> (a key or key-combo,
 /// e.g. <c>Ctrl+B</c>, <c>↑/↓</c>) and the <paramref name="Label"/> for the action it triggers.
+/// <para>
+/// <paramref name="IsAction"/> distinguishes a clickable <em>action</em> hint (#289) from a
+/// non-clickable <em>movement/informational</em> hint (cursor-arrow / PgUp-PgDn glyphs,
+/// <c>type to search</c>). Only action items fire on a footer click; movement items render as plain
+/// text as they always have. It defaults to <c>true</c> because most footer items are actions — only
+/// movement hints are annotated <c>IsAction: false</c> — which also keeps the pre-#289 two-argument
+/// construction and record equality unchanged.
+/// </para>
+/// <para>
+/// <paramref name="Chord"/> is the parseable key token to re-raise when the item is clicked, for the
+/// few items whose display <paramref name="Key"/> is a glyph or a compound label rather than a single
+/// parseable key (e.g. <c>␣</c>→<c>Space</c>, <c>↩</c>→<c>Enter</c>, <c>Del</c>→<c>Delete</c>). When
+/// <c>null</c> the display <paramref name="Key"/> is itself the token (see <see cref="ActionKey"/>).
+/// </para>
 /// </summary>
-public readonly record struct HelpItem(string Key, string Label);
+public readonly record struct HelpItem(string Key, string Label, bool IsAction = true, string? Chord = null)
+{
+    /// <summary>The key token a footer click re-raises (#289): the explicit <see cref="Chord"/> when the
+    /// display <see cref="Key"/> isn't a single parseable key, otherwise the <see cref="Key"/> itself.
+    /// The host parses this with <c>Key.TryParse</c> and dispatches it via
+    /// <c>Application.RaiseKeyDownEvent</c>, so a click converges on the same handler as the keypress.</summary>
+    public string ActionKey => Chord ?? Key;
+}
 
 /// <summary>
 /// Pure model + formatter for the single contextual help footer (#103, part of #102). The window owns
@@ -68,6 +89,51 @@ public static class HelpLine
     }
 
     /// <summary>
+    /// The display-column span <c>[Start, End)</c> of each item within <see cref="Format"/> of the same
+    /// list (#289 click hit-testing). Item <c>i</c> occupies its <c>"key label"</c> width; the ` · `
+    /// separators between items are the gaps <em>between</em> spans. <paramref name="measure"/> is the
+    /// same column-aware measure passed to <see cref="Fit"/>, so wide glyphs/emoji count as their true
+    /// column width — the spans line up with what the host renders. Kept free of Terminal.Gui so the
+    /// mapping stays unit-testable.
+    /// </summary>
+    public static IReadOnlyList<(int Start, int End)> ColumnRanges(
+        IReadOnlyList<HelpItem> items, Func<string, int> measure)
+    {
+        var ranges = new List<(int, int)>(items.Count);
+        int separator = measure(" · ");
+        int pos = 0;
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (i > 0)
+                pos += separator;
+            int end = pos + measure($"{items[i].Key} {items[i].Label}");
+            ranges.Add((pos, end));
+            pos = end;
+        }
+
+        return ranges;
+    }
+
+    /// <summary>
+    /// The index of the item rendered at display <paramref name="column"/> (#289), or <c>-1</c> when the
+    /// column falls on a ` · ` separator, before the first item, or past the last — so a click there is
+    /// a no-op rather than snapping to the nearest item. Columns are measured with the host's
+    /// column-aware <paramref name="measure"/> (matching <see cref="ColumnRanges"/> / <see cref="Fit"/>).
+    /// </summary>
+    public static int HitTest(IReadOnlyList<HelpItem> items, int column, Func<string, int> measure)
+    {
+        if (column < 0)
+            return -1;
+
+        var ranges = ColumnRanges(items, measure);
+        for (int i = 0; i < ranges.Count; i++)
+            if (column >= ranges[i].Start && column < ranges[i].End)
+                return i;
+
+        return -1;
+    }
+
+    /// <summary>
     /// The selection rule: the active screen's items when a screen is open (and it declares any),
     /// otherwise the list's items. A screen that declares an empty set falls back to the list's set
     /// rather than showing a blank footer.
@@ -89,10 +155,10 @@ public static class HelpItemSets
     /// help line byte-for-byte, so the default (list-active) footer is unchanged.</summary>
     public static readonly IReadOnlyList<HelpItem> MainList =
     [
-        new("↑/↓", "move"),
-        new("→|", "next section"),
-        new("␣", "status"),
-        new("↩", "detail"),
+        new("↑/↓", "move", IsAction: false),
+        new("→|", "next section", IsAction: false),
+        new("␣", "status", Chord: "Space"),
+        new("↩", "detail", Chord: "Enter"),
         new("Ctrl+N", "new task"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+P", "📌"),
@@ -104,18 +170,18 @@ public static class HelpItemSets
         new("F5", "↻"),
         new("F6", "badges"),
         new("F12", "completed"),
-        new("→/←", "expand/collapse"),
-        new("Ctrl+→/←", "all"),
+        new("→/←", "expand/collapse", IsAction: false),
+        new("Ctrl+→/←", "all", IsAction: false),
         new("Ctrl+Q", "quit"),
-        new("type", "to search"),
+        new("type", "to search", IsAction: false),
     ];
 
     /// <summary>The task detail view (adds F1, which the detail screen previously did not handle).</summary>
     public static readonly IReadOnlyList<HelpItem> Detail =
     [
         new("Tab", "switch tab"),
-        new("↑/↓ PgUp/PgDn", "scroll"),
-        new("Ctrl+PgUp/PgDn", "order activity"),
+        new("↑/↓ PgUp/PgDn", "scroll", IsAction: false),
+        new("Ctrl+PgUp/PgDn", "order activity", IsAction: false),
         new("Ctrl+A", "dispatch to Claude"),
         new("Ctrl+N", "add comment"),
         new("Ctrl+E", "edit description"),
@@ -151,7 +217,7 @@ public static class HelpItemSets
     [
         new("Tab", "moves"),
         new("Enter", "in Value adds"),
-        new("Del", "removes selected filter"),
+        new("Del", "removes selected filter", Chord: "Delete"),
         new("F1", "help"),
         new("Esc", "cancels"),
     ];
@@ -162,7 +228,7 @@ public static class HelpItemSets
     public static readonly IReadOnlyList<HelpItem> QuickUpdates =
     [
         new("Tab", "Status/Priority/Assignees"),
-        new("↑/↓", "move"),
+        new("↑/↓", "move", IsAction: false),
         new("Enter", "apply status/priority"),
         new("F1", "help"),
         new("Esc", "exit"),
@@ -173,7 +239,7 @@ public static class HelpItemSets
     public static readonly IReadOnlyList<HelpItem> NewTask =
     [
         new("Tab", "moves"),
-        new("Enter/Save", "saves"),
+        new("Enter/Save", "saves", Chord: "Enter"),
         new("Esc", "cancels"),
         new("F1", "help"),
     ];
@@ -193,7 +259,7 @@ public static class HelpItemSets
     /// returns to the list.</summary>
     public static readonly IReadOnlyList<HelpItem> NotificationsFeed =
     [
-        new("↑/↓", "move"),
+        new("↑/↓", "move", IsAction: false),
         new("Enter", "open"),
         new("F3", "mentions only"),
         new("F5", "↻"),
@@ -208,7 +274,7 @@ public static class HelpItemSets
     /// once it has finished.</summary>
     public static readonly IReadOnlyList<HelpItem> AgentRun =
     [
-        new("↑/↓ PgUp/PgDn", "scroll"),
+        new("↑/↓ PgUp/PgDn", "scroll", IsAction: false),
         new("F1", "help"),
         new("Esc", "cancel/back"),
     ];
@@ -216,6 +282,6 @@ public static class HelpItemSets
     /// <summary>The help screen itself (no F1 — it is the help).</summary>
     public static readonly IReadOnlyList<HelpItem> Help =
     [
-        new("Esc/Enter", "close"),
+        new("Esc/Enter", "close", Chord: "Esc"),
     ];
 }

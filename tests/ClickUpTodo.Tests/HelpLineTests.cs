@@ -1,4 +1,5 @@
 using ClickUpTodo.Tui.Screens;
+using Terminal.Gui.Input;
 using Terminal.Gui.Text;
 
 namespace ClickUpTodo.Tests;
@@ -198,5 +199,128 @@ public sealed class HelpLineTests
         // ...while the column measure correctly truncates (9 > 6) down to just the fallback.
         HelpItem[] onlyFallback = [HelpLine.HelpFallback];
         Assert.Equal(onlyFallback, byColumns);
+    }
+
+    // ── #289: action/movement classification, click chords, and hit-testing ──────────────────
+
+    [Fact]
+    public void HelpItem_TwoArgConstruction_IsAnActionWithNoExplicitChord()
+    {
+        // The pre-#289 two-argument form must still build (and equal) an action item with no chord —
+        // this is what keeps records like `new("Ctrl+N", "new task")` equal across the sets and tests.
+        var item = new HelpItem("Ctrl+N", "new task");
+
+        Assert.True(item.IsAction);
+        Assert.Null(item.Chord);
+        Assert.Equal(new HelpItem("Ctrl+N", "new task", IsAction: true, Chord: null), item);
+    }
+
+    [Fact]
+    public void ActionKey_FallsBackToKey_WhenNoChord()
+        => Assert.Equal("Ctrl+N", new HelpItem("Ctrl+N", "new task").ActionKey);
+
+    [Fact]
+    public void ActionKey_UsesChord_WhenTheDisplayKeyIsAGlyphOrCompound()
+    {
+        Assert.Equal("Space", new HelpItem("␣", "status", Chord: "Space").ActionKey);
+        Assert.Equal("Delete", new HelpItem("Del", "removes selected filter", Chord: "Delete").ActionKey);
+    }
+
+    [Fact]
+    public void MainList_MovementHintsAreNonClickable_AndLead()
+    {
+        // The arrow/next-section glyphs and the "type to search" affordance are movement/informational:
+        // non-clickable, and the two cursor hints still lead the set.
+        Assert.False(HelpItemSets.MainList[0].IsAction); // ↑/↓ move
+        Assert.False(HelpItemSets.MainList[1].IsAction); // →| next section
+        Assert.False(HelpItemSets.MainList.Single(i => i.Key == "→/←").IsAction);
+        Assert.False(HelpItemSets.MainList.Single(i => i.Key == "Ctrl+→/←").IsAction);
+        Assert.False(HelpItemSets.MainList.Single(i => i.Key == "type").IsAction);
+    }
+
+    [Fact]
+    public void MainList_ActionHintsAreClickable()
+    {
+        Assert.True(HelpItemSets.MainList.Single(i => i.Key == "Ctrl+N").IsAction);
+        Assert.True(HelpItemSets.MainList.Single(i => i.Key == "F6").IsAction);
+        // The glyph-keyed status/detail actions carry an explicit re-raiseable chord.
+        Assert.True(HelpItemSets.MainList.Single(i => i.Key == "␣").IsAction);
+        Assert.Equal("Space", HelpItemSets.MainList.Single(i => i.Key == "␣").ActionKey);
+        Assert.Equal("Enter", HelpItemSets.MainList.Single(i => i.Key == "↩").ActionKey);
+    }
+
+    [Fact]
+    public void HelpFallback_IsAClickableActionThatOpensHelp()
+    {
+        Assert.True(HelpLine.HelpFallback.IsAction);
+        Assert.True(Key.TryParse(HelpLine.HelpFallback.ActionKey, out var k));
+        Assert.Equal(Key.F1, k);
+    }
+
+    // Every action item that can appear on the footer — across all sets and the truncation fallback —
+    // must re-raise a *parseable* key, or clicking it would silently do nothing. This pins the chord
+    // annotations (e.g. ␣→Space, Del→Delete, Enter/Save→Enter) against Terminal.Gui's own parser.
+    public static readonly TheoryData<HelpItem> AllActionItems = BuildActionItems();
+
+    private static TheoryData<HelpItem> BuildActionItems()
+    {
+        var data = new TheoryData<HelpItem>();
+        IReadOnlyList<HelpItem>[] sets =
+        [
+            HelpItemSets.MainList, HelpItemSets.Detail, HelpItemSets.DetailDescriptionEditor,
+            HelpItemSets.Settings, HelpItemSets.FilterSortGroup, HelpItemSets.QuickUpdates,
+            HelpItemSets.NewTask, HelpItemSets.PromptTemplateEditor, HelpItemSets.NotificationsFeed,
+            HelpItemSets.AgentRun, HelpItemSets.Help, [HelpLine.HelpFallback],
+        ];
+        foreach (var item in sets.SelectMany(s => s).Where(i => i.IsAction).DistinctBy(i => i.ActionKey))
+            data.Add(item);
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(AllActionItems))]
+    public void EveryActionItem_ReRaisesAParseableKey(HelpItem item)
+        => Assert.True(Key.TryParse(item.ActionKey, out _), $"'{item.ActionKey}' should parse");
+
+    [Fact]
+    public void ColumnRanges_MapsEachItemToItsSpan_WithSeparatorsAsGaps()
+    {
+        // "Esc back · F1 help": item 0 at cols 0..8, the " · " gap at 8..11, item 1 at cols 11..18.
+        var items = new HelpItem[] { new("Esc", "back"), new("F1", "help") };
+
+        var ranges = HelpLine.ColumnRanges(items, Cols);
+
+        Assert.Equal([(0, 8), (11, 18)], ranges);
+    }
+
+    [Fact]
+    public void ColumnRanges_EmptySet_IsEmpty()
+        => Assert.Empty(HelpLine.ColumnRanges([], Cols));
+
+    [Theory]
+    [InlineData(-1, -1)] // before the start
+    [InlineData(0, 0)]   // first column of item 0
+    [InlineData(7, 0)]   // last column of item 0
+    [InlineData(8, -1)]  // on the separator
+    [InlineData(10, -1)] // still on the separator
+    [InlineData(11, 1)]  // first column of item 1
+    [InlineData(17, 1)]  // last column of item 1
+    [InlineData(18, -1)] // past the end
+    public void HitTest_ResolvesTheItemUnderTheColumn_OrMinusOne(int column, int expected)
+    {
+        var items = new HelpItem[] { new("Esc", "back"), new("F1", "help") };
+
+        Assert.Equal(expected, HelpLine.HitTest(items, column, Cols));
+    }
+
+    [Fact]
+    public void HitTest_IsColumnAware_ForWideGlyphs()
+    {
+        // "中 x" renders as 4 columns (the wide glyph is 2), not the 3 chars it contains. A click at
+        // column 3 is still on the item; only a char-count measure would wrongly fall off its end.
+        IReadOnlyList<HelpItem> items = [new("中", "x")];
+
+        Assert.Equal(0, HelpLine.HitTest(items, 3, Cols));
+        Assert.Equal(-1, HelpLine.HitTest(items, 4, Cols));
     }
 }
