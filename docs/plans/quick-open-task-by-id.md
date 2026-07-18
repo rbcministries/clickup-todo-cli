@@ -9,8 +9,9 @@ that task's Task Detail view. Depends on nothing unmerged; the new-tab variant
 
 - Ctrl+O opens an entry surface; a valid task ID, custom ID, or URL (`app.clickup.com`
   or the workspace subdomain) opens that task's Task Detail.
-- A **cached** task opens without a resolve round-trip; an **uncached** task flashes
-  **"Fetching task…"** then the existing **"Loading details…"**.
+- A **cached** task opens without a resolve round-trip. An **uncached custom id** flashes
+  **"Fetching task…"** (the resolve step) then the existing **"Loading details…"**; an
+  uncached plain id has no separate resolve step, so it shows just **"Loading details…"**.
 - An unresolvable/invalid input flashes an error and leaves the current screen unchanged
   (no navigation).
 - URL/custom-ID parsing + resolution-order logic is **pure and unit-tested**; `dotnet
@@ -74,12 +75,14 @@ full-window modal over the list, same as the other screens.
   - `Parse` ⇒ `Invalid` → flash an error, no navigation.
   - `FindInCache(CandidateUniverse(), r)` hit → `OpenTaskDetail(cached.Id)` (its existing
     "Loading details…").
-  - Uncached **TaskId** → flash "Fetching task…", `OpenTaskDetail(r.Value)` (its own
-    fetch surfaces a not-found as a flashed error, no navigation).
-  - Uncached **CustomId** → flash "Fetching task…", off-thread
-    `GetTaskDetailByCustomIdAsync(r.Value, WorkspaceId)`, then `OpenTaskDetail(detail.Id)`
-    on the UI thread; failure flashes an error, no navigation. (One extra GET on a cold
-    custom-id open — the resolve fetch — is negligible for a one-shot open.)
+  - Uncached **TaskId** → `OpenTaskDetail(r.Value)` directly (its own "Loading details…"
+    IS the fetch — there's no separate resolve step, so no redundant "Fetching task…"; a
+    not-found surfaces as a flashed error, no navigation).
+  - Uncached **CustomId** → flash "Fetching task…" (the resolve round-trip, visible while
+    the lookup is in flight), off-thread `GetTaskDetailByCustomIdAsync(r.Value, WorkspaceId)`,
+    then `OpenTaskDetail(detail.Id)` on the UI thread; failure flashes an error, no
+    navigation. (One extra GET on a cold custom-id open — the resolve fetch — is negligible
+    for a one-shot open.)
   - Blank `WorkspaceId` on the custom-id path → flash "Workspace not configured".
 - **Footer**: add `Ctrl+O open` to `HelpItemSets.MainList`; add a `QuickOpen` set for the
   entry screen.

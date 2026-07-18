@@ -1075,9 +1075,11 @@ public sealed class TodoApp
         var screen = new QuickOpenScreen();
         ShowScreen(screen, () =>
         {
-            // Defer to a later main-loop iteration (Application.Invoke runs inline on the UI thread) so the
-            // entry surface is fully torn down before we open Task Detail — otherwise OpenTaskDetail would
-            // capture the still-mounted modal as its "requester" and skip the mount once the modal closes.
+            // Run the resolve on a later main-loop iteration so this entry surface is fully torn down
+            // first: doing it inline in the close handler fires it while the modal is still mounted, so
+            // OpenTaskDetail captures the modal as its "requester" and then skips the mount once the modal
+            // closes (observed under the tui-validate harness — "Loading details…" stuck, detail never
+            // shown). AddTimeout guarantees the later iteration.
             if (screen.Result is { } text)
                 Application.AddTimeout(TimeSpan.FromMilliseconds(1), () =>
                 {
@@ -1110,16 +1112,18 @@ public sealed class TodoApp
             return;
         }
 
-        // 2. Uncached → resolve via the API. A plain id goes straight through the detail load.
-        Flash("Fetching task…");
+        // 2. Uncached plain id → straight through the detail load (its own "Loading details…" flash IS
+        // the fetch; there's no separate resolve step, so no redundant "Fetching task…" here).
         if (reference.Kind == QuickOpenKind.TaskId)
         {
             OpenTaskDetail(reference.Value);
             return;
         }
 
-        // 3. A custom id needs the workspace (team) id and the custom-id lookup, which returns the task's
-        // real id; opening that goes through the ordinary detail load.
+        // 3. A custom id needs the workspace (team) id and a resolve step — the custom-id lookup returns
+        // the task's real id, which is then opened through the ordinary detail load. "Fetching task…"
+        // covers that resolve round-trip (visible while the off-thread lookup is in flight), after which
+        // OpenTaskDetail's "Loading details…" covers the load.
         var teamId = _config.WorkspaceId;
         if (string.IsNullOrWhiteSpace(teamId))
         {
@@ -1127,6 +1131,7 @@ public sealed class TodoApp
             return;
         }
 
+        Flash("Fetching task…");
         _ = Task.Run(async () =>
         {
             try

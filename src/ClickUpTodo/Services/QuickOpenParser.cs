@@ -46,6 +46,13 @@ public static class QuickOpenParser
     /// unavailable): <c>…/t/{id}</c> ⇒ task, <c>…/t/{team_id}/{custom_id}</c> ⇒ custom. A non-ClickUp
     /// URL, a ClickUp URL without a <c>/t/</c> task segment, and blank input all return
     /// <see cref="QuickOpenRef.Invalid"/>.
+    /// <para>
+    /// A <b>bare</b> custom id is recognized only when it carries a hyphen (ClickUp's usual
+    /// <c>PREFIX-123</c> form); a hyphenless bare token is classified as a plain id, so an
+    /// <em>uncached</em> hyphenless custom id resolves through the plain-id endpoint and won't be found.
+    /// A custom id in a <c>/t/{team}/{custom}</c> URL, or any cached custom id (matched on the task's
+    /// <see cref="TaskItem.CustomId"/> by <see cref="FindInCache"/> regardless of hyphen), is unaffected.
+    /// </para>
     /// </summary>
     public static QuickOpenRef Parse(string? input)
     {
@@ -53,10 +60,12 @@ public static class QuickOpenParser
         if (s.Length == 0)
             return QuickOpenRef.Invalid;
 
-        // Let a scheme-less clickup.com paste (e.g. "app.clickup.com/t/abc") parse as a URL.
+        // Let a scheme-less clickup.com paste (e.g. "app.clickup.com/t/abc" or the apex "clickup.com/t/abc")
+        // parse as a URL.
         var candidate = s;
         if (!s.Contains("://", StringComparison.Ordinal)
-            && s.Contains(".clickup.com/", StringComparison.OrdinalIgnoreCase))
+            && (s.Contains(".clickup.com/", StringComparison.OrdinalIgnoreCase)
+                || s.StartsWith("clickup.com/", StringComparison.OrdinalIgnoreCase)))
             candidate = "https://" + s;
 
         if (Uri.TryCreate(candidate, UriKind.Absolute, out var uri)

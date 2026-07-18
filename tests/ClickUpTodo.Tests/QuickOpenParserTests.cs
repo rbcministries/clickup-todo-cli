@@ -37,13 +37,21 @@ public sealed class QuickOpenParserTests
     [InlineData("https://odbm.clickup.com/t/86abc123", "86abc123")] // workspace subdomain accepted
     [InlineData("https://app.clickup.com/t/86abc123/", "86abc123")] // trailing slash
     [InlineData("https://app.clickup.com/t/86abc123?comment=1#c", "86abc123")] // query + fragment stripped
-    [InlineData("app.clickup.com/t/86abc123", "86abc123")] // scheme-less paste
+    [InlineData("app.clickup.com/t/86abc123", "86abc123")] // scheme-less paste (subdomain)
+    [InlineData("clickup.com/t/86abc123", "86abc123")] // scheme-less paste (apex)
+    [InlineData("https://evil.com@app.clickup.com/t/86abc123", "86abc123")] // userinfo — host is the real one
     public void Parse_TaskUrl_ExtractsPlainId(string input, string expectedId)
     {
         var r = QuickOpenParser.Parse(input);
         Assert.Equal(QuickOpenKind.TaskId, r.Kind);
         Assert.Equal(expectedId, r.Value);
     }
+
+    [Theory]
+    [InlineData("https://app.clickup.com.evil.com/t/86abc123")] // subdomain-suffix spoof
+    [InlineData("https://notclickup.com/t/86abc123")]
+    public void Parse_SpoofedClickUpHost_IsInvalid(string input)
+        => Assert.Equal(QuickOpenKind.Invalid, QuickOpenParser.Parse(input).Kind);
 
     [Theory]
     [InlineData("https://app.clickup.com/t/9014107164/ABC-123", "ABC-123")]
@@ -108,6 +116,17 @@ public sealed class QuickOpenParserTests
         var byId = Task("shared");
         var found = QuickOpenParser.FindInCache([byCustom, byId], QuickOpenRef.Task("shared"));
         Assert.Equal("shared", found?.Id);
+    }
+
+    [Fact]
+    public void FindInCache_IsKindAgnostic_MatchesCustomIdFieldForATaskIdRef()
+    {
+        // A TaskId-kind ref whose value happens to match only a task's CustomId still resolves — the
+        // resolution order tries both fields regardless of the ref's kind (a bare hyphenless custom id
+        // parses as TaskId but still opens if it's on screen).
+        var universe = new[] { Task("aaa", "XYZ") };
+        var found = QuickOpenParser.FindInCache(universe, QuickOpenRef.Task("xyz"));
+        Assert.Equal("aaa", found?.Id);
     }
 
     [Fact]
