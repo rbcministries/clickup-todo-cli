@@ -40,8 +40,9 @@ if (args.Any(a => a is "--help" or "-h" or "-?"))
 {
     Console.WriteLine($"clickup-todo — {AppBranding.DisplayName}, a keyboard-driven ClickUp task list.");
     Console.WriteLine();
-    Console.WriteLine("Usage: clickup-todo [--reset] [--driver <name>]");
+    Console.WriteLine("Usage: clickup-todo [--task <id>] [--reset] [--driver <name>]");
     Console.WriteLine("  (no args)        Launch the task UI (runs first-time setup if needed).");
+    Console.WriteLine("  --task <id>      Open straight into that task's detail view (a single-task tab).");
     Console.WriteLine("  --reset          Forget the saved token and settings.");
     Console.WriteLine("  --driver <name>  Force a Terminal.Gui console driver. One of:");
     Console.WriteLine("                     windows  native Win32 input (try this if input feels laggy)");
