@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using ClickUpTodo.ClickUp.Generated;
 using ClickUpTodo.ClickUp.Generated.Models;
+using ClickUpTodo.Configuration;
 using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.Kiota.Abstractions.Serialization;
 using Microsoft.Kiota.Http.HttpClientLibrary;
@@ -22,6 +23,12 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     private readonly HttpClientRequestAdapter _adapter;
     private readonly ClickUpApiClient _client;
 
+    // The cross-process nudge channel (#294): after a confirmed (2xx) write the facade records a
+    // change marker here so other running instances can re-fetch the changed task. Defaults to a no-op
+    // so a caller that doesn't wire multi-tab support (or the offline write tests) behaves exactly as
+    // before. Never null — the write paths call it unconditionally.
+    private readonly IChangeMarkerStore _changeMarkers;
+
     // Set when the caller hands over HttpClient ownership: the Kiota adapter only disposes a client
     // it created itself, so a factory-built pipeline would otherwise leak its connection pool (and
     // the rate-limit governor's semaphore) past ClickUpClient.Dispose.
@@ -29,18 +36,25 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
 
     /// <summary>Drives the client with any Kiota auth provider (personal token or OAuth).
     /// Pass <paramref name="ownsHttpClient"/> when this client should dispose
-    /// <paramref name="httpClient"/> along with itself (e.g. a pipeline the factory built for it).</summary>
-    public ClickUpClient(IAuthenticationProvider authProvider, HttpClient? httpClient = null, bool ownsHttpClient = false)
+    /// <paramref name="httpClient"/> along with itself (e.g. a pipeline the factory built for it).
+    /// <paramref name="changeMarkers"/> receives a nudge after each confirmed write (#294); omit it
+    /// (or pass null) to disable the channel.</summary>
+    public ClickUpClient(
+        IAuthenticationProvider authProvider, HttpClient? httpClient = null, bool ownsHttpClient = false,
+        IChangeMarkerStore? changeMarkers = null)
     {
         ArgumentNullException.ThrowIfNull(authProvider);
         _adapter = new HttpClientRequestAdapter(authProvider, httpClient: httpClient);
         _client = new ClickUpApiClient(_adapter);
         _ownedHttpClient = ownsHttpClient ? httpClient : null;
+        _changeMarkers = changeMarkers ?? NullChangeMarkerStore.Instance;
     }
 
     /// <summary>Drives the client with a ClickUp personal API token (sent as a raw header).</summary>
-    public ClickUpClient(string token, HttpClient? httpClient = null, bool ownsHttpClient = false)
-        : this(new ClickUpTokenAuthProvider(token), httpClient, ownsHttpClient)
+    public ClickUpClient(
+        string token, HttpClient? httpClient = null, bool ownsHttpClient = false,
+        IChangeMarkerStore? changeMarkers = null)
+        : this(new ClickUpTokenAuthProvider(token), httpClient, ownsHttpClient, changeMarkers)
     {
     }
 
@@ -265,6 +279,8 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         => Guard("UpdateTask", async () =>
         {
             var updated = await _client.V2.Task[taskId].PutAsync(new UpdateTaskRequest { Status = statusName }, cancellationToken: ct);
+            // Reached only on a 2xx (a non-2xx throws above), so this is the confirmed-write nudge (#294).
+            Nudge(taskId, updated, StatusFields);
             return updated?.Status?.StatusProp;
         });
 
@@ -288,6 +304,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 request.AdditionalData["priority"] = null!;
 
             var updated = await _client.V2.Task[taskId].PutAsync(request, cancellationToken: ct);
+            Nudge(taskId, updated, PriorityFields);
             return ClickUpPriority.Level(updated?.Priority?.Id, updated?.Priority?.PriorityProp);
         });
 
@@ -309,6 +326,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         return Guard("UpdateTask", async () =>
         {
             var updated = await _client.V2.Task[taskId].PutAsync(new UpdateTaskRequest { Description = description }, cancellationToken: ct);
+            Nudge(taskId, updated, DescriptionFields);
             return !string.IsNullOrWhiteSpace(updated?.TextContent) ? updated!.TextContent : updated?.Description;
         });
     }
@@ -345,6 +363,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 },
             };
             var updated = await _client.V2.Task[taskId].PutAsync(request, cancellationToken: ct);
+            Nudge(taskId, updated, AssigneeFields);
             return MapAssignees(updated?.Assignees);
         });
 
@@ -454,6 +473,10 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         {
             var request = new CreateCommentRequest { CommentText = text, NotifyAll = false };
             var created = await _client.V2.Task[taskId].Comment.PostAsync(request, cancellationToken: ct);
+            // A comment bumps the task's date_updated, but the create-comment response returns only the
+            // comment's own id/date, not the task's — so the nudge carries no serverDateUpdated (null),
+            // meaning a consumer simply always re-fetches on a comment nudge (#294).
+            _changeMarkers.Record(taskId, serverDateUpdatedMs: null, CommentFields);
             return new CommentItem(
                 Id: created?.Id ?? "",
                 Author: "",
@@ -509,6 +532,25 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 TaskId: null);
         });
     }
+
+    // ── Change-marker nudges (#294) ─────────────────────────────────────────
+
+    // Advisory field-name hints stamped on a marker (the consumer re-fetches everything, so these are
+    // diagnostics only). Static readonly so each write path shares one allocation.
+    private static readonly string[] StatusFields = ["status"];
+    private static readonly string[] PriorityFields = ["priority"];
+    private static readonly string[] DescriptionFields = ["description"];
+    private static readonly string[] AssigneeFields = ["assignees"];
+    private static readonly string[] CommentFields = ["comment"];
+
+    /// <summary>
+    /// Records a change-marker nudge for a confirmed <c>PUT /task</c> write (#294), carrying the
+    /// server-confirmed <c>date_updated</c> parsed off the response so a consumer holding the task can
+    /// suppress a redundant fetch. Called only after a 2xx (a non-2xx throws before reaching it); the
+    /// store swallows its own failures, so this never affects the write's result.
+    /// </summary>
+    private void Nudge(string taskId, TaskObject? updated, string[] changedFields)
+        => _changeMarkers.Record(taskId, ParseMs(updated?.DateUpdated), changedFields);
 
     // ── Mapping & plumbing ──────────────────────────────────────────────────
 
