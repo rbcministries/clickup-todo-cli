@@ -341,6 +341,149 @@ public sealed class TerminalLauncherTests
         Assert.Equal("konsole", Assert.Single(specs).FileName);
     }
 
+    // ── Linux: broadened emulator detection (#307) ─────────────────────────────
+    //
+    // The issue calls for detecting `xterm` and the modern emulators (not just the original
+    // x-terminal-emulator/gnome-terminal/konsole three), each with the right command-invocation
+    // syntax, plus a tmux/multiplexer path.
+
+    [Theory]
+    [InlineData("xterm", new[] { "-e", "bash", "-lc" })]
+    [InlineData("alacritty", new[] { "-e", "bash", "-lc" })]
+    [InlineData("xfce4-terminal", new[] { "-x", "bash", "-lc" })]
+    [InlineData("terminator", new[] { "-x", "bash", "-lc" })]
+    [InlineData("kitty", new[] { "bash", "-lc" })]
+    [InlineData("foot", new[] { "bash", "-lc" })]
+    [InlineData("wezterm", new[] { "start", "--", "bash", "-lc" })]
+    public void Linux_NewEmulator_UsesCorrectExecPrefix(string emulator, string[] expectedPrefix)
+    {
+        var spec = Assert.Single(Plan(OSPlatformKind.Linux, Present(emulator)));
+
+        Assert.Equal(emulator, spec.FileName);
+        Assert.Equal(expectedPrefix, spec.Arguments.Take(expectedPrefix.Length));
+        // The inner command is always the final argument, prompt still file-indirected.
+        Assert.Equal("'claude' \"$(cat '/tmp/clickup-todo/agent-prompt.txt')\"", spec.Arguments[^1]);
+        Assert.Equal(expectedPrefix.Length + 1, spec.Arguments.Count);
+    }
+
+    [Fact]
+    public void Linux_ProbesBroadenedEmulatorList_InOrder()
+    {
+        // Every supported emulator present at once — confirm the documented fallback order.
+        var all = Present(
+            "x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal",
+            "alacritty", "kitty", "wezterm", "foot", "xterm", "terminator");
+
+        var specs = Plan(OSPlatformKind.Linux, all);
+
+        Assert.Equal(
+            [
+                "x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal",
+                "alacritty", "kitty", "wezterm", "foot", "xterm", "terminator",
+            ],
+            specs.Select(s => s.FileName));
+    }
+
+    [Fact]
+    public void Linux_NewEmulator_BakesCdIntoWorkingDirectory()
+    {
+        // A non-VTE emulator (kitty, no exec flag) must still land in the working directory.
+        var inner = PlanCwd(OSPlatformKind.Linux, Present("kitty"), "/work/dir")[0].Arguments[^1];
+
+        Assert.Equal(
+            "cd '/work/dir' && 'claude' \"$(cat '/tmp/clickup-todo/agent-prompt.txt')\"",
+            inner);
+    }
+
+    [Fact]
+    public void Linux_TerminalEnv_NamingAProbedEmulator_IsNotAddedTwice()
+    {
+        // $TERMINAL=xterm and xterm also on PATH: it must appear exactly once (the $TERMINAL entry),
+        // not once for $TERMINAL and again from the probe loop.
+        var env = (string k) => k == "TERMINAL" ? "xterm" : null;
+
+        var specs = Plan(OSPlatformKind.Linux, Present("xterm"), env: env);
+
+        Assert.Equal("xterm", Assert.Single(specs).FileName);
+    }
+
+    // ── Linux: tmux multiplexer path (#307) ────────────────────────────────────
+
+    [Fact]
+    public void Linux_Tmux_HeadlessSession_YieldsRunnableNewWindowSpec()
+    {
+        // No GUI emulator on PATH, but we're inside tmux: instead of "no terminal found", emit a
+        // `tmux new-window` spec so a headless tmux-over-SSH session can still launch.
+        var env = Env(("TMUX", "/tmp/tmux-1000/default,123,0"));
+
+        var spec = Assert.Single(Plan(OSPlatformKind.Linux, Present("tmux"), env: env));
+
+        Assert.Equal("tmux", spec.FileName);
+        Assert.Equal(["new-window", "bash", "-lc"], spec.Arguments.Take(3));
+        Assert.Equal("tmux (new window)", spec.DisplayName);
+        Assert.Contains("$(cat '/tmp/clickup-todo/agent-prompt.txt')", spec.Arguments[^1]); // file-indirected
+    }
+
+    [Fact]
+    public void Linux_Tmux_NewWindowRequest_TmuxIsLastResortAfterGuiEmulators()
+    {
+        // Default (new-window) inside tmux with a GUI emulator present: the GUI window is preferred,
+        // tmux is the final fallback (so the launcher only reaches it if the GUI window won't start).
+        var env = Env(("TMUX", "/tmp/tmux-1000/default,123,0"));
+
+        var specs = Plan(OSPlatformKind.Linux, Present("gnome-terminal", "tmux"), env: env);
+
+        Assert.Equal(["gnome-terminal", "tmux"], specs.Select(s => s.FileName));
+    }
+
+    [Fact]
+    public void Linux_Tmux_TabRequest_TmuxTabIsTriedBeforeWindowFallbacks()
+    {
+        // A tab request inside tmux (no detected GUI-emulator tab) puts the tmux new-window ahead of
+        // the GUI window fallback, mirroring the gnome/konsole tab-before-window ordering.
+        var env = Env(("TMUX", "/tmp/tmux-1000/default,123,0"));
+
+        var specs = PlanTab(OSPlatformKind.Linux, Present("xterm", "tmux"), env);
+
+        Assert.Equal("tmux", specs[0].FileName);
+        Assert.Equal("tmux (new window)", specs[0].DisplayName);
+        Assert.Contains(specs, s => s.FileName == "xterm"); // window fallback retained
+    }
+
+    [Fact]
+    public void Linux_Tmux_DetectedGuiTab_IsPreferredOverTmux()
+    {
+        // Inside both gnome-terminal and tmux with a tab request: the real gnome tab is tried first,
+        // tmux after it.
+        var env = Env(("VTE_VERSION", "6003"), ("TMUX", "/tmp/tmux-1000/default,123,0"));
+
+        var specs = PlanTab(OSPlatformKind.Linux, Present("gnome-terminal", "tmux"), env);
+
+        Assert.Equal("gnome-terminal (new tab)", specs[0].DisplayName);
+        Assert.Contains(specs, s => s.FileName == "tmux");
+    }
+
+    [Fact]
+    public void Linux_Tmux_NotInsideTmux_NoTmuxSpec()
+    {
+        // tmux is installed but $TMUX is unset (we're not inside a session): no tmux spec is emitted.
+        var specs = Plan(OSPlatformKind.Linux, Present("tmux"));
+
+        Assert.Empty(specs);
+    }
+
+    [Fact]
+    public void Linux_Tmux_OneOff_KeepAliveRidesAlong()
+    {
+        var env = Env(("TMUX", "/tmp/tmux-1000/default,123,0"));
+
+        var spec = Assert.Single(PlanOneOff(OSPlatformKind.Linux, Present("tmux"), env: env));
+
+        Assert.Equal("tmux", spec.FileName);
+        Assert.Contains("'claude' -p ", spec.Arguments[^1]);
+        Assert.Contains("read -r _", spec.Arguments[^1]); // POSIX keep-alive
+    }
+
     // ── Safety: prompt content stays in the file, only the path is inlined ──────
 
     [Fact]
