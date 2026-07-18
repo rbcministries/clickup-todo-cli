@@ -5,6 +5,7 @@ using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
 using ClickUpTodo.Services;
+using ClickUpTodo.Setup;
 using ClickUpTodo.Tui.Screens;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
@@ -46,6 +47,10 @@ public sealed class TodoApp
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IFocusStore _focus;
+    // Opens a task URL in the system browser (#304). Injected so the E2E harness can swap in a
+    // recording launcher; defaults to the OS shell association (SystemBrowserLauncher). The Ctrl+B
+    // rewrite to the workspace subdomain host is applied before the URL reaches this.
+    private readonly IBrowserLauncher _browserLauncher;
     // Persists the last loaded working set for an instant first paint on the next launch (#122). Read
     // once at startup (TryPaintCachedTasks) and written after each changed live load (OnTasksLoaded).
     private readonly TaskCache _taskCache;
@@ -158,7 +163,7 @@ public sealed class TodoApp
 
     public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
         IFocusStore focus, TaskCache taskCache, FeedCache feedCache, AssigneeFrequencyCache assignees,
-        ListFrequencyCache lists)
+        ListFrequencyCache lists, IBrowserLauncher? browserLauncher = null)
     {
         _tasks = tasks;
         _feed = feed;
@@ -169,6 +174,7 @@ public sealed class TodoApp
         _feedCache = feedCache;
         _assignees = assignees;
         _lists = lists;
+        _browserLauncher = browserLauncher ?? new SystemBrowserLauncher();
         _agent = BuildAgentDispatcher();
     }
 
@@ -971,7 +977,7 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.AgentDispatch, _config.DetailView);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.WorkspaceSubdomain, _config.AgentDispatch, _config.DetailView);
 
         // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
         // save it folds the edited template back into the settings screen via the request's callback, so
@@ -1000,6 +1006,9 @@ public sealed class TodoApp
             // (or next-polled) feed picks up the new window with no extra wiring.
             _config.FeedActivityLookbackDays = result.FeedActivityLookbackDays;
             _config.DefaultWorkingDirectory = result.DefaultWorkingDirectory;
+            // Read live by LaunchBrowser (#304) on the next Ctrl+B, so a saved change takes effect
+            // immediately with no extra wiring.
+            _config.WorkspaceSubdomain = result.WorkspaceSubdomain;
             _config.AgentDispatch = result.AgentDispatch;
             _config.DetailView = result.DetailView;
             _configStore.Save(_config);
@@ -1447,10 +1456,18 @@ public sealed class TodoApp
             return;
         }
 
+        // Rewrite an app.clickup.com link onto the configured workspace subdomain (#304) so the launch
+        // skips the app→subdomain redirect; unset/non-app URLs pass through unchanged.
+        var target = ClickUpUrl.RewriteHost(url, _config.WorkspaceSubdomain);
+        if (!Uri.TryCreate(target, UriKind.Absolute, out var uri))
+        {
+            Flash("No URL for this task.");
+            return;
+        }
+
         try
         {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-            Flash($"Opened: {name}");
+            Flash(_browserLauncher.TryOpen(uri) ? $"Opened: {name}" : "Could not open browser.");
         }
         catch (Exception ex)
         {
