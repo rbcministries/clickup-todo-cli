@@ -300,6 +300,61 @@ public sealed class ConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public void Save_TwoTabsPinDifferentTasks_BothPinsSurvive()
+    {
+        // The same-field concurrent case #335 fixes, end-to-end through Save: two tabs pin *different*
+        // tasks in one load->save window. Whole-field LWW would drop whichever saved first; the
+        // element-level set union keeps both.
+        new ConfigStore(new JsonFileStateStore(_dir)).Save(new AppConfig
+        {
+            WorkspaceId = "1",
+            PersonalTasksListId = "2",
+        });
+
+        var tabA = new ConfigStore(new JsonFileStateStore(_dir));
+        var tabB = new ConfigStore(new JsonFileStateStore(_dir));
+        var a = tabA.Load();
+        var b = tabB.Load();
+
+        b.PinnedTaskIds.Add("pin-b");
+        tabB.Save(b);
+
+        a.PinnedTaskIds.Add("pin-a");
+        tabA.Save(a); // must not clobber pin-b with its own [pin-a]
+
+        var final = new ConfigStore(new JsonFileStateStore(_dir)).Load();
+        Assert.Equal(["pin-a", "pin-b"], final.PinnedTaskIds.OrderBy(x => x).ToArray());
+    }
+
+    [Fact]
+    public void Save_ConcurrentUnpin_Sticks_NotResurrectedByTheUnion()
+    {
+        // A genuine unpin must survive the set merge: tab A unpins a task while tab B leaves it alone.
+        // The three-way (vs. baseline) rule honors the removal instead of resurrecting it via union.
+        new ConfigStore(new JsonFileStateStore(_dir)).Save(new AppConfig
+        {
+            WorkspaceId = "1",
+            PersonalTasksListId = "2",
+            PinnedTaskIds = ["keep", "drop"],
+        });
+
+        var tabA = new ConfigStore(new JsonFileStateStore(_dir));
+        var tabB = new ConfigStore(new JsonFileStateStore(_dir));
+        var a = tabA.Load();
+        var b = tabB.Load();
+
+        b.RefreshSeconds = 30;            // tab B changes an unrelated field, doesn't touch pins
+        tabB.Save(b);
+
+        a.PinnedTaskIds.Remove("drop");  // tab A unpins "drop"
+        tabA.Save(a);
+
+        var final = new ConfigStore(new JsonFileStateStore(_dir)).Load();
+        Assert.Equal(["keep"], final.PinnedTaskIds); // "drop" stays gone
+        Assert.Equal(30, final.RefreshSeconds);      // tab B's unrelated change preserved
+    }
+
+    [Fact]
     public void Save_SwallowsWriteFailure_DoesNotThrow()
     {
         // A failed settings write (read-only/full disk, or LiteDB contention when a second tab is
