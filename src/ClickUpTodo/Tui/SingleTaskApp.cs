@@ -37,7 +37,7 @@ namespace ClickUpTodo.Tui;
 /// without a second <c>RefreshService</c> or any working-set fetch.
 /// </para>
 /// </summary>
-internal sealed class SingleTaskApp
+public sealed class SingleTaskApp
 {
     private readonly TaskService _tasks;
     private readonly AppConfig _config;

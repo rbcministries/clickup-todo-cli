@@ -55,6 +55,18 @@ var feedCache = new FeedCache(cacheStore);
 var assignees = new AssigneeFrequencyCache(
     stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
 var lists = new ListFrequencyCache(stateStore, config.WorkspaceId);
+
+// Single-task launch mode (#296): E2E_SINGLE_TASK=<id> boots SingleTaskApp straight into that task's
+// detail view — the harness equivalent of `clickup-todo --task <id>` — instead of the dashboard.
+var singleTaskId = Environment.GetEnvironmentVariable("E2E_SINGLE_TASK");
+if (!string.IsNullOrWhiteSpace(singleTaskId))
+{
+    var launchTask = await tasks.GetTaskDetailAsync(singleTaskId);
+    var launchComments = await tasks.GetTaskCommentsAsync(singleTaskId);
+    new SingleTaskApp(tasks, config, launchTask, launchComments).Run("ansi");
+    return;
+}
+
 new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists).Run("ansi");
 return;
 
