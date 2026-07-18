@@ -5,6 +5,7 @@ using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
 using ClickUpTodo.Services;
+using ClickUpTodo.Setup;
 using ClickUpTodo.Tui.Screens;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
@@ -60,6 +61,10 @@ public sealed class TodoApp
     // set's home lists and backfilled (count-0) from the scheduled list-hierarchy walk (#236). Never
     // touches rendering or input — no #3/#12 impact.
     private readonly ListFrequencyCache _lists;
+    // Cross-platform open-in-browser (#308): Windows shell association, macOS `open`, Linux `xdg-open`
+    // & friends, resolved by BrowserLaunchPlanner. The TUI isn't unit-tested; the launch logic lives
+    // in the planner and is covered there.
+    private readonly IBrowserLauncher _browser = new SystemBrowserLauncher();
     // How many candidates the Assignees pane wants available before it stops needing the deferred
     // workspace-members top-up (it fills its empty state up to 10 rows).
     private const int AssigneeCandidateTarget = 10;
@@ -1447,15 +1452,20 @@ public sealed class TodoApp
             return;
         }
 
-        try
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
         {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            Flash($"Not a valid URL: {url}");
+            return;
+        }
+
+        if (_browser.TryOpen(uri))
+        {
             Flash($"Opened: {name}");
+            return;
         }
-        catch (Exception ex)
-        {
-            Flash($"Could not open browser: {Short(ex)}");
-        }
+
+        var hint = BrowserLaunchPlanner.OpenerHint(BrowserLaunchPlanner.CurrentOS());
+        Flash(hint is null ? $"Couldn't open a browser — copy the URL: {url}" : $"Couldn't open a browser ({hint}) — copy the URL: {url}");
     }
 
     private void OpenDetail()
