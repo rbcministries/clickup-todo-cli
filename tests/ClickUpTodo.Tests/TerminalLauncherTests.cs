@@ -473,6 +473,18 @@ public sealed class TerminalLauncherTests
     }
 
     [Fact]
+    public void Linux_Tmux_InsideTmuxButTmuxNotOnPath_NoTmuxSpec()
+    {
+        // The other half of the guard: $TMUX is set but tmux isn't on PATH (e.g. inherited env in a
+        // container where tmux was removed). Only the GUI emulator is offered — no bogus tmux spec.
+        var env = Env(("TMUX", "/tmp/tmux-1000/default,123,0"));
+
+        var specs = Plan(OSPlatformKind.Linux, Present("xterm"), env: env);
+
+        Assert.Equal("xterm", Assert.Single(specs).FileName);
+    }
+
+    [Fact]
     public void Linux_Tmux_OneOff_KeepAliveRidesAlong()
     {
         var env = Env(("TMUX", "/tmp/tmux-1000/default,123,0"));
