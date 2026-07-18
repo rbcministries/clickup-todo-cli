@@ -35,7 +35,13 @@ internal readonly record struct TaskLaunchArg(bool Present, string? TaskId)
             var arg = args[i];
             if (arg == Flag)
             {
-                var value = i + 1 < args.Length ? args[i + 1].Trim() : null;
+                // Only consume the next token as the id when it isn't itself a flag: `--task --reset`
+                // means "the flag has no value" (report MissingValue → a clear error), not "the id is
+                // literally --reset". A real ClickUp task/custom id never starts with `--`.
+                var next = i + 1 < args.Length ? args[i + 1] : null;
+                var value = next is not null && !next.StartsWith("--", StringComparison.Ordinal)
+                    ? next.Trim()
+                    : null;
                 return new TaskLaunchArg(true, string.IsNullOrEmpty(value) ? null : value);
             }
             if (arg.StartsWith(Flag + "=", StringComparison.Ordinal))

@@ -142,7 +142,7 @@ public sealed class SingleTaskApp
         _detail.Closed += (_, _) =>
         {
             if (_detail.OpenBrowserRequested)
-                LaunchBrowser(_task.Url, _task.Name);
+                LaunchBrowser(_task.Url);
             Application.RequestStop();
         };
         // Deferred in single-task mode (see the plan / PR): Quick Updates needs sub-issue (5) #297 to
@@ -275,13 +275,13 @@ public sealed class SingleTaskApp
         _statusLabel.Text = message;
     }
 
-    private void LaunchBrowser(string? url, string? name)
+    // Ctrl+B launches the browser and immediately closes the tab (the detail screen sets
+    // OpenBrowserRequested then Close()s), so — unlike TodoApp's LaunchBrowser — there is no live view
+    // left to flash success/failure onto; a launch failure is only debug-logged.
+    private void LaunchBrowser(string? url)
     {
         if (string.IsNullOrWhiteSpace(url))
-        {
-            Flash("No URL for this task.");
             return;
-        }
 
         try
         {

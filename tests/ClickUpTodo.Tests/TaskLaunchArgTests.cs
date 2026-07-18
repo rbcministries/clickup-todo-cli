@@ -87,6 +87,22 @@ public sealed class TaskLaunchArgTests
         Assert.Equal("abc123", TaskLaunchArg.Parse(["--task=  abc123 "]).TaskId);
     }
 
+    [Theory]
+    [InlineData("--reset")]
+    [InlineData("--driver")]
+    [InlineData("--task")]
+    public void FlagShapedNextToken_IsMissingValue_NotConsumedAsId(string next)
+    {
+        // `--task --reset` means the flag was given without an id (→ a clear error), not that the id is
+        // literally "--reset". A real ClickUp task/custom id never starts with "--".
+        var result = TaskLaunchArg.Parse(["--task", next]);
+
+        Assert.True(result.Present);
+        Assert.True(result.MissingValue);
+        Assert.False(result.HasId);
+        Assert.Null(result.TaskId);
+    }
+
     [Fact]
     public void FindsFlag_AmongOtherArgs()
     {
