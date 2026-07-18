@@ -1026,11 +1026,14 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// Ctrl+N — opens the New Task compose screen (#213) over the list. Guarded on
+    /// Ctrl+N — opens the New Task compose screen (#213/#240) over the list. Guarded on
     /// <see cref="ActiveScreen"/> like the other list-initiated opens (only Help stacks). Requires a
-    /// configured Personal Tasks list (the create target); flashes and no-ops when unset. The embedded
-    /// assignee selector draws its candidate pool from the #155 frequency cache and seeds the current
-    /// user as a locked default. On success the list refreshes and the cursor lands on the new task.
+    /// configured Personal Tasks list (the fallback seed / create target when the cursor can't supply one);
+    /// flashes and no-ops when unset. The embedded assignee selector draws its candidate pool from the #155
+    /// frequency cache and seeds the current user as a locked default; the List selector (#239) draws from
+    /// the #238 list-frequency cache and is seeded with the cursor's list as the primary/home create target
+    /// (personal-list fallback — see <see cref="NewTaskForm.ResolveListSeed"/>). On success the list
+    /// refreshes and the cursor lands on the new task.
     /// </summary>
     private void OpenNewTask()
     {
@@ -1048,11 +1051,27 @@ public sealed class TodoApp
         var selfName = string.IsNullOrWhiteSpace(_tasks.UserName) ? "Me" : _tasks.UserName;
         var self = new TaskAssignee(_tasks.UserId, selfName);
 
+        // Seed the List selector's primary/home create target (#240) from the cursor's task list, falling
+        // back to the configured Personal Tasks list on a header row (no current task), a context parent
+        // (#46), a foreign subtask (#70/#179), or a task with a blank list id. The context/foreign
+        // classification reuses the same membership the row markers read.
+        var cursor = CurrentTask();
+        var primaryList = NewTaskForm.ResolveListSeed(
+            cursorListId: cursor?.ListId,
+            cursorListName: cursor?.ListName,
+            cursorIsContextParent: cursor is not null && _contextParents.ContainsKey(cursor.Id),
+            cursorIsForeignSubtask: cursor is not null && _foreignSubtasks.ContainsKey(cursor.Id),
+            personalListId: listId!,
+            personalListName: _config.PersonalTasksListName);
+
         var screen = new NewTaskScreen(
             match: (query, exclude) => _assignees.Match(query, exclude),
             topFrequent: (n, exclude) => _assignees.TopMostFrequent(n, exclude),
             lockedSelf: self,
-            createAsync: (request, ct) => _tasks.CreateTaskAsync(listId, request, ct));
+            listMatch: (query, exclude) => _lists.Match(query, exclude),
+            listTopFrequent: (n, exclude) => _lists.TopMostFrequent(n, exclude),
+            primaryList: primaryList,
+            createAsync: (targetListId, request, ct) => _tasks.CreateTaskAsync(targetListId, request, ct));
         screen.Created += (_, created) =>
         {
             // Land the next refresh on the new task, then kick that refresh directly (RequestRefresh's

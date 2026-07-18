@@ -16,12 +16,14 @@ namespace ClickUpTodo.Tui.Screens;
 /// A full-window compose screen for filing a new task from the main list (#213, sub-issue E of the
 /// Writing New Content epic #208): a required <b>Name</b>, an optional multi-line <b>Description</b>,
 /// an <b>Assignees</b> selector (the reusable <see cref="AssigneeSelectorView"/> #212 in
-/// collect-selection mode, seeded with the current user as a locked default), and the two optional
-/// basic fields (#215): a <b>Priority</b> selector (the four canonical priorities + a "no priority"
-/// clear row, mirroring the Quick Updates pane #157) and a <b>Due date</b> field. Save builds a
+/// collect-selection mode, seeded with the current user as a locked default), a <b>List</b> selector
+/// (the reusable <see cref="ListSelectorView"/> #239/#240 in collect-selection mode, seeded with the
+/// cursor's list — or the personal-list fallback — as the primary/home create target), and the two
+/// optional basic fields (#215): a <b>Priority</b> selector (the four canonical priorities + a "no
+/// priority" clear row, mirroring the Quick Updates pane #157) and a <b>Due date</b> field. Save builds a
 /// <see cref="NewTaskRequest"/> via the pure <see cref="NewTaskForm"/> and creates the task through the
-/// injected <paramref name="createAsync"/> callback (the create facade #209, wired by the host to the
-/// configured Personal Tasks list).
+/// injected <paramref name="createAsync"/> callback (the create facade #209) against the List selector's
+/// primary list (#240) — a new task must have at least one list, so Save is blocked when none is selected.
 /// <para>
 /// The create runs <b>while the screen is still mounted</b> so a server failure can keep the form open
 /// (re-enable Save, flash the error) — hence the injected-async pattern (the same shape #212's
@@ -36,10 +38,11 @@ public sealed class NewTaskScreen : Screen
     private readonly TextField _name;
     private readonly TextView _description;
     private readonly AssigneeSelectorView _assignees;
+    private readonly ListSelectorView _lists;
     private readonly ListView _priority;
     private readonly TextField _due;
     private readonly Button _save;
-    private readonly Func<NewTaskRequest, CancellationToken, Task<TaskItem>> _createAsync;
+    private readonly Func<string, NewTaskRequest, CancellationToken, Task<TaskItem>> _createAsync;
     private readonly CancellationTokenSource _cts = new();
     private bool _busy;
 
@@ -53,13 +56,24 @@ public sealed class NewTaskScreen : Screen
     /// <c>AssigneeFrequencyCache.TopMostFrequent</c>.</param>
     /// <param name="lockedSelf">The current user, pre-selected and non-removable (the New Task default
     /// assignee). A blank name would be silently dropped by the selector, so the host passes a fallback.</param>
-    /// <param name="createAsync">Creates the task from the built request and returns it mapped; run off
-    /// the UI thread. The host wires this to the create facade against the target list.</param>
+    /// <param name="listMatch">Substring match over the candidate list pool, excluding the given ids — i.e.
+    /// <c>ListFrequencyCache.Match</c> (#238/#240).</param>
+    /// <param name="listTopFrequent">Top-N most-frequent lists excluding the given ids — i.e.
+    /// <c>ListFrequencyCache.TopMostFrequent</c>.</param>
+    /// <param name="primaryList">The primary/home list to seed as the create target (#240): the cursor
+    /// task's list, or the personal-list fallback — see <see cref="NewTaskForm.ResolveListSeed"/>. Shown
+    /// pre-selected with a <c>" (home)"</c> marker; removable (the "≥1 list" rule is enforced on Save).</param>
+    /// <param name="createAsync">Creates the task in the given list from the built request and returns it
+    /// mapped; run off the UI thread. The host wires this to the create facade; the target list id comes
+    /// from the List selector's <c>Primary</c>, not a fixed host constant.</param>
     public NewTaskScreen(
         Func<string, ISet<long>, IReadOnlyList<TaskAssignee>> match,
         Func<int, ISet<long>, IReadOnlyList<TaskAssignee>> topFrequent,
         TaskAssignee lockedSelf,
-        Func<NewTaskRequest, CancellationToken, Task<TaskItem>> createAsync)
+        Func<string, ISet<string>, IReadOnlyList<NamedEntity>> listMatch,
+        Func<int, ISet<string>, IReadOnlyList<NamedEntity>> listTopFrequent,
+        NamedEntity primaryList,
+        Func<string, NewTaskRequest, CancellationToken, Task<TaskItem>> createAsync)
     {
         _createAsync = createAsync;
         Title = "New task";
@@ -90,8 +104,10 @@ public sealed class NewTaskScreen : Screen
             X = 1,
             Y = Pos.Bottom(assigneesLabel),
             Width = Dim.Fill(2),
-            // Reserve the bottom rows for the button line, a blank gap, and the Priority/Due block below.
-            Height = Dim.Fill(9),
+            // Reserve the bottom rows for the button line, a blank gap, the Priority/Due block, and the
+            // List block below it (8 rows more than the pre-#240 layout, for the List label + 6-row selector
+            // + a gap).
+            Height = Dim.Fill(17),
         };
         _assignees.Flash += (_, message) => RequestFlash(message);
 
@@ -99,6 +115,25 @@ public sealed class NewTaskScreen : Screen
         var cancel = new Button { X = Pos.Right(_save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         _save.Accepting += (_, _) => TrySave();
         cancel.Accepting += (_, _) => Close();
+
+        // List selector (#239/#240) in collect-selection mode, seeded with the primary/home create target.
+        // No apply callback — collect mode only mutates the in-memory selection; Save reads Primary.
+        var listsLabel = new Label { X = 1, Y = Pos.Top(_save) - 15, Text = "List (at least one required):" };
+        _lists = new ListSelectorView(
+            listMatch,
+            listTopFrequent,
+            initialSelected: null,
+            primary: primaryList,
+            mode: SelectorMode.CollectSelection)
+        {
+            X = 1,
+            // Sits above the Priority/Due block, anchored to Save so it lands on fixed rows regardless of
+            // window height (rows Save-14…Save-9 for the 6-row selector, with a blank gap below it).
+            Y = Pos.Top(_save) - 14,
+            Width = Dim.Fill(2),
+            Height = 6,
+        };
+        _lists.Flash += (_, message) => RequestFlash(message);
 
         // ── Optional fields (#215): Priority + Due date, sitting just above the button line. Positioned
         // relative to Save so the block lands on fixed rows regardless of window height (rows Save-6…Save-2
@@ -113,18 +148,18 @@ public sealed class NewTaskScreen : Screen
         _due = new TextField { X = Pos.Right(_priority) + 4, Y = Pos.Top(_save) - 6, Width = 24, Height = 1 };
 
         // Esc cancels, F1 opens Help (#103). Wire the handler to the screen and the text/list editors so
-        // they're intercepted before the TextField/TextView/ListView consume them; the selector already
-        // lets Esc/F1 fall through to the host.
+        // they're intercepted before the TextField/TextView/ListView consume them; the selectors already
+        // let Esc/F1 fall through to the host.
         KeyDown += OnKey;
         _name.KeyDown += OnKey;
         _description.KeyDown += OnKey;
         _priority.KeyDown += OnKey;
         _due.KeyDown += OnKey;
 
-        // Add in Tab order: Name → Description → Assignees → Priority → Due date → Save/Cancel. Labels are
-        // not focusable, so their position here doesn't affect the tab cycle.
+        // Add in Tab order: Name → Description → Assignees → List → Priority → Due date → Save/Cancel.
+        // Labels are not focusable, so their position here doesn't affect the tab cycle.
         Add(nameLabel, _name, descriptionLabel, _description, assigneesLabel, _assignees,
-            priorityLabel, _priority, dueLabel, _due, _save, cancel);
+            listsLabel, _lists, priorityLabel, _priority, dueLabel, _due, _save, cancel);
     }
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.NewTask;
@@ -155,13 +190,18 @@ public sealed class NewTaskScreen : Screen
 
         var assigneeIds = _assignees.Selection.Select(a => a.Id).ToList();
         var priorityLevel = QuickUpdatesModel.PriorityLevelForRow(_priority.SelectedItem ?? QuickUpdatesModel.NoPriorityRow);
+        // The create target is the List selector's primary (first-selected / home) list; null when the user
+        // removed every list, which TryBuild rejects with ListRequiredError (#240).
+        var primaryListId = _lists.Primary?.Id;
         if (!NewTaskForm.TryBuild(
                 _name.Text?.ToString(), _description.Text?.ToString(), assigneeIds,
-                priorityLevel, _due.Text?.ToString(), out var request, out var error))
+                priorityLevel, _due.Text?.ToString(), primaryListId, out var request, out var error))
         {
             RequestFlash(error!);
             // Land the cursor on the field the error is about so the user can fix it in place.
-            if (error == NewTaskForm.DueDateInvalidError)
+            if (error == NewTaskForm.ListRequiredError)
+                _lists.SetFocus();
+            else if (error == NewTaskForm.DueDateInvalidError)
                 _due.SetFocus();
             else
                 _name.SetFocus();
@@ -177,7 +217,7 @@ public sealed class NewTaskScreen : Screen
         {
             try
             {
-                var created = await _createAsync(request!, token).ConfigureAwait(false);
+                var created = await _createAsync(primaryListId!, request!, token).ConfigureAwait(false);
                 Application.Invoke(() =>
                 {
                     if (token.IsCancellationRequested)

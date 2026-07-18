@@ -41,7 +41,7 @@ public sealed class HelpLineTests
     [Fact]
     public void Format_NewTask_RendersMoveSaveCancelHelp()
         => Assert.Equal(
-            "Tab moves · Enter/Save saves · Esc cancels · F1 help",
+            "Tab Name/Descr/Assignees/List · Enter/Save saves · Esc cancels · F1 help",
             HelpLine.Format(HelpItemSets.NewTask));
 
     [Fact]
