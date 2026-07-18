@@ -113,7 +113,7 @@ public static class HelpItemSets
     /// <summary>The task detail view (adds F1, which the detail screen previously did not handle).</summary>
     public static readonly IReadOnlyList<HelpItem> Detail =
     [
-        new("Tab", "switch tab"),
+        new("Ctrl+←/→", "switch tab"),
         new("↑/↓ PgUp/PgDn", "scroll"),
         new("Ctrl+PgUp/PgDn", "order activity"),
         new("Ctrl+A", "dispatch to Claude"),
