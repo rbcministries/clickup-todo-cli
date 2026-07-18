@@ -51,13 +51,15 @@ background. The essentials:
 | --- | --- |
 | `↑` / `↓` | Move between tasks |
 | `Tab` | Switch between **Current Focus** and **Tasks** |
-| `Space` | Change the focused task's status |
-| `P` | Pin / unpin to the Focus pane |
-| `Enter` | Open the task in your browser |
+| `Ctrl+U` | Quick Updates — status / priority / assignees |
+| `Enter` | Open the task in **Task Detail** |
+| `Ctrl+B` | Open the task in your browser |
+| `Ctrl+P` | Pin / unpin to the Focus pane |
 | `Ctrl+E` | Mentions & Comments feed |
-| `R` | Refresh now · `?` Help · `Q`/`Esc` Quit |
+| `F5` | Refresh now · `F1` Help · `Ctrl+Q`/`Esc` Quit |
 
-The full shortcut list and details are in the [README](../README.md).
+Press `F1` in the app for the full, per-screen shortcut list. More details are in the
+[README](../README.md).
 
 ## What's in this beta
 
