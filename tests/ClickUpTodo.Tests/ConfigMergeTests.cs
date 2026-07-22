@@ -68,4 +68,111 @@ public sealed class ConfigMergeTests
 
         Assert.Equal("y", merged["otherField"]!.GetValue<string>());
     }
+
+    // --- pinnedTaskIds element-level set-union (#335) -------------------------------------------
+    // Unlike every other field, pinnedTaskIds three-way set-merges its elements: additions on either
+    // side (vs. baseline) are unioned; a genuine unpin (baseline element removed on a side) is honored
+    // and not resurrected by the union.
+
+    private static string[] Pins(JsonObject merged)
+        => merged["pinnedTaskIds"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray();
+
+    [Fact]
+    public void PinnedTaskIds_TwoTabsPinDifferentTasks_BothSurvive()
+    {
+        // baseline empty; this tab pinned X, the other tab pinned Y (already on disk). Both must stick.
+        var merged = Merge(
+            """{"pinnedTaskIds":[]}""",
+            """{"pinnedTaskIds":["X"]}""",
+            """{"pinnedTaskIds":["Y"]}""");
+
+        Assert.Equal(["X", "Y"], Pins(merged)); // current's order first, then disk-only additions
+    }
+
+    [Fact]
+    public void PinnedTaskIds_ThisSideUnpins_OtherIdle_UnpinSticks()
+    {
+        // baseline had Z; this tab unpinned it; the other tab left it. The unpin must win, not resurrect.
+        var merged = Merge(
+            """{"pinnedTaskIds":["Z"]}""",
+            """{"pinnedTaskIds":[]}""",
+            """{"pinnedTaskIds":["Z"]}""");
+
+        Assert.Empty(Pins(merged));
+    }
+
+    [Fact]
+    public void PinnedTaskIds_DiskSideUnpins_ThisIdle_UnpinSticks()
+    {
+        // Symmetric: the other tab unpinned Z (gone from disk); this tab didn't touch it. Stays unpinned.
+        var merged = Merge(
+            """{"pinnedTaskIds":["Z"]}""",
+            """{"pinnedTaskIds":["Z"]}""",
+            """{"pinnedTaskIds":[]}""");
+
+        Assert.Empty(Pins(merged));
+    }
+
+    [Fact]
+    public void PinnedTaskIds_ConcurrentAddAndUnpinOfDifferentIds_BothHonored()
+    {
+        // baseline [A]; this tab adds B (keeping A); the other tab unpins A. Result: A gone, B added.
+        var merged = Merge(
+            """{"pinnedTaskIds":["A"]}""",
+            """{"pinnedTaskIds":["A","B"]}""",
+            """{"pinnedTaskIds":[]}""");
+
+        Assert.Equal(["B"], Pins(merged));
+    }
+
+    [Fact]
+    public void PinnedTaskIds_NoConcurrentChange_IsIdempotent()
+    {
+        // Re-reading and merging our own just-written document changes nothing.
+        var merged = Merge(
+            """{"pinnedTaskIds":["A","B"]}""",
+            """{"pinnedTaskIds":["A","B"]}""",
+            """{"pinnedTaskIds":["A","B"]}""");
+
+        Assert.Equal(["A", "B"], Pins(merged));
+    }
+
+    [Fact]
+    public void PinnedTaskIds_PreservesCurrentOrder_ThenAppendsDiskOnlyAdditions()
+    {
+        // baseline [A]; this tab reorders to [B, A] and adds C; the other tab adds D. Current order
+        // is kept for its own ids, disk-only additions (D) append last.
+        var merged = Merge(
+            """{"pinnedTaskIds":["A"]}""",
+            """{"pinnedTaskIds":["B","A","C"]}""",
+            """{"pinnedTaskIds":["A","D"]}""");
+
+        Assert.Equal(["B", "A", "C", "D"], Pins(merged));
+    }
+
+    [Fact]
+    public void PinnedTaskIds_UnionDoesNotAffectOtherFieldsLwwBehaviour()
+    {
+        // pinnedTaskIds unions; a sibling array (some other field) still merges whole-field LWW.
+        var baseline = """{"pinnedTaskIds":[],"other":["a"]}""";
+        var current = """{"pinnedTaskIds":["X"],"other":["a"]}""";
+        var onDisk = """{"pinnedTaskIds":["Y"],"other":["a","b"]}""";
+
+        var merged = Merge(baseline, current, onDisk);
+
+        Assert.Equal(["X", "Y"], Pins(merged));                                              // unioned
+        Assert.Equal(["a", "b"], merged["other"]!.AsArray().Select(n => n!.GetValue<string>())); // LWW → disk
+    }
+
+    [Fact]
+    public void PinnedTaskIds_MissingOnASide_TreatedAsEmptySet()
+    {
+        // The key is absent on disk (a legacy doc). This tab's pin is an addition and survives.
+        var merged = Merge(
+            """{"pinnedTaskIds":[]}""",
+            """{"pinnedTaskIds":["X"]}""",
+            """{}""");
+
+        Assert.Equal(["X"], Pins(merged));
+    }
 }

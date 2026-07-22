@@ -12,7 +12,7 @@ body:
     attributes:
       label: What happened?
       description: What went wrong, and what did you expect instead?
-      placeholder: I pressed Space to change a status and the row disappeared; I expected the status to update in place.
+      placeholder: I pressed Ctrl+U to change a status and the row disappeared; I expected the status to update in place.
     validations:
       required: true
   - type: textarea
@@ -23,7 +23,7 @@ body:
       placeholder: |
         1. Open the app
         2. Move to a task on my Personal Tasks list
-        3. Press Space
+        3. Press Ctrl+U
         4. …
     validations:
       required: true

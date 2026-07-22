@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using ClickUpTodo.ClickUp.Generated;
 using ClickUpTodo.ClickUp.Generated.Models;
+using ClickUpTodo.Configuration;
 using Microsoft.Kiota.Abstractions.Authentication;
 using Microsoft.Kiota.Abstractions.Serialization;
 using Microsoft.Kiota.Http.HttpClientLibrary;
@@ -22,6 +23,12 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     private readonly HttpClientRequestAdapter _adapter;
     private readonly ClickUpApiClient _client;
 
+    // The cross-process nudge channel (#294): after a confirmed (2xx) write the facade records a
+    // change marker here so other running instances can re-fetch the changed task. Defaults to a no-op
+    // so a caller that doesn't wire multi-tab support (or the offline write tests) behaves exactly as
+    // before. Never null — the write paths call it unconditionally.
+    private readonly IChangeMarkerStore _changeMarkers;
+
     // Set when the caller hands over HttpClient ownership: the Kiota adapter only disposes a client
     // it created itself, so a factory-built pipeline would otherwise leak its connection pool (and
     // the rate-limit governor's semaphore) past ClickUpClient.Dispose.
@@ -29,18 +36,25 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
 
     /// <summary>Drives the client with any Kiota auth provider (personal token or OAuth).
     /// Pass <paramref name="ownsHttpClient"/> when this client should dispose
-    /// <paramref name="httpClient"/> along with itself (e.g. a pipeline the factory built for it).</summary>
-    public ClickUpClient(IAuthenticationProvider authProvider, HttpClient? httpClient = null, bool ownsHttpClient = false)
+    /// <paramref name="httpClient"/> along with itself (e.g. a pipeline the factory built for it).
+    /// <paramref name="changeMarkers"/> receives a nudge after each confirmed write (#294); omit it
+    /// (or pass null) to disable the channel.</summary>
+    public ClickUpClient(
+        IAuthenticationProvider authProvider, HttpClient? httpClient = null, bool ownsHttpClient = false,
+        IChangeMarkerStore? changeMarkers = null)
     {
         ArgumentNullException.ThrowIfNull(authProvider);
         _adapter = new HttpClientRequestAdapter(authProvider, httpClient: httpClient);
         _client = new ClickUpApiClient(_adapter);
         _ownedHttpClient = ownsHttpClient ? httpClient : null;
+        _changeMarkers = changeMarkers ?? NullChangeMarkerStore.Instance;
     }
 
     /// <summary>Drives the client with a ClickUp personal API token (sent as a raw header).</summary>
-    public ClickUpClient(string token, HttpClient? httpClient = null, bool ownsHttpClient = false)
-        : this(new ClickUpTokenAuthProvider(token), httpClient, ownsHttpClient)
+    public ClickUpClient(
+        string token, HttpClient? httpClient = null, bool ownsHttpClient = false,
+        IChangeMarkerStore? changeMarkers = null)
+        : this(new ClickUpTokenAuthProvider(token), httpClient, ownsHttpClient, changeMarkers)
     {
     }
 
@@ -265,6 +279,8 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         => Guard("UpdateTask", async () =>
         {
             var updated = await _client.V2.Task[taskId].PutAsync(new UpdateTaskRequest { Status = statusName }, cancellationToken: ct);
+            // Reached only on a 2xx (a non-2xx throws above), so this is the confirmed-write nudge (#294).
+            Nudge(taskId, updated, StatusFields);
             return updated?.Status?.StatusProp;
         });
 
@@ -288,6 +304,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 request.AdditionalData["priority"] = null!;
 
             var updated = await _client.V2.Task[taskId].PutAsync(request, cancellationToken: ct);
+            Nudge(taskId, updated, PriorityFields);
             return ClickUpPriority.Level(updated?.Priority?.Id, updated?.Priority?.PriorityProp);
         });
 
@@ -309,6 +326,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         return Guard("UpdateTask", async () =>
         {
             var updated = await _client.V2.Task[taskId].PutAsync(new UpdateTaskRequest { Description = description }, cancellationToken: ct);
+            Nudge(taskId, updated, DescriptionFields);
             return !string.IsNullOrWhiteSpace(updated?.TextContent) ? updated!.TextContent : updated?.Description;
         });
     }
@@ -345,6 +363,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 },
             };
             var updated = await _client.V2.Task[taskId].PutAsync(request, cancellationToken: ct);
+            Nudge(taskId, updated, AssigneeFields);
             return MapAssignees(updated?.Assignees);
         });
 
@@ -454,6 +473,10 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         {
             var request = new CreateCommentRequest { CommentText = text, NotifyAll = false };
             var created = await _client.V2.Task[taskId].Comment.PostAsync(request, cancellationToken: ct);
+            // A comment bumps the task's date_updated, but the create-comment response returns only the
+            // comment's own id/date, not the task's — so the nudge carries no serverDateUpdated (null),
+            // meaning a consumer simply always re-fetches on a comment nudge (#294).
+            _changeMarkers.Record(taskId, serverDateUpdatedMs: null, CommentFields);
             return new CommentItem(
                 Id: created?.Id ?? "",
                 Author: "",
@@ -463,6 +486,71 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 TaskId: taskId);
         });
     }
+
+    /// <summary>
+    /// The replies in a comment's thread (<c>GET /comment/{comment_id}/reply</c>, #327), mapped to the
+    /// stable <see cref="CommentItem"/> shape. Unlike the flat task-comment endpoint this one is
+    /// <b>not cursor-paginated</b> — ClickUp returns a thread's replies in a single response (a thread is
+    /// bounded by its parent comment) — so this does one fetch and maps via <see cref="MapComment"/>.
+    /// A reply payload carries no task context, so <see cref="CommentItem.TaskId"/> is left null for the
+    /// caller (the thread loader, #328) to stamp from the parent comment. Empty when the comment has no
+    /// replies.
+    /// </summary>
+    public Task<IReadOnlyList<CommentItem>> GetThreadedCommentsAsync(string commentId, CancellationToken ct = default)
+        => Guard("GetThreadedComments", async () =>
+        {
+            var resp = await _client.V2.Comment[commentId].Reply.GetAsync(cancellationToken: ct);
+            return (IReadOnlyList<CommentItem>)(resp?.Comments?
+                .Select(c => MapComment(c, null))
+                .ToList() ?? []);
+        });
+
+    /// <summary>
+    /// Post a <b>plain-text</b> reply into a comment's thread (<c>POST /comment/{comment_id}/reply</c>,
+    /// #327) and return it as a <see cref="CommentItem"/> for optimistic append. Mirrors
+    /// <see cref="CreateTaskCommentAsync"/>: only <c>comment_text</c> is sent (rich content — @-mentions,
+    /// task links — is a later epic) with <c>notify_all=false</c>, and because ClickUp's create response
+    /// is minimal (<c>id</c>/<c>hist_id</c>/<c>date</c> only, no text/author/blocks) the returned item
+    /// echoes the posted <paramref name="text"/> and leaves <see cref="CommentItem.Author"/> empty for the
+    /// caller's optimistic row to stamp. <see cref="CommentItem.TaskId"/> is null — the reply endpoint is
+    /// keyed by comment, not task.
+    /// </summary>
+    public Task<CommentItem> CreateThreadedCommentAsync(string commentId, string text, CancellationToken ct = default)
+    {
+        // ClickUp rejects an empty comment_text with a 400; fail faster and clearer at the boundary.
+        ArgumentException.ThrowIfNullOrWhiteSpace(text);
+        return Guard("CreateThreadedComment", async () =>
+        {
+            var request = new CreateCommentRequest { CommentText = text, NotifyAll = false };
+            var created = await _client.V2.Comment[commentId].Reply.PostAsync(request, cancellationToken: ct);
+            return new CommentItem(
+                Id: created?.Id ?? "",
+                Author: "",
+                DateMs: created?.Date,
+                Text: text,
+                Resolved: false,
+                TaskId: null);
+        });
+    }
+
+    // ── Change-marker nudges (#294) ─────────────────────────────────────────
+
+    // Advisory field-name hints stamped on a marker (the consumer re-fetches everything, so these are
+    // diagnostics only). Static readonly so each write path shares one allocation.
+    private static readonly string[] StatusFields = ["status"];
+    private static readonly string[] PriorityFields = ["priority"];
+    private static readonly string[] DescriptionFields = ["description"];
+    private static readonly string[] AssigneeFields = ["assignees"];
+    private static readonly string[] CommentFields = ["comment"];
+
+    /// <summary>
+    /// Records a change-marker nudge for a confirmed <c>PUT /task</c> write (#294), carrying the
+    /// server-confirmed <c>date_updated</c> parsed off the response so a consumer holding the task can
+    /// suppress a redundant fetch. Called only after a 2xx (a non-2xx throws before reaching it); the
+    /// store swallows its own failures, so this never affects the write's result.
+    /// </summary>
+    private void Nudge(string taskId, TaskObject? updated, string[] changedFields)
+        => _changeMarkers.Record(taskId, ParseMs(updated?.DateUpdated), changedFields);
 
     // ── Mapping & plumbing ──────────────────────────────────────────────────
 
@@ -526,7 +614,8 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         Text: c.CommentText ?? "",
         Resolved: c.Resolved == true,
         TaskId: taskId,
-        MentionedUserIds: MapMentionedUserIds(c.CommentProp));
+        MentionedUserIds: MapMentionedUserIds(c.CommentProp),
+        ReplyCount: ParseCount(c.ReplyCount));
 
     /// <summary>Extracts the distinct numeric ids of members @-mentioned in a comment's structured
     /// blocks — the runs carrying a <c>user</c> with a positive id (a mention/tag block, per #167).
@@ -618,6 +707,11 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// <summary>Parses a ClickUp epoch-milliseconds string, or null when absent/unparseable.</summary>
     private static long? ParseMs(string? value)
         => long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ms) ? ms : null;
+
+    /// <summary>Parses ClickUp's string-typed <c>reply_count</c> to a non-negative int; a missing,
+    /// unparseable, or negative value yields 0 (#327).</summary>
+    private static int ParseCount(string? value)
+        => int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var n) && n > 0 ? n : 0;
 
     /// <summary>Walks a paginated task endpoint until ClickUp reports the last page.</summary>
     private static async Task<List<TaskItem>> PageAsync(Func<int, Task<TasksResponse?>> fetchPage, CancellationToken ct)

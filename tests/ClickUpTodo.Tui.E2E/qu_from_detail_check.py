@@ -2,7 +2,7 @@
 """#159 end-to-end: Quick Updates launchable from Task Detail, return to origin.
 
 Drives the real app under a PTY:
-  A. list -> Space opens Quick Updates -> Esc returns to the list.
+  A. list -> Ctrl+U opens Quick Updates -> Esc returns to the list.
   B. list -> Enter opens detail -> Ctrl+U stacks Quick Updates over it -> Esc pops
      back to the *detail* (not the list).
   C. detail -> Ctrl+U -> down to 'complete' -> Enter applies and pops back to the
@@ -67,10 +67,10 @@ try:
     require("Task" in visible(), "list did not boot")
     require(not qu_open(visible()), "Quick Updates unexpectedly open at boot")
 
-    # A. list -> Space -> Quick Updates -> Esc -> list
-    os.write(master, b" ")
+    # A. list -> Ctrl+U -> Quick Updates -> Esc -> list (#290: Ctrl+U is the launcher on both origins)
+    os.write(master, CTRL_U)
     pump(2.5)
-    require(qu_open(visible()), "Space from the list did not open Quick Updates")
+    require(qu_open(visible()), "Ctrl+U from the list did not open Quick Updates")
     os.write(master, b"\x1b")
     pump(2.0)
     require("Task" in visible() and not qu_open(visible()),

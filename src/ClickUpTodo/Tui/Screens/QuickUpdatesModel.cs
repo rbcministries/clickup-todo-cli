@@ -77,4 +77,21 @@ public static class QuickUpdatesModel
     /// effective <paramref name="effectiveLevel"/> (the clear row when it has no priority).</summary>
     public static IReadOnlyList<string> PriorityRows(int? effectiveLevel)
         => [.. PriorityLabels.Select((label, i) => Mark(label, PriorityLevelForRow(i) == effectiveLevel))];
+
+    /// <summary>
+    /// The absolute row a viewport-relative click at <paramref name="clickY"/> lands on in a Status or
+    /// Priority pane, given the list's vertical <paramref name="scrollOffset"/> (its <c>Viewport.Y</c>,
+    /// the index of the topmost displayed row) and total <paramref name="rowCount"/>. Returns <c>-1</c>
+    /// when the click is above the first row (<paramref name="clickY"/> &lt; 0) or below the last — the
+    /// empty space beneath a list shorter than its frame — so a click-to-apply (#288) resolves to the
+    /// real row or explicitly no-ops instead of falling onto the nearest one (which
+    /// <see cref="StatusPickerModel"/>-style commit-on-<c>SelectedItem</c> would otherwise apply).
+    /// </summary>
+    public static int RowIndexAt(int clickY, int scrollOffset, int rowCount)
+    {
+        if (clickY < 0)
+            return -1;
+        var index = scrollOffset + clickY;
+        return index >= 0 && index < rowCount ? index : -1;
+    }
 }

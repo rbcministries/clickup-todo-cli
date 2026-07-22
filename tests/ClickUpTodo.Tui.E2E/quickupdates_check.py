@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Boots the TUI under a PTY and exercises the Quick Updates screen (#156):
-Space opens it → Tab cycles Status→Priority→Assignees (wrapping) → Esc exits.
+Ctrl+U opens it → Tab cycles Status→Priority→Assignees (wrapping) → Esc exits.
 Asserts the three pane titles render on open and that Esc returns to the list."""
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte
@@ -53,8 +53,8 @@ try:
     assert "Task" in visible(), "app never rendered the list:\n" + visible()[-1500:]
     pump(1.0)
 
-    # Space opens Quick Updates.
-    send(b" ", 2.0)
+    # Ctrl+U opens Quick Updates (#290).
+    send(b"\x15", 2.0)
     v = visible()
     for token in ("Quick Updates", "Status", "Priority", "Assignees"):
         assert token in v, f"missing {token!r} after opening Quick Updates:\n{v}"
