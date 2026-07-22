@@ -46,6 +46,14 @@ namespace ClickUpTodo.ClickUp.Generated.Models
 #else
         public string Id { get; set; }
 #endif
+        /// <summary>Number of replies in this comment&apos;s thread, as a string (ClickUp returns numeric comment fields as strings, like &apos;date&apos;). Absent/unparseable ⇒ 0.</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public string? ReplyCount { get; set; }
+#nullable restore
+#else
+        public string ReplyCount { get; set; }
+#endif
         /// <summary>The resolved property</summary>
         public bool? Resolved { get; set; }
         /// <summary>The user property</summary>
@@ -85,6 +93,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
                 { "comment_text", n => { CommentText = n.GetStringValue(); } },
                 { "date", n => { Date = n.GetStringValue(); } },
                 { "id", n => { Id = n.GetStringValue(); } },
+                { "reply_count", n => { ReplyCount = n.GetStringValue(); } },
                 { "resolved", n => { Resolved = n.GetBoolValue(); } },
                 { "user", n => { User = n.GetObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.User>(global::ClickUpTodo.ClickUp.Generated.Models.User.CreateFromDiscriminatorValue); } },
             };
@@ -100,6 +109,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             writer.WriteStringValue("comment_text", CommentText);
             writer.WriteStringValue("date", Date);
             writer.WriteStringValue("id", Id);
+            writer.WriteStringValue("reply_count", ReplyCount);
             writer.WriteBoolValue("resolved", Resolved);
             writer.WriteObjectValue<global::ClickUpTodo.ClickUp.Generated.Models.User>("user", User);
             writer.WriteAdditionalData(AdditionalData);

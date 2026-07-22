@@ -85,13 +85,14 @@ public static class HelpLine
 /// </summary>
 public static class HelpItemSets
 {
-    /// <summary>The main task list. <see cref="HelpLine.Format"/> of this reproduces the pre-#103
-    /// help line byte-for-byte, so the default (list-active) footer is unchanged.</summary>
+    /// <summary>The main task list. Matched the pre-#103 help line byte-for-byte until #290 rebound the
+    /// Quick Updates launcher from <c>Space</c> to <c>Ctrl+U</c> (to agree with Task Detail), so the
+    /// third item now reads <c>Ctrl+U quick update</c> instead of <c>␣ status</c>.</summary>
     public static readonly IReadOnlyList<HelpItem> MainList =
     [
         new("↑/↓", "move"),
         new("→|", "next section"),
-        new("␣", "status"),
+        new("Ctrl+U", "quick update"),
         new("↩", "detail"),
         new("Ctrl+N", "new task"),
         new("Ctrl+B", "🌐"),
@@ -113,7 +114,7 @@ public static class HelpItemSets
     /// <summary>The task detail view (adds F1, which the detail screen previously did not handle).</summary>
     public static readonly IReadOnlyList<HelpItem> Detail =
     [
-        new("Tab", "switch tab"),
+        new("Ctrl+←/→", "switch tab"),
         new("↑/↓ PgUp/PgDn", "scroll"),
         new("Ctrl+PgUp/PgDn", "order activity"),
         new("Ctrl+A", "dispatch to Claude"),
@@ -156,9 +157,9 @@ public static class HelpItemSets
         new("Esc", "cancels"),
     ];
 
-    /// <summary>The Quick Updates screen (Space, #156): Tab cycles Status → Priority → Assignees → Lists,
-    /// ↑/↓ move within a pane, Enter applies the highlighted status/priority (#157; assignee apply is
-    /// #158, list membership #242).</summary>
+    /// <summary>The Quick Updates screen (Ctrl+U from both the main list and Task Detail, #156/#290):
+    /// Tab cycles Status → Priority → Assignees → Lists, ↑/↓ move within a pane, Enter applies the
+    /// highlighted status/priority (#157; assignee apply is #158, list membership #242).</summary>
     public static readonly IReadOnlyList<HelpItem> QuickUpdates =
     [
         new("Tab", "Status/Priority/Assignees/Lists"),
@@ -168,11 +169,12 @@ public static class HelpItemSets
         new("Esc", "exit"),
     ];
 
-    /// <summary>The New Task compose screen (Ctrl+N, #213): Tab moves between Name/Description/Assignees
-    /// and the buttons, Enter (or the default Save button) files the task, Esc cancels, F1 help.</summary>
+    /// <summary>The New Task compose screen (Ctrl+N, #213/#240): Tab moves between
+    /// Name/Description/Assignees/List and the buttons, Enter (or the default Save button) files the task
+    /// in the primary (home) list, Esc cancels, F1 help.</summary>
     public static readonly IReadOnlyList<HelpItem> NewTask =
     [
-        new("Tab", "moves"),
+        new("Tab", "Name/Descr/Assignees/List"),
         new("Enter/Save", "saves"),
         new("Esc", "cancels"),
         new("F1", "help"),

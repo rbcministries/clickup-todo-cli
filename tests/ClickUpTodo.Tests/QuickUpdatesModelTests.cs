@@ -132,4 +132,22 @@ public sealed class QuickUpdatesModelTests
             rows);
     }
 
+    // ── RowIndexAt (mouse click → pane row, #288) ────────────────────────────────
+
+    [Theory]
+    [InlineData(0, 0, 5, 0)]   // top of an unscrolled list
+    [InlineData(4, 0, 5, 4)]   // last row, unscrolled
+    [InlineData(1, 3, 8, 4)]   // scrolled down 3: viewport row 1 → absolute row 4
+    [InlineData(0, 2, 8, 2)]   // scrolled down 2: viewport row 0 → absolute row 2
+    public void RowIndexAt_ResolvesAbsoluteRow(int clickY, int scrollOffset, int rowCount, int expected)
+        => Assert.Equal(expected, QuickUpdatesModel.RowIndexAt(clickY, scrollOffset, rowCount));
+
+    [Theory]
+    [InlineData(-1, 0, 5)]   // above the first row
+    [InlineData(5, 0, 5)]    // one past the last row (empty space beneath a short list)
+    [InlineData(10, 0, 5)]   // well past the last row
+    [InlineData(3, 3, 5)]    // scrolled: viewport row 3 → absolute row 6, past the end
+    [InlineData(0, 0, 0)]    // empty list
+    public void RowIndexAt_ReturnsMinusOneOutsideRows(int clickY, int scrollOffset, int rowCount)
+        => Assert.Equal(-1, QuickUpdatesModel.RowIndexAt(clickY, scrollOffset, rowCount));
 }

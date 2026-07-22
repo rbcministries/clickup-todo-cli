@@ -15,10 +15,10 @@ using Terminal.Gui.Views;
 namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>
-/// A full-window screen (#153/#156) that lets the user change a task's <b>Status</b>, <b>Priority</b>
-/// and <b>Assignees</b> without leaving their place. It hosts three vertically-stacked, focusable
-/// controls; <c>Tab</c>/<c>Shift+Tab</c> cycle focus Status → Priority → Assignees (wrapping) and
-/// <c>Esc</c> exits from any pane.
+/// A full-window screen (#153/#156) that lets the user change a task's <b>Status</b>, <b>Priority</b>,
+/// <b>Assignees</b> and <b>Lists</b> without leaving their place. It hosts four vertically-stacked,
+/// focusable controls; <c>Tab</c>/<c>Shift+Tab</c> cycle focus Status → Priority → Assignees → Lists
+/// (wrapping) and <c>Esc</c> exits from any pane.
 /// <para>
 /// Status and Priority are <b>deferred-commit</b> (#157): moving the highlight does nothing; pressing
 /// <c>Enter</c> applies the highlighted value. Each pane marks its current effective value with a
@@ -119,10 +119,10 @@ public sealed class QuickUpdatesScreen : Screen
         var title = taskName.Length > 40 ? taskName[..39] + "…" : taskName;
         Title = $"Quick Updates — {title}";
 
-        // Three bordered sections, top-to-bottom in focus order. Priority is a fixed 5-row list; the
-        // Assignees pane (a search box over a scrolling list) gets the taller bottom frame; Status takes
-        // the remaining top space. The shared footer (#103) carries the shortcuts, so no per-pane hint
-        // labels are needed.
+        // Four bordered sections, top-to-bottom in focus order. Priority is a fixed 5-row list; the
+        // Assignees and Lists panes (a search box over a scrolling list each) get the taller bottom
+        // frames; Status takes the remaining top space. The shared footer (#103) carries the shortcuts,
+        // so no per-pane hint labels are needed. (Frame geometry is set further below.)
         _statusList = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
         _statusList.SetSource(new ObservableCollection<string>(QuickUpdatesModel.StatusRows(statuses, _effectiveStatus)));
         var preselectedStatus = StatusPickerModel.PreselectedIndex(statuses, currentStatus);
@@ -177,6 +177,11 @@ public sealed class QuickUpdatesScreen : Screen
         _panes = [_statusList, _priorityList, _assignees, _lists];
         foreach (var pane in _panes)
             pane.KeyDown += OnPaneKey;
+
+        // Mouse click-to-apply (#288): a left-click on a Status/Priority row selects and commits it in
+        // one gesture. The Assignees and Lists panes own their own click (SelectorView.OnListMouse).
+        _statusList.MouseEvent += (_, e) => OnListClick(e, _statusList, _statuses.Count, CommitStatus);
+        _priorityList.MouseEvent += (_, e) => OnListClick(e, _priorityList, QuickUpdatesModel.PriorityLabels.Count, CommitPriority);
 
         Add([statusFrame, priorityFrame, assigneesFrame, listsFrame]);
     }
@@ -245,6 +250,28 @@ public sealed class QuickUpdatesScreen : Screen
                 Close();
                 break;
         }
+    }
+
+    /// <summary>
+    /// A left-click on a Status/Priority row is select-and-apply in one gesture (#288): resolve the
+    /// clicked row (via the pure <see cref="QuickUpdatesModel.RowIndexAt"/>, using the list's scroll
+    /// offset), move the highlight and focus there, then run the same commit path Enter uses — which
+    /// keeps the "unchanged → flash, no-op" guard and the host's optimistic-apply + revert + ✓ reconcile.
+    /// Only the single left-click is handled; a click on empty space below a short list resolves to
+    /// <c>-1</c> and is left unhandled (native select behaviour intact), so it can never apply the
+    /// nearest row.
+    /// </summary>
+    private static void OnListClick(Mouse e, ListView list, int rowCount, Action commit)
+    {
+        if (!e.Flags.HasFlag(MouseFlags.LeftButtonClicked) || e.Position is not { } pos)
+            return;
+        var row = QuickUpdatesModel.RowIndexAt(pos.Y, list.Viewport.Y, rowCount);
+        if (row < 0)
+            return;
+        e.Handled = true;
+        list.SetFocus();
+        list.SelectedItem = row;
+        commit();
     }
 
     private void CommitStatus()

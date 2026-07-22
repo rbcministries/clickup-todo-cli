@@ -103,19 +103,35 @@ redirect URL, set `CLICKUP_OAUTH_REDIRECT_URI` (it must match the URL registered
 
 ## Keyboard shortcuts
 
-| Key       | Action                                            |
-| --------- | ------------------------------------------------- |
-| `↑` / `↓` | Move between tasks                                |
-| `Tab`     | Switch between the **Current Focus** and **Tasks** sections |
-| `Space`   | Set the focused task's status (from its list's statuses) |
-| `P`       | Pin / unpin the focused task to the Focus pane    |
-| `Enter`   | Open the focused task in your browser             |
-| `R`       | Refresh now                                       |
-| `?`       | Show help                                         |
-| `Q` / `Esc` | Quit                                            |
+These are the main task-list shortcuts. Command actions use modifier chords / function keys so bare
+letters stay free for the list's type-ahead search. Press `F1` in the app for the full, per-screen
+list (each screen shows its own contextual shortcuts on the footer).
 
-Pinned tasks persist across restarts. The list refreshes in the background on your configured
-interval, and your cursor stays on the same task across refreshes so the screen stays steady.
+| Key           | Action                                                        |
+| ------------- | ------------------------------------------------------------- |
+| `↑` / `↓`     | Move between tasks                                            |
+| `Tab`         | Jump to the next section (**Current Focus** ↔ **Tasks**)      |
+| `Ctrl+U`      | Quick Updates — set status / priority / assignees             |
+| `Enter`       | Open the focused task in **Task Detail**                      |
+| `Ctrl+B`      | Open the focused task in your browser                         |
+| `Ctrl+P`      | Pin / unpin the focused task to the Focus pane                |
+| `Ctrl+N`      | New task                                                      |
+| `Ctrl+E`      | Toggle the mentions & comments feed                          |
+| `F1`          | Show help + full shortcut list                                |
+| `F2`          | Settings                                                      |
+| `F3`          | Filter / sort / group                                         |
+| `F4`          | Cycle the subtasks view                                       |
+| `F5`          | Refresh now (`Ctrl+R` is an alias)                           |
+| `F6`          | Cycle status/priority badges                                  |
+| `F12`         | Toggle completed tasks                                        |
+| `→` / `←`     | Expand / collapse the focused parent's subtasks              |
+| `Ctrl+→` / `Ctrl+←` | Expand-all / collapse-all subtasks                     |
+| `type`        | Type-ahead search by task title                               |
+| `Ctrl+Q` / `Esc` | Quit                                                      |
+
+Quick Updates opens with `Ctrl+U` from both the main list and Task Detail. Pinned tasks persist
+across restarts. The list refreshes in the background on your configured interval, and your cursor
+stays on the same task across refreshes so the screen stays steady.
 
 ## Mentions & Comments feed
 

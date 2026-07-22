@@ -26,15 +26,17 @@ public static class ClickUpClientFactory
 
     /// <summary>Constructs a client for the token using the provider implied by <paramref name="config"/>.
     /// Unless the caller supplies its own <paramref name="httpClient"/>, the client is built by
-    /// <see cref="CreateHttpClient"/> so all app traffic flows through the rate-limit governor (#193).</summary>
-    public static ClickUpClient Create(AppConfig config, string token, HttpClient? httpClient = null)
+    /// <see cref="CreateHttpClient"/> so all app traffic flows through the rate-limit governor (#193).
+    /// <paramref name="changeMarkers"/> (optional) receives a nudge after each confirmed write (#294).</summary>
+    public static ClickUpClient Create(
+        AppConfig config, string token, HttpClient? httpClient = null, IChangeMarkerStore? changeMarkers = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         // A factory-created HttpClient is owned (and disposed) by the ClickUpClient; a caller-supplied
         // one stays the caller's to manage, as before.
         return httpClient is null
-            ? new ClickUpClient(AuthProviderFor(config.AuthMode, token), CreateHttpClient(), ownsHttpClient: true)
-            : new ClickUpClient(AuthProviderFor(config.AuthMode, token), httpClient);
+            ? new ClickUpClient(AuthProviderFor(config.AuthMode, token), CreateHttpClient(), ownsHttpClient: true, changeMarkers)
+            : new ClickUpClient(AuthProviderFor(config.AuthMode, token), httpClient, changeMarkers: changeMarkers);
     }
 
     /// <summary>

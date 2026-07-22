@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Boots the TUI under a PTY and exercises the Quick Updates *List* pane (#242):
-Space opens Quick Updates → Tab x3 to the List pane (Status→Priority→Assignees→Lists) →
+Ctrl+U opens Quick Updates → Tab x3 to the List pane (Status→Priority→Assignees→Lists) →
 its empty-state shows the task's home list marked "✓ Personal Tasks (home)" (removable
 primary) topped up with the frequency-pool lists → type "Q3" and, after the ~1s debounce,
 the list filters to "Q3 Website Refresh" → Enter adds it (membership write round-trips; it
@@ -63,8 +63,8 @@ try:
     assert "Task" in visible(), "app never rendered the list:\n" + visible()[-1500:]
     pump(1.0)
 
-    # Space opens Quick Updates.
-    send(b" ", 2.0)
+    # Ctrl+U opens Quick Updates (#290).
+    send(b"\x15", 2.0)
     assert "Quick Updates" in visible(), "Quick Updates did not open:\n" + visible()
 
     # Tab three times: Status → Priority → Assignees → Lists. Focus lands in the List search box.
