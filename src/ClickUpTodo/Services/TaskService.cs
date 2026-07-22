@@ -550,6 +550,23 @@ public sealed class TaskService(
         => tasks.Select(t => t.Id == taskId ? t with { Assignees = assignees } : t).ToList();
 
     /// <summary>
+    /// Folds the status, priority and assignee fields of <paramref name="updated"/> onto the matching
+    /// task in <paramref name="tasks"/> in one pass — the Quick Updates reconcile shared by the main-list
+    /// snapshot and the single-task update target (#297), so a commit settles a field identically in
+    /// both modes. Pure (the input list is not mutated); other tasks and the overall order are untouched.
+    /// The <paramref name="updated"/> record always carries the current value for the fields the caller
+    /// didn't touch, so applying all three never clobbers — a status/priority commit re-applies the
+    /// task's existing assignees (a no-op) and an assignee change re-applies its status/priority (#158).
+    /// </summary>
+    public static IReadOnlyList<TaskItem> ApplyFieldChanges(IReadOnlyList<TaskItem> tasks, TaskItem updated)
+    {
+        tasks = ApplyStatusChange(tasks, updated.Id, updated.StatusName);
+        tasks = ApplyPriorityChange(
+            tasks, updated.Id, updated.PriorityLevel, updated.PriorityName, updated.PriorityColor);
+        return ApplyAssigneesChange(tasks, updated.Id, updated.Assignees);
+    }
+
+    /// <summary>
     /// The distinct parent ids referenced by a subtask in <paramref name="snapshot"/> that aren't
     /// themselves present in it — the parents the nested subtasks view (#46) must pull in as context
     /// headers. Pure; order follows first appearance so the fetch <em>start</em> order is deterministic

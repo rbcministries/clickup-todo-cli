@@ -31,6 +31,18 @@ public sealed class AppConfig
 
     public string PersonalTasksListName { get; set; } = "";
 
+    /// <summary>
+    /// The logged-in workspace's ClickUp subdomain label (#304), e.g. <c>odbm</c> for
+    /// <c>odbm.clickup.com</c>. When set, a Ctrl+B browser launch rewrites an <c>app.clickup.com</c>
+    /// task URL's host to <c>{Subdomain}.clickup.com</c> (see
+    /// <see cref="Services.ClickUpUrl.RewriteHost"/>), so the launch lands directly on the workspace host
+    /// instead of eating the <c>app.clickup.com</c> redirect. Blank/absent (the default) keeps the
+    /// original URL, so existing configs need no migration and it's cleared on <c>--reset</c>/logout with
+    /// the rest of config. Stored as the bare label; <see cref="Tui.Screens.SettingsScreen"/> normalizes
+    /// user input (label, host, or pasted URL) via <see cref="Services.ClickUpUrl.NormalizeSubdomain"/>.
+    /// </summary>
+    public string WorkspaceSubdomain { get; set; } = "";
+
     /// <summary>How often the task list polls ClickUp, in seconds.</summary>
     public int RefreshSeconds { get; set; } = 60;
 

@@ -178,38 +178,84 @@ public static class TerminalCommandPlanner
         var tabSpecs = new List<LaunchSpec>();
         var windowSpecs = new List<LaunchSpec>();
 
+        // The argv that makes an emulator run our `bash -lc <inner>` command — its per-emulator prefix
+        // (see ExecPrefix) followed by the shell invocation.
+        string[] WindowArgs(string name) => [.. ExecPrefix(name), "bash", "-lc", inner];
+
+        // Emulators for which a *window* spec has been emitted, so an explicit $TERMINAL that also
+        // appears in the probe list below doesn't add a duplicate window. A detected tab spec is
+        // distinct (and more specific) and is never suppressed by this.
+        var windowAdded = new HashSet<string>(StringComparer.Ordinal);
+
         // An explicit $TERMINAL stays window-only: it's an arbitrary emulator with no portable tab flag.
         var configured = getEnv("TERMINAL");
         if (!string.IsNullOrWhiteSpace(configured) && exists(configured))
-            windowSpecs.Add(new LaunchSpec(configured, [ExecSeparator(configured), "bash", "-lc", inner], cwd, configured));
+        {
+            windowSpecs.Add(new LaunchSpec(configured, WindowArgs(configured), cwd, configured));
+            windowAdded.Add(configured);
+        }
 
-        foreach (var name in new[] { "x-terminal-emulator", "gnome-terminal", "konsole" })
+        foreach (var name in LinuxEmulators)
         {
             if (!exists(name))
                 continue;
 
             // gnome-terminal (shared server → `--tab` lands in the current window) and konsole
-            // (`--new-tab`) can open a tab in the running instance when we detect we're inside them.
-            // x-terminal-emulator is a generic alias with no portable tab flag, so it stays window-only.
+            // (`--new-tab`) can open a tab in the running instance when we detect we're inside them —
+            // that tab spec is always kept, even when $TERMINAL already added a window for the same
+            // emulator. Every other emulator has no portable in-place tab flag, so it stays window-only,
+            // and its window is emitted once (windowAdded dedupes a $TERMINAL that names it).
             if (tab && name == "gnome-terminal" && EnvPresent(getEnv, "GNOME_TERMINAL_SCREEN", "VTE_VERSION"))
                 tabSpecs.Add(new LaunchSpec(name, ["--tab", "--", "bash", "-lc", inner], cwd, "gnome-terminal (new tab)"));
             else if (tab && name == "konsole" && EnvPresent(getEnv, "KONSOLE_VERSION"))
                 tabSpecs.Add(new LaunchSpec(name, ["--new-tab", "-e", "bash", "-lc", inner], cwd, "konsole (new tab)"));
+            else if (windowAdded.Add(name))
+                windowSpecs.Add(new LaunchSpec(name, WindowArgs(name), cwd, name));
+        }
+
+        // Multiplexer path: inside a tmux session `tmux new-window` opens a new window in the current
+        // session — the multiplexer analog of a tab, and the only path that works in a headless
+        // tmux-over-SSH session with no GUI emulator on PATH (tmux stops option parsing at `bash`, so
+        // the `-lc` reaches the shell intact). When a tab was asked for it joins the tab specs (after a
+        // detected GUI-emulator tab); otherwise it's appended as the last-resort window fallback so a
+        // local GUI window is still preferred when one is available.
+        if (EnvPresent(getEnv, "TMUX") && exists("tmux"))
+        {
+            var tmuxSpec = new LaunchSpec("tmux", ["new-window", "bash", "-lc", inner], cwd, "tmux (new window)");
+            if (tab)
+                tabSpecs.Add(tmuxSpec);
             else
-                windowSpecs.Add(new LaunchSpec(name, [ExecSeparator(name), "bash", "-lc", inner], cwd, name));
+                windowSpecs.Add(tmuxSpec);
         }
 
         return [.. tabSpecs, .. windowSpecs];
     }
 
     /// <summary>
-    /// The "run this command" separator for a Linux terminal. gnome-terminal dropped <c>-e</c> in
-    /// favor of <c>--</c>; everything else (and an unknown <c>$TERMINAL</c>) takes <c>-e</c>.
+    /// Linux terminal emulators probed in fallback order: the Debian generic alias first, then the
+    /// tab-capable VTE/KDE emulators, then common modern emulators, with <c>xterm</c> as the
+    /// near-universal lowest-common-denominator and <c>terminator</c> last.
     /// </summary>
-    private static string ExecSeparator(string terminal) => terminal switch
+    private static readonly string[] LinuxEmulators =
+    [
+        "x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal",
+        "alacritty", "kitty", "wezterm", "foot", "xterm", "terminator",
+    ];
+
+    /// <summary>
+    /// The token(s) that make a Linux terminal run a command vector, inserted between the emulator and
+    /// <c>bash -lc &lt;inner&gt;</c>. Syntax differs per emulator: gnome-terminal dropped <c>-e</c> for
+    /// <c>--</c>; xfce4-terminal and terminator use <c>-x</c>; kitty and foot take the command as bare
+    /// positional args (no flag); wezterm needs its <c>start --</c> subcommand; everything else (and an
+    /// unknown <c>$TERMINAL</c>) takes <c>-e</c>.
+    /// </summary>
+    private static string[] ExecPrefix(string terminal) => terminal switch
     {
-        "gnome-terminal" => "--",
-        _ => "-e",
+        "gnome-terminal" => ["--"],
+        "xfce4-terminal" or "terminator" => ["-x"],
+        "kitty" or "foot" => [],
+        "wezterm" => ["start", "--"],
+        _ => ["-e"],
     };
 
     // ── Command construction (file-indirected; prompt content never inlined) ──

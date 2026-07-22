@@ -8,7 +8,7 @@ using System;
 namespace ClickUpTodo.ClickUp.Generated.Models
 {
     /// <summary>
-    /// Body for POST /task/{task_id}/comment. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.
+    /// Plain-text comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.
     /// </summary>
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     public partial class CreateCommentRequest : IAdditionalDataHolder, IParsable
