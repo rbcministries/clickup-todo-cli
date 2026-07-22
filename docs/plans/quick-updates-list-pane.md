@@ -1,5 +1,16 @@
 # Plan — #242: Quick Updates List pane (reuse `ListSelectorView`, immediate add/remove of list membership)
 
+> **Status: implemented but temporarily DISABLED.** The pane and all its wiring are in the tree but
+> commented out of the Quick Updates composition (`QuickUpdatesScreen`, `QuickUpdatesModel`,
+> `HelpItemSets.QuickUpdates`, `TodoApp.ShowQuickUpdates`). Changing a task's list can strand custom
+> fields / statuses that don't exist on the target list; ClickUp's PWA offers a **guided migration** for
+> those cases and we don't yet, so enabling live list changes from Quick Updates would risk silent data
+> loss. The reusable, side-effect-free pieces stay active: `ListSelectorModel.Membership`,
+> `TaskService.Add/RemoveTaskFromListAsync`, `SelectorView.AddExistingSelections` /
+> `ListSelectorView.SeedExistingMemberships`, and the fake-backend membership modeling. **Re-enable** by
+> uncommenting the marked blocks in those four files (and restoring the add/remove `tui-validate`
+> scenario from git history) once the field/status migration is designed — tracked in **#365**.
+
 ## Goal (from the issue)
 
 Add a fourth Quick Updates pane that changes which list(s) a task belongs to, live, alongside

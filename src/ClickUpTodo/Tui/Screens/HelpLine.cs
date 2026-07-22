@@ -158,11 +158,12 @@ public static class HelpItemSets
     ];
 
     /// <summary>The Quick Updates screen (Ctrl+U from both the main list and Task Detail, #156/#290):
-    /// Tab cycles Status → Priority → Assignees → Lists, ↑/↓ move within a pane, Enter applies the
-    /// highlighted status/priority (#157; assignee apply is #158, list membership #242).</summary>
+    /// Tab cycles Status → Priority → Assignees, ↑/↓ move within a pane, Enter applies the highlighted
+    /// status/priority (#157; assignee apply is #158). A fourth Lists pane (#242) is implemented but
+    /// temporarily disabled — when re-enabled, restore "Lists" to the Tab item below.</summary>
     public static readonly IReadOnlyList<HelpItem> QuickUpdates =
     [
-        new("Tab", "Status/Priority/Assignees/Lists"),
+        new("Tab", "Status/Priority/Assignees"),
         new("↑/↓", "move"),
         new("Enter", "apply status/priority"),
         new("F1", "help"),

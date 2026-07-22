@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""Boots the TUI under a PTY and exercises the Quick Updates *List* pane (#242):
-Ctrl+U opens Quick Updates → Tab x3 to the List pane (Status→Priority→Assignees→Lists) →
-its empty-state shows the task's home list marked "✓ Personal Tasks (home)" (removable
-primary) topped up with the frequency-pool lists → type "Q3" and, after the ~1s debounce,
-the list filters to "Q3 Website Refresh" → Enter adds it (membership write round-trips; it
-shows with a leading ✓) → Down-Down+Enter on that ✓ row removes it again → Esc returns.
+"""Guard for the Quick Updates *List* pane (#242), which is IMPLEMENTED BUT TEMPORARILY
+DISABLED. Changing a task's list can strand fields/statuses that don't exist on the target
+list; ClickUp's PWA offers a guided migration for those cases and we don't yet, so the pane
+is commented out of the composition (see QuickUpdatesScreen's summary).
 
-Validates the surface this issue adds: the List selector renders inside the screen's Lists
-frame, focus lands on the search box, type-ahead + debounce filter the candidate lists, and
-the immediate-apply add/remove reaches the #237 membership facade and reconciles the pane
-from the server-confirmed membership (read back from the detail's `locations`). The fake
-backend (Program.cs) mutates an additional-locations set on the membership POST/DELETE so
-the round-trip is truthful."""
+This check asserts the disabled state: Ctrl+U opens Quick Updates with exactly Status /
+Priority / Assignees and *no* "Lists" pane, and Tab cycles among only those three (never
+surfacing a "(home)" list marker). When the pane is re-enabled, replace this with the
+add/remove round-trip check (see git history for the original) — the fake backend already
+models the membership POST/DELETE + `locations` for it."""
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte
 
@@ -65,47 +62,22 @@ try:
 
     # Ctrl+U opens Quick Updates (#290).
     send(b"\x15", 2.0)
-    assert "Quick Updates" in visible(), "Quick Updates did not open:\n" + visible()
-
-    # Tab three times: Status → Priority → Assignees → Lists. Focus lands in the List search box.
-    send(b"\t", 0.8)
-    send(b"\t", 0.8)
-    send(b"\t", 0.8)
-
-    # The Lists frame renders and the empty state shows the home list as the removable "(home)" primary.
     v = visible()
-    assert "Lists" in v, f"Lists pane frame missing:\n{v}"
-    assert "Personal Tasks" in v and "(home)" in v, f"home list not marked '(home)':\n{v}"
-    print("LIST PANE ok — home list shown as '(home)'")
+    assert "Quick Updates" in v, "Quick Updates did not open:\n" + v
+    for token in ("Status", "Priority", "Assignees"):
+        assert token in v, f"missing {token!r} pane after opening Quick Updates:\n{v}"
+    # The List pane is disabled — its frame title and home marker must not appear.
+    assert "Lists" not in v, f"'Lists' pane is present — the #242 List pane should be disabled:\n{v}"
+    assert "(home)" not in v, f"a '(home)' list marker rendered — the #242 List pane should be disabled:\n{v}"
+    print("DISABLED-STATE ok — Status/Priority/Assignees present, no Lists pane")
 
-    # Type-ahead: "Q3" then wait out the ~1s debounce; the candidate list should surface Q3 Website
-    # Refresh (a frequency-pool list the task isn't in).
-    send(b"Q3", 2.2)
-    v = visible()
-    assert "Q3 Website Refresh" in v, f"type-ahead did not surface Q3 Website Refresh:\n{v}"
-    print("TYPE-AHEAD ok — filtered to Q3 Website Refresh")
-
-    # Enter adds the highlighted result; the box clears and, after the membership write + detail refetch,
-    # the list shows selected (leading ✓).
-    send(b"\r", 2.5)
-    v = visible()
-    assert "✓ Q3 Website Refresh" in v, f"add did not mark Q3 Website Refresh selected (✓):\n{v}"
-    assert "Quick Updates" in v, f"screen lost after add:\n{v}"
-    print("ADD ok — Q3 Website Refresh now ✓ (membership write round-tripped)")
-
-    # Down twice moves focus into the list past the home row onto the ✓ Q3 row; Enter removes it.
-    send(b"\x1b[B", 0.8)   # CursorDown → into list, row 0 (home)
-    send(b"\x1b[B", 0.8)   # CursorDown → row 1 (✓ Q3 Website Refresh)
-    send(b"\r", 2.5)
-    v = visible()
-    assert "✓ Q3 Website Refresh" not in v, f"remove did not clear Q3 Website Refresh's ✓:\n{v}"
-    assert "Personal Tasks" in v and "(home)" in v, f"home list should remain after removing Q3:\n{v}"
-    print("REMOVE ok — Q3 Website Refresh ✓ cleared, home list intact")
-
-    # Tab must cycle out of the composite List pane back to Status (wrapping); the screen stays intact.
-    send(b"\t", 0.8)
-    assert "Quick Updates" in visible(), f"Tab out of the List pane lost the screen:\n{visible()}"
-    print("TAB-OUT ok — cycled out of the List composite")
+    # Tab four times must never surface a Lists pane / home marker (only three panes cycle).
+    for i in range(4):
+        send(b"\t", 0.7)
+        v = visible()
+        assert "Quick Updates" in v, f"screen lost after Tab #{i+1}:\n{v}"
+        assert "Lists" not in v and "(home)" not in v, f"List pane surfaced on Tab #{i+1}:\n{v}"
+    print("TAB-CYCLE ok — three panes only, no Lists pane surfaced")
 
     # Esc returns to the task list.
     send(b"\x1b", 1.5)
@@ -113,7 +85,7 @@ try:
     assert "Quick Updates" not in v, f"Esc did not close Quick Updates:\n{v}"
     assert "Task" in v, f"did not return to the task list after Esc:\n{v}"
     print("ESC ok — returned to the task list")
-    print("QU LISTS E2E: PASS")
+    print("QU LISTS (DISABLED) E2E: PASS")
 finally:
     try: os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception: pass

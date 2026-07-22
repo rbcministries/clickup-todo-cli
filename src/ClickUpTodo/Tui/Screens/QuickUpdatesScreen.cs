@@ -15,10 +15,10 @@ using Terminal.Gui.Views;
 namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>
-/// A full-window screen (#153/#156) that lets the user change a task's <b>Status</b>, <b>Priority</b>,
-/// <b>Assignees</b> and <b>Lists</b> without leaving their place. It hosts four vertically-stacked,
-/// focusable controls; <c>Tab</c>/<c>Shift+Tab</c> cycle focus Status → Priority → Assignees → Lists
-/// (wrapping) and <c>Esc</c> exits from any pane.
+/// A full-window screen (#153/#156) that lets the user change a task's <b>Status</b>, <b>Priority</b>
+/// and <b>Assignees</b> without leaving their place. It hosts three vertically-stacked, focusable
+/// controls; <c>Tab</c>/<c>Shift+Tab</c> cycle focus Status → Priority → Assignees (wrapping) and
+/// <c>Esc</c> exits from any pane.
 /// <para>
 /// Status and Priority are <b>deferred-commit</b> (#157): moving the highlight does nothing; pressing
 /// <c>Enter</c> applies the highlighted value. Each pane marks its current effective value with a
@@ -36,13 +36,13 @@ namespace ClickUpTodo.Tui.Screens;
 /// server write and reconciling the task's row.
 /// </para>
 /// <para>
-/// The List pane (#242) is the same pattern for list membership: an embedded <see cref="ListSelectorView"/>
-/// in <see cref="SelectorMode.ImmediateApply"/> mode over the list-frequency cache (#238), wired to the
-/// task↔list membership writes (#237). It seeds with the task's current memberships — the home list
-/// (marked <c>" (home)"</c>, removable) plus any additional "Tasks in Multiple Lists" locations —
-/// and add/remove apply immediately. When the host only learns the additional locations after open (a
-/// list-origin launch, where the snapshot task carries only the home list), it enriches them via
-/// <see cref="SeedListMemberships"/>.
+/// <b>List pane (#242) — implemented but temporarily disabled.</b> A fourth pane for live list-membership
+/// add/remove (the same <see cref="ListSelectorView"/> pattern) is fully wired but commented out of the
+/// composition below. Changing a task's list can strand custom fields / statuses that don't exist on the
+/// target list; ClickUp's PWA offers a guided migration for those cases and we don't yet. Re-enable it —
+/// uncomment the marked blocks here, in <c>QuickUpdatesModel</c> (the <c>Lists</c> pane + <c>PaneCount</c>),
+/// in <c>HelpItemSets.QuickUpdates</c>, and in <c>TodoApp.ShowQuickUpdates</c> — once that migration is
+/// designed. See <c>docs/plans/quick-updates-list-pane.md</c>.
 /// </para>
 /// </summary>
 public sealed class QuickUpdatesScreen : Screen
@@ -50,7 +50,8 @@ public sealed class QuickUpdatesScreen : Screen
     private readonly ListView _statusList;
     private readonly ListView _priorityList;
     private readonly AssigneeSelectorView _assignees;
-    private readonly ListSelectorView _lists;
+    // #242 (temporarily disabled — see the class summary): the List pane.
+    // private readonly ListSelectorView _lists;
     private readonly IReadOnlyList<StatusOption> _statuses;
 
     // The panes in focus (Tab) order — index maps to QuickUpdatesPane. The Assignees pane is a single
@@ -77,23 +78,12 @@ public sealed class QuickUpdatesScreen : Screen
     /// <param name="applyAssignee">Performs the immediate server add/remove for a person and returns the
     /// server-confirmed assignee set. Runs off the UI thread (the selector owns the optimistic update +
     /// revert around it).</param>
-    /// <param name="homeList">The task's home list — pre-selected as the List pane's primary, marked
-    /// <c>" (home)"</c> (removable); null when the task has no list (Quick Updates won't open in that
-    /// case). See #242.</param>
-    /// <param name="additionalLists">The task's additional "Tasks in Multiple Lists" locations known at
-    /// construction (a detail-origin launch); empty for a list-origin launch, which enriches them later
-    /// via <see cref="SeedListMemberships"/>.</param>
-    /// <param name="listMatch">Case-insensitive substring match over the list candidate pool excluding
-    /// the given ids — i.e. <c>ListFrequencyCache.Match</c> (#238).</param>
-    /// <param name="listTopFrequent">Top-N most-frequent lists excluding the given ids — i.e.
-    /// <c>ListFrequencyCache.TopMostFrequent</c> (#238).</param>
-    /// <param name="applyList">Performs the immediate server add/remove of a list membership and returns
-    /// the server-confirmed membership set. Runs off the UI thread (the selector owns the optimistic
-    /// update + revert).</param>
     /// <param name="timeProvider">Debounce clock for the type-ahead search (test seam); defaults to
     /// <see cref="TimeProvider.System"/>.</param>
     /// <param name="assigneeDebounce">Type-ahead debounce interval; defaults to the selector's ~1s.</param>
-    /// <param name="listDebounce">List type-ahead debounce interval; defaults to the selector's ~1s.</param>
+    // #242 (temporarily disabled — see the class summary): the List pane's ctor parameters —
+    // homeList, additionalLists, listMatch, listTopFrequent, applyList, listDebounce — are commented out
+    // below alongside the pane itself. Re-add them (and their <param> docs) when re-enabling.
     public QuickUpdatesScreen(
         string taskName,
         IReadOnlyList<StatusOption> statuses,
@@ -103,14 +93,14 @@ public sealed class QuickUpdatesScreen : Screen
         Func<string, ISet<long>, IReadOnlyList<TaskAssignee>> assigneeMatch,
         Func<int, ISet<long>, IReadOnlyList<TaskAssignee>> assigneeTopFrequent,
         Func<ToggleKind, TaskAssignee, CancellationToken, Task<IReadOnlyList<TaskAssignee>>> applyAssignee,
-        NamedEntity? homeList,
-        IReadOnlyList<NamedEntity> additionalLists,
-        Func<string, ISet<string>, IReadOnlyList<NamedEntity>> listMatch,
-        Func<int, ISet<string>, IReadOnlyList<NamedEntity>> listTopFrequent,
-        Func<ToggleKind, NamedEntity, CancellationToken, Task<IReadOnlyList<NamedEntity>>> applyList,
+        // NamedEntity? homeList,
+        // IReadOnlyList<NamedEntity> additionalLists,
+        // Func<string, ISet<string>, IReadOnlyList<NamedEntity>> listMatch,
+        // Func<int, ISet<string>, IReadOnlyList<NamedEntity>> listTopFrequent,
+        // Func<ToggleKind, NamedEntity, CancellationToken, Task<IReadOnlyList<NamedEntity>>> applyList,
         TimeProvider? timeProvider = null,
-        TimeSpan? assigneeDebounce = null,
-        TimeSpan? listDebounce = null)
+        TimeSpan? assigneeDebounce = null)
+    // TimeSpan? listDebounce = null)  // #242 (disabled)
     {
         _statuses = statuses;
         _effectiveStatus = currentStatus;
@@ -146,54 +136,61 @@ public sealed class QuickUpdatesScreen : Screen
         // Surface the selector's locked-no-op / write-failure messages on the shared status line.
         _assignees.Flash += (_, message) => RequestFlash(message);
 
-        _lists = new ListSelectorView(
-            listMatch,
-            listTopFrequent,
-            initialSelected: additionalLists,
-            primary: homeList,
-            mode: SelectorMode.ImmediateApply,
-            applyAsync: applyList,
-            timeProvider: timeProvider,
-            debounce: listDebounce)
-        { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
-        _lists.Flash += (_, message) => RequestFlash(message);
+        // #242 (temporarily disabled — see the class summary): the List pane. When re-enabling, restore
+        // the construction below, the listsFrame + its slot in _panes/Add, and widen the bottom reserve
+        // to 24 rows (Status Fill(24); Priority AnchorEnd(24) h7; Assignees AnchorEnd(17) h8; Lists
+        // AnchorEnd(9) h9), plus the ctor params and host wiring in TodoApp.ShowQuickUpdates.
+        // _lists = new ListSelectorView(
+        //     listMatch,
+        //     listTopFrequent,
+        //     initialSelected: additionalLists,
+        //     primary: homeList,
+        //     mode: SelectorMode.ImmediateApply,
+        //     applyAsync: applyList,
+        //     timeProvider: timeProvider,
+        //     debounce: listDebounce)
+        // { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
+        // _lists.Flash += (_, message) => RequestFlash(message);
 
-        // Four bordered sections, top-to-bottom in focus order. Priority is a fixed 5-row list; the two
-        // search-box panes (Assignees, Lists) get taller frames; Status takes the remaining top space.
-        // The bottom stack reserves 24 rows (7 + 8 + 9); on the wide validation/typical terminal Status
-        // still gets ample height above it. The shared footer (#103) carries the shortcuts.
-        var statusFrame = new FrameView { Title = "Status", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(24) };
+        // Three bordered sections, top-to-bottom in focus order. Priority is a fixed 5-row list; the
+        // Assignees pane (a search box over a scrolling list) gets the taller bottom frame; Status takes
+        // the remaining top space. The shared footer (#103) carries the shortcuts, so no per-pane hint
+        // labels are needed.
+        var statusFrame = new FrameView { Title = "Status", X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(17) };
         statusFrame.Add(_statusList);
 
-        var priorityFrame = new FrameView { Title = "Priority", X = 0, Y = Pos.AnchorEnd(24), Width = Dim.Fill(), Height = 7 };
+        var priorityFrame = new FrameView { Title = "Priority", X = 0, Y = Pos.AnchorEnd(17), Width = Dim.Fill(), Height = 7 };
         priorityFrame.Add(_priorityList);
 
-        var assigneesFrame = new FrameView { Title = "Assignees", X = 0, Y = Pos.AnchorEnd(17), Width = Dim.Fill(), Height = 8 };
+        var assigneesFrame = new FrameView { Title = "Assignees", X = 0, Y = Pos.AnchorEnd(10), Width = Dim.Fill(), Height = 10 };
         assigneesFrame.Add(_assignees);
 
-        var listsFrame = new FrameView { Title = "Lists", X = 0, Y = Pos.AnchorEnd(9), Width = Dim.Fill(), Height = 9 };
-        listsFrame.Add(_lists);
+        // #242 (disabled): the Lists frame.
+        // var listsFrame = new FrameView { Title = "Lists", X = 0, Y = Pos.AnchorEnd(9), Width = Dim.Fill(), Height = 9 };
+        // listsFrame.Add(_lists);
 
-        _panes = [_statusList, _priorityList, _assignees, _lists];
+        _panes = [_statusList, _priorityList, _assignees /*, _lists (#242 disabled) */];
         foreach (var pane in _panes)
             pane.KeyDown += OnPaneKey;
 
         // Mouse click-to-apply (#288): a left-click on a Status/Priority row selects and commits it in
-        // one gesture. The Assignees and Lists panes own their own click (SelectorView.OnListMouse).
+        // one gesture. The Assignees pane owns its own click (SelectorView.OnListMouse).
         _statusList.MouseEvent += (_, e) => OnListClick(e, _statusList, _statuses.Count, CommitStatus);
         _priorityList.MouseEvent += (_, e) => OnListClick(e, _priorityList, QuickUpdatesModel.PriorityLabels.Count, CommitPriority);
 
-        Add([statusFrame, priorityFrame, assigneesFrame, listsFrame]);
+        Add([statusFrame, priorityFrame, assigneesFrame /*, listsFrame (#242 disabled) */]);
     }
 
-    /// <summary>
-    /// Merges the task's additional "Tasks in Multiple Lists" locations into the List pane after open —
-    /// for a list-origin launch, where the snapshot task carries only the home list, so the host fetches
-    /// the full membership in the background and enriches it here (#242). Additive and idempotent; a
-    /// no-op once the user has started editing the pane. Must run on the UI thread.
-    /// </summary>
-    public void SeedListMemberships(IReadOnlyList<NamedEntity> additionalLists)
-        => _lists.SeedExistingMemberships(additionalLists);
+    // #242 (temporarily disabled — see the class summary): enrich the List pane's additional locations
+    // after a list-origin open. Restore alongside the pane.
+    // /// <summary>
+    // /// Merges the task's additional "Tasks in Multiple Lists" locations into the List pane after open —
+    // /// for a list-origin launch, where the snapshot task carries only the home list, so the host fetches
+    // /// the full membership in the background and enriches it here (#242). Additive and idempotent; a
+    // /// no-op once the user has started editing the pane. Must run on the UI thread.
+    // /// </summary>
+    // public void SeedListMemberships(IReadOnlyList<NamedEntity> additionalLists)
+    //     => _lists.SeedExistingMemberships(additionalLists);
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.QuickUpdates;
 
@@ -214,11 +211,11 @@ public sealed class QuickUpdatesScreen : Screen
     }
 
     /// <summary>
-    /// Screen-wide keys shared by all four panes. Tab/Shift+Tab cycle focus (wrapping); Esc exits;
+    /// Screen-wide keys shared by all three panes. Tab/Shift+Tab cycle focus (wrapping); Esc exits;
     /// F1 opens Help; Enter commits the highlighted Status/Priority value. ↑/↓ fall through so each
-    /// Status/Priority ListView moves its own selection. The Assignees and Lists panes are single
-    /// focusable <see cref="SelectorView"/> composites: each handles Enter (add/remove) and ↑/↓ (search
-    /// box ↔ list) internally and marks them handled, so only their bubbled Tab/Shift+Tab/Esc/F1 reach
+    /// Status/Priority ListView moves its own selection. The Assignees pane is a single focusable
+    /// <see cref="AssigneeSelectorView"/> composite: it handles Enter (add/remove) and ↑/↓ (search
+    /// box ↔ list) internally and marks them handled, so only its bubbled Tab/Shift+Tab/Esc/F1 reach
     /// here — the Enter-commit branch below stays keyed to the Status/Priority lists by identity.
     /// </summary>
     private void OnPaneKey(object? sender, Key key)

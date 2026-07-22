@@ -10,17 +10,15 @@ public sealed class QuickUpdatesModelTests
     [Theory]
     [InlineData(QuickUpdatesPane.Status, QuickUpdatesPane.Priority)]
     [InlineData(QuickUpdatesPane.Priority, QuickUpdatesPane.Assignees)]
-    [InlineData(QuickUpdatesPane.Assignees, QuickUpdatesPane.Lists)]
-    [InlineData(QuickUpdatesPane.Lists, QuickUpdatesPane.Status)] // wraps
-    public void Cycle_Forward_AdvancesStatusPriorityAssigneesListsAndWraps(
+    [InlineData(QuickUpdatesPane.Assignees, QuickUpdatesPane.Status)] // wraps
+    public void Cycle_Forward_AdvancesStatusPriorityAssigneesAndWraps(
         QuickUpdatesPane current, QuickUpdatesPane expected)
         => Assert.Equal(expected, QuickUpdatesModel.Cycle(current, forward: true));
 
     [Theory]
-    [InlineData(QuickUpdatesPane.Lists, QuickUpdatesPane.Assignees)]
     [InlineData(QuickUpdatesPane.Assignees, QuickUpdatesPane.Priority)]
     [InlineData(QuickUpdatesPane.Priority, QuickUpdatesPane.Status)]
-    [InlineData(QuickUpdatesPane.Status, QuickUpdatesPane.Lists)] // wraps
+    [InlineData(QuickUpdatesPane.Status, QuickUpdatesPane.Assignees)] // wraps
     public void Cycle_Backward_RetreatsAndWraps(
         QuickUpdatesPane current, QuickUpdatesPane expected)
         => Assert.Equal(expected, QuickUpdatesModel.Cycle(current, forward: false));
