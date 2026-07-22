@@ -5,6 +5,7 @@ using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
 using ClickUpTodo.Services;
+using ClickUpTodo.Setup;
 using ClickUpTodo.Tui;
 
 // Boots the REAL TodoApp against a canned in-process ClickUp backend so the TUI can be
@@ -19,6 +20,9 @@ var config = new AppConfig
     PersonalTasksListId = "plist",
     PersonalTasksListName = "Personal Tasks",
     RefreshSeconds = int.TryParse(Environment.GetEnvironmentVariable("E2E_REFRESH"), out var r) ? r : 600,
+    // #304: seed a workspace subdomain so a Ctrl+B launch rewrites the fake backend's
+    // app.clickup.com task URLs onto {subdomain}.clickup.com. Absent ⇒ blank ⇒ no rewrite.
+    WorkspaceSubdomain = Environment.GetEnvironmentVariable("E2E_SUBDOMAIN") ?? "",
 };
 
 if (Environment.GetEnvironmentVariable("E2E_VIEW") == "rich")
@@ -55,20 +59,46 @@ var feedCache = new FeedCache(cacheStore);
 var assignees = new AssigneeFrequencyCache(
     stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
 var lists = new ListFrequencyCache(stateStore, config.WorkspaceId);
+// #304: when E2E_BROWSER_LOG is set, capture Ctrl+B launches to that file (one URL per line) so a
+// pyte check can assert the app.clickup.com → subdomain host rewrite. Otherwise the app can't launch a
+// real browser under the PTY, so fall back to a no-op launcher rather than SystemBrowserLauncher.
+var browserLog = Environment.GetEnvironmentVariable("E2E_BROWSER_LOG");
+IBrowserLauncher browser = string.IsNullOrEmpty(browserLog)
+    ? new NullBrowserLauncher()
+    : new RecordingBrowserLauncher(browserLog);
 
 // Single-task launch mode (#296): E2E_SINGLE_TASK=<id> boots SingleTaskApp straight into that task's
-// detail view — the harness equivalent of `clickup-todo --task <id>` — instead of the dashboard.
+// detail view — the harness equivalent of `clickup-todo --task <id>` — instead of the dashboard. It
+// shares the same #304 browser launcher so a Ctrl+B host rewrite is observable in single-task mode too.
 var singleTaskId = Environment.GetEnvironmentVariable("E2E_SINGLE_TASK");
 if (!string.IsNullOrWhiteSpace(singleTaskId))
 {
     var launchTask = await tasks.GetTaskDetailAsync(singleTaskId);
     var launchComments = await tasks.GetTaskCommentsAsync(singleTaskId);
-    new SingleTaskApp(tasks, config, launchTask, launchComments).Run("ansi");
+    new SingleTaskApp(tasks, config, launchTask, launchComments, browser).Run("ansi");
     return;
 }
 
-new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists).Run("ansi");
+new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser).Run("ansi");
 return;
+
+/// <summary>A browser launcher that succeeds without opening anything — the default under the PTY, where
+/// there is no browser to launch and a real <see cref="SystemBrowserLauncher"/> would just fail.</summary>
+sealed class NullBrowserLauncher : IBrowserLauncher
+{
+    public bool TryOpen(Uri url) => true;
+}
+
+/// <summary>Records each launched URL (one per line) to a file so a pyte check can assert the #304 host
+/// rewrite. Appends so repeated Ctrl+B presses are all observable.</summary>
+sealed class RecordingBrowserLauncher(string path) : IBrowserLauncher
+{
+    public bool TryOpen(Uri url)
+    {
+        File.AppendAllText(path, url.ToString() + "\n");
+        return true;
+    }
+}
 
 sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandler
 {

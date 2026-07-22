@@ -2,6 +2,7 @@ using System.Diagnostics;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Services;
+using ClickUpTodo.Setup;
 using ClickUpTodo.Tui.Screens;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
@@ -41,6 +42,7 @@ public sealed class SingleTaskApp
 {
     private readonly TaskService _tasks;
     private readonly AppConfig _config;
+    private readonly IBrowserLauncher _browser;
     private readonly string _taskId;
 
     // The task/comments last shown. _task is read on the UI thread when launching the browser (Ctrl+B),
@@ -63,10 +65,12 @@ public sealed class SingleTaskApp
 
     private string _status;
 
-    public SingleTaskApp(TaskService tasks, AppConfig config, TaskDetail task, IReadOnlyList<CommentItem> comments)
+    public SingleTaskApp(TaskService tasks, AppConfig config, TaskDetail task, IReadOnlyList<CommentItem> comments,
+        IBrowserLauncher? browserLauncher = null)
     {
         _tasks = tasks;
         _config = config;
+        _browser = browserLauncher ?? new SystemBrowserLauncher();
         _task = task;
         _comments = comments;
         _taskId = task.Id;
@@ -277,20 +281,22 @@ public sealed class SingleTaskApp
 
     // Ctrl+B launches the browser and immediately closes the tab (the detail screen sets
     // OpenBrowserRequested then Close()s), so — unlike TodoApp's LaunchBrowser — there is no live view
-    // left to flash success/failure onto; a launch failure is only debug-logged.
+    // left to flash success/failure onto; a launch failure is only debug-logged. Routes through the same
+    // IBrowserLauncher seam + app.clickup.com → workspace-subdomain rewrite the dashboard uses (#304).
     private void LaunchBrowser(string? url)
     {
         if (string.IsNullOrWhiteSpace(url))
             return;
 
-        try
+        var target = ClickUpUrl.RewriteHost(url, _config.WorkspaceSubdomain);
+        if (!Uri.TryCreate(target, UriKind.Absolute, out var uri))
         {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            Debug.WriteLine($"Not a valid URL to open: {target}");
+            return;
         }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"Could not open browser: {ex}");
-        }
+
+        if (!_browser.TryOpen(uri))
+            Debug.WriteLine($"Could not open a browser for: {target}");
     }
 
     private static string Short(Exception ex) => ex is ClickUpApiException c ? c.Message : ex.Message;
