@@ -88,6 +88,19 @@ public sealed class TodoApp
     // UI-thread-only.
     private bool _feedRefreshPending;
     private bool _refreshingDetail;
+    // The cross-process nudge channel (#292). The producer (#294) records a marker after every confirmed
+    // write; this is the consumer side (#295) — a background scan that turns another instance's markers
+    // into a per-task re-fetch. `_changeMarkers` is the shared store (Null when the file-backed state
+    // store has no cross-process channel), `_markerConsumer` the pure cursor scan over it. UI-thread-only.
+    private readonly IChangeMarkerStore _changeMarkers;
+    private readonly ChangeMarkerConsumer _markerConsumer;
+    // True while a marker-poll ReadAll (off-thread) + Advance/dispatch (UI thread) is outstanding, so the
+    // short marker cadence can't pile ticks up when a fan-out outlasts it. UI-thread-only (like the others).
+    private bool _pollingMarkers;
+    // Marker-check cadence (#295), deliberately decoupled from the API poll: a `changes` read is a cheap,
+    // bounded DB-only op, so cross-tab updates propagate on a short fixed cadence while API fetches stay
+    // targeted, independent of the 60s-default RefreshSeconds.
+    private static readonly TimeSpan MarkerPollInterval = TimeSpan.FromSeconds(4);
 
     private Window _window = null!;
     private FrameView _frame = null!;
@@ -167,7 +180,8 @@ public sealed class TodoApp
 
     public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
         IFocusStore focus, TaskCache taskCache, FeedCache feedCache, AssigneeFrequencyCache assignees,
-        ListFrequencyCache lists, IBrowserLauncher? browserLauncher = null)
+        ListFrequencyCache lists, IBrowserLauncher? browserLauncher = null,
+        IChangeMarkerStore? changeMarkers = null)
     {
         _tasks = tasks;
         _feed = feed;
@@ -179,6 +193,10 @@ public sealed class TodoApp
         _assignees = assignees;
         _lists = lists;
         _browser = browserLauncher ?? new SystemBrowserLauncher();
+        // The nudge channel's read side (#295). Defaults to the no-op store so every existing caller/test
+        // is unchanged; the Null store's empty InstanceId disarms the marker poll (see Run).
+        _changeMarkers = changeMarkers ?? NullChangeMarkerStore.Instance;
+        _markerConsumer = new ChangeMarkerConsumer(_changeMarkers.InstanceId);
         _agent = BuildAgentDispatcher();
     }
 
@@ -219,6 +237,7 @@ public sealed class TodoApp
                 onUpdate: tasks => Application.Invoke(() => OnTasksLoaded(tasks)),
                 onError: ex => Application.Invoke(() => Flash($"Refresh failed: {Short(ex)}")));
             _refresh.Start();
+            ArmMarkerPoll();
             Application.Run(_window);
         }
         finally
@@ -1798,6 +1817,145 @@ public sealed class TodoApp
             finally
             {
                 Application.Invoke(() => _refreshingDetail = false);
+            }
+        });
+    }
+
+    // ── Cross-process nudge channel — consumer (#295) ─────────────────────────
+
+    /// <summary>
+    /// Arms the nudge-channel consumer (#295): seeds the cursor to the current max marker seq so a fresh
+    /// tab never replays history (edge case 1), then starts a repeating marker poll on its own short
+    /// cadence (<see cref="MarkerPollInterval"/>), decoupled from the API refresh loop. A no-op store (the
+    /// file-backed state store's Null channel) has an empty InstanceId, so nothing is armed — the poll only
+    /// runs where a real cross-process channel exists. Runs on the UI thread during <see cref="Run"/>,
+    /// before the run loop pumps.
+    /// </summary>
+    private void ArmMarkerPoll()
+    {
+        if (string.IsNullOrEmpty(_changeMarkers.InstanceId))
+            return; // no cross-process channel (e.g. the JSON file store) — nothing to consume.
+
+        _markerConsumer.Initialize(_changeMarkers.ReadAll());
+        // The timeout callback fires on the UI thread; returning true keeps it repeating. It's torn down
+        // by Application.Shutdown at quit along with the run loop.
+        Application.AddTimeout(MarkerPollInterval, () =>
+        {
+            PollMarkers();
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// One marker-poll tick (#295): read the markers <b>off</b> the UI thread (a <c>changes</c> ReadAll
+    /// briefly takes LiteDB's shared-mode cross-process lock), then run the pure cursor scan and dispatch
+    /// <b>on</b> the UI thread (it reads <c>_all</c> / <c>_rows</c> / the open detail). A single in-flight
+    /// guard keeps ticks from piling up when a fetch fan-out outlasts the cadence. Best-effort throughout —
+    /// a read or reconcile failure is swallowed, since a nudge rides on an edit that already succeeded
+    /// elsewhere.
+    /// </summary>
+    private void PollMarkers()
+    {
+        if (_pollingMarkers)
+            return;
+        _pollingMarkers = true;
+
+        _ = Task.Run(() =>
+        {
+            IReadOnlyList<ChangeMarker> markers;
+            try { markers = _changeMarkers.ReadAll(); }
+            catch { markers = []; }
+
+            Application.Invoke(() =>
+            {
+                try
+                {
+                    foreach (var taskId in _markerConsumer.Advance(markers, IsNudgeTaskInView, HeldNudgeVersion))
+                        ReconcileNudgedTask(taskId);
+                }
+                finally
+                {
+                    _pollingMarkers = false;
+                }
+            });
+        });
+    }
+
+    /// <summary>A task is "in view" for the nudge scan (#295) when it's in the working set (<c>_all</c> or
+    /// a visible <c>_rows</c> entry) or shown in an open Task Detail. UI-thread read.</summary>
+    private bool IsNudgeTaskInView(string taskId) =>
+        _all.Any(t => t.Id == taskId)
+        || _rows.Any(r => r?.Id == taskId)
+        || _screens.OfType<TaskDetailScreen>().Any(s => s.Task.Id == taskId);
+
+    /// <summary>The <c>date_updated</c> (epoch ms) we currently hold for a task, so the scan can suppress a
+    /// redundant fetch (#295). Prefers the working-set copy, falling back to an open detail; null when the
+    /// task's in-view source carries no version (so the fetch isn't suppressed). UI-thread read.</summary>
+    private long? HeldNudgeVersion(string taskId)
+    {
+        var item = _all.FirstOrDefault(t => t.Id == taskId) ?? _rows.FirstOrDefault(r => r?.Id == taskId);
+        if (item is not null)
+            return item.UpdatedMs;
+        return _screens.OfType<TaskDetailScreen>().FirstOrDefault(s => s.Task.Id == taskId)?.Task.UpdatedMs;
+    }
+
+    /// <summary>
+    /// Reconciles a single task the nudge scan flagged (#295) — another instance changed it. Refreshes the
+    /// list row in place (a per-task fetch folded into <c>_all</c>, never a full resync) when the task is in
+    /// the working set, and re-fetches any open Task Detail for it via the existing detail-refresh path.
+    /// Runs on the UI thread; both reconciles are independent and best-effort.
+    /// </summary>
+    private void ReconcileNudgedTask(string taskId)
+    {
+        if (_all.Any(t => t.Id == taskId) || _rows.Any(r => r?.Id == taskId))
+            RefreshNudgedRow(taskId);
+
+        // ToList: the detail refresh doesn't mutate _screens, but snapshot it anyway for a stable iterate.
+        foreach (var screen in _screens.OfType<TaskDetailScreen>().Where(s => s.Task.Id == taskId).ToList())
+            RefreshDetail(screen, taskId);
+    }
+
+    /// <summary>
+    /// Off-thread single-task fetch for a nudged list row (#295): pull the task's detail and overlay its
+    /// status + priority onto the existing row in place — the same <see cref="UpdateTaskRow"/> reconcile
+    /// Quick Updates uses — on the UI thread. We overlay onto the live <c>_all</c> item (keeping its
+    /// ParentId / list / status-type and its <b>real</b> assignee ids) rather than the projected detail,
+    /// because a <see cref="TaskDetail"/> is lossy relative to a list item (assignees by name only, id 0;
+    /// no parent) — see <see cref="TaskItemProjection"/>. Status and priority are exactly what a cross-tab
+    /// Quick Update changes, so this reflects the common case without degrading the row; other cross-tab
+    /// field changes (assignee-by-id, name, due) continue to surface via the normal delta poll. Re-checks
+    /// membership on the way back in (a background resync may have dropped the task), and swallows a fetch
+    /// failure (the nudge rides on an already-succeeded edit).
+    /// </summary>
+    private void RefreshNudgedRow(string taskId)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var detail = await _tasks.GetTaskDetailAsync(taskId);
+                var fresh = TaskItemProjection.FromDetail(detail);
+                Application.Invoke(() =>
+                {
+                    var existing = _all.FirstOrDefault(t => t.Id == taskId)
+                                   ?? _rows.FirstOrDefault(r => r?.Id == taskId);
+                    if (existing is null)
+                        return; // dropped by a background resync meanwhile — nothing to update.
+                    var updated = existing with
+                    {
+                        StatusName = fresh.StatusName,
+                        StatusColor = fresh.StatusColor,
+                        PriorityLevel = fresh.PriorityLevel,
+                        PriorityName = fresh.PriorityName,
+                        PriorityColor = fresh.PriorityColor,
+                    };
+                    UpdateTaskRow(updated, sending: false);
+                });
+            }
+            catch
+            {
+                // Best-effort: a nudge-driven fetch failure must not surface — the edit already succeeded
+                // in the other instance, and the next authoritative refresh reconciles regardless.
             }
         });
     }

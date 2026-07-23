@@ -159,7 +159,8 @@ var assigneeCache = new AssigneeFrequencyCache(
 // The list-frequency candidate pool (#238) — warmed from the lists on the loaded tasks and backfilled
 // by the scheduled list-hierarchy walk (#236) — rides the same state store, scoped to the workspace.
 var listCache = new ListFrequencyCache(stateStore, config.WorkspaceId);
-new TodoApp(taskService, feedService, config, configStore, focusStore, taskCache, feedCache, assigneeCache, listCache).Run(driverName);
+new TodoApp(taskService, feedService, config, configStore, focusStore, taskCache, feedCache, assigneeCache, listCache,
+    changeMarkers: changeMarkers).Run(driverName);
 return 0;
 
 // Reads "--opt value" or "--opt=value" from args.
