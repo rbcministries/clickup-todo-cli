@@ -244,6 +244,16 @@
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } }
           }
         }
+      },
+      "delete": {
+        "operationId": "DeleteTask",
+        "summary": "Permanently delete a task. ClickUp returns an empty object. Used to keep the create-task integration test idempotent by removing the throwaway task it creates.",
+        "parameters": [
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "The task was deleted (ClickUp returns an empty object)." }
+        }
       }
     },
     "/v2/task/{task_id}/comment": {
@@ -479,9 +489,9 @@
       },
       "CreateCommentResponse": {
         "type": "object",
-        "description": "ClickUp's create-comment response is minimal: it returns the new comment's id, a hist_id, and the server date (epoch ms). It does NOT echo the text, author, or structured blocks.",
+        "description": "ClickUp's create-comment response is minimal: it returns the new comment's id, a hist_id, and the server date (epoch ms). It does NOT echo the text, author, or structured blocks. NOTE: on create the id comes back as a JSON number (int64), whereas the GET /comment read path returns it as a string — the client stringifies it so both paths agree.",
         "properties": {
-          "id": { "type": "string" },
+          "id": { "type": "integer", "format": "int64" },
           "hist_id": { "type": "string", "nullable": true },
           "date": { "type": "integer", "format": "int64", "nullable": true }
         }

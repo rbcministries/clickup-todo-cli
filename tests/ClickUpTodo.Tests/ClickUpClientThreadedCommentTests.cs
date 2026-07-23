@@ -67,8 +67,10 @@ public sealed class ClickUpClientThreadedCommentTests
     public async Task CreateThreadedComment_PostsToReplyEndpoint_AndReturnsCreatedComment()
     {
         // Response deliberately omits comment_text/user: proves the returned Text is the posted text
-        // echoed back (not read off the response) and Author is left empty for the caller.
-        var handler = new CapturingHandler("""{ "id": "r123", "hist_id": "h456", "date": 1568036964079 }""");
+        // echoed back (not read off the response) and Author is left empty for the caller. The id is a
+        // JSON *number* here — the reply create endpoint shares CreateTaskCommentAsync's contract, where
+        // ClickUp returns the id as int64 on create (string on the read path); the facade stringifies it.
+        var handler = new CapturingHandler("""{ "id": 90140228459981, "hist_id": "h456", "date": 1568036964079 }""");
         using var client = new ClickUpClient("pk_x", new HttpClient(handler));
 
         var created = await client.CreateThreadedCommentAsync("c100", "On it 🚀");
@@ -82,7 +84,7 @@ public sealed class ClickUpClientThreadedCommentTests
         // Rich content (structured `comment` blocks) is out of scope for a plain-text reply.
         Assert.False(body.TryGetProperty("comment", out _), "a plain-text reply must not send rich `comment` blocks.");
 
-        Assert.Equal("r123", created.Id);
+        Assert.Equal("90140228459981", created.Id);
         Assert.Equal(1568036964079L, created.DateMs);
         Assert.Equal("On it 🚀", created.Text);
         Assert.Equal("", created.Author);

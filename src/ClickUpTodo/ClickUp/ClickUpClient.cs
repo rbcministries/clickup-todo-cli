@@ -270,6 +270,17 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     }
 
     /// <summary>
+    /// Permanently delete a task (<c>DELETE /task/{task_id}</c>). ClickUp returns an empty body. Errors
+    /// surface as a caught <see cref="ClickUpApiException"/>. The app has no delete UI; this exists so the
+    /// create-task integration test can remove its throwaway task and stay idempotent.
+    /// </summary>
+    public Task DeleteTaskAsync(string taskId, CancellationToken ct = default)
+        => Guard("DeleteTask", async () =>
+        {
+            using var _ = await _client.V2.Task[taskId].DeleteAsync(cancellationToken: ct);
+        });
+
+    /// <summary>
     /// Set a task's status. <paramref name="statusName"/> must be one of its list's statuses.
     /// Returns the <b>confirmed</b> status name from the write response (ClickUp's
     /// <c>PUT /task/{id}</c> returns the updated task), or null if the response omits it — so the
@@ -495,8 +506,10 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             // comment's own id/date, not the task's — so the nudge carries no serverDateUpdated (null),
             // meaning a consumer simply always re-fetches on a comment nudge (#294).
             _changeMarkers.Record(taskId, serverDateUpdatedMs: null, CommentFields);
+            // ClickUp returns the new comment's id as a JSON number on create but as a string on the
+            // GET read path; stringify so callers see the same id from both (and re-fetch matches).
             return new CommentItem(
-                Id: created?.Id ?? "",
+                Id: created?.Id?.ToString(CultureInfo.InvariantCulture) ?? "",
                 Author: "",
                 DateMs: created?.Date,
                 Text: text,
@@ -541,8 +554,10 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         {
             var request = new CreateCommentRequest { CommentText = text, NotifyAll = false };
             var created = await _client.V2.Comment[commentId].Reply.PostAsync(request, cancellationToken: ct);
+            // Same id quirk as CreateTaskCommentAsync: ClickUp returns the new comment's id as a JSON
+            // number on create but as a string on the GET read path; stringify so both paths agree.
             return new CommentItem(
-                Id: created?.Id ?? "",
+                Id: created?.Id?.ToString(CultureInfo.InvariantCulture) ?? "",
                 Author: "",
                 DateMs: created?.Date,
                 Text: text,

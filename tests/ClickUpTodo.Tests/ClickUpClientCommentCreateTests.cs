@@ -20,7 +20,10 @@ public sealed class ClickUpClientCommentCreateTests
     {
         // The canned response deliberately omits comment_text/user: proving the returned Text is the
         // posted text echoed back (not read off the response) and Author is left empty for the caller.
-        var handler = new CapturingHandler("""{ "id": "c123", "hist_id": "h456", "date": 1568036964079 }""");
+        // The id is a JSON *number* here — that's what ClickUp's create-comment endpoint really returns
+        // (the GET read path returns it as a string), and the facade stringifies it so both paths agree.
+        // A regression where the response id was typed as a string dropped it to null/empty (#144 run).
+        var handler = new CapturingHandler("""{ "id": 90140228459974, "hist_id": "h456", "date": 1568036964079 }""");
         using var client = new ClickUpClient("pk_x", new HttpClient(handler));
 
         var created = await client.CreateTaskCommentAsync("t1", "Ship it 🚀");
@@ -32,7 +35,7 @@ public sealed class ClickUpClientCommentCreateTests
         Assert.Equal(JsonValueKind.String, body.GetProperty("comment_text").ValueKind);
         Assert.Equal("Ship it 🚀", body.GetProperty("comment_text").GetString());
 
-        Assert.Equal("c123", created.Id);
+        Assert.Equal("90140228459974", created.Id);
         Assert.Equal(1568036964079L, created.DateMs);
         Assert.Equal("Ship it 🚀", created.Text);
         Assert.Equal("t1", created.TaskId);
@@ -43,7 +46,7 @@ public sealed class ClickUpClientCommentCreateTests
     [Fact]
     public async Task CreateTaskComment_SendsNotifyAllFalse_AndNoRichBlocks()
     {
-        var handler = new CapturingHandler("""{ "id": "c1", "date": 1 }""");
+        var handler = new CapturingHandler("""{ "id": 1, "date": 1 }""");
         using var client = new ClickUpClient("pk_x", new HttpClient(handler));
 
         await client.CreateTaskCommentAsync("t1", "hello");
@@ -77,7 +80,7 @@ public sealed class ClickUpClientCommentCreateTests
     {
         // Empty comment_text is a 400 at ClickUp; the facade guards it at the boundary so the request
         // is never sent (the handler would throw if reached, proving the guard fires first).
-        var handler = new CapturingHandler("""{ "id": "c1" }""");
+        var handler = new CapturingHandler("""{ "id": 1 }""");
         using var client = new ClickUpClient("pk_x", new HttpClient(handler));
 
         await Assert.ThrowsAsync<ArgumentException>(() => client.CreateTaskCommentAsync("t1", text));
