@@ -2,8 +2,8 @@
 """Clickable contextual help bar (#289). Boots the TUI under a PTY, renders through
 a real VT emulator (pyte), and injects SGR-1006 mouse clicks on the bottom footer:
 
-  1. a left-click on an ACTION hint ("Ctrl+N new task") fires its shortcut — the
-     New Task screen opens (the footer becomes the New Task set);
+  1. a left-click on an ACTION hint ("Ctrl+N ➕", the New Task hint) fires its
+     shortcut — the New Task screen opens (the footer becomes the New Task set);
   2. a left-click on a MOVEMENT hint ("↑/↓ move") does nothing — still on the list;
   3. a rapid double-click on an action fires it exactly ONCE (Terminal.Gui raises
      LeftButtonClicked then LeftButtonDoubleClicked; the handler acts only on the
@@ -71,12 +71,14 @@ try:
     pump(9.0)
     assert "Task" in "\n".join(visible()), "boot failed:\n" + "\n".join(visible()[-5:])
 
-    # 1) Click the middle of the "Ctrl+N new task" action hint → New Task opens.
-    y, c = find("Ctrl+N new task")
+    # 1) Click the middle of the "Ctrl+N ➕" action hint → New Task opens. Anchor on the
+    # plain-ASCII "Ctrl+N" key token (unique in the footer) rather than the glyph label,
+    # so the emulator's wide-glyph cell handling can't shift the substring match.
+    y, c = find("Ctrl+N")
     click(c + 3, y)
     pump(2.0)
     assert NEW_TASK in "\n".join(visible()), \
-        "clicking 'Ctrl+N new task' did not open New Task:\n" + "\n".join(visible()[-6:])
+        "clicking the 'Ctrl+N ➕' hint did not open New Task:\n" + "\n".join(visible()[-6:])
     print("PASS 1: clicking an action hint fires its shortcut (New Task opened)")
 
     os.write(master, b"\x1b")  # Esc back to the list
@@ -93,7 +95,7 @@ try:
     print("PASS 2: clicking a movement hint does nothing")
 
     # 3) Rapid double-click on the action fires it exactly once (one Esc returns).
-    y3, c3 = find("Ctrl+N new task")
+    y3, c3 = find("Ctrl+N")
     click(c3 + 3, y3, times=2)
     pump(2.0)
     assert NEW_TASK in "\n".join(visible()), "double-click did not open New Task"
