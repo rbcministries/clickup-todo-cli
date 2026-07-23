@@ -6,6 +6,19 @@ List selector (#239/#240, merged) and the task↔list membership write
 user selects more than one list on the New Task screen, create the task in the
 primary/home list and add it to the rest.
 
+> **Shipped DISABLED pending the list-change migration (#365).** Exactly as the
+> Quick Updates List pane (#242/#339) is: the implementation lands complete and
+> unit-tested, but the New Task screen wires it to file into the **single home
+> list only** until the field/status stranding migration is designed (#365).
+> Focusing the List selector flashes `NewTaskScreen.MultiListDisabledNote` so a
+> user who adds a second list knows it won't be applied.
+>
+> **To re-enable when #365 lands:** in `NewTaskScreen.TrySave`, pass
+> `_lists.Selection` to `NewTaskCreator.CreateAsync` instead of `[primary!]`, and
+> drop the `MultiListDisabledNote` focus flash wired in the constructor. The
+> orchestrator, its facade delegate, and the partial-failure result/flash stay in
+> the tree, so nothing else changes.
+
 ## Verified current state
 
 - `NewTaskScreen` (`Tui/Screens/NewTaskScreen.cs`) embeds a `ListSelectorView` in

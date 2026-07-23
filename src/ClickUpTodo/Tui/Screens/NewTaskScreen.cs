@@ -54,6 +54,13 @@ public sealed class NewTaskScreen : Screen
     /// itself immediately after.</summary>
     public event EventHandler<NewTaskCreateResult>? Created;
 
+    /// <summary>Flashed when the List selector takes focus while multi-list create is disabled (#241,
+    /// pending the list-change migration #365): a new task is filed into its single home list only, so any
+    /// additional list the user picks here is ignored on Save. Public so the tui-validate check can assert
+    /// the disabled-state note.</summary>
+    public const string MultiListDisabledNote =
+        "Setting multiple lists isn't supported here yet — the new task is created in its home list only.";
+
     /// <param name="match">Substring match over the candidate pool, excluding the given ids — i.e.
     /// <c>AssigneeFrequencyCache.Match</c>.</param>
     /// <param name="topFrequent">Top-N most-frequent candidates excluding the given ids — i.e.
@@ -143,6 +150,17 @@ public sealed class NewTaskScreen : Screen
             Height = 6,
         };
         _lists.Flash += (_, message) => RequestFlash(message);
+        // #241 multi-list create is implemented + unit-tested (NewTaskCreator) but shipped DISABLED
+        // pending the list-change field/status migration (#365), mirroring the Quick Updates List pane
+        // (#242/#339). While disabled, Save files the task into its single home list only; flag that on the
+        // status line the moment the List selector takes focus so a user who adds a second list understands
+        // it won't be applied. HasFocus reflects the post-change state, so this fires once on focus-in and
+        // not on internal search↔list moves. Remove this when re-enabling multi-list (see TrySave).
+        _lists.HasFocusChanged += (_, _) =>
+        {
+            if (_lists.HasFocus)
+                RequestFlash(MultiListDisabledNote);
+        };
 
         // ── Optional fields (#215): Priority + Due date, sitting just above the button line. Positioned
         // relative to Save so the block lands on fixed rows regardless of window height (rows Save-6…Save-2
@@ -200,10 +218,8 @@ public sealed class NewTaskScreen : Screen
         var assigneeIds = _assignees.Selection.Select(a => a.Id).ToList();
         var priorityLevel = QuickUpdatesModel.PriorityLevelForRow(_priority.SelectedItem ?? QuickUpdatesModel.NoPriorityRow);
         // The create target is the List selector's primary (first-selected / home) list; null when the user
-        // removed every list, which TryBuild rejects with ListRequiredError (#240). The full ordered
-        // selection drives the additional-list adds (#241).
+        // removed every list, which TryBuild rejects with ListRequiredError (#240).
         var primary = _lists.Primary;
-        var selection = _lists.Selection;
         var primaryListId = primary?.Id;
         if (!NewTaskForm.TryBuild(
                 _name.Text?.ToString(), _description.Text?.ToString(), assigneeIds,
@@ -229,11 +245,14 @@ public sealed class NewTaskScreen : Screen
         {
             try
             {
-                // Create in the primary/home list, then add to any additional selected lists (#241). A
-                // primary-create failure throws out (task not created); a failed additional add is carried
-                // in the result without discarding the created task.
+                // Multi-list create (#241) is DISABLED pending the list-change migration (#365): file the
+                // task into its single home list only by passing just the primary — no additional-list
+                // adds fire. The orchestrator, its facade delegate, and the partial-failure result stay
+                // wired so re-enabling is a one-line change: pass `_lists.Selection` here instead of
+                // `[primary!]` (and drop the MultiListDisabledNote focus flash above). A primary-create
+                // failure still throws out (task not created), keeping the form open to retry.
                 var result = await NewTaskCreator.CreateAsync(
-                    primary!, selection, request!, _createAsync, _addToListAsync, token).ConfigureAwait(false);
+                    primary!, [primary!], request!, _createAsync, _addToListAsync, token).ConfigureAwait(false);
                 Application.Invoke(() =>
                 {
                     if (token.IsCancellationRequested)

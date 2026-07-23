@@ -4,10 +4,11 @@ Ctrl+N opens it → the fields render with the current user seeded as a locked �
 default → the List selector is seeded with the cursor's list as the ✓ (home) primary
 (#240) → the locked default assignee refuses removal → the optional Priority selector
 (four canonical priorities + "(no priority)") and Due-date field (#215) render and
-accept input → typing a name + setting priority/due + adding a second list + Save creates in the
-primary list and adds the task to the additional selected list (#241) — a subsequent
-detail fetch then shows the full multi-list membership — before returning to the list.
-Asserts each step on the pyte screen."""
+accept input → typing a name + setting priority/due + Save creates in the primary/home list and
+returns to the list. Multi-list create (#241) is shipped DISABLED pending the
+list-change migration (#365): focusing the List selector flashes the disabled note,
+and a second list the user adds is ignored on Save — a subsequent detail fetch shows
+the home list only. Asserts each step on the pyte screen."""
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte
 
@@ -100,14 +101,19 @@ try:
     # -> Due date -> Save (#215/#240).
     send(b"\x1b[A", 0.6)  # Up: Assignees list -> its search box
     send(b"\t", 0.6)      # Assignees search box -> List selector search box (Tab bubbles out of composite)
-    # Change the list set (#240 "the user can change the list(s)"): type-ahead a second list and add it
-    # from the search box. The seeded home stays the primary/home create target.
+    # #241 is shipped disabled pending #365: the moment the List selector takes focus, the disabled-state
+    # note flashes so a user who tries to add a second list knows it won't be applied.
+    assert "multiple lists" in visible().lower(), \
+        f"disabled-multi-list note not flashed when the List selector took focus (#241/#365):\n{visible()}"
+    print("LIST-NOTE ok — focusing the List selector flashes the disabled-multi-list note (#241/#365)")
+    # The selector still lets the user pick a second list (the UI is unchanged); type-ahead-add "Ministry
+    # Ops" to prove it's accepted into the selection here — but Save will ignore it while disabled.
     send(b"Ministry", 1.8)  # debounced (~1s) substring match on "Ministry Ops"
     send(b"\r", 1.2)        # Enter in the search box adds the highlighted match
     v = visible()
-    assert "✓ Ministry Ops" in v, f"type-ahead add of a second list didn't take (#240):\n{v}"
+    assert "✓ Ministry Ops" in v, f"type-ahead add of a second list didn't take in the selector UI:\n{v}"
     assert "✓ Personal Tasks (home)" in v, f"primary/home list changed after adding another list (#240):\n{v}"
-    print("LIST ok — added a second list via type-ahead; home stays the create target")
+    print("LIST ok — a second list can be picked in the selector; home stays the create target")
     send(b"\t", 0.6)      # List selector search box -> Priority list
     send(b"\x1b[A", 0.6)  # Up: move off "(no priority)" onto a real priority (Low)
     send(b"\t", 0.6)      # Priority -> Due date field
@@ -121,16 +127,15 @@ try:
     assert "Task" in v, f"did not return to the task list after Save:\n{v}"
     print("SAVE ok — task created (round-tripped) and returned to the list")
 
-    # #241: Save didn't just create in the primary — it added the task to the second selected list too
-    # (the additional-list membership write). Because the create-then-add orchestration finishes before the
-    # screen closes, the fake backend's shared membership set already holds that second list, so a
-    # subsequent detail fetch shows the full "Tasks in Multiple Lists" membership. Open the cursor task's
-    # detail and cycle to the Other tab (Ctrl+→ ×2, #315), where the multi-list "Lists:" line renders.
+    # #241 disabled (#365): Save filed the task into its home list ONLY — the second list the user picked
+    # was ignored, so no membership write fired. Open the cursor task's detail and cycle to the Other tab
+    # (Ctrl+→, #315), where a *multi*-list membership would render as a "Lists:" line — assert it does not,
+    # and that the ignored second list is absent.
     send(b"\r", 3.0)         # Enter → open detail (async fetch + screen swap)
     assert "Description" in visible(), f"detail screen did not open:\n{visible()}"
-    # Cycle to the Other tab (Ctrl+→, #315). The tab the detail opens on comes from persisted view
-    # settings (Stream/Description/Comments/Other), so step through until the Other tab's header
-    # attributes render — its "Priority:" / "Status:" labels are unique to that tab's body.
+    # The tab the detail opens on comes from persisted view settings (Stream/Description/Comments/Other),
+    # so step through until the Other tab's header attributes render — its "Priority:" / "Status:" labels
+    # are unique to that tab's body.
     other = ""
     for _ in range(5):
         v = visible()
@@ -140,10 +145,11 @@ try:
         send(b"\x1b[1;5C", 1.2)  # Ctrl+→ → next tab
     assert "Priority:" in other and "Status:" in other, \
         f"could not reach the Other tab after cycling:\n{visible()}"
-    assert "Lists:" in other, f"multi-list membership line not shown on the Other tab (#241):\n{other}"
-    assert "Personal Tasks" in other, f"home list missing from the multi-list membership (#241):\n{other}"
-    assert "Ministry Ops" in other, f"the added second list is missing from a subsequent detail fetch (#241):\n{other}"
-    print("MEMBERSHIP ok — the second list the Save added shows in a subsequent detail fetch (#241)")
+    assert "Lists:" not in other, \
+        f"a multi-list membership line rendered — multi-list should be disabled (#241/#365):\n{other}"
+    assert "Ministry Ops" not in other, \
+        f"the ignored second list leaked into the created task's membership (#241/#365):\n{other}"
+    print("MEMBERSHIP ok — the ignored second list did not persist; task filed in its home list only (#241 disabled)")
     print("NEW TASK E2E: PASS")
 finally:
     try: os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
