@@ -8,6 +8,9 @@ public enum QuickUpdatesPane
     Status = 0,
     Priority = 1,
     Assignees = 2,
+    // #242 (temporarily disabled — see QuickUpdatesScreen's summary): the List pane. Re-add this value
+    // and bump PaneCount back to 4 when re-enabling.
+    // Lists = 3,
 }
 
 /// <summary>
@@ -16,11 +19,13 @@ public enum QuickUpdatesPane
 /// the pane cycle order + wrap and the Status/Priority rows with their leading <c>✓</c> current-value
 /// marker + preselection (#157). The Assignees pane's own row/search/toggle logic lives in
 /// <see cref="AssigneeSelectorModel"/> (#212), embedded by the screen as an
-/// <see cref="AssigneeSelectorView"/> in immediate-apply mode (#158).
+/// <see cref="AssigneeSelectorView"/> in immediate-apply mode (#158). (A fourth Lists pane — #242, backed
+/// by <see cref="ListSelectorModel"/> — is implemented but temporarily disabled; see QuickUpdatesScreen.)
 /// </summary>
 public static class QuickUpdatesModel
 {
-    /// <summary>The number of panes (Status, Priority, Assignees).</summary>
+    /// <summary>The number of panes (Status, Priority, Assignees). Bump to 4 when the List pane (#242) is
+    /// re-enabled.</summary>
     public const int PaneCount = 3;
 
     /// <summary>The 2-column prefix on the currently-effective row: a check mark then a space.</summary>

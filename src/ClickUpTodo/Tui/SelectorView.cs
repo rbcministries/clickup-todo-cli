@@ -345,6 +345,37 @@ public class SelectorView : View
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// Merges already-existing selections into the current set without firing a server write — for a host
+    /// that only learns the full selection <em>after</em> construction (the Quick Updates List pane's
+    /// background membership enrich, #242). Purely additive: each not-already-selected item is added
+    /// (blank id/name dropped) and the view re-rendered; nothing is removed and no
+    /// <see cref="SelectorMode.ImmediateApply"/> write is issued (these items are already on the server).
+    /// <para>
+    /// No-ops once the user has interacted (an add/remove has bumped <see cref="_applyGeneration"/>), so a
+    /// slow enrich can't resurrect an item the user just removed; a later user edit reconciles from the
+    /// server truth regardless. Marks nothing as locked/distinguished — the seeded home marker set at
+    /// construction is left untouched. Must run on the UI thread.
+    /// </para>
+    /// </summary>
+    protected void AddExistingSelections(IReadOnlyList<SelectorItem> items)
+    {
+        if (_applyGeneration != 0)
+            return;
+        var added = false;
+        foreach (var item in items ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(item.Id) || string.IsNullOrWhiteSpace(item.Name) || _selectedIds.Contains(item.Id))
+                continue;
+            AddToSelection(item);
+            added = true;
+        }
+        if (!added)
+            return;
+        RenderCurrent();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     private void AddToSelection(SelectorItem item)
     {
         if (string.IsNullOrWhiteSpace(item.Id) || string.IsNullOrWhiteSpace(item.Name))

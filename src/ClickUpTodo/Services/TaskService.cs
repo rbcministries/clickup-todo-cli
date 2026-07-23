@@ -465,6 +465,20 @@ public sealed class TaskService(
         => client.RemoveTaskAssigneeAsync(taskId, userId, ct);
 
     /// <summary>
+    /// Adds the task to an additional list — a "Tasks in Multiple Lists" membership (#237), consumed by
+    /// the Quick Updates List pane (#242). A thin passthrough to the facade; the membership endpoint
+    /// echoes no body, so callers read the confirmed set back via <see cref="GetTaskDetailAsync"/>. A
+    /// disabled ClickApp surfaces as a <c>ClickUpApiException</c> for the caller to flash (non-fatal).
+    /// </summary>
+    public Task AddTaskToListAsync(string taskId, string listId, CancellationToken ct = default)
+        => client.AddTaskToListAsync(taskId, listId, ct);
+
+    /// <summary>Removes an additional list membership from a task (#237); the remove sibling of
+    /// <see cref="AddTaskToListAsync"/>. The task's home list is unaffected.</summary>
+    public Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
+        => client.RemoveTaskFromListAsync(taskId, listId, ct);
+
+    /// <summary>
     /// Creates a task in <paramref name="listId"/> from the given fields and returns it mapped to the
     /// domain <see cref="TaskItem"/> (#209/#213). A thin passthrough to the facade, the create sibling of
     /// <see cref="SetStatusAsync"/>/<see cref="SetPriorityAsync"/>.
