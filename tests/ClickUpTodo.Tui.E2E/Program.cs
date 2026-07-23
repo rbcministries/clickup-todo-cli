@@ -41,7 +41,12 @@ var foreign = Environment.GetEnvironmentVariable("E2E_FOREIGN") == "1";
 if (foreign)
     config.View.Subtasks = SubtaskView.All;
 
-var client = new ClickUpClient("fake-token", new HttpClient(new FakeClickUp(taskCount, foreign)));
+// Opt-in Task Tree tab scenario (#291): serve a small fixed ancestry/child tree for the opened task so
+// the detail view's Task Tree tab has real parents/children to render and navigate. Gated so no other
+// check's GET /task/{id} response changes.
+var tree = Environment.GetEnvironmentVariable("E2E_TREE") == "1";
+
+var client = new ClickUpClient("fake-token", new HttpClient(new FakeClickUp(taskCount, foreign, tree)));
 IStateStore stateStore = new JsonFileStateStore();
 var configStore = new ConfigStore(stateStore);
 var tasks = new TaskService(client, config, 1, userName: "Ben Seymour");
@@ -115,11 +120,12 @@ sealed class RecordingBrowserLauncher(string path) : IBrowserLauncher
     }
 }
 
-sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandler
+sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false) : HttpMessageHandler
 {
     // #232 opt-in scenario flag: serve the small not-mine-rows snapshot + a modelled Status/Priority
     // write instead of the default generated list. Off by default so every existing check is untouched.
     private readonly bool _foreign = foreign;
+    private readonly bool _tree = tree;
 
     private static readonly string[] Statuses = ["to do", "in progress", "blocked", "in review"];
     private static readonly string[] StatusColors = ["#d3d3d3", "#4194f6", "#e50000", "#a875ff"];
@@ -248,7 +254,9 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
                     Content = new StringContent(
                         """{"err":"Task not found","ECODE":"ITEM_100"}""", Encoding.UTF8, "application/json"),
                 };
-            if (_foreign)
+            if (_tree)
+                body = TreeTaskGet(path, query);
+            else if (_foreign)
                 body = ForeignTaskGet(path, query);
             else
                 lock (_gate) body = DetailJson(path, _assignees);
@@ -462,6 +470,40 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
         var includeSubtasks = query.Contains("include_subtasks=true", StringComparison.OrdinalIgnoreCase);
         lock (_gate)
             return ForeignTaskJson(id, includeSubtasks);
+    }
+
+    /// <summary>The Task Tree scenario (#291): a fixed, bounded ancestry/child tree hung off the opened
+    /// task <c>t0</c>. A plain GET returns each node's own <c>parent</c> (the tab's ancestry walk climbs
+    /// it one node at a time); an <c>?include_subtasks=true</c> GET appends that node's direct children
+    /// (the descendant BFS). The chain terminates — <c>tanc</c> has no parent and the leaves have no
+    /// children — so the walk and BFS both stop naturally.</summary>
+    private string TreeTaskGet(string path, string query)
+    {
+        var id = path[(path.LastIndexOf('/') + 1)..];
+        var includeSubtasks = query.Contains("include_subtasks=true", StringComparison.OrdinalIgnoreCase);
+        return TreeTaskJson(id, includeSubtasks);
+    }
+
+    private static string TreeTaskJson(string id, bool includeSubtasks)
+    {
+        // id -> (display name, parent id, direct child ids). Distinctive UPPER tokens so the check can
+        // assert each row is present and correctly indented.
+        var (name, parent, children) = id switch
+        {
+            "tanc" => ("Ancestor epic ANCESTOR", (string?)null, Array.Empty<string>()),
+            "t0" => ("Release task ROOT", "tanc", new[] { "t0c1", "t0c2" }),
+            "t0c1" => ("Subtask one CHILDONE", "t0", new[] { "t0c1a" }),
+            "t0c1a" => ("Nested subtask GRANDKID", "t0c1", Array.Empty<string>()),
+            "t0c2" => ("Subtask two CHILDTWO", "t0", Array.Empty<string>()),
+            _ => ($"Task {id}", (string?)null, Array.Empty<string>()),
+        };
+        var parentField = parent is null ? "" : $",\"parent\":\"{parent}\"";
+        var subtasksField = includeSubtasks && children.Length > 0
+            ? $",\"subtasks\":[{string.Join(",", children.Select(c => TreeTaskJson(c, includeSubtasks: false)))}]"
+            : "";
+        return $$"""
+        {"id":"{{id}}","name":"{{name}}","status":{"status":"in progress","color":"#4194f6"},"list":{"id":"plist","name":"Personal Tasks"},"assignees":[],"date_updated":"1700000000000","url":"https://app.clickup.com/t/{{id}}"{{parentField}}{{subtasksField}}}
+        """;
     }
 
     /// <summary>Applies a modelled Status/Priority write and echoes the task reflecting it.</summary>
