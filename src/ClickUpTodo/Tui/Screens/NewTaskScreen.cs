@@ -59,7 +59,7 @@ public sealed class NewTaskScreen : Screen
     /// additional list the user picks here is ignored on Save. Public so the tui-validate check can assert
     /// the disabled-state note.</summary>
     public const string MultiListDisabledNote =
-        "Setting multiple lists isn't supported here yet — the new task is created in its home list only.";
+        "Pick a single list — setting multiple lists isn't supported here yet (the task is created in one list).";
 
     /// <param name="match">Substring match over the candidate pool, excluding the given ids — i.e.
     /// <c>AssigneeFrequencyCache.Match</c>.</param>

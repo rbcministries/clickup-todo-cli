@@ -106,14 +106,32 @@ try:
     assert "multiple lists" in visible().lower(), \
         f"disabled-multi-list note not flashed when the List selector took focus (#241/#365):\n{visible()}"
     print("LIST-NOTE ok — focusing the List selector flashes the disabled-multi-list note (#241/#365)")
-    # The selector still lets the user pick a second list (the UI is unchanged); type-ahead-add "Ministry
-    # Ops" to prove it's accepted into the selection here — but Save will ignore it while disabled.
-    send(b"Ministry", 1.8)  # debounced (~1s) substring match on "Ministry Ops"
-    send(b"\r", 1.2)        # Enter in the search box adds the highlighted match
+
+    # Changing the single target list must still work: de-select the seeded "Personal Tasks (home)" and
+    # pick a DIFFERENT list. Drop into the list (row 0 = the ✓ seeded home) and remove it; its "(home)"
+    # marker clears with the seed, and ResolvePrimary then falls through to whatever is selected next.
+    send(b"\x1b[B", 0.6)   # Down: search box -> list row 0 (the ✓ seeded home)
+    send(b"\r", 1.0)       # Enter: de-select the seeded home
     v = visible()
-    assert "✓ Ministry Ops" in v, f"type-ahead add of a second list didn't take in the selector UI:\n{v}"
-    assert "✓ Personal Tasks (home)" in v, f"primary/home list changed after adding another list (#240):\n{v}"
-    print("LIST ok — a second list can be picked in the selector; home stays the create target")
+    # De-selected = the ✓ is gone. (The "(home)" label lingers on the now-unselected candidate — a cosmetic
+    # artifact of the shared selector; the create target is whatever is checked ✓, resolved by Primary.)
+    assert "✓ Personal Tasks" not in v, f"seeded home wasn't de-selectable (#241 change-list):\n{v}"
+    send(b"\x1b[A", 0.6)   # Up: list row 0 -> back to the search box
+    send(b"Q3", 1.8)       # debounced substring match on "Q3 Website Refresh"
+    send(b"\r", 1.2)       # Enter: add it -> now the sole selection, so the create target
+    v = visible()
+    assert "✓ Q3 Website Refresh" in v, f"couldn't pick a different list after de-selecting the seed (#241):\n{v}"
+    print("CHANGE-LIST ok — de-selected the seeded home and chose a different list as the create target")
+
+    # The UI still lets the user add a further list; type-ahead-add "Ministry Ops" so two lists are
+    # selected at Save (Q3 is the create target as the first selection). Save must ignore the extra while
+    # multi-list is disabled — proven below by the subsequent detail fetch showing no multi-list membership.
+    send(b"Ministry", 1.8)  # search cleared after the previous add, so this starts fresh
+    send(b"\r", 1.2)
+    v = visible()
+    assert "✓ Ministry Ops" in v and "✓ Q3 Website Refresh" in v, \
+        f"expected both lists selected before Save (Q3 as the create target):\n{v}"
+    print("LIST ok — a second list can be added in the UI; it will be ignored on Save while disabled")
     send(b"\t", 0.6)      # List selector search box -> Priority list
     send(b"\x1b[A", 0.6)  # Up: move off "(no priority)" onto a real priority (Low)
     send(b"\t", 0.6)      # Priority -> Due date field
@@ -127,10 +145,10 @@ try:
     assert "Task" in v, f"did not return to the task list after Save:\n{v}"
     print("SAVE ok — task created (round-tripped) and returned to the list")
 
-    # #241 disabled (#365): Save filed the task into its home list ONLY — the second list the user picked
-    # was ignored, so no membership write fired. Open the cursor task's detail and cycle to the Other tab
-    # (Ctrl+→, #315), where a *multi*-list membership would render as a "Lists:" line — assert it does not,
-    # and that the ignored second list is absent.
+    # #241 disabled (#365): two lists were selected, but Save created the task in its single primary list
+    # (Q3) only — the extra list (Ministry Ops) was ignored, so no membership write fired. Open the cursor
+    # task's detail and cycle to the Other tab (Ctrl+→, #315), where a *multi*-list membership would render
+    # as a "Lists:" line — assert it does not, and that the ignored extra list is absent.
     send(b"\r", 3.0)         # Enter → open detail (async fetch + screen swap)
     assert "Description" in visible(), f"detail screen did not open:\n{visible()}"
     # The tab the detail opens on comes from persisted view settings (Stream/Description/Comments/Other),
