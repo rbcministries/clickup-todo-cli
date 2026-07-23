@@ -94,8 +94,10 @@ public sealed class TodoApp
     // store has no cross-process channel), `_markerConsumer` the pure cursor scan over it. UI-thread-only.
     private readonly IChangeMarkerStore _changeMarkers;
     private readonly ChangeMarkerConsumer _markerConsumer;
-    // True while a marker-poll ReadAll (off-thread) + Advance/dispatch (UI thread) is outstanding, so the
-    // short marker cadence can't pile ticks up when a fan-out outlasts it. UI-thread-only (like the others).
+    // True from a marker-poll's off-thread ReadAll through its UI-thread Advance+dispatch, so two scans
+    // can't overlap and the short cadence can't pile ReadAlls up. (The per-task fetches a scan dispatches
+    // are fire-and-forget and guarded separately — the detail path by _refreshingDetail, the row path by
+    // an UpdatedMs ordering check in RefreshNudgedRow.) UI-thread-only.
     private bool _pollingMarkers;
     // Marker-check cadence (#295), deliberately decoupled from the API poll: a `changes` read is a cheap,
     // bounded DB-only op, so cross-tab updates propagate on a short fixed cadence while API fetches stay
@@ -1850,9 +1852,9 @@ public sealed class TodoApp
     /// One marker-poll tick (#295): read the markers <b>off</b> the UI thread (a <c>changes</c> ReadAll
     /// briefly takes LiteDB's shared-mode cross-process lock), then run the pure cursor scan and dispatch
     /// <b>on</b> the UI thread (it reads <c>_all</c> / <c>_rows</c> / the open detail). A single in-flight
-    /// guard keeps ticks from piling up when a fetch fan-out outlasts the cadence. Best-effort throughout —
-    /// a read or reconcile failure is swallowed, since a nudge rides on an edit that already succeeded
-    /// elsewhere.
+    /// guard keeps two scans from overlapping (the per-task reconciles a scan dispatches are guarded
+    /// separately). Best-effort throughout — a read or reconcile failure is swallowed, since a nudge rides
+    /// on an edit that already succeeded elsewhere.
     /// </summary>
     private void PollMarkers()
     {
@@ -1888,15 +1890,24 @@ public sealed class TodoApp
         || _rows.Any(r => r?.Id == taskId)
         || _screens.OfType<TaskDetailScreen>().Any(s => s.Task.Id == taskId);
 
-    /// <summary>The <c>date_updated</c> (epoch ms) we currently hold for a task, so the scan can suppress a
-    /// redundant fetch (#295). Prefers the working-set copy, falling back to an open detail; null when the
-    /// task's in-view source carries no version (so the fetch isn't suppressed). UI-thread read.</summary>
+    /// <summary>The <c>date_updated</c> (epoch ms) we currently hold for a task across <b>every</b> in-view
+    /// surface (working set + any open detail), so the scan can suppress a redundant fetch (#295). Returns
+    /// the <b>minimum</b> version so suppression fires only when every surface is already at or beyond the
+    /// marker — a fresh working-set copy must not mask a stale open detail (which would otherwise miss its
+    /// refresh until its own 30s tick). An unknown version on any surface returns null (can't prove current
+    /// → don't suppress). Null too when the task isn't in view. UI-thread read.</summary>
     private long? HeldNudgeVersion(string taskId)
     {
+        var versions = new List<long?>();
         var item = _all.FirstOrDefault(t => t.Id == taskId) ?? _rows.FirstOrDefault(r => r?.Id == taskId);
         if (item is not null)
-            return item.UpdatedMs;
-        return _screens.OfType<TaskDetailScreen>().FirstOrDefault(s => s.Task.Id == taskId)?.Task.UpdatedMs;
+            versions.Add(item.UpdatedMs);
+        foreach (var screen in _screens.OfType<TaskDetailScreen>().Where(s => s.Task.Id == taskId))
+            versions.Add(screen.Task.UpdatedMs);
+
+        if (versions.Count == 0 || versions.Any(v => v is null))
+            return null;
+        return versions.Min();
     }
 
     /// <summary>
@@ -1941,6 +1952,13 @@ public sealed class TodoApp
                                    ?? _rows.FirstOrDefault(r => r?.Id == taskId);
                     if (existing is null)
                         return; // dropped by a background resync meanwhile — nothing to update.
+                    // Drop a stale out-of-order fetch: nudged rows are fire-and-forget and can overlap
+                    // across ticks (or race the delta poll), so an older in-flight fetch resolving last must
+                    // not clobber a newer version already on the row. When either side has no version we
+                    // can't order them — apply (best-effort). This is the row-path analogue of the detail
+                    // path's _refreshingDetail / Quick Updates' commit-generation guards.
+                    if (fresh.UpdatedMs is long fu && existing.UpdatedMs is long eu && fu < eu)
+                        return;
                     var updated = existing with
                     {
                         StatusName = fresh.StatusName,
@@ -1948,6 +1966,11 @@ public sealed class TodoApp
                         PriorityLevel = fresh.PriorityLevel,
                         PriorityName = fresh.PriorityName,
                         PriorityColor = fresh.PriorityColor,
+                        // Carry the fresh activity stamp so the row's version reflects this reconcile (and a
+                        // later stale fetch is ordered out above). StatusType / ParentId / assignee-ids stay
+                        // from `existing` — a TaskDetail can't carry them (full-fidelity reconcile is #376);
+                        // they self-heal on the next authoritative delta poll.
+                        UpdatedMs = fresh.UpdatedMs ?? existing.UpdatedMs,
                     };
                     UpdateTaskRow(updated, sending: false);
                 });
