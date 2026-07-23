@@ -19,6 +19,14 @@ public interface IClickUpClient
     Task<NamedEntity> GetListAsync(string listId, CancellationToken ct = default);
     Task<string?> GetListColorAsync(string listId, CancellationToken ct = default);
     Task<IReadOnlyList<StatusOption>> GetListStatusesAsync(string listId, CancellationToken ct = default);
+
+    /// <summary>The list's Custom Field definitions — id, name, type, required flag, and drop-down/label
+    /// options (#249). See <see cref="ClickUpClient.GetListCustomFieldsAsync"/>. A default throwing
+    /// implementation (mirroring the writes/deltas below) spares fakes that don't exercise custom fields
+    /// from implementing it; <see cref="ClickUpClient"/> overrides it.</summary>
+    Task<IReadOnlyList<CustomFieldDefinition>> GetListCustomFieldsAsync(string listId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement custom-field fetch.");
+
     Task<List<TaskItem>> GetAssignedTasksAsync(string workspaceId, IReadOnlyList<long> assigneeIds, bool includeClosed = false, long? updatedAfterMs = null, CancellationToken ct = default);
     Task<List<TaskItem>> GetListTasksAsync(string listId, bool includeClosed = false, CancellationToken ct = default);
 

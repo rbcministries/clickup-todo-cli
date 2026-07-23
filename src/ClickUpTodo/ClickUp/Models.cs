@@ -216,6 +216,31 @@ public sealed record CustomFieldItem(
 }
 
 /// <summary>
+/// A Custom Field <b>definition</b> for a list, from <c>GET /list/{list_id}/field</c> (#249) — the
+/// field's schema (identity, type, whether it's required, and any drop-down/label options), as opposed
+/// to <see cref="CustomFieldItem"/> which carries a field's <b>value</b> on a task. This is what the New
+/// Task screen will use to render the right input widget per field and to enforce required fields (both
+/// deferred follow-ups; this record is the foundation they consume).
+/// <para><see cref="Type"/> is ClickUp's field type (<c>text</c>, <c>short_text</c>, <c>number</c>,
+/// <c>date</c>, <c>drop_down</c>, <c>labels</c>, <c>checkbox</c>, <c>url</c>, <c>email</c>, <c>phone</c>,
+/// <c>currency</c>, <c>users</c>, …). Read-only/computed types (<c>formula</c>, <c>rollup</c>, baselines
+/// <c>multi_key</c>, <c>signature</c>) are surfaced too, but a value-filler should skip them.</para>
+/// <see cref="Required"/> reflects the API's per-field <c>required</c> flag (<c>false</c> when the API
+/// omits it — see the #249 spike, which confirmed the flag <i>is</i> surfaced). <see cref="Options"/> are
+/// the selectable choices for <c>drop_down</c>/<c>labels</c> fields (empty otherwise), reusing
+/// <see cref="CustomFieldOption"/> exactly as the read/detail path does.</summary>
+public sealed record CustomFieldDefinition(
+    string Id,
+    string Name,
+    string? Type,
+    bool Required,
+    IReadOnlyList<CustomFieldOption>? Options = null)
+{
+    /// <summary>The field's options, never null (empty when the field has none).</summary>
+    public IReadOnlyList<CustomFieldOption> Options { get; init; } = Options ?? [];
+}
+
+/// <summary>
 /// A comment on a task, as shown in the detail view's Comments tab and — aggregated across many
 /// tasks — in the mentions/comments feed (#109). <see cref="TaskId"/> attributes the comment to the
 /// task it belongs to so the feed can group it and open that task from a feed entry (#111 / #115); it

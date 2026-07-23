@@ -187,6 +187,21 @@
         }
       }
     },
+    "/v2/list/{list_id}/field": {
+      "get": {
+        "operationId": "GetListCustomFields",
+        "summary": "Get the Custom Field definitions accessible from a List (their id, name, type, options, and whether each is required). This is the field-definition side (schema); a task's custom_fields carries the values. NOTE: the public v2 response DOES surface a per-field 'required' boolean (verified empirically against real lists), despite older docs omitting it.",
+        "parameters": [
+          { "name": "list_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The List's accessible Custom Field definitions.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CustomFieldsResponse" } } }
+          }
+        }
+      }
+    },
     "/v2/list/{list_id}/task/{task_id}": {
       "post": {
         "operationId": "AddTaskToList",
@@ -452,6 +467,20 @@
           "name": { "type": "string", "nullable": true },
           "type": { "type": "string", "nullable": true }
         }
+      },
+      "CustomFieldDefinition": {
+        "type": "object",
+        "description": "A Custom Field DEFINITION as returned by GET /list/{list_id}/field (the field's schema, not a value on a task). Only the stable identity and the 'required' flag are typed; the loosely-typed 'type_config' (whose 'options' sub-array shape varies by field type) is intentionally left to Kiota's AdditionalData and read back with System.Text.Json, mirroring the task-side CustomField read path (#35).",
+        "properties": {
+          "id": { "type": "string", "nullable": true },
+          "name": { "type": "string", "nullable": true },
+          "type": { "type": "string", "nullable": true },
+          "required": { "type": "boolean", "nullable": true }
+        }
+      },
+      "CustomFieldsResponse": {
+        "type": "object",
+        "properties": { "fields": { "type": "array", "items": { "$ref": "#/components/schemas/CustomFieldDefinition" } } }
       },
       "CommentBlock": {
         "type": "object",

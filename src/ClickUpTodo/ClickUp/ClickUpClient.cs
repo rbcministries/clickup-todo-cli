@@ -8,6 +8,9 @@ using Microsoft.Kiota.Abstractions.Serialization;
 using Microsoft.Kiota.Http.HttpClientLibrary;
 using Microsoft.Kiota.Serialization.Json;
 using ApiException = Microsoft.Kiota.Abstractions.ApiException;
+// The generated field-definition model shares its name with the stable domain record
+// (ClickUpTodo.ClickUp.CustomFieldDefinition); alias the generated one so the facade can name both.
+using GenCustomFieldDefinition = ClickUpTodo.ClickUp.Generated.Models.CustomFieldDefinition;
 
 namespace ClickUpTodo.ClickUp;
 
@@ -150,6 +153,24 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 .OrderBy(s => s.Orderindex ?? int.MaxValue)
                 .Where(s => !string.IsNullOrWhiteSpace(s.StatusProp))
                 .Select(s => new StatusOption(s.StatusProp!, s.Color))
+                .ToList();
+        });
+
+    /// <summary>
+    /// The Custom Field <b>definitions</b> accessible from a list (<c>GET /list/{list_id}/field</c>,
+    /// #249): each field's id, name, type, <c>required</c> flag, and drop-down/label options. This is the
+    /// schema side (what fields a list has and how to render an input for each) — a task's values come
+    /// back separately on <see cref="TaskDetail.CustomFields"/>. Fields with a blank id are dropped (an
+    /// id is required to write the value back). Maps onto the stable <see cref="CustomFieldDefinition"/>
+    /// so no generated type escapes the facade.
+    /// </summary>
+    public Task<IReadOnlyList<CustomFieldDefinition>> GetListCustomFieldsAsync(string listId, CancellationToken ct = default)
+        => Guard("GetListCustomFields", async () =>
+        {
+            var fields = (await _client.V2.List[listId].Field.GetAsync(cancellationToken: ct))?.Fields ?? [];
+            return (IReadOnlyList<CustomFieldDefinition>)fields
+                .Where(f => !string.IsNullOrWhiteSpace(f.Id))
+                .Select(MapCustomFieldDefinition)
                 .ToList();
         });
 
@@ -713,6 +734,29 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             // One malformed/unexpected field must never sink the whole task's detail — degrade to
             // name/type only (the same shape the tab showed before values were surfaced).
             return new CustomFieldItem(f.Name!, f.Type);
+        }
+    }
+
+    /// <summary>
+    /// Maps a generated field <b>definition</b> onto the stable <see cref="CustomFieldDefinition"/>,
+    /// including its drop-down/label <c>type_config.options</c>. The generated type surfaces
+    /// <c>id/name/type/required</c> as typed properties; the loosely-typed <c>type_config</c> lands in
+    /// Kiota's <c>AdditionalData</c>, so we re-serialize the definition to JSON (the same faithful
+    /// round-trip <see cref="MapCustomField"/> uses) and read the options back with
+    /// <see cref="System.Text.Json"/> — no generated type escapes the facade (#249).
+    /// </summary>
+    internal static CustomFieldDefinition MapCustomFieldDefinition(GenCustomFieldDefinition f)
+    {
+        try
+        {
+            var options = CustomFieldReader.ReadOptions(SerializeToJson(f));
+            return new CustomFieldDefinition(f.Id ?? "", f.Name ?? "", f.Type, f.Required ?? false, options);
+        }
+        catch
+        {
+            // One malformed field must never sink the whole list's field fetch — degrade to
+            // identity + required only (no options), mirroring MapCustomField's defensive fallback.
+            return new CustomFieldDefinition(f.Id ?? "", f.Name ?? "", f.Type, f.Required ?? false);
         }
     }
 
