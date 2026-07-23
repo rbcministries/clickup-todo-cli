@@ -2429,7 +2429,7 @@ public sealed class TodoApp
         // render path (Render → AddTask → TaskRowRenderer.Render) sets them per row.
         var (isContextParent, isForeignSubtask, isUnassignedSubtask) =
             ClassifyRowMarker(updated, _contextParents, VisibleForeignSubtasks());
-        var (text, badges) = TaskRowRenderer.Render(
+        var (text, badges, _, _) = TaskRowRenderer.Render(
             updated, _config.BadgeDisplay, _tasks.UserId, index < _depths.Count ? _depths[index] : 0,
             isContextParent, groupedBy: groupedBy, marker: marker,
             isForeignSubtask: isForeignSubtask, isUnassignedSubtask: isUnassignedSubtask);
@@ -2745,7 +2745,7 @@ public sealed class TodoApp
 
     private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None, bool isForeignSubtask = false, bool isUnassignedSubtask = false)
     {
-        var (text, badges) = TaskRowRenderer.Render(task, _config.BadgeDisplay, _tasks.UserId, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask, isUnassignedSubtask);
+        var (text, badges, _, _) = TaskRowRenderer.Render(task, _config.BadgeDisplay, _tasks.UserId, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask, isUnassignedSubtask);
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);

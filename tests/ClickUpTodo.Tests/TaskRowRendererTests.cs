@@ -147,13 +147,27 @@ public sealed class TaskRowRendererTests
     }
 
     [Fact]
-    public void RenderedRow_Deconstructs_ToTextAndBadges()
+    public void RenderedRow_Deconstructs_ToTextBadgesAndMarkerSpan()
     {
         // The positional record struct deconstructs at the call site, matching the host's `var (text,
-        // badges) = ...` usage that replaced the old TodoApp.BuildRow.
-        var (text, badges) = TaskRowRenderer.Render(FullTask(), BadgeDisplay.Icons, currentUserId: 1);
+        // badges, markerStart, markerLength) = ...` usage that replaced the old TodoApp.BuildRow.
+        var (text, badges, markerStart, markerLength) =
+            TaskRowRenderer.Render(FullTask(), BadgeDisplay.Icons, currentUserId: 1);
 
         Assert.NotEmpty(text);
         Assert.NotEmpty(badges);
+        // No marker passed → the (-1, 0) "no marker" sentinel flows through from the formatter.
+        Assert.Equal(-1, markerStart);
+        Assert.Equal(0, markerLength);
+    }
+
+    [Fact]
+    public void Render_PassesTheFoldMarkerSpanThrough()
+    {
+        // The fold marker span (#287) is forwarded from TaskRowFormatter so the host can hit-test the
+        // arrow column against the same rendered text it stores.
+        var rendered = TaskRowRenderer.Render(FullTask(), BadgeDisplay.Icons, currentUserId: 1, marker: "▶ ");
+
+        Assert.Equal("▶ ", rendered.Text.Substring(rendered.MarkerStart, rendered.MarkerLength));
     }
 }

@@ -178,6 +178,34 @@ public sealed class TaskRowFormatterTests
         // the marker, then the title.
         Assert.StartsWith("1 (TD)" + TaskRowFormatter.BlankGutter + "  ▶ Roll up sprint", row.Text);
         Assert.Equal("(TD)", row.Text.Substring(row.StatusStart, row.StatusLength));
+        // The fold marker span (#287) points at exactly the "▶ " after the chips + indent, so a mouse
+        // hit-test resolves the arrow column even with badges and indent ahead of it.
+        Assert.Equal("▶ ", row.Text.Substring(row.MarkerStart, row.MarkerLength));
+        Assert.Equal(2, row.MarkerLength);
+    }
+
+    [Fact]
+    public void FoldMarkerSpan_IsAbsentSentinel_WhenNoMarker()
+    {
+        var task = new TaskItem { Id = "1", Name = "Leaf", StatusName = "to do" };
+
+        // No marker argument (the default, e.g. nesting off) → the (-1, 0) "no marker" span sentinel.
+        var row = TaskRowFormatter.Format(task);
+
+        Assert.Equal(-1, row.MarkerStart);
+        Assert.Equal(0, row.MarkerLength);
+    }
+
+    [Fact]
+    public void FoldMarkerSpan_TracksTheMarker_InTextMode()
+    {
+        var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", PriorityName = "High" };
+
+        // Text mode ("1 ○ to do ⚑ High ") puts the marker after the ragged text badges; the captured span
+        // must still land on the "▼ " regardless of the emoji glyphs (⚑) ahead of it.
+        var row = TaskRowFormatter.Format(task, marker: "▼ ", badges: BadgeDisplay.Text);
+
+        Assert.Equal("▼ ", row.Text.Substring(row.MarkerStart, row.MarkerLength));
     }
 
     // ── Text mode: id then "○ {status}" "⚑ {priority}", id first (#171 + #162) ─
