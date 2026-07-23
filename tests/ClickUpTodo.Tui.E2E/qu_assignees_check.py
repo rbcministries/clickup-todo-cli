@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Boots the TUI under a PTY and exercises the Quick Updates *Assignees* pane (#158):
-Space opens Quick Updates → Tab to the Assignees pane → its empty-state list shows the
+Ctrl+U opens Quick Updates → Tab to the Assignees pane → its empty-state list shows the
 seeded workspace members (frequency-pool top-up) → type "grac" and, after the ~1s
 debounce, the list filters to Grace Hopper → Enter adds her (write round-trips; she shows
 with a leading ✓) → Down+Enter on that ✓ row removes her again → Esc returns to the list.
@@ -61,8 +61,8 @@ try:
     assert "Task" in visible(), "app never rendered the list:\n" + visible()[-1500:]
     pump(1.0)
 
-    # Space opens Quick Updates.
-    send(b" ", 2.0)
+    # Ctrl+U opens Quick Updates (#290).
+    send(b"\x15", 2.0)
     assert "Quick Updates" in visible(), "Quick Updates did not open:\n" + visible()
 
     # Tab twice: Status → Priority → Assignees. Focus should land in the search box.

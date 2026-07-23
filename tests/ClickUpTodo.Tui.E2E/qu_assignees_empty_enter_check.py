@@ -4,7 +4,7 @@ focused in the **empty** search box of a task that already has assignees must NO
 first current assignee.
 
 Runs with E2E_QU_SEED_ASSIGNEE=1 so the fake backend seeds every task with a current
-assignee (Ada Lovelace). Flow: Space opens Quick Updates → Tab to the Assignees pane → its
+assignee (Ada Lovelace). Flow: Ctrl+U opens Quick Updates → Tab to the Assignees pane → its
 empty-state list shows the current assignee as a leading ✓ row (row 0, the default
 selection) → Enter in the *empty* search box → she must still be ✓ (the pre-fix behaviour
 picked row 0, toggled Removed, and wrote an immediate server remove). It also covers the
@@ -64,8 +64,8 @@ try:
     assert "Task" in visible(), "app never rendered the list:\n" + visible()[-1500:]
     pump(1.0)
 
-    # Space opens Quick Updates on the cursor's task (seeded with a current assignee).
-    send(b" ", 2.0)
+    # Ctrl+U opens Quick Updates on the cursor's task (seeded with a current assignee) (#290).
+    send(b"\x15", 2.0)
     assert "Quick Updates" in visible(), "Quick Updates did not open:\n" + visible()
 
     # Tab twice: Status → Priority → Assignees. Focus lands in the (empty) search box.

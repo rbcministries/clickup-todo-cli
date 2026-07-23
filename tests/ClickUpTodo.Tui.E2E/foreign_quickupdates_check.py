@@ -8,7 +8,7 @@ plus a modelled PUT /task/{id} so a committed Status round-trips.
 
 Asserts, on the pyte-rendered screen:
   1. both not-mine row markers render;
-  2. Space OPENS Quick Updates on the foreign subtask (the #160 write-block is gone — the pre-#160
+  2. Ctrl+U OPENS Quick Updates on the foreign subtask (the #160 write-block is gone — the pre-#160
      build flashed "not assigned to you — unchanged" and never opened);
   3. committing a changed, active status settles the Status pane's ✓ on the new value — which only
      holds if the modelled PUT echoed the committed status (ApplyStatus reconciles ✓ to the
@@ -92,7 +92,7 @@ def qu_open():
     return "Quick Updates" in v and "Priority" in v and "Assignees" in v
 
 
-SPACE = b" "
+CTRL_U = b"\x15"    # #290: Quick Updates launcher (was Space)
 ESC = b"\x1b"
 DOWN = b"\x1b[B"
 UP = b"\x1b[A"
@@ -103,11 +103,11 @@ F5 = b"\x1b[15~"             # manual refresh — never a delta, so it re-runs t
 
 
 def open_qu_on(name, what):
-    """Open Quick Updates on the row named `name`. Space opens QU on the selected row; if the open
+    """Open Quick Updates on the row named `name`. Ctrl+U opens QU on the selected row; if the open
     screen's title isn't that task, Esc + Down and retry (robust to row ordering). QU is a full-window
     screen, so while it's open `name` can only be the title — a reliable oracle for "on this row"."""
     for _ in range(12):
-        send(SPACE, 2.5)
+        send(CTRL_U, 2.5)
         if qu_open() and name in visible():
             return
         if qu_open():

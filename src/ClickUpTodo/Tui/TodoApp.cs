@@ -5,6 +5,7 @@ using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
 using ClickUpTodo.Services;
+using ClickUpTodo.Setup;
 using ClickUpTodo.Tui.Screens;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
@@ -60,6 +61,11 @@ public sealed class TodoApp
     // set's home lists and backfilled (count-0) from the scheduled list-hierarchy walk (#236). Never
     // touches rendering or input — no #3/#12 impact.
     private readonly ListFrequencyCache _lists;
+    // Cross-platform open-in-browser (#308): Windows shell association, macOS `open`, Linux `xdg-open`
+    // & friends, resolved by BrowserLaunchPlanner. The TUI isn't unit-tested; the launch logic lives
+    // in the planner and is covered there. Injected (#304) so the E2E harness can swap in a recording
+    // launcher; defaults to the real OS launcher.
+    private readonly IBrowserLauncher _browser;
     // How many candidates the Assignees pane wants available before it stops needing the deferred
     // workspace-members top-up (it fills its empty state up to 10 rows).
     private const int AssigneeCandidateTarget = 10;
@@ -161,7 +167,7 @@ public sealed class TodoApp
 
     public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
         IFocusStore focus, TaskCache taskCache, FeedCache feedCache, AssigneeFrequencyCache assignees,
-        ListFrequencyCache lists)
+        ListFrequencyCache lists, IBrowserLauncher? browserLauncher = null)
     {
         _tasks = tasks;
         _feed = feed;
@@ -172,6 +178,7 @@ public sealed class TodoApp
         _feedCache = feedCache;
         _assignees = assignees;
         _lists = lists;
+        _browser = browserLauncher ?? new SystemBrowserLauncher();
         _agent = BuildAgentDispatcher();
     }
 
@@ -450,6 +457,7 @@ public sealed class TodoApp
         };
         _list = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
         _list.KeyDown += OnListKey;
+        _list.MouseEvent += OnListMouse;
         _frame.Add(_list);
 
         _statusLabel = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = _status };
@@ -500,6 +508,19 @@ public sealed class TodoApp
                     key.Handled = true;
                     OpenNewTask();
                     break;
+                case KeyCode.O:
+                    // Ctrl+O opens the quick-open-by-id entry surface (#303). A chord (bare letters are
+                    // reserved for the ListView type-ahead, #12).
+                    key.Handled = true;
+                    OpenQuickOpen();
+                    break;
+                case KeyCode.U:
+                    // Ctrl+U opens Quick Updates (#159). Standardized to match Task Detail's Ctrl+U so
+                    // the same action uses the same key everywhere (#290); the old bare-Space launcher is
+                    // retired, freeing Space for the ListView type-ahead (#12).
+                    key.Handled = true;
+                    OpenQuickUpdates();
+                    break;
                 case KeyCode.E:
                     // Ctrl+E toggles to the mentions & comments feed — List ↔ Feed navigation.
                     key.Handled = true;
@@ -537,10 +558,6 @@ public sealed class TodoApp
 
         switch (key.KeyCode)
         {
-            case KeyCode.Space:
-                key.Handled = true;
-                OpenQuickUpdates();
-                break;
             case KeyCode.Enter:
                 key.Handled = true;
                 OpenDetail();
@@ -599,6 +616,30 @@ public sealed class TodoApp
                 CycleShowCompleted();
                 break;
         }
+    }
+
+    /// <summary>
+    /// Double-click a task row → open its Task Detail, the mouse equivalent of Enter (#286). We handle
+    /// only the double-click and leave every other mouse event unhandled, so the ListView's native
+    /// single-click select and drag-scroll are untouched. A double-click on a header/spacer row or in the
+    /// empty space beneath a short list resolves to a null task and no-ops, exactly like Enter there.
+    /// Guarded on <see cref="ActiveScreen"/> so a click can't fire while a screen is stacked over the
+    /// list. The click's viewport-relative Y plus the list's scroll offset (<c>Viewport.Y</c>) resolves
+    /// the row via the shared <see cref="RowHitTester"/> (reused by B/F, #287/#291).
+    /// </summary>
+    private void OnListMouse(object? sender, Mouse e)
+    {
+        if (!e.Flags.HasFlag(MouseFlags.LeftButtonDoubleClicked) || e.Position is not { } pos)
+            return;
+        if (ActiveScreen is not null)
+            return;
+
+        var task = RowHitTester.TaskAt(pos.Y, _list.Viewport.Y, _rows);
+        if (task is null)
+            return;
+
+        e.Handled = true;
+        OpenTaskDetail(task.Id);
     }
 
     /// <summary>F6 — cycles how Status/Priority badges render (icons → text → hidden → icons), persists
@@ -977,7 +1018,7 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.AgentDispatch, _config.DetailView);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.WorkspaceSubdomain, _config.AgentDispatch, _config.DetailView);
 
         // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
         // save it folds the edited template back into the settings screen via the request's callback, so
@@ -1006,6 +1047,9 @@ public sealed class TodoApp
             // (or next-polled) feed picks up the new window with no extra wiring.
             _config.FeedActivityLookbackDays = result.FeedActivityLookbackDays;
             _config.DefaultWorkingDirectory = result.DefaultWorkingDirectory;
+            // Read live by LaunchBrowser (#304) on the next Ctrl+B, so a saved change takes effect
+            // immediately with no extra wiring.
+            _config.WorkspaceSubdomain = result.WorkspaceSubdomain;
             _config.AgentDispatch = result.AgentDispatch;
             _config.DetailView = result.DetailView;
             _configStore.Save(_config);
@@ -1022,11 +1066,14 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// Ctrl+N — opens the New Task compose screen (#213) over the list. Guarded on
+    /// Ctrl+N — opens the New Task compose screen (#213/#240) over the list. Guarded on
     /// <see cref="ActiveScreen"/> like the other list-initiated opens (only Help stacks). Requires a
-    /// configured Personal Tasks list (the create target); flashes and no-ops when unset. The embedded
-    /// assignee selector draws its candidate pool from the #155 frequency cache and seeds the current
-    /// user as a locked default. On success the list refreshes and the cursor lands on the new task.
+    /// configured Personal Tasks list (the fallback seed / create target when the cursor can't supply one);
+    /// flashes and no-ops when unset. The embedded assignee selector draws its candidate pool from the #155
+    /// frequency cache and seeds the current user as a locked default; the List selector (#239) draws from
+    /// the #238 list-frequency cache and is seeded with the cursor's list as the primary/home create target
+    /// (personal-list fallback — see <see cref="NewTaskForm.ResolveListSeed"/>). On success the list
+    /// refreshes and the cursor lands on the new task.
     /// </summary>
     private void OpenNewTask()
     {
@@ -1044,11 +1091,27 @@ public sealed class TodoApp
         var selfName = string.IsNullOrWhiteSpace(_tasks.UserName) ? "Me" : _tasks.UserName;
         var self = new TaskAssignee(_tasks.UserId, selfName);
 
+        // Seed the List selector's primary/home create target (#240) from the cursor's task list, falling
+        // back to the configured Personal Tasks list on a header row (no current task), a context parent
+        // (#46), a foreign subtask (#70/#179), or a task with a blank list id. The context/foreign
+        // classification reuses the same membership the row markers read.
+        var cursor = CurrentTask();
+        var primaryList = NewTaskForm.ResolveListSeed(
+            cursorListId: cursor?.ListId,
+            cursorListName: cursor?.ListName,
+            cursorIsContextParent: cursor is not null && _contextParents.ContainsKey(cursor.Id),
+            cursorIsForeignSubtask: cursor is not null && _foreignSubtasks.ContainsKey(cursor.Id),
+            personalListId: listId!,
+            personalListName: _config.PersonalTasksListName);
+
         var screen = new NewTaskScreen(
             match: (query, exclude) => _assignees.Match(query, exclude),
             topFrequent: (n, exclude) => _assignees.TopMostFrequent(n, exclude),
             lockedSelf: self,
-            createAsync: (request, ct) => _tasks.CreateTaskAsync(listId, request, ct));
+            listMatch: (query, exclude) => _lists.Match(query, exclude),
+            listTopFrequent: (n, exclude) => _lists.TopMostFrequent(n, exclude),
+            primaryList: primaryList,
+            createAsync: (targetListId, request, ct) => _tasks.CreateTaskAsync(targetListId, request, ct));
         screen.Created += (_, created) =>
         {
             // Land the next refresh on the new task, then kick that refresh directly (RequestRefresh's
@@ -1058,6 +1121,99 @@ public sealed class TodoApp
             _refresh.RequestRefresh();
         };
         ShowScreen(screen, static () => { });
+    }
+
+    /// <summary>
+    /// Ctrl+O — opens the quick-open entry surface (#303) over the list. Guarded on
+    /// <see cref="ActiveScreen"/> like the other list-initiated opens. The modal only collects the typed
+    /// text; the parse/resolve/navigate runs in <see cref="ResolveAndOpen"/> once the modal has closed
+    /// (deferred to the next loop iteration) so the Task Detail view opens over the list rather than
+    /// stacking on top of the entry surface.
+    /// </summary>
+    private void OpenQuickOpen()
+    {
+        if (ActiveScreen is not null)
+            return;
+
+        var screen = new QuickOpenScreen();
+        ShowScreen(screen, () =>
+        {
+            // Run the resolve on a later main-loop iteration so this entry surface is fully torn down
+            // first: doing it inline in the close handler fires it while the modal is still mounted, so
+            // OpenTaskDetail captures the modal as its "requester" and then skips the mount once the modal
+            // closes (observed under the tui-validate harness — "Loading details…" stuck, detail never
+            // shown). AddTimeout guarantees the later iteration.
+            if (screen.Result is { } text)
+                Application.AddTimeout(TimeSpan.FromMilliseconds(1), () =>
+                {
+                    ResolveAndOpen(text);
+                    return false;
+                });
+        });
+    }
+
+    /// <summary>
+    /// Resolves a quick-open input to a task and opens its Task Detail (#303). Cache-first: a task in the
+    /// current working set opens with no round-trip; an uncached one flashes "Fetching task…" first and
+    /// resolves via the API (a plain id straight through <see cref="OpenTaskDetail"/>; a custom id via the
+    /// <c>custom_task_ids</c> lookup, then opened by its real id). An unparseable input, a missing
+    /// workspace for a custom id, or a not-found task flashes an error and leaves the list unchanged.
+    /// </summary>
+    private void ResolveAndOpen(string text)
+    {
+        var reference = QuickOpenParser.Parse(text);
+        if (reference.Kind == QuickOpenKind.Invalid)
+        {
+            Flash($"Couldn’t open “{Ellipsize(text)}” — enter a task id, custom id, or ClickUp task URL.");
+            return;
+        }
+
+        // 1. Cache hit → open immediately (its own "Loading details…").
+        if (QuickOpenParser.FindInCache(CandidateUniverse(), reference) is { } cached)
+        {
+            OpenTaskDetail(cached.Id);
+            return;
+        }
+
+        // 2. Uncached plain id → straight through the detail load (its own "Loading details…" flash IS
+        // the fetch; there's no separate resolve step, so no redundant "Fetching task…" here).
+        if (reference.Kind == QuickOpenKind.TaskId)
+        {
+            OpenTaskDetail(reference.Value);
+            return;
+        }
+
+        // 3. A custom id needs the workspace (team) id and a resolve step — the custom-id lookup returns
+        // the task's real id, which is then opened through the ordinary detail load. "Fetching task…"
+        // covers that resolve round-trip (visible while the off-thread lookup is in flight), after which
+        // OpenTaskDetail's "Loading details…" covers the load.
+        var teamId = _config.WorkspaceId;
+        if (string.IsNullOrWhiteSpace(teamId))
+        {
+            Flash($"Can’t resolve custom id “{Ellipsize(reference.Value)}” — no workspace is configured.");
+            return;
+        }
+
+        Flash("Fetching task…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var detail = await _tasks.GetTaskDetailByCustomIdAsync(reference.Value, teamId);
+                Application.Invoke(() => OpenTaskDetail(detail.Id));
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Couldn’t find task “{Ellipsize(reference.Value)}”: {Short(ex)}"));
+            }
+        });
+    }
+
+    /// <summary>Clips an echoed user input to a short, single-line snippet for a flash message.</summary>
+    private static string Ellipsize(string s)
+    {
+        s = s.ReplaceLineEndings(" ").Trim();
+        return s.Length <= 40 ? s : s[..39] + "…";
     }
 
     // ── Screen navigation seam ─────────────────────────────────────────────────
@@ -1481,15 +1637,23 @@ public sealed class TodoApp
             return;
         }
 
-        try
+        // Rewrite an app.clickup.com link onto the configured workspace subdomain (#304) so the launch
+        // skips the app→subdomain redirect; unset/non-app URLs pass through unchanged.
+        var target = ClickUpUrl.RewriteHost(url, _config.WorkspaceSubdomain);
+        if (!Uri.TryCreate(target, UriKind.Absolute, out var uri))
         {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            Flash($"Not a valid URL: {target}");
+            return;
+        }
+
+        if (_browser.TryOpen(uri))
+        {
             Flash($"Opened: {name}");
+            return;
         }
-        catch (Exception ex)
-        {
-            Flash($"Could not open browser: {Short(ex)}");
-        }
+
+        var hint = BrowserLaunchPlanner.OpenerHint(BrowserLaunchPlanner.CurrentOS());
+        Flash(hint is null ? $"Couldn't open a browser — copy the URL: {target}" : $"Couldn't open a browser ({hint}) — copy the URL: {target}");
     }
 
     private void OpenDetail()
@@ -1788,7 +1952,7 @@ public sealed class TodoApp
         // Fast path: statuses were warmed by the background prefetch — open instantly, no round-trip.
         if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
         {
-            ShowQuickUpdates(task, cached);
+            ShowQuickUpdates(task, cached, ListTarget);
             return;
         }
 
@@ -1799,7 +1963,7 @@ public sealed class TodoApp
             try
             {
                 var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
-                Application.Invoke(() => ShowQuickUpdates(task, statuses));
+                Application.Invoke(() => ShowQuickUpdates(task, statuses, ListTarget));
             }
             catch (Exception ex)
             {
@@ -1830,9 +1994,20 @@ public sealed class TodoApp
             return;
         }
 
+        // Decouple the write path from `_all` (#297): if the detail's task has a row/snapshot entry the
+        // list target repaints it (unchanged behaviour); otherwise — a feed-opened task (#115), and every
+        // task in single-task launch mode (#296) — the commit runs against the loaded task itself, so it
+        // no longer dead-ends at "no longer in the list" with no `_all` present.
+        // Frozen here, before the cold-path status fetch below: if an absent task materialised in `_all`
+        // during that await it would commit against the single-task target and not repaint the now-present
+        // row — benign (the write still lands; the next background refresh reconciles the row).
+        var target = QuickUpdatesTaskById(task.Id) is not null
+            ? ListTarget
+            : new SingleTaskUpdateTarget(task);
+
         if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
         {
-            ShowQuickUpdates(task, cached, detailScreen);
+            ShowQuickUpdates(task, cached, target, detailScreen);
             return;
         }
 
@@ -1842,7 +2017,7 @@ public sealed class TodoApp
             try
             {
                 var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
-                Application.Invoke(() => ShowQuickUpdates(task, statuses, detailScreen));
+                Application.Invoke(() => ShowQuickUpdates(task, statuses, target, detailScreen));
             }
             catch (Exception ex)
             {
@@ -1861,7 +2036,8 @@ public sealed class TodoApp
     /// each committed status/priority so the popped-back detail shows the change.
     /// </para>
     /// </summary>
-    private void ShowQuickUpdates(TaskItem task, IReadOnlyList<StatusOption> statuses, TaskDetailScreen? detailOrigin = null)
+    private void ShowQuickUpdates(TaskItem task, IReadOnlyList<StatusOption> statuses,
+        IQuickUpdateTarget target, TaskDetailScreen? detailOrigin = null)
     {
         if (statuses.Count == 0)
         {
@@ -1875,19 +2051,103 @@ public sealed class TodoApp
         if (!ReferenceEquals(ActiveScreen, detailOrigin))
             return;
 
+        // #242 (temporarily disabled — see QuickUpdatesScreen's summary): the List pane's seed. Changing a
+        // task's list can strand fields/statuses that don't exist on the target list; ClickUp's PWA has a
+        // guided migration for those cases and we don't yet. Re-enable this (and the ctor args + enrich
+        // call below, and ApplyListAsync/EnrichListMemberships/HomeListOf) once that migration is designed.
+        // var homeList = new NamedEntity(task.ListId!, task.ListName ?? task.ListId!);
+        // var additionalLists = (IReadOnlyList<NamedEntity>)(detailOrigin?.Task.Lists ?? [])
+        //     .Where(l => !string.Equals(l.Id, task.ListId, StringComparison.Ordinal))
+        //     .ToList();
+
         var screen = new QuickUpdatesScreen(
             task.Name, statuses, task.StatusName, task.PriorityLevel, task.Assignees,
             // Assignees pane (#158): candidate pool from the frequency cache (#155); add/remove apply
             // immediately via ApplyAssigneeAsync (the selector owns the optimistic update + revert).
             _assignees.Match, _assignees.TopMostFrequent,
-            (kind, person, ct) => ApplyAssigneeAsync(task.Id, kind, person, ct));
+            (kind, person, ct) => ApplyAssigneeAsync(task.Id, kind, person, target, ct));
+        // #242 (disabled): the List pane's ctor args followed the assignee ones —
+        //     homeList, additionalLists,
+        //     _lists.Match, _lists.TopMostFrequent,
+        //     (kind, list, ct) => ApplyListAsync(task.Id, kind, list, ct));
         // Status/Priority apply on Enter and reconcile the screen's ✓ from the server-confirmed value.
+        // The commit resolves against and writes back to `target` (#297) — the list snapshot in list mode,
+        // the loaded task with no list in single-task mode — decoupling the write path from `_all`.
         // A detail-origin launch (#159) also reflects each committed value onto the detail so the
         // popped-back detail shows it; `statuses` supplies the colour for a reflected status.
-        screen.StatusCommitted += status => ApplyStatus(task.Id, status, screen, detailOrigin, statuses);
-        screen.PriorityCommitted += level => ApplyPriority(task.Id, level, screen, detailOrigin);
+        screen.StatusCommitted += status => ApplyStatus(task.Id, status, screen, target, detailOrigin, statuses);
+        screen.PriorityCommitted += level => ApplyPriority(task.Id, level, screen, target, detailOrigin);
         ShowScreen(screen, static () => { });
+
+        // #242 (disabled): a list-origin launch enriched the List pane's additional locations here —
+        // if (detailOrigin is null)
+        //     EnrichListMemberships(task.Id, screen);
     }
+
+    // #242 (temporarily disabled — see QuickUpdatesScreen's summary): the List-pane host helpers
+    // (EnrichListMemberships / ApplyListAsync / HomeListOf) are commented out with the pane. The reusable
+    // pieces they lean on — TaskService.Add/RemoveTaskFromListAsync (#237) and ListSelectorModel.Membership
+    // — stay in place. Re-enable these once the field/status migration is designed.
+    //
+    // /// <summary>
+    // /// Background-fetches a task's full membership and merges its additional "Tasks in Multiple Lists"
+    // /// locations into an open Quick Updates List pane (#242). Only runs for a list-origin launch, where
+    // /// the snapshot TaskItem carries only the home list. A failed/empty fetch leaves the pane seeded with
+    // /// the home list; the enrich no-ops if the screen has moved on or the user already began editing.
+    // /// </summary>
+    // private void EnrichListMemberships(string taskId, QuickUpdatesScreen screen)
+    // {
+    //     _ = Task.Run(async () =>
+    //     {
+    //         try
+    //         {
+    //             var detail = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
+    //             if (detail.Lists.Count == 0)
+    //                 return;
+    //             Application.Invoke(() =>
+    //             {
+    //                 if (ReferenceEquals(ActiveScreen, screen))
+    //                     screen.SeedListMemberships(detail.Lists);
+    //             });
+    //         }
+    //         catch
+    //         {
+    //             // Best-effort enrich: on failure the pane keeps the home-list seed and any user
+    //             // add/remove still reconciles from the server truth — not worth a flash.
+    //         }
+    //     });
+    // }
+    //
+    // /// <summary>
+    // /// Performs a Quick Updates List-pane add/remove (#242): writes the membership change to ClickUp off
+    // /// the UI thread over the #237 facade and returns the server-confirmed membership set so the embedded
+    // /// ListSelectorView can reconcile. The membership endpoints echo no body, so the confirmed set is read
+    // /// back from a fresh GetTaskDetailAsync — the home list (ListId/ListName) plus the additional locations
+    // /// (Lists). A disabled "Tasks in Multiple Lists" ClickApp throws a ClickUpApiException that the selector
+    // /// catches to revert + flash (non-fatal). The main-list row shows only the home list, so — unlike
+    // /// ApplyAssigneeAsync — there is no row to reconcile.
+    // /// </summary>
+    // private async Task<IReadOnlyList<NamedEntity>> ApplyListAsync(
+    //     string taskId, ToggleKind kind, NamedEntity list, CancellationToken ct)
+    // {
+    //     // Deliberately do NOT thread the selector's token into the write: it's cancelled when the screen
+    //     // is disposed (Esc), so forwarding it would drop an add/remove the user already saw applied. Same
+    //     // rationale as ApplyAssigneeAsync / ApplyStatus.
+    //     _ = ct;
+    //     if (kind == ToggleKind.Added)
+    //         await _tasks.AddTaskToListAsync(taskId, list.Id).ConfigureAwait(false);
+    //     else
+    //         await _tasks.RemoveTaskFromListAsync(taskId, list.Id).ConfigureAwait(false);
+    //     var detail = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
+    //     return ListSelectorModel.Membership(HomeListOf(detail), detail.Lists);
+    // }
+    //
+    // /// <summary>The home list of a task detail as a NamedEntity, or null when it has no list. Falls the
+    // /// display name back to the id if the detail carries none (the marker still shows).</summary>
+    // private static NamedEntity? HomeListOf(TaskDetail detail)
+    //     => string.IsNullOrWhiteSpace(detail.ListId)
+    //         ? null
+    //         : new NamedEntity(detail.ListId!, string.IsNullOrWhiteSpace(detail.ListName) ? detail.ListId! : detail.ListName!);
 
     /// <summary>
     /// Performs a Quick Updates Assignees-pane add/remove (#158): writes the change to ClickUp off the
@@ -1901,7 +2161,7 @@ public sealed class TodoApp
     /// same-task writes settle on the last-returning confirmed set and self-heal on the next refresh.
     /// </summary>
     private async Task<IReadOnlyList<TaskAssignee>> ApplyAssigneeAsync(
-        string taskId, ToggleKind kind, TaskAssignee person, CancellationToken ct)
+        string taskId, ToggleKind kind, TaskAssignee person, IQuickUpdateTarget target, CancellationToken ct)
     {
         // Deliberately do NOT thread the selector's cancellation token into the write: that token is
         // cancelled when the screen is disposed (Esc), so forwarding it would cancel an in-flight
@@ -1916,10 +2176,11 @@ public sealed class TodoApp
             : await _tasks.RemoveAssigneeAsync(taskId, person.Id).ConfigureAwait(false);
         Application.Invoke(() =>
         {
-            // QuickUpdatesTaskById (not TaskById) so an assignee edit on a foreign subtask / context
-            // parent — now editable (#160) — reconciles its row in place too, not just tasks in _all.
-            if (QuickUpdatesTaskById(taskId) is { } t)
-                UpdateTaskRow(t with { Assignees = confirmed }, sending: false);
+            // Resolve/apply through the target (#297): the list target reconciles the row in place — for a
+            // foreign subtask / context parent too (#160), not just tasks in _all — while a single-task
+            // target updates the loaded task with no list present.
+            if (target.Resolve(taskId) is { } t)
+                target.Apply(t with { Assignees = confirmed }, sending: false);
         });
         return confirmed;
     }
@@ -1934,6 +2195,19 @@ public sealed class TodoApp
     /// user's own work (#160). <see cref="UpdateTaskRow"/> keeps both in sync, so consecutive edits
     /// compose regardless of which side holds the row.</summary>
     private TaskItem? QuickUpdatesTaskById(string taskId) => TaskService.FindById(_all, _rows, taskId);
+
+    // The list-backed Quick Updates write target (#297): resolves against the canonical snapshot + visible
+    // rows and repaints the on-screen row via UpdateTaskRow — i.e. the unchanged list-mode behaviour. It
+    // holds no state of its own (it delegates to the host's live snapshot), so one shared instance serves
+    // every list-origin launch; single-task launches get a fresh SingleTaskUpdateTarget instead.
+    private sealed class ListUpdateTarget(TodoApp app) : IQuickUpdateTarget
+    {
+        public TaskItem? Resolve(string taskId) => app.QuickUpdatesTaskById(taskId);
+        public void Apply(TaskItem updated, bool sending) => app.UpdateTaskRow(updated, sending);
+    }
+
+    private IQuickUpdateTarget? _listTarget;
+    private IQuickUpdateTarget ListTarget => _listTarget ??= new ListUpdateTarget(this);
 
     // Monotonic per-field commit counters. The Quick Updates screen stays open, so the user can fire a
     // second write for the same field before the first returns; each commit stamps its generation and a
@@ -1955,9 +2229,9 @@ public sealed class TodoApp
     /// </para>
     /// </summary>
     private void ApplyStatus(string taskId, string status, QuickUpdatesScreen screen,
-        TaskDetailScreen? detailOrigin = null, IReadOnlyList<StatusOption>? statuses = null)
+        IQuickUpdateTarget target, TaskDetailScreen? detailOrigin = null, IReadOnlyList<StatusOption>? statuses = null)
     {
-        var task = QuickUpdatesTaskById(taskId);
+        var task = target.Resolve(taskId);
         if (task is null)
         {
             // The screen hasn't moved its ✓ yet (it defers that to us), so just report and bail.
@@ -1970,7 +2244,7 @@ public sealed class TodoApp
 
         ReconcileScreenStatus(screen, status); // optimistic ✓
         ReflectDetailStatus(detailOrigin, status, ColorForStatus(statuses, status));
-        UpdateTaskRow(task with { StatusName = status }, sending: true);
+        target.Apply(task with { StatusName = status }, sending: true);
         Flash($"Setting '{status}'…");
 
         _ = Task.Run(async () =>
@@ -1983,8 +2257,8 @@ public sealed class TodoApp
                     if (gen != _statusCommitGen)
                         return; // a newer status commit superseded this one
                     var final = confirmed ?? status;
-                    if (QuickUpdatesTaskById(taskId) is { } t)
-                        UpdateTaskRow(t with { StatusName = final }, sending: false);
+                    if (target.Resolve(taskId) is { } t)
+                        target.Apply(t with { StatusName = final }, sending: false);
                     ReconcileScreenStatus(screen, final);
                     ReflectDetailStatus(detailOrigin, final, ColorForStatus(statuses, final));
                     Flash($"Set status to '{final}'.");
@@ -1996,8 +2270,8 @@ public sealed class TodoApp
                 {
                     if (gen != _statusCommitGen)
                         return;
-                    if (QuickUpdatesTaskById(taskId) is { } t)
-                        UpdateTaskRow(t with { StatusName = previousStatus }, sending: false); // revert
+                    if (target.Resolve(taskId) is { } t)
+                        target.Apply(t with { StatusName = previousStatus }, sending: false); // revert
                     ReconcileScreenStatus(screen, previousStatus);
                     ReflectDetailStatus(detailOrigin, previousStatus, previousColor);
                     Flash($"Could not set status: {Short(ex)}");
@@ -2012,9 +2286,9 @@ public sealed class TodoApp
     /// confirm-from-server on success, revert-the-row on failure, drop a superseded continuation.
     /// </summary>
     private void ApplyPriority(string taskId, int? level, QuickUpdatesScreen screen,
-        TaskDetailScreen? detailOrigin = null)
+        IQuickUpdateTarget target, TaskDetailScreen? detailOrigin = null)
     {
-        var task = QuickUpdatesTaskById(taskId);
+        var task = target.Resolve(taskId);
         if (task is null)
         {
             Flash("This task is no longer in the list — priority unchanged.");
@@ -2025,7 +2299,7 @@ public sealed class TodoApp
 
         ReconcileScreenPriority(screen, level); // optimistic ✓
         ReflectDetailPriority(detailOrigin, level);
-        UpdateTaskRow(WithPriority(task, level), sending: true);
+        target.Apply(WithPriority(task, level), sending: true);
         Flash($"Setting priority '{ClickUpPriority.NameFromLevel(level) ?? "none"}'…");
 
         _ = Task.Run(async () =>
@@ -2037,8 +2311,8 @@ public sealed class TodoApp
                 {
                     if (gen != _priorityCommitGen)
                         return; // a newer priority commit superseded this one
-                    if (QuickUpdatesTaskById(taskId) is { } t)
-                        UpdateTaskRow(WithPriority(t, confirmed), sending: false);
+                    if (target.Resolve(taskId) is { } t)
+                        target.Apply(WithPriority(t, confirmed), sending: false);
                     ReconcileScreenPriority(screen, confirmed);
                     ReflectDetailPriority(detailOrigin, confirmed);
                     Flash($"Set priority to '{ClickUpPriority.NameFromLevel(confirmed) ?? "none"}'.");
@@ -2050,8 +2324,8 @@ public sealed class TodoApp
                 {
                     if (gen != _priorityCommitGen)
                         return;
-                    if (QuickUpdatesTaskById(taskId) is { } t)
-                        UpdateTaskRow(WithPriority(t, previousLevel), sending: false); // revert
+                    if (target.Resolve(taskId) is { } t)
+                        target.Apply(WithPriority(t, previousLevel), sending: false); // revert
                     ReconcileScreenPriority(screen, previousLevel);
                     ReflectDetailPriority(detailOrigin, previousLevel);
                     Flash($"Could not set priority: {Short(ex)}");
@@ -2115,14 +2389,11 @@ public sealed class TodoApp
     /// </summary>
     private void UpdateTaskRow(TaskItem updated, bool sending)
     {
-        _all = TaskService.ApplyStatusChange(_all, updated.Id, updated.StatusName);
-        _all = TaskService.ApplyPriorityChange(
-            _all, updated.Id, updated.PriorityLevel, updated.PriorityName, updated.PriorityColor);
         // Per-field sync (#158): the `updated` record always carries the current value for the fields a
-        // given caller didn't touch, so applying all three never clobbers — a status/priority commit
+        // given caller didn't touch, so folding all three never clobbers — a status/priority commit
         // re-applies the task's existing assignees (a no-op) and an assignee change re-applies its
-        // existing status/priority.
-        _all = TaskService.ApplyAssigneesChange(_all, updated.Id, updated.Assignees);
+        // existing status/priority. This is the same pure reconcile the single-task target uses (#297).
+        _all = TaskService.ApplyFieldChanges(_all, updated);
         _signature = CurrentSignature(_all);
 
         var index = _rows.FindIndex(r => r?.Id == updated.Id);

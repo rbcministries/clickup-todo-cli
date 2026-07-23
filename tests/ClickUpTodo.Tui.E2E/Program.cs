@@ -5,6 +5,7 @@ using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
 using ClickUpTodo.Services;
+using ClickUpTodo.Setup;
 using ClickUpTodo.Tui;
 
 // Boots the REAL TodoApp against a canned in-process ClickUp backend so the TUI can be
@@ -19,6 +20,9 @@ var config = new AppConfig
     PersonalTasksListId = "plist",
     PersonalTasksListName = "Personal Tasks",
     RefreshSeconds = int.TryParse(Environment.GetEnvironmentVariable("E2E_REFRESH"), out var r) ? r : 600,
+    // #304: seed a workspace subdomain so a Ctrl+B launch rewrites the fake backend's
+    // app.clickup.com task URLs onto {subdomain}.clickup.com. Absent ⇒ blank ⇒ no rewrite.
+    WorkspaceSubdomain = Environment.GetEnvironmentVariable("E2E_SUBDOMAIN") ?? "",
 };
 
 if (Environment.GetEnvironmentVariable("E2E_VIEW") == "rich")
@@ -55,8 +59,61 @@ var feedCache = new FeedCache(cacheStore);
 var assignees = new AssigneeFrequencyCache(
     stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
 var lists = new ListFrequencyCache(stateStore, config.WorkspaceId);
-new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists).Run("ansi");
+
+// #333 bridge-paint scenario: warm the closed-task cache *before* the TUI boots, so the F12→All
+// bridge (TaskService.SupplementWithClosed) has a set to splice and paints closed rows on the
+// pre-refresh frame. Exercises the real fetch→map→ClosedTaskCache.Update path (no synthetic inject);
+// no state store is needed since Update sets the in-memory snapshot regardless of persistence. Off by
+// default so every other scenario keeps its cold, empty warm set (byte-identical A/B first paint).
+if (Environment.GetEnvironmentVariable("E2E_WARM_CLOSED") == "1")
+    await tasks.PrefetchClosedTasksAsync();
+
+// Arm the closed-refresh stall (#333) only now — after any warm prefetch has already run unstalled —
+// so the delay hits the *authoritative* F12→All include_closed=true refresh (opening a deterministic
+// window to observe the pre-refresh bridge frame) but never the pre-boot warm prefetch above. A no-op
+// unless E2E_STALL_CLOSED_MS > 0.
+FakeClickUp.ArmClosedStall();
+
+// #304: when E2E_BROWSER_LOG is set, capture Ctrl+B launches to that file (one URL per line) so a
+// pyte check can assert the app.clickup.com → subdomain host rewrite. Otherwise the app can't launch a
+// real browser under the PTY, so fall back to a no-op launcher rather than SystemBrowserLauncher.
+var browserLog = Environment.GetEnvironmentVariable("E2E_BROWSER_LOG");
+IBrowserLauncher browser = string.IsNullOrEmpty(browserLog)
+    ? new NullBrowserLauncher()
+    : new RecordingBrowserLauncher(browserLog);
+
+// Single-task launch mode (#296): E2E_SINGLE_TASK=<id> boots SingleTaskApp straight into that task's
+// detail view — the harness equivalent of `clickup-todo --task <id>` — instead of the dashboard. It
+// shares the same #304 browser launcher so a Ctrl+B host rewrite is observable in single-task mode too.
+var singleTaskId = Environment.GetEnvironmentVariable("E2E_SINGLE_TASK");
+if (!string.IsNullOrWhiteSpace(singleTaskId))
+{
+    var launchTask = await tasks.GetTaskDetailAsync(singleTaskId);
+    var launchComments = await tasks.GetTaskCommentsAsync(singleTaskId);
+    new SingleTaskApp(tasks, config, launchTask, launchComments, browser).Run("ansi");
+    return;
+}
+
+new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser).Run("ansi");
 return;
+
+/// <summary>A browser launcher that succeeds without opening anything — the default under the PTY, where
+/// there is no browser to launch and a real <see cref="SystemBrowserLauncher"/> would just fail.</summary>
+sealed class NullBrowserLauncher : IBrowserLauncher
+{
+    public bool TryOpen(Uri url) => true;
+}
+
+/// <summary>Records each launched URL (one per line) to a file so a pyte check can assert the #304 host
+/// rewrite. Appends so repeated Ctrl+B presses are all observable.</summary>
+sealed class RecordingBrowserLauncher(string path) : IBrowserLauncher
+{
+    public bool TryOpen(Uri url)
+    {
+        File.AppendAllText(path, url.ToString() + "\n");
+        return true;
+    }
+}
 
 sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandler
 {
@@ -84,12 +141,41 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
     private const long SeededAssigneeId = 101; // Ada Lovelace (Members[0])
     private static bool SeedQuAssignee => Environment.GetEnvironmentVariable("E2E_QU_SEED_ASSIGNEE") == "1";
 
+    // #333 closed-task bridge-paint scenario knobs (default off, so no other check is affected):
+    //  • E2E_WARM_CLOSED=1 — the completed task (tclosed) is served with a *recent* date_updated so it
+    //    survives ClosedTaskCache's 30-day age window when the warm-now hook (Program.cs) prefetches it.
+    //    Off ⇒ the original fixed date (which the feed checks rely on for comment-sort order) is kept.
+    //  • E2E_STALL_CLOSED_MS=<ms> — delay the *authoritative* include_closed=true team-task refresh by
+    //    this many ms once armed (see ArmClosedStall), so the F12→All pre-refresh bridge frame is
+    //    deterministically observable before the superset lands.
+    private static bool WarmClosed => Environment.GetEnvironmentVariable("E2E_WARM_CLOSED") == "1";
+    private static readonly int ClosedStallMs =
+        int.TryParse(Environment.GetEnvironmentVariable("E2E_STALL_CLOSED_MS"), out var ms) ? ms : 0;
+    private static volatile bool _closedStallArmed;
+
+    /// <summary>Arms the include_closed refresh stall (#333). Called by <c>Program.cs</c> right before
+    /// <c>Run()</c>, i.e. after any pre-boot warm prefetch — so the stall hits the authoritative F12→All
+    /// refresh but never the warm prefetch that seeds the bridge. A no-op unless E2E_STALL_CLOSED_MS &gt; 0.</summary>
+    public static void ArmClosedStall() => _closedStallArmed = true;
+
+    /// <summary>The completed task's <c>date_updated</c>: recent (so the warm cache's age window keeps it)
+    /// only under E2E_WARM_CLOSED, otherwise the original fixed timestamp the feed checks depend on.</summary>
+    private static string ClosedTaskDateUpdated => WarmClosed
+        ? DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds().ToString()
+        : "1751500000000";
+
     // The current assignee set of any task the Assignees pane writes to, mutated by the PUT so the
     // add/remove round-trip is truthful (the write response echoes the new set, which the pane and the
     // list row reconcile to). Starts empty so the empty-state list shows the top-frequent members
     // (or pre-seeded with the #234 member so a remove would round-trip truthfully).
     // Guarded by _gate since SendAsync is async and a detail GET can race an assignee PUT.
     private readonly HashSet<long> _assignees = SeedQuAssignee ? [SeededAssigneeId] : [];
+
+    // The task's current *additional* list memberships ("Tasks in Multiple Lists", #237), mutated by the
+    // membership POST/DELETE (#242) so an add/remove from the Quick Updates List pane round-trips: a later
+    // detail GET reflects the change via the detail's `locations` array. Ids index into Lists/ListNames.
+    // Starts empty (the common single-list case — the pane shows only the home "plist"). Guarded by _gate.
+    private readonly HashSet<string> _locations = [];
     private readonly object _gate = new();
 
     // The task's current plain-text description, mutated by a description PUT (#217) so the write
@@ -107,6 +193,22 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
 
         if (path.EndsWith("/user"))
             body = """{"user":{"id":1,"username":"bench","email":"bench@example.com"}}""";
+        // POST/DELETE /v2/list/{listId}/task/{taskId} (#237): task↔list membership writes, consumed by
+        // the Quick Updates List pane (#242). Mutate the shared additional-locations set so a later detail
+        // GET reflects the change; ClickUp echoes an empty body. Must precede the /task/ branches below,
+        // since this path also contains "/task/". Create-task is POST .../task (no trailing id) and stays
+        // on its own branch further down.
+        else if (path.Contains("/list/") && path.Contains("/task/")
+                 && (request.Method == HttpMethod.Post || request.Method == HttpMethod.Delete))
+        {
+            var listId = ListIdOfMembership(path);
+            lock (_gate)
+            {
+                if (request.Method == HttpMethod.Post) _locations.Add(listId);
+                else _locations.Remove(listId);
+            }
+            body = "{}";
+        }
         // POST /task/{id}/comment (#216): the create-comment write returns the minimal created-comment
         // shape (id + date + hist_id) the CreateCommentResponse deserializer reads, so a comment posted
         // from the detail composer round-trips truthfully. Must precede the GET /comment branch below.
@@ -135,13 +237,30 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
         }
         else if (path.Contains("/task/"))
         {
+            // #303 quick-open not-found path: a GET for the sentinel id "tmissing" returns a 404 so the
+            // Ctrl+O resolve can flash an error and leave the list unchanged. Off every other scenario's
+            // path (no check opens "tmissing").
+            if (path[(path.LastIndexOf('/') + 1)..] == "tmissing")
+                return new HttpResponseMessage(HttpStatusCode.NotFound)
+                {
+                    Content = new StringContent(
+                        """{"err":"Task not found","ECODE":"ITEM_100"}""", Encoding.UTF8, "application/json"),
+                };
             if (_foreign)
                 body = ForeignTaskGet(path, query);
             else
                 lock (_gate) body = DetailJson(path, _assignees);
         }
         else if (path.Contains("/team/") && path.EndsWith("/task"))
+        {
+            // #333: stall the authoritative F12→All include_closed=true refresh (once armed) so the
+            // pre-refresh bridge frame is observable before this superset replaces it. The pre-boot warm
+            // prefetch's include_closed fetch runs unarmed, so it is never delayed; the default
+            // include_closed=false boot/poll fetches never match this gate.
+            if (!_foreign && ClosedStallMs > 0 && _closedStallArmed && IncludeClosed(query))
+                await Task.Delay(ClosedStallMs, ct);
             body = _foreign ? ForeignTeamTasks() : TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
+        }
         else if (request.Method == HttpMethod.Post && path.Contains("/list/") && path.EndsWith("/task"))
             // Create-task (#209/#213): echo a created task so the New Task screen's Save round-trips
             // through the facade and closes back to the list. (Not persisted into the team-tasks list.)
@@ -213,8 +332,8 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
         if (includeClosed && lastPage)
         {
             if (count > 0) sb.Append(',');
-            sb.Append("""
-            {"id":"tclosed","name":"Closed ticket — shipped and done ✅","status":{"status":"complete","type":"closed","color":"#6bc950"},"list":{"id":"plist","name":"Personal Tasks"},"date_updated":"1751500000000","url":"https://app.clickup.com/t/tclosed"}
+            sb.Append($$"""
+            {"id":"tclosed","name":"Closed ticket — shipped and done ✅","status":{"status":"complete","type":"closed","color":"#6bc950"},"list":{"id":"plist","name":"Personal Tasks"},"date_updated":"{{ClosedTaskDateUpdated}}","url":"https://app.clickup.com/t/tclosed"}
             """);
         }
         sb.Append($"],\"last_page\":{(lastPage ? "true" : "false")}}}");
@@ -229,9 +348,31 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
         var id = path[(path.LastIndexOf('/') + 1)..];
         // JSON-encode the (mutable, possibly user-edited) description so quotes/newlines/emoji round-trip.
         var description = JsonSerializer.Serialize(_description);
+        // `locations` are the task's additional list memberships (#242), mutated by the membership
+        // POST/DELETE so an add/remove from the List pane round-trips; empty in the common single-list case.
         return $$"""
-        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"description":{{description}}}
+        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"locations":[{{LocationsJson()}}],"description":{{description}}}
         """;
+    }
+
+    /// <summary>The <c>locations</c> array (additional list memberships, #242) for the current
+    /// <see cref="_locations"/> set, mapped to the seeded list names. Called under <c>_gate</c>.</summary>
+    private string LocationsJson()
+        => string.Join(",", _locations.Select(lid =>
+        {
+            var idx = Array.IndexOf(Lists, lid);
+            var name = idx >= 0 ? ListNames[idx] : lid;
+            return $"{{\"id\":\"{lid}\",\"name\":\"{name}\"}}";
+        }));
+
+    /// <summary>The list id from a <c>/v2/list/{listId}/task/{taskId}</c> membership path.</summary>
+    private static string ListIdOfMembership(string path)
+    {
+        const string listSeg = "/list/";
+        const string taskSeg = "/task/";
+        var start = path.IndexOf(listSeg, StringComparison.Ordinal) + listSeg.Length;
+        var end = path.IndexOf(taskSeg, StringComparison.Ordinal);
+        return end > start ? path[start..end] : "";
     }
 
     /// <summary>Applies a description PUT body (<c>{"description":"..."}</c>) to the shared field so the

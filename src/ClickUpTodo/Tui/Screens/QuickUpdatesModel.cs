@@ -8,6 +8,9 @@ public enum QuickUpdatesPane
     Status = 0,
     Priority = 1,
     Assignees = 2,
+    // #242 (temporarily disabled — see QuickUpdatesScreen's summary): the List pane. Re-add this value
+    // and bump PaneCount back to 4 when re-enabling.
+    // Lists = 3,
 }
 
 /// <summary>
@@ -16,11 +19,13 @@ public enum QuickUpdatesPane
 /// the pane cycle order + wrap and the Status/Priority rows with their leading <c>✓</c> current-value
 /// marker + preselection (#157). The Assignees pane's own row/search/toggle logic lives in
 /// <see cref="AssigneeSelectorModel"/> (#212), embedded by the screen as an
-/// <see cref="AssigneeSelectorView"/> in immediate-apply mode (#158).
+/// <see cref="AssigneeSelectorView"/> in immediate-apply mode (#158). (A fourth Lists pane — #242, backed
+/// by <see cref="ListSelectorModel"/> — is implemented but temporarily disabled; see QuickUpdatesScreen.)
 /// </summary>
 public static class QuickUpdatesModel
 {
-    /// <summary>The number of panes (Status, Priority, Assignees).</summary>
+    /// <summary>The number of panes (Status, Priority, Assignees). Bump to 4 when the List pane (#242) is
+    /// re-enabled.</summary>
     public const int PaneCount = 3;
 
     /// <summary>The 2-column prefix on the currently-effective row: a check mark then a space.</summary>
@@ -77,4 +82,21 @@ public static class QuickUpdatesModel
     /// effective <paramref name="effectiveLevel"/> (the clear row when it has no priority).</summary>
     public static IReadOnlyList<string> PriorityRows(int? effectiveLevel)
         => [.. PriorityLabels.Select((label, i) => Mark(label, PriorityLevelForRow(i) == effectiveLevel))];
+
+    /// <summary>
+    /// The absolute row a viewport-relative click at <paramref name="clickY"/> lands on in a Status or
+    /// Priority pane, given the list's vertical <paramref name="scrollOffset"/> (its <c>Viewport.Y</c>,
+    /// the index of the topmost displayed row) and total <paramref name="rowCount"/>. Returns <c>-1</c>
+    /// when the click is above the first row (<paramref name="clickY"/> &lt; 0) or below the last — the
+    /// empty space beneath a list shorter than its frame — so a click-to-apply (#288) resolves to the
+    /// real row or explicitly no-ops instead of falling onto the nearest one (which
+    /// <see cref="StatusPickerModel"/>-style commit-on-<c>SelectedItem</c> would otherwise apply).
+    /// </summary>
+    public static int RowIndexAt(int clickY, int scrollOffset, int rowCount)
+    {
+        if (clickY < 0)
+            return -1;
+        var index = scrollOffset + clickY;
+        return index >= 0 && index < rowCount ? index : -1;
+    }
 }

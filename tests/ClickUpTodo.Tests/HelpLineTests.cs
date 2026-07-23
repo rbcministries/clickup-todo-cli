@@ -22,13 +22,14 @@ public sealed class HelpLineTests
     public void Format_SingleItem_HasNoSeparator()
         => Assert.Equal("Esc/Enter close", HelpLine.Format(HelpItemSets.Help));
 
-    // Pins the full main-list footer. F5 is the refresh key (icon ↻; Ctrl+R is its undisplayed alias)
-    // and Ctrl+E opens the feed — the List ↔ Feed navigation key.
+    // Pins the full main-list footer. Quick Updates launches with Ctrl+U (standardized to match Task
+    // Detail, #290); F5 is the refresh key (icon ↻; Ctrl+R is its undisplayed alias) and Ctrl+E opens
+    // the feed — the List ↔ Feed navigation key.
     [Fact]
     public void Format_MainList_RendersTheFullFooter()
     {
         const string expected =
-            "↑/↓ move · →| next section · ␣ status · ↩ detail · Ctrl+N new task · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
+            "↑/↓ move · →| next section · Ctrl+U quick update · ↩ detail · Ctrl+O open by id · Ctrl+N new task · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
             + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 ↻ · F6 badges · F12 completed · "
             + "→/← expand/collapse · Ctrl+→/← all · Ctrl+Q quit · type to search";
 
@@ -36,13 +37,49 @@ public sealed class HelpLineTests
     }
 
     [Fact]
+    public void MainList_CarriesCtrlOQuickOpen()
+        => Assert.Contains(new HelpItem("Ctrl+O", "open by id"), HelpItemSets.MainList);
+
+    [Fact]
+    public void Format_QuickOpen_RendersOpenHelpCancel()
+        => Assert.Equal(
+            "Enter/Open open · F1 help · Esc cancel",
+            HelpLine.Format(HelpItemSets.QuickOpen));
+
+    [Fact]
     public void MainList_CarriesCtrlNNewTask()
         => Assert.Contains(new HelpItem("Ctrl+N", "new task"), HelpItemSets.MainList);
+
+    // #290 — the "quick update" action must use one shortcut everywhere. It launches Quick Updates from
+    // both the main list and Task Detail, so both help sets must advertise the same key (Ctrl+U).
+    [Fact]
+    public void QuickUpdate_UsesCtrlU_OnBothListAndDetail()
+    {
+        var listKey = HelpItemSets.MainList.Single(i => i.Label == "quick update").Key;
+        var detailKey = HelpItemSets.Detail.Single(i => i.Label == "quick update").Key;
+
+        Assert.Equal("Ctrl+U", listKey);
+        Assert.Equal(listKey, detailKey);
+    }
+
+    // #290 — refresh is standardized on F5 (icon ↻) across every screen that can refresh, so the footer
+    // never drifts. (Ctrl+R remains an undisplayed alias in each handler.)
+    [Theory]
+    [MemberData(nameof(RefreshableSets))]
+    public void Refresh_UsesF5_OnEveryRefreshableScreen(IReadOnlyList<HelpItem> set)
+        => Assert.Contains(new HelpItem("F5", "↻"), set);
+
+    public static readonly TheoryData<IReadOnlyList<HelpItem>> RefreshableSets = new()
+    {
+        HelpItemSets.MainList,
+        HelpItemSets.Detail,
+        HelpItemSets.NotificationsFeed,
+    };
 
     [Fact]
     public void Format_NewTask_RendersMoveSaveCancelHelp()
         => Assert.Equal(
-            "Tab moves · Enter/Save saves · Esc cancels · F1 help",
+            "Tab Name/Descr/Assignees/List · Enter/Save saves · Esc cancels · F1 help",
             HelpLine.Format(HelpItemSets.NewTask));
 
     [Fact]
@@ -82,6 +119,7 @@ public sealed class HelpLineTests
         HelpItemSets.Settings,
         HelpItemSets.FilterSortGroup,
         HelpItemSets.QuickUpdates,
+        HelpItemSets.QuickOpen,
         HelpItemSets.NotificationsFeed,
         HelpItemSets.Help,
     };
@@ -99,6 +137,7 @@ public sealed class HelpLineTests
         HelpItemSets.Settings,
         HelpItemSets.FilterSortGroup,
         HelpItemSets.QuickUpdates,
+        HelpItemSets.QuickOpen,
         HelpItemSets.NotificationsFeed,
     };
 
@@ -140,12 +179,14 @@ public sealed class HelpLineTests
     [Fact]
     public void Fit_Truncates_KeepingLeadingPrefixThenFallbackLast()
     {
-        // At 70 columns the main-list footer fits its first four items plus the reserved fallback
-        // ("↑/↓ move · →| next section · ␣ status · ↩ detail · F1 Help + Shortcuts" = 70 cols).
+        // At 70 columns the main-list footer fits its first three items plus the reserved fallback
+        // ("↑/↓ move · →| next section · Ctrl+U quick update · F1 Help + Shortcuts" = 70 cols). The
+        // wider "Ctrl+U quick update" item (19 cols, #290) leaves room for one fewer item than the old
+        // "␣ status" (8 cols) did, so the kept prefix is three items rather than four.
         var result = HelpLine.Fit(HelpItemSets.MainList, width: 70, Cols);
 
         Assert.Equal(HelpLine.HelpFallback, result[^1]);
-        Assert.Equal(HelpItemSets.MainList.Take(4), result.Take(result.Count - 1));
+        Assert.Equal(HelpItemSets.MainList.Take(3), result.Take(result.Count - 1));
         Assert.True(Cols(HelpLine.Format(result)) <= 70);
     }
 
@@ -243,9 +284,10 @@ public sealed class HelpLineTests
     {
         Assert.True(HelpItemSets.MainList.Single(i => i.Key == "Ctrl+N").IsAction);
         Assert.True(HelpItemSets.MainList.Single(i => i.Key == "F6").IsAction);
-        // The glyph-keyed status/detail actions carry an explicit re-raiseable chord.
-        Assert.True(HelpItemSets.MainList.Single(i => i.Key == "␣").IsAction);
-        Assert.Equal("Space", HelpItemSets.MainList.Single(i => i.Key == "␣").ActionKey);
+        // Quick Updates launches from the list via Ctrl+U (standardized in #290); its key parses
+        // directly, while the glyph-keyed "detail" action carries an explicit re-raiseable chord.
+        Assert.True(HelpItemSets.MainList.Single(i => i.Key == "Ctrl+U").IsAction);
+        Assert.Equal("Ctrl+U", HelpItemSets.MainList.Single(i => i.Label == "quick update").ActionKey);
         Assert.Equal("Enter", HelpItemSets.MainList.Single(i => i.Key == "↩").ActionKey);
     }
 
@@ -269,8 +311,9 @@ public sealed class HelpLineTests
         [
             HelpItemSets.MainList, HelpItemSets.Detail, HelpItemSets.DetailDescriptionEditor,
             HelpItemSets.Settings, HelpItemSets.FilterSortGroup, HelpItemSets.QuickUpdates,
-            HelpItemSets.NewTask, HelpItemSets.PromptTemplateEditor, HelpItemSets.NotificationsFeed,
-            HelpItemSets.AgentRun, HelpItemSets.Help, [HelpLine.HelpFallback],
+            HelpItemSets.QuickOpen, HelpItemSets.NewTask, HelpItemSets.PromptTemplateEditor,
+            HelpItemSets.NotificationsFeed, HelpItemSets.AgentRun, HelpItemSets.Help,
+            [HelpLine.HelpFallback],
         ];
         foreach (var item in sets.SelectMany(s => s).Where(i => i.IsAction).DistinctBy(i => i.ActionKey))
             data.Add(item);
