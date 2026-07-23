@@ -19,8 +19,40 @@ public static class NewTaskForm
     /// <summary>The validation error shown when Save is pressed with a blank name.</summary>
     public const string NameRequiredError = "A task name is required.";
 
+    /// <summary>The validation error shown when Save is pressed with no list selected (#240). A new task
+    /// must be created against exactly one primary list, so the List pane must hold at least one entry.</summary>
+    public const string ListRequiredError = "Pick at least one list for the task.";
+
     /// <summary>The validation error shown when the Due date field can't be parsed (#215).</summary>
     public const string DueDateInvalidError = "Due date must be a date like 2026-07-15 (yyyy-MM-dd).";
+
+    /// <summary>
+    /// Resolves the primary/home list to seed the New Task List selector with (#240): the cursor task's
+    /// own list when it is a real, own-work row with a non-blank list id, otherwise the configured personal
+    /// list fallback. A blank cursor list id, or a cursor sitting on a context parent (#46) or a foreign
+    /// subtask (#70/#179) — rows that aren't the user's own work to file a sibling against — falls back to
+    /// <paramref name="personalListId"/>/<paramref name="personalListName"/>. Pure so the host's
+    /// classification (which it already computes for the row markers) drives a unit-tested decision; the
+    /// host passes <paramref name="cursorIsContextParent"/>/<paramref name="cursorIsForeignSubtask"/> and a
+    /// null/blank <paramref name="cursorListId"/> for a header row (no current task).
+    /// </summary>
+    public static NamedEntity ResolveListSeed(
+        string? cursorListId,
+        string? cursorListName,
+        bool cursorIsContextParent,
+        bool cursorIsForeignSubtask,
+        string personalListId,
+        string personalListName)
+    {
+        if (!cursorIsContextParent
+            && !cursorIsForeignSubtask
+            && !string.IsNullOrWhiteSpace(cursorListId))
+        {
+            return new NamedEntity(cursorListId!, cursorListName ?? string.Empty);
+        }
+
+        return new NamedEntity(personalListId ?? string.Empty, personalListName ?? string.Empty);
+    }
 
     /// <summary>
     /// Validates the entered fields and, on success, builds the <see cref="NewTaskRequest"/>:
@@ -31,9 +63,13 @@ public static class NewTaskForm
     /// … 4=Low, see <see cref="ClickUpPriority"/>), else cleared to <c>null</c>; <paramref name="dueDate"/>
     /// blank ⇒ undated, otherwise parsed via <see cref="TaskFieldInfo.TryParseNumeric"/> (the same
     /// <c>yyyy-MM-dd</c>/epoch-ms/ISO convention the F3 date filters use) — an unparseable value fails
-    /// with <see cref="DueDateInvalidError"/>. The name check runs first, so a blank name reports the
-    /// name error even when the due date is also invalid. Returns false with a non-null
-    /// <paramref name="error"/> and a null <paramref name="request"/> when invalid.
+    /// with <see cref="DueDateInvalidError"/>. A blank <paramref name="primaryListId"/> (no list selected)
+    /// fails with <see cref="ListRequiredError"/> (#240) — a new task needs exactly one primary list to
+    /// create against; the list id is a separate path parameter to the create facade, so it is validated
+    /// here but not carried on the returned <see cref="NewTaskRequest"/>. Checks run in screen order (name,
+    /// then list, then due date), so a blank name reports the name error even when the list or due date is
+    /// also invalid. Returns false with a non-null <paramref name="error"/> and a null
+    /// <paramref name="request"/> when invalid.
     /// </summary>
     public static bool TryBuild(
         string? name,
@@ -41,6 +77,7 @@ public static class NewTaskForm
         IReadOnlyList<long> assigneeIds,
         int? priorityLevel,
         string? dueDate,
+        string? primaryListId,
         out NewTaskRequest? request,
         out string? error)
     {
@@ -50,6 +87,14 @@ public static class NewTaskForm
         if (trimmedName.Length == 0)
         {
             error = NameRequiredError;
+            return false;
+        }
+
+        // A new task is POSTed to exactly one primary list (its id is a path parameter to the create
+        // facade), so the List pane must hold at least one entry, else Save is blocked.
+        if (string.IsNullOrWhiteSpace(primaryListId))
+        {
+            error = ListRequiredError;
             return false;
         }
 

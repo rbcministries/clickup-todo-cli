@@ -465,6 +465,20 @@ public sealed class TaskService(
         => client.RemoveTaskAssigneeAsync(taskId, userId, ct);
 
     /// <summary>
+    /// Adds the task to an additional list — a "Tasks in Multiple Lists" membership (#237), consumed by
+    /// the Quick Updates List pane (#242). A thin passthrough to the facade; the membership endpoint
+    /// echoes no body, so callers read the confirmed set back via <see cref="GetTaskDetailAsync"/>. A
+    /// disabled ClickApp surfaces as a <c>ClickUpApiException</c> for the caller to flash (non-fatal).
+    /// </summary>
+    public Task AddTaskToListAsync(string taskId, string listId, CancellationToken ct = default)
+        => client.AddTaskToListAsync(taskId, listId, ct);
+
+    /// <summary>Removes an additional list membership from a task (#237); the remove sibling of
+    /// <see cref="AddTaskToListAsync"/>. The task's home list is unaffected.</summary>
+    public Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
+        => client.RemoveTaskFromListAsync(taskId, listId, ct);
+
+    /// <summary>
     /// Creates a task in <paramref name="listId"/> from the given fields and returns it mapped to the
     /// domain <see cref="TaskItem"/> (#209/#213). A thin passthrough to the facade, the create sibling of
     /// <see cref="SetStatusAsync"/>/<see cref="SetPriorityAsync"/>.
@@ -475,6 +489,11 @@ public sealed class TaskService(
     /// <summary>Full detail for a single task, fetched on demand for the detail view (#17).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskDetailAsync(taskId, ct);
+
+    /// <summary>Full detail for a task addressed by its workspace custom id (#303, Ctrl+O quick-open);
+    /// the mapped <see cref="TaskDetail.Id"/> is the task's plain id.</summary>
+    public Task<TaskDetail> GetTaskDetailByCustomIdAsync(string customId, string teamId, CancellationToken ct = default)
+        => client.GetTaskDetailByCustomIdAsync(customId, teamId, ct);
 
     /// <summary>The comments on a task, for the detail view's Comments tab (#17).</summary>
     public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
@@ -543,6 +562,23 @@ public sealed class TaskService(
     public static IReadOnlyList<TaskItem> ApplyAssigneesChange(
         IReadOnlyList<TaskItem> tasks, string taskId, IReadOnlyList<TaskAssignee> assignees)
         => tasks.Select(t => t.Id == taskId ? t with { Assignees = assignees } : t).ToList();
+
+    /// <summary>
+    /// Folds the status, priority and assignee fields of <paramref name="updated"/> onto the matching
+    /// task in <paramref name="tasks"/> in one pass — the Quick Updates reconcile shared by the main-list
+    /// snapshot and the single-task update target (#297), so a commit settles a field identically in
+    /// both modes. Pure (the input list is not mutated); other tasks and the overall order are untouched.
+    /// The <paramref name="updated"/> record always carries the current value for the fields the caller
+    /// didn't touch, so applying all three never clobbers — a status/priority commit re-applies the
+    /// task's existing assignees (a no-op) and an assignee change re-applies its status/priority (#158).
+    /// </summary>
+    public static IReadOnlyList<TaskItem> ApplyFieldChanges(IReadOnlyList<TaskItem> tasks, TaskItem updated)
+    {
+        tasks = ApplyStatusChange(tasks, updated.Id, updated.StatusName);
+        tasks = ApplyPriorityChange(
+            tasks, updated.Id, updated.PriorityLevel, updated.PriorityName, updated.PriorityColor);
+        return ApplyAssigneesChange(tasks, updated.Id, updated.Assignees);
+    }
 
     /// <summary>
     /// The distinct parent ids referenced by a subtask in <paramref name="snapshot"/> that aren't

@@ -158,6 +158,7 @@ public class SelectorView : View
         _search.TextChanged += (_, _) => OnSearchChanged();
         _search.KeyDown += OnSearchKey;
         _list.KeyDown += OnListKey;
+        _list.MouseEvent += OnListMouse;
 
         Add(_search, _list);
         RenderEmptyState();
@@ -224,6 +225,31 @@ public class SelectorView : View
                 Pick(_list.SelectedItem ?? -1);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Left-click a candidate/✓ row → toggle it, the mouse equivalent of Enter on that row (#288):
+    /// clicking an unselected candidate adds it, clicking a ✓ row removes it, all through the same
+    /// <see cref="Pick"/> → <see cref="SelectorModel.Toggle"/> path (immediate-apply for Quick Updates
+    /// assignees, collect for New Task). A click resolves the row directly from its position, so it acts
+    /// on the clicked row regardless of the current highlight. We handle only the single left-click and
+    /// leave every other mouse event unhandled, so native drag-scroll and the search box's own mouse
+    /// handling are untouched. Empty space below a short list resolves out of range and no-ops (mirrors
+    /// <see cref="Pick"/>'s own bounds guard). Additive to every specialization of the base (assignees
+    /// #158, the List selector #239).
+    /// </summary>
+    private void OnListMouse(object? sender, Mouse e)
+    {
+        // A negative Y (above the list) is guarded before adding the scroll offset — matching
+        // QuickUpdatesModel.RowIndexAt — so it can't resolve to a valid-but-wrong row.
+        if (!e.Flags.HasFlag(MouseFlags.LeftButtonClicked) || e.Position is not { Y: >= 0 } pos)
+            return;
+        var row = _list.Viewport.Y + pos.Y;
+        if (row >= _rowItems.Count)
+            return;
+        e.Handled = true;
+        _list.SetFocus();
+        Pick(row);
     }
 
     private void Pick(int rowIndex)
@@ -315,6 +341,37 @@ public class SelectorView : View
         // A locked / distinguished entry the server dropped is no longer meaningfully marked.
         _lockedIds.RemoveWhere(id => !_selectedIds.Contains(id));
         _distinguishedIds.RemoveWhere(id => !_selectedIds.Contains(id));
+        RenderCurrent();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Merges already-existing selections into the current set without firing a server write — for a host
+    /// that only learns the full selection <em>after</em> construction (the Quick Updates List pane's
+    /// background membership enrich, #242). Purely additive: each not-already-selected item is added
+    /// (blank id/name dropped) and the view re-rendered; nothing is removed and no
+    /// <see cref="SelectorMode.ImmediateApply"/> write is issued (these items are already on the server).
+    /// <para>
+    /// No-ops once the user has interacted (an add/remove has bumped <see cref="_applyGeneration"/>), so a
+    /// slow enrich can't resurrect an item the user just removed; a later user edit reconciles from the
+    /// server truth regardless. Marks nothing as locked/distinguished — the seeded home marker set at
+    /// construction is left untouched. Must run on the UI thread.
+    /// </para>
+    /// </summary>
+    protected void AddExistingSelections(IReadOnlyList<SelectorItem> items)
+    {
+        if (_applyGeneration != 0)
+            return;
+        var added = false;
+        foreach (var item in items ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(item.Id) || string.IsNullOrWhiteSpace(item.Name) || _selectedIds.Contains(item.Id))
+                continue;
+            AddToSelection(item);
+            added = true;
+        }
+        if (!added)
+            return;
         RenderCurrent();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }

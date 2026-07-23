@@ -73,6 +73,19 @@ public sealed class LiteDbStateStore : IStateStore, IDisposable
 
     public void Delete(string key) => _collection.Delete(key);
 
+    /// <summary>
+    /// Builds the cross-process change-marker channel (#294) over this store's <b>own</b> shared
+    /// <c>state.db</c> connection, so producer nudges and the key→document state ride the same file and
+    /// its cross-process mutex. Exposed as a factory (rather than leaking the <see cref="LiteDatabase"/>)
+    /// so the connection stays encapsulated and single-owned here.
+    /// </summary>
+    /// <param name="instanceId">This process's id, stamped on every marker (#295).</param>
+    /// <param name="options">Table bounds; defaults to <see cref="ChangeMarkerOptions.Default"/>.</param>
+    /// <param name="timeProvider">Clock for TTL aging; defaults to <see cref="TimeProvider.System"/>.</param>
+    public IChangeMarkerStore CreateChangeMarkerStore(
+        string instanceId, ChangeMarkerOptions? options = null, TimeProvider? timeProvider = null)
+        => new LiteDbChangeMarkerStore(_db, instanceId, options, timeProvider);
+
     public void Dispose() => _db.Dispose();
 
     /// <summary>The stored document shape: a key and its serialised JSON payload.</summary>

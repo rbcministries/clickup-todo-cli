@@ -42,6 +42,7 @@ public sealed class ClickUpClientIntegrationTests
     private static string? ListId => Environment.GetEnvironmentVariable("CLICKUP_LIST_ID");
     private static string? TaskId => Environment.GetEnvironmentVariable("CLICKUP_TASK_ID");
     private static string? SecondaryListId => Environment.GetEnvironmentVariable("CLICKUP_SECONDARY_LIST_ID");
+    private static string? CommentId => Environment.GetEnvironmentVariable("CLICKUP_COMMENT_ID");
 
     [SkippableFact]
     public async Task GetMe_ReturnsAuthenticatedUser()
@@ -337,6 +338,37 @@ public sealed class ClickUpClientIntegrationTests
 
         var comments = await client.GetTaskCommentsAsync(TaskId!);
         Assert.Contains(comments, c => c.Id == created.Id && c.Text == text);
+    }
+
+    [SkippableFact]
+    public async Task GetThreadedComments_ReturnsReplies()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(CommentId),
+            "Set CLICKUP_TOKEN and CLICKUP_COMMENT_ID (a comment that has replies) to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var replies = await client.GetThreadedCommentsAsync(CommentId!);
+
+        // May legitimately be empty, but every returned reply must have an id.
+        Assert.All(replies, r => Assert.False(string.IsNullOrWhiteSpace(r.Id)));
+    }
+
+    [SkippableFact]
+    public async Task CreateThreadedComment_PostsReply_AndAppearsOnRefetch()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(CommentId),
+            "Set CLICKUP_TOKEN and CLICKUP_COMMENT_ID (a comment to reply to) to run this test.");
+        using var client = new ClickUpClient(Token!);
+        // Unique marker so the re-fetch assertion can find exactly this reply (it posts real data).
+        var text = $"clickup-todo integration test reply {Guid.NewGuid():N}";
+
+        var created = await client.CreateThreadedCommentAsync(CommentId!, text);
+
+        Assert.False(string.IsNullOrWhiteSpace(created.Id));
+        Assert.Equal(text, created.Text);
+
+        var replies = await client.GetThreadedCommentsAsync(CommentId!);
+        Assert.Contains(replies, r => r.Id == created.Id && r.Text == text);
     }
 
     [SkippableFact]

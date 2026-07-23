@@ -30,6 +30,12 @@ backend (a fake `HttpMessageHandler` — no sockets). Scenario knobs (env vars):
 - `E2E_VIEW=rich` — grouping by list + F4 subtasks + pinned tasks
 - `E2E_REFRESH=600` — background poll interval; keep high so it stays out of timings
 - `CLICKUP_TODO_NO_DIFF=1` — app escape hatch; doubles as the **stock-renderer baseline** for A/B
+- `E2E_WARM_CLOSED=1` — warm the closed-task cache before boot (a real `PrefetchClosedTasksAsync`)
+  so the F12→All bridge has a set to splice, and serve the closed task with a recent `date_updated`
+  so it survives the cache's age window (#333). Off ⇒ empty warm set, original fixed date.
+- `E2E_STALL_CLOSED_MS=<ms>` — delay the authoritative `include_closed=true` refresh (the F12→All
+  fetch, once the app has booted) by this many ms, so the pre-refresh bridge frame is observable
+  before the superset lands (#333). The pre-boot warm prefetch runs unstalled.
 
 ## Checks (each is one command; all exit nonzero / print a traceback on failure)
 
@@ -85,6 +91,21 @@ border-column shifts (`││C…`) mean flushed runs are landing at wrong colum
 This check is why the frame diff is **row-atomic**: cell-level skipping repositions
 the cursor mid-row from the buffer's column model, which drifts around
 wide/ambiguous-width graphemes; whole-row flushes are byte-identical to stock.
+
+**5. Instant closed-task bridge paint (#253/#280) — A/B isolating the bridge** — F12→All
+splices the warm closed set into the snapshot and paints it *before* the authoritative
+`include_closed=true` refresh returns. This asserts that pre-refresh frame by warming the
+cache (`E2E_WARM_CLOSED`) and stalling the refresh (`E2E_STALL_CLOSED_MS`) so the closed row
+is observable while the refresh is still blocked; a control leg (no warm) confirms the row is
+absent during the stall and appears only after it — proving the row is the bridge, not the
+refresh firing early:
+
+```bash
+timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/closed_bridge_check.py $DLL
+```
+
+Self-contained (drives both legs, sets its own env). Expected: `ok — F12→All paints the warm
+closed set on the pre-refresh frame …`.
 
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 

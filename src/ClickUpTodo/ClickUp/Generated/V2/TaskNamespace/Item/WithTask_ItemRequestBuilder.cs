@@ -28,7 +28,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item
         /// </summary>
         /// <param name="pathParameters">Path parameters for the request</param>
         /// <param name="requestAdapter">The request adapter to use to execute the requests.</param>
-        public WithTask_ItemRequestBuilder(Dictionary<string, object> pathParameters, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/task/{task_id}{?include_subtasks*}", pathParameters)
+        public WithTask_ItemRequestBuilder(Dictionary<string, object> pathParameters, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/task/{task_id}{?custom_task_ids*,include_subtasks*,team_id*}", pathParameters)
         {
         }
         /// <summary>
@@ -36,7 +36,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item
         /// </summary>
         /// <param name="rawUrl">The raw URL to use for the request builder.</param>
         /// <param name="requestAdapter">The request adapter to use to execute the requests.</param>
-        public WithTask_ItemRequestBuilder(string rawUrl, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/task/{task_id}{?include_subtasks*}", rawUrl)
+        public WithTask_ItemRequestBuilder(string rawUrl, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/task/{task_id}{?custom_task_ids*,include_subtasks*,team_id*}", rawUrl)
         {
         }
         /// <summary>
@@ -169,8 +169,21 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item
         [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
         public partial class WithTask_ItemRequestBuilderGetQueryParameters 
         {
+            /// <summary>When true, task_id is treated as a workspace custom task id; team_id must also be supplied.</summary>
+            [QueryParameter("custom_task_ids")]
+            public bool? CustomTaskIds { get; set; }
             [QueryParameter("include_subtasks")]
             public bool? IncludeSubtasks { get; set; }
+            /// <summary>The workspace (team) id, required when custom_task_ids is true.</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+            [QueryParameter("team_id")]
+            public string? TeamId { get; set; }
+#nullable restore
+#else
+            [QueryParameter("team_id")]
+            public string TeamId { get; set; }
+#endif
         }
     }
 }

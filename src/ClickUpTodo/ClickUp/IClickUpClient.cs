@@ -71,6 +71,16 @@ public interface IClickUpClient
     Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement task↔list membership writes.");
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
+
+    /// <summary>Full detail for a task addressed by its workspace <b>custom id</b> (#303, Ctrl+O
+    /// quick-open) via <c>custom_task_ids=true&amp;team_id=…</c>. The returned <see cref="TaskDetail.Id"/>
+    /// is the task's <b>plain</b> id, so the caller can then open it through the normal path. Default
+    /// throwing implementation so read-only fakes needn't implement a lookup they never call (mirrors the
+    /// membership writes); <see cref="ClickUpClient"/> overrides it. See
+    /// <see cref="ClickUpClient.GetTaskDetailByCustomIdAsync"/>.</summary>
+    Task<TaskDetail> GetTaskDetailByCustomIdAsync(string customId, string teamId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement custom-id task lookup.");
+
     Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default);
 
@@ -78,4 +88,17 @@ public interface IClickUpClient
     /// for optimistic append. Rich content (@-mentions, task links) is out of scope. See
     /// <see cref="ClickUpClient.CreateTaskCommentAsync"/> for the minimal-response mapping contract.</summary>
     Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default);
+
+    /// <summary>Fetch the replies in a comment's thread (#327). Default throwing implementation so
+    /// existing fakes need not implement it; <see cref="ClickUpClient"/> overrides it. See
+    /// <see cref="ClickUpClient.GetThreadedCommentsAsync"/>.</summary>
+    Task<IReadOnlyList<CommentItem>> GetThreadedCommentsAsync(string commentId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement threaded-comment reads.");
+
+    /// <summary>Post a plain-text reply into a comment's thread (#327) and return it as a
+    /// <see cref="CommentItem"/> for optimistic append. Default throwing implementation as above;
+    /// <see cref="ClickUpClient"/> overrides it. See
+    /// <see cref="ClickUpClient.CreateThreadedCommentAsync"/> for the minimal-response mapping contract.</summary>
+    Task<CommentItem> CreateThreadedCommentAsync(string commentId, string text, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement threaded-comment writes.");
 }

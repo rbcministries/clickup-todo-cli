@@ -38,7 +38,22 @@ public sealed class ClickUpClientCommentMapTests
         Assert.Equal("task-9", mapped.TaskId);
         Assert.False(mapped.MentionsMe);
         Assert.Empty(mapped.MentionedUserIds);
+        Assert.Equal(0, mapped.ReplyCount); // reply_count absent ⇒ 0
     }
+
+    // ── Reply-count mapping (#327) ─────────────────────────────────────────────
+
+    [Fact]
+    public void MapComment_ParsesReplyCountFromString()
+        => Assert.Equal(3, ClickUpClient.MapComment(new Comment { Id = "c1", ReplyCount = "3" }, "t").ReplyCount);
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not-a-number")]
+    [InlineData("-2")]
+    public void MapComment_AbsentOrUnparseableOrNegativeReplyCount_YieldsZero(string? value)
+        => Assert.Equal(0, ClickUpClient.MapComment(new Comment { Id = "c1", ReplyCount = value }, "t").ReplyCount);
 
     [Fact]
     public void MapComment_AuthorFallsBackFromUsernameToEmailToId()
@@ -132,7 +147,8 @@ public sealed class ClickUpClientCommentMapTests
               "comment_text": "cc @Ben Seymour please review",
               "user": { "id": 42, "username": "Alex Kim" },
               "date": "1699000000000",
-              "resolved": false
+              "resolved": false,
+              "reply_count": "2"
             }
             """;
 
@@ -141,5 +157,6 @@ public sealed class ClickUpClientCommentMapTests
         Assert.Equal(new long[] { 183 }, mapped.MentionedUserIds);
         Assert.Equal("cc @Ben Seymour please review", mapped.Text);
         Assert.Equal("Alex Kim", mapped.Author); // the comment author, not the mentioned user
+        Assert.Equal(2, mapped.ReplyCount);       // ClickUp returns reply_count as a string (#327)
     }
 }
