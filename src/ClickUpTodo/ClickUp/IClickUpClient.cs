@@ -38,6 +38,12 @@ public interface IClickUpClient
     /// create tasks from implementing it; <see cref="ClickUpClient"/> overrides it.</summary>
     Task<TaskItem> CreateTaskAsync(string listId, NewTaskRequest task, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement task creation.");
+
+    /// <summary>Permanently delete a task. See <see cref="ClickUpClient.DeleteTaskAsync"/>. The app has no
+    /// delete UI — this backs the create-task integration test's cleanup — so, like the writes above, it
+    /// has a default throwing implementation and read-only fakes needn't implement it.</summary>
+    Task DeleteTaskAsync(string taskId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement task deletion.");
     Task<string?> SetTaskStatusAsync(string taskId, string statusName, CancellationToken ct = default);
     Task<int?> SetTaskPriorityAsync(string taskId, int? priorityLevel, CancellationToken ct = default);
 

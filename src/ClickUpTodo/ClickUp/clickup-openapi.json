@@ -242,6 +242,16 @@
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Task" } } }
           }
         }
+      },
+      "delete": {
+        "operationId": "DeleteTask",
+        "summary": "Permanently delete a task. ClickUp returns an empty object. Used to keep the create-task integration test idempotent by removing the throwaway task it creates.",
+        "parameters": [
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "The task was deleted (ClickUp returns an empty object)." }
+        }
       }
     },
     "/v2/task/{task_id}/comment": {

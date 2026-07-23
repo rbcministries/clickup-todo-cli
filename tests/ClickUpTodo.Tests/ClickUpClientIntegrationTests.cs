@@ -3,9 +3,33 @@ using ClickUpTodo.ClickUp;
 namespace ClickUpTodo.Tests;
 
 /// <summary>
-/// Integration tests that hit the real ClickUp API. They are skipped automatically unless a
-/// personal token is provided via the CLICKUP_TOKEN environment variable, so CI stays green
-/// without credentials. Deeper tests also read CLICKUP_WORKSPACE_ID and CLICKUP_LIST_ID.
+/// Integration tests that hit the real ClickUp API. Each test self-skips (SkippableFact) unless the
+/// environment variables it needs are set, so CI stays green without credentials.
+///
+/// <para><b>Environment variables — how to run the full suite locally.</b></para>
+/// <list type="bullet">
+///   <item><c>CLICKUP_TOKEN</c> — a ClickUp personal API token (<c>pk_…</c>). Required by every test
+///   here; without it, all of them skip.</item>
+///   <item><c>CLICKUP_WORKSPACE_ID</c> — a Workspace (team) id. Unlocks the member/assigned-task tests.</item>
+///   <item><c>CLICKUP_LIST_ID</c> — a List id with at least two statuses. Unlocks the list-status,
+///   create-task, and status/priority tests. Point it at a <b>scratch list you own</b>; create-task
+///   creates (and now deletes) a throwaway task here.</item>
+///   <item><c>CLICKUP_TASK_ID</c> — a single task id. Unlocks the task-detail, comment, status,
+///   priority, description, assignee, and multi-list tests. <b>These tests MUTATE this task</b>
+///   (status, priority, description, assignee, and a posted comment). They restore what they change in
+///   a <c>finally</c>, but the description restore rewrites as <i>plain text</i> and a posted comment is
+///   not deleted — so this MUST be a <b>throwaway/scratch task</b>, not real work. The simplest setup:
+///   create a scratch task on <c>CLICKUP_LIST_ID</c> (so the status/priority tests, which look the task
+///   up via <c>GetListTasksAsync(CLICKUP_LIST_ID)</c>, can find it), point <c>CLICKUP_TASK_ID</c> at it,
+///   run the suite, then delete it (<see cref="ClickUpClient.DeleteTaskAsync"/>).</item>
+///   <item><c>CLICKUP_SECONDARY_LIST_ID</c> — a second List id the task is <i>not</i> already in, for the
+///   "Tasks in Multiple Lists" test. That test self-skips if the (paid) ClickApp is disabled, and is
+///   self-cleaning (adds then removes the membership) when it is enabled.</item>
+///   <item><c>CLICKUP_OAUTH_CLIENT_ID</c> / <c>CLICKUP_OAUTH_CLIENT_SECRET</c> / <c>CLICKUP_OAUTH_CODE</c>
+///   — for <see cref="ClickUpOAuthIntegrationTests"/>. The code is a <b>single-use authorization code</b>
+///   from a fresh browser OAuth redirect, so that test can't be automated and stays skipped in unattended
+///   runs; run it by hand when validating the OAuth exchange.</item>
+/// </list>
 /// </summary>
 public sealed class ClickUpClientIntegrationTests
 {
@@ -88,8 +112,8 @@ public sealed class ClickUpClientIntegrationTests
             "Set CLICKUP_TOKEN and CLICKUP_LIST_ID to run this test.");
         using var client = new ClickUpClient(Token!);
 
-        // ClickUp v2 has no task-delete in this facade, so this leaves a clearly-labelled throwaway task
-        // on the target list. The name flags it as a test artifact for easy manual cleanup.
+        // The name flags it as a test artifact in case cleanup can't run (e.g. the process is killed
+        // between create and delete). The finally deletes it so the test leaves no residue.
         var name = "[clickup-todo-cli test] create-task smoke — safe to delete";
 
         var created = await client.CreateTaskAsync(ListId!, new NewTaskRequest
@@ -99,9 +123,18 @@ public sealed class ClickUpClientIntegrationTests
             PriorityLevel = 3,
         });
 
-        Assert.False(string.IsNullOrWhiteSpace(created.Id));
-        Assert.Equal(name, created.Name);
-        Assert.Equal(3, created.PriorityLevel);
+        try
+        {
+            Assert.False(string.IsNullOrWhiteSpace(created.Id));
+            Assert.Equal(name, created.Name);
+            Assert.Equal(3, created.PriorityLevel);
+        }
+        finally
+        {
+            // Delete the throwaway task so repeated runs don't pile up artifacts on the list.
+            if (!string.IsNullOrWhiteSpace(created.Id))
+                await client.DeleteTaskAsync(created.Id);
+        }
     }
 
     [SkippableFact]

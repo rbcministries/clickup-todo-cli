@@ -256,6 +256,17 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     }
 
     /// <summary>
+    /// Permanently delete a task (<c>DELETE /task/{task_id}</c>). ClickUp returns an empty body. Errors
+    /// surface as a caught <see cref="ClickUpApiException"/>. The app has no delete UI; this exists so the
+    /// create-task integration test can remove its throwaway task and stay idempotent.
+    /// </summary>
+    public Task DeleteTaskAsync(string taskId, CancellationToken ct = default)
+        => Guard("DeleteTask", async () =>
+        {
+            using var _ = await _client.V2.Task[taskId].DeleteAsync(cancellationToken: ct);
+        });
+
+    /// <summary>
     /// Set a task's status. <paramref name="statusName"/> must be one of its list's statuses.
     /// Returns the <b>confirmed</b> status name from the write response (ClickUp's
     /// <c>PUT /task/{id}</c> returns the updated task), or null if the response omits it — so the
