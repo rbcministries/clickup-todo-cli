@@ -149,11 +149,13 @@ public sealed class CommentThreadLoaderTests
         await CommentThreadLoader.LoadRepliesAsync(comments, Fetch, maxConcurrency: 3);
 
         Assert.True(peak <= 3, $"peak concurrency {peak} exceeded the cap of 3");
+        Assert.True(peak > 1, "expected the reply fan-out to run concurrently, but it never exceeded 1 in flight");
     }
 
     [Fact]
-    public async Task LoadReplies_propagates_caller_cancellation()
+    public async Task LoadReplies_propagates_caller_cancellation_at_the_gate()
     {
+        // Token already cancelled before the call → the throw happens at gate.WaitAsync(ct), before any fetch.
         var comments = new[] { Comment("a", replyCount: 1) };
         using var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -166,6 +168,46 @@ public sealed class CommentThreadLoaderTests
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => CommentThreadLoader.LoadRepliesAsync(comments, Fetch, maxConcurrency: 4, cts.Token));
+    }
+
+    [Fact]
+    public async Task LoadReplies_rethrows_when_a_fetch_is_cancelled_on_the_caller_token()
+    {
+        // The gate is acquired while the token is still live, then the fetch cancels the caller token and
+        // throws — exercising the discriminating `when (ct.IsCancellationRequested)` rethrow branch that the
+        // gate-time cancellation above never reaches.
+        var comments = new[] { Comment("a", replyCount: 1) };
+        using var cts = new CancellationTokenSource();
+
+        Task<IReadOnlyList<CommentItem>> Fetch(string id, CancellationToken ct)
+        {
+            cts.Cancel();
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<CommentItem>>([]);
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => CommentThreadLoader.LoadRepliesAsync(comments, Fetch, maxConcurrency: 4, cts.Token));
+    }
+
+    [Fact]
+    public async Task LoadReplies_swallows_a_fetch_cancellation_on_an_unrelated_token()
+    {
+        // A per-call HttpClient timeout surfaces as a TaskCanceledException whose token is NOT the caller's.
+        // With the caller token still live, the `when (ct.IsCancellationRequested)` guard is false, so it must
+        // fall through to best-effort (empty Replies) rather than aborting the whole load.
+        var comments = new[] { Comment("a", replyCount: 1), Comment("b", replyCount: 1) };
+        using var cts = new CancellationTokenSource(); // live — never cancelled
+
+        Task<IReadOnlyList<CommentItem>> Fetch(string id, CancellationToken ct)
+            => id == "a"
+                ? throw new TaskCanceledException("simulated per-call timeout")
+                : Task.FromResult<IReadOnlyList<CommentItem>>([Reply("b1")]);
+
+        var result = await CommentThreadLoader.LoadRepliesAsync(comments, Fetch, maxConcurrency: 4, cts.Token);
+
+        Assert.Empty(result.Single(c => c.Id == "a").Replies);   // timed-out thread → no replies, no throw
+        Assert.Single(result.Single(c => c.Id == "b").Replies);  // the other thread still loads
     }
 
     [Fact]
