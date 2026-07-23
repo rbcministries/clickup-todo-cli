@@ -78,7 +78,12 @@ public static class NewTaskCreator
             {
                 await addToListAsync(created.Id, list.Id, ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException)
+            // Only a cancellation of *our* token (the screen tore down / the user cancelled) unwinds — the
+            // task is created, so bailing is correct there. An ambient HTTP timeout also surfaces as an
+            // OperationCanceledException (a Kiota HttpClient TaskCanceledException, not wrapped by Guard);
+            // treat that like any other add failure so the created task isn't discarded and a retry can't
+            // create a duplicate.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
             }

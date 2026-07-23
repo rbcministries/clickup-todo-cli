@@ -134,7 +134,8 @@ public sealed class NewTaskCreatorTests
 
         Assert.Empty(added);
         Assert.Equal(["b", "c"], result.FailedAdditionalLists.Select(l => l.Id));
-        Assert.NotNull(result.Created);
+        // The created task survives even when every additional add fails (never rolled back).
+        Assert.Equal("task-1", result.Created.Id);
     }
 
     [Fact]
@@ -163,5 +164,31 @@ public sealed class NewTaskCreatorTests
 
         await Assert.ThrowsAsync<OperationCanceledException>(() => NewTaskCreator.CreateAsync(
             L("home"), [L("home"), L("b")], Request, Creator(createdIn), cancelingAdd, cts.Token));
+    }
+
+    [Fact]
+    public async Task AmbientTimeoutDuringAdd_WhenOurTokenNotCancelled_IsRecordedAsFailure_NotRethrown()
+    {
+        // A Kiota HttpClient timeout surfaces as a TaskCanceledException (an OperationCanceledException)
+        // even though our own token was never cancelled. The task is already created, so it must be
+        // recorded as a failed add — not unwound (which would keep the form open and risk a duplicate).
+        var createdIn = new List<string>();
+        var added = new List<(string TaskId, string ListId)>();
+        Func<string, string, CancellationToken, Task> timingOutAdd = (taskId, listId, _) =>
+        {
+            if (listId == "b")
+                throw new TaskCanceledException("The request timed out.");
+            added.Add((taskId, listId));
+            return Task.CompletedTask;
+        };
+
+        var result = await NewTaskCreator.CreateAsync(
+            L("home"), [L("home"), L("b", "Backlog"), L("c")], Request,
+            Creator(createdIn), timingOutAdd, CancellationToken.None);
+
+        Assert.Equal("task-1", result.Created.Id);
+        Assert.Equal([("task-1", "c")], added);            // the add after the timeout still ran
+        var failed = Assert.Single(result.FailedAdditionalLists);
+        Assert.Equal("b", failed.Id);
     }
 }
