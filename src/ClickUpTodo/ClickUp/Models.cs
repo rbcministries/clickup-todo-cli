@@ -252,10 +252,15 @@ public sealed record CustomFieldDefinition(
 /// <see cref="ReplyCount"/> is the number of replies in the comment's thread (#327), letting a caller
 /// tell a comment has a thread worth fetching without a probe request; it defaults to 0 (no thread, or a
 /// reply/create item that doesn't carry the count).
+/// <see cref="ParentCommentId"/> and <see cref="Replies"/> carry the loaded thread (#328):
+/// <see cref="ParentCommentId"/> is set on a <b>reply</b> item to the id of the comment it answers (null
+/// on a top-level comment), and <see cref="Replies"/> is a parent's loaded replies (oldest-first, empty
+/// when the comment has no thread or replies weren't loaded).
 /// </summary>
 public sealed record CommentItem(
     string Id, string Author, long? DateMs, string Text, bool Resolved, string? TaskId = null,
-    bool MentionsMe = false, IReadOnlyList<long>? MentionedUserIds = null, int ReplyCount = 0)
+    bool MentionsMe = false, IReadOnlyList<long>? MentionedUserIds = null, int ReplyCount = 0,
+    string? ParentCommentId = null, IReadOnlyList<CommentItem>? Replies = null)
 {
     /// <summary>The numeric ids of members @-mentioned in the comment's structured <c>comment</c> blocks
     /// (#167); never null (empty when the comment mentions no one, or the blocks weren't mapped).
@@ -264,6 +269,12 @@ public sealed record CommentItem(
     /// consumer relies on <see cref="CommentItem"/> value equality (the feed de-dups by <see cref="Id"/>);
     /// give this member structural equality before using it as a <c>HashSet</c>/dictionary key.</summary>
     public IReadOnlyList<long> MentionedUserIds { get; init; } = MentionedUserIds ?? [];
+
+    /// <summary>The comment's loaded reply thread (#328), oldest-first; never null (empty when the comment
+    /// has no replies or they weren't loaded). Same by-reference-equality caveat as
+    /// <see cref="MentionedUserIds"/> — no consumer relies on <see cref="CommentItem"/> value equality (the
+    /// feed de-dups by <see cref="Id"/>).</summary>
+    public IReadOnlyList<CommentItem> Replies { get; init; } = Replies ?? [];
 }
 
 /// <summary>

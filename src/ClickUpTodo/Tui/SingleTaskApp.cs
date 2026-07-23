@@ -186,7 +186,7 @@ public sealed class SingleTaskApp
             try
             {
                 var detail = await _tasks.GetTaskDetailAsync(_taskId);
-                var comments = await _tasks.GetTaskCommentsAsync(_taskId);
+                var comments = await _tasks.GetTaskCommentsWithRepliesAsync(_taskId);
                 Application.Invoke(() =>
                 {
                     _task = detail;

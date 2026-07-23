@@ -133,7 +133,7 @@ if (launch.HasId)
     try
     {
         launchTask = await taskService.GetTaskDetailAsync(launch.TaskId!);
-        launchComments = await taskService.GetTaskCommentsAsync(launch.TaskId!);
+        launchComments = await taskService.GetTaskCommentsWithRepliesAsync(launch.TaskId!);
     }
     catch (ClickUpApiException ex) when (ex.StatusCode == 404)
     {
