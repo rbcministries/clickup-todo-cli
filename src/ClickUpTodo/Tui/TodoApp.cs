@@ -129,6 +129,10 @@ public sealed class TodoApp
     // Per-row fold state, parallel to _display, so ←/→ can read the selected row's state and an in-place
     // update reproduces the correct ▶/▼ marker (#76). None on headers/spacers/leaves/context parents.
     private List<FoldState> _folds = [];
+    // Per-row char span of the leading ▶/▼ fold marker within the rendered text, parallel to _display, so
+    // a mouse click can hit-test the arrow column (#287). (-1, 0) on rows without a marker (headers,
+    // spacers, leaves, or when nesting is off). Length is always the 2-char "▶ "/"▼ " on a foldable row.
+    private List<(int Start, int Length)> _markerSpans = [];
     // Per-list color chips for List-grouped headers, resolved off the UI thread in FetchAsync and read
     // during Render; volatile to publish the reference safely across threads. (#61)
     private volatile IReadOnlyDictionary<string, string?> _listColors = EmptyListColors;
@@ -619,27 +623,51 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// Double-click a task row → open its Task Detail, the mouse equivalent of Enter (#286). We handle
-    /// only the double-click and leave every other mouse event unhandled, so the ListView's native
-    /// single-click select and drag-scroll are untouched. A double-click on a header/spacer row or in the
-    /// empty space beneath a short list resolves to a null task and no-ops, exactly like Enter there.
-    /// Guarded on <see cref="ActiveScreen"/> so a click can't fire while a screen is stacked over the
-    /// list. The click's viewport-relative Y plus the list's scroll offset (<c>Viewport.Y</c>) resolves
-    /// the row via the shared <see cref="RowHitTester"/> (reused by B/F, #287/#291).
+    /// Mouse gestures on the task list, all resolved through the shared <see cref="RowHitTester"/> (the
+    /// click's viewport-relative Y plus the list's scroll offset <c>Viewport.Y</c>). Guarded on
+    /// <see cref="ActiveScreen"/> so nothing fires while a screen is stacked over the list:
+    /// <list type="bullet">
+    /// <item><b>Double-click a task row → open Task Detail</b> (A, #286), the mouse equivalent of Enter.
+    /// A double-click on a header/spacer row or the empty space beneath a short list resolves to a null
+    /// task and no-ops, exactly like Enter there.</item>
+    /// <item><b>Single-click a parent's ▶/▼ arrow → toggle its subtasks</b> (B, #287), the mouse
+    /// equivalent of →/←. Gated on the subtasks view like the keyboard fold, and scoped to the narrow
+    /// arrow column — a click anywhere else on the row is left unhandled so the ListView's native
+    /// single-click selection still moves the cursor, and the row body stays free for A's
+    /// double-click-to-open (so a title double-click can't be mistaken for two fold toggles).</item>
+    /// </list>
+    /// Every other mouse event is left unhandled, so native selection and drag-scroll are untouched.
     /// </summary>
     private void OnListMouse(object? sender, Mouse e)
     {
-        if (!e.Flags.HasFlag(MouseFlags.LeftButtonDoubleClicked) || e.Position is not { } pos)
-            return;
-        if (ActiveScreen is not null)
+        if (e.Position is not { } pos || ActiveScreen is not null)
             return;
 
-        var task = RowHitTester.TaskAt(pos.Y, _list.Viewport.Y, _rows);
-        if (task is null)
+        // Double-click → open detail (A). Checked first and independent of the subtasks view.
+        if (e.Flags.HasFlag(MouseFlags.LeftButtonDoubleClicked))
+        {
+            if (RowHitTester.TaskAt(pos.Y, _list.Viewport.Y, _rows) is not { } task)
+                return;
+            e.Handled = true;
+            OpenTaskDetail(task.Id);
             return;
+        }
 
-        e.Handled = true;
-        OpenTaskDetail(task.Id);
+        // Single-click within a foldable parent's arrow column → toggle its fold (B).
+        if (e.Flags.HasFlag(MouseFlags.LeftButtonClicked) && _config.View.ShowSubtasks)
+        {
+            var index = RowHitTester.RowIndexAt(pos.Y, _list.Viewport.Y, _rows.Count);
+            if (index < 0 || index >= _folds.Count
+                || _folds[index] is not (FoldState.Collapsed or FoldState.Expanded))
+                return;
+            var (markerStart, markerLength) = index < _markerSpans.Count ? _markerSpans[index] : (-1, 0);
+            // Measure with the same grapheme/column-aware GetColumns the renderer uses, so wide/emoji
+            // badges ahead of the arrow don't shift the target column (mirrors HelpLine.HitTest).
+            if (!RowHitTester.IsWithinFoldMarker(pos.X, _display[index], markerStart, markerLength, static s => s.GetColumns()))
+                return;
+            e.Handled = true;
+            ToggleFoldAt(index);
+        }
     }
 
     /// <summary>F6 — cycles how Status/Priority badges render (icons → text → hidden → icons), persists
@@ -1430,9 +1458,8 @@ public sealed class TodoApp
 
         switch (_folds[i])
         {
-            case FoldState.Collapsed when _rows[i]?.Id is { } id:
-                _expanded.Add(id);
-                Render(keepTaskId: id);
+            case FoldState.Collapsed:
+                SetFold(i, expand: true);
                 break;
             case FoldState.Expanded:
                 // Move into the first child — the next row indented deeper than this one.
@@ -1453,10 +1480,9 @@ public sealed class TodoApp
         if (i < 0 || i >= _folds.Count)
             return;
 
-        if (_folds[i] == FoldState.Expanded && _rows[i]?.Id is { } id)
+        if (_folds[i] == FoldState.Expanded && _rows[i]?.Id is not null)
         {
-            _expanded.Remove(id);
-            Render(keepTaskId: id);
+            SetFold(i, expand: false);
             return;
         }
 
@@ -1470,13 +1496,48 @@ public sealed class TodoApp
             return;
         if (_folds[j] == FoldState.Expanded)
         {
-            _expanded.Remove(parentId!);
-            Render(keepTaskId: parentId);
+            SetFold(j, expand: false);
         }
         else
         {
             _list.SelectedItem = j; // context parent (not foldable) — just select it
         }
+    }
+
+    /// <summary>
+    /// The single fold mutation both the keyboard (→/←, #76) and a mouse arrow-click (#287) converge on:
+    /// expand or collapse the parent on row <paramref name="index"/> by toggling its id in the ephemeral
+    /// <see cref="_expanded"/> set and re-rendering with the cursor kept on it. A no-op on any row that
+    /// isn't a foldable parent (its <see cref="FoldState"/> isn't Collapsed/Expanded, or it carries no
+    /// task id), so callers may pass an arbitrary row index. Keeps <see cref="_expanded"/> + the arranger
+    /// the one source of truth for fold state.
+    /// </summary>
+    private void SetFold(int index, bool expand)
+    {
+        if (index < 0 || index >= _folds.Count || index >= _rows.Count)
+            return;
+        if (_folds[index] is not (FoldState.Collapsed or FoldState.Expanded))
+            return;
+        if (_rows[index]?.Id is not { } id)
+            return;
+
+        if (expand)
+            _expanded.Add(id);
+        else
+            _expanded.Remove(id);
+        Render(keepTaskId: id);
+    }
+
+    /// <summary>
+    /// Toggle the fold on row <paramref name="index"/> — collapse an expanded parent, expand a collapsed
+    /// one. The mouse arrow-click (#287) equivalent of →/←; a no-op on any non-foldable row (guarded by
+    /// <see cref="SetFold"/>).
+    /// </summary>
+    private void ToggleFoldAt(int index)
+    {
+        if (index < 0 || index >= _folds.Count)
+            return;
+        SetFold(index, expand: _folds[index] == FoldState.Collapsed);
     }
 
     /// <summary>
@@ -2429,11 +2490,13 @@ public sealed class TodoApp
         // render path (Render → AddTask → TaskRowRenderer.Render) sets them per row.
         var (isContextParent, isForeignSubtask, isUnassignedSubtask) =
             ClassifyRowMarker(updated, _contextParents, VisibleForeignSubtasks());
-        var (text, badges, _, _) = TaskRowRenderer.Render(
+        var (text, badges, markerStart, markerLength) = TaskRowRenderer.Render(
             updated, _config.BadgeDisplay, _tasks.UserId, index < _depths.Count ? _depths[index] : 0,
             isContextParent, groupedBy: groupedBy, marker: marker,
             isForeignSubtask: isForeignSubtask, isUnassignedSubtask: isUnassignedSubtask);
         _badges[index] = badges;
+        if (index < _markerSpans.Count)
+            _markerSpans[index] = (markerStart, markerLength);
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
         _display[index] = sending ? $"{text}  (sending…)" : text;
@@ -2652,6 +2715,7 @@ public sealed class TodoApp
         _headerAttrs = new List<Attribute?>();
         _depths = new List<int>();
         _folds = new List<FoldState>();
+        _markerSpans = new List<(int, int)>();
 
         // A background color per group header, by the grouped field (status/list/priority/date). Null
         // entries (and the non-field pinned/tasks headers) fall back to the neutral bar. (#61)
@@ -2730,6 +2794,7 @@ public sealed class TodoApp
         _headerAttrs.Add(StatusBadgeListSource.HeaderAttr(hexColor) ?? StatusBadgeListSource.NeutralHeaderAttr);
         _depths.Add(0);
         _folds.Add(FoldState.None);
+        _markerSpans.Add((-1, 0));
     }
 
     private void AddSpacer()
@@ -2741,11 +2806,12 @@ public sealed class TodoApp
         _headerAttrs.Add(null);
         _depths.Add(0);
         _folds.Add(FoldState.None);
+        _markerSpans.Add((-1, 0));
     }
 
     private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None, bool isForeignSubtask = false, bool isUnassignedSubtask = false)
     {
-        var (text, badges, _, _) = TaskRowRenderer.Render(task, _config.BadgeDisplay, _tasks.UserId, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask, isUnassignedSubtask);
+        var (text, badges, markerStart, markerLength) = TaskRowRenderer.Render(task, _config.BadgeDisplay, _tasks.UserId, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask, isUnassignedSubtask);
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);
@@ -2753,6 +2819,7 @@ public sealed class TodoApp
         _headerAttrs.Add(null);
         _depths.Add(depth);
         _folds.Add(fold);
+        _markerSpans.Add((markerStart, markerLength));
     }
 
     /// <summary>
