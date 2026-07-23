@@ -390,6 +390,17 @@ public sealed class TaskDetailScreen : Screen
         // selection is (re)asserted in OnShown — setting it here alone doesn't survive first show.
         _defaultTabIndex = prefs.DefaultTab.ToTabIndex();
         _tabs.Value = _tabContents[_defaultTabIndex];
+        // Selecting a tab by clicking its header (a native Tabs gesture) must behave like the Ctrl+←/→
+        // cycle: focus the pane so ↑/↓/Enter reach it, and lazy-load the Task Tree tab (#291) — otherwise
+        // a mouse user clicking straight onto that tab would be stuck on "Loading task tree…". Wired after
+        // the default-tab assignment above so it doesn't fire during construction; CycleTab still handles
+        // the keyboard path (this makes both converge). Idempotent: FocusCurrentPane/EnsureTreeLoaded are
+        // safe to re-run, so the extra fire during CycleTab's own Value set is harmless.
+        _tabs.ValueChanged += (_, _) =>
+        {
+            FocusCurrentPane();
+            EnsureTreeLoaded();
+        };
 
         // The Dispatch pane (#93, D1 of the #90 epic; superseding the single-line #26 prompt): a
         // bottom-anchored FrameView hosting the prompt plus the one-off/interactive (#94), working-dir

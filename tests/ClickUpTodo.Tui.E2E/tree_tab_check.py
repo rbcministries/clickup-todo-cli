@@ -83,6 +83,19 @@ def row_of(substr):
     return -1
 
 
+def pos_of(substr):
+    """(col, row) of the first occurrence of substr on the screen, or (-1, -1)."""
+    for y in range(ROWS):
+        i = screen.display[y].find(substr)
+        if i >= 0:
+            return (i, y)
+    return (-1, -1)
+
+
+def click(col0, row0):
+    send(_sgr(col0, row0, True)); send(_sgr(col0, row0, False))
+
+
 CTRL_RIGHT = b"\x1b[1;5C"
 DOWN = b"\x1b[B"
 ENTER = b"\r"
@@ -142,6 +155,19 @@ try:
     send(ESC)
     pump(2.0)
     assert "Task 0" in visible(), "Esc after double-click did not return to the list:\n" + visible()
+
+    # ── 5) Clicking the "Task Tree" tab header (mouse) lazy-loads the tree ─────────────────────
+    # Selecting the tab by clicking its header must trigger the same lazy load as Ctrl+←/→, not leave
+    # it stuck on "Loading task tree…".
+    send(ENTER)          # reopen t0's detail (opens on the Stream tab)
+    pump(3.0)
+    cx, cy = pos_of("Task Tree")
+    assert cx >= 0, "Task Tree tab header not found:\n" + visible()
+    click(cx + 2, cy)    # single-click the tab header
+    pump(3.0)
+    v = visible()
+    assert "ANCESTOR" in v and "GRANDKID" in v, "tab-header click did not load the tree:\n" + v
+    assert "Loading task tree" not in v, "tab-header click left the tree stuck loading:\n" + v
 
     print("ok")
 finally:

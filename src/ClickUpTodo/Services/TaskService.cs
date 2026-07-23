@@ -527,7 +527,9 @@ public sealed class TaskService(
         var ancestors = new List<TaskItem>();
         var seen = new HashSet<string>(StringComparer.Ordinal) { current.Id };
         var parentId = current.ParentId;
-        while (!string.IsNullOrEmpty(parentId) && seen.Add(parentId!) && ancestors.Count < MaxAncestorFetches)
+        // Cap check before seen.Add so the seen-set holds only ids we actually resolved (the id we stop
+        // at isn't recorded), keeping the descendant de-dup below reasoning over resolved nodes only.
+        while (!string.IsNullOrEmpty(parentId) && ancestors.Count < MaxAncestorFetches && seen.Add(parentId!))
         {
             TaskItem parent;
             try

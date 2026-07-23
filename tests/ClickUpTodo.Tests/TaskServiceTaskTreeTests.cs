@@ -129,6 +129,25 @@ public sealed class TaskServiceTaskTreeTests
     }
 
     [Fact]
+    public async Task DescendantEchoingAncestor_IsNotReAddedOrRefetched()
+    {
+        // Defensive: a subtask fetch that echoes an ancestor (or the current task) back must not loop the
+        // tree — the descendant de-dup is seeded with the ancestry ids, so it's dropped and never re-BFS'd.
+        var fake = new FakeClient();
+        fake.Items["anc"] = Item("anc");
+        fake.Items["T"] = Item("T", parent: "anc");
+        // T's subtasks include a real child AND (pathologically) its own ancestor "anc" and itself "T".
+        fake.Subtasks["T"] = [Item("c", parent: "T"), Item("anc"), Item("T", parent: "anc")];
+
+        var rows = await Service(fake).GetTaskTreeAsync("T");
+
+        Assert.Equal([("anc", 0, false), ("T", 1, true), ("c", 2, false)], rows.Select(Row));
+        // "anc"/"T" were already seen (ancestry + current), so they were neither re-added nor re-fetched
+        // as subtask parents — only the genuine new child "c" was probed for its own subtasks.
+        Assert.Equal(["T", "c"], fake.SubtaskCalls);
+    }
+
+    [Fact]
     public async Task DescendantBfs_CapsAtMaxSubtaskFetches()
     {
         var fake = new FakeClient();
