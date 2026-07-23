@@ -90,6 +90,16 @@ public interface IClickUpClient
         => throw new NotSupportedException($"{GetType().Name} does not implement custom-id task lookup.");
 
     Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default);
+
+    /// <summary>A single task mapped to the stable <see cref="TaskItem"/> shape (#291) — <c>GET /task/{id}</c>
+    /// through the same mapper the list/subtask fetches use, so it carries <see cref="TaskItem.ParentId"/>,
+    /// structured assignees, and status/priority colours. The Task Tree tab uses it to walk a task's
+    /// ancestry (repeated parent fetches) alongside <see cref="GetSubtasksAsync"/> for descendants. Default
+    /// throwing implementation so read-only fakes needn't implement a lookup they never call (mirrors the
+    /// membership writes / custom-id lookup); <see cref="ClickUpClient"/> overrides it.</summary>
+    Task<TaskItem> GetTaskItemAsync(string taskId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement single-task item lookup.");
+
     Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default);
 
     /// <summary>Post a plain-text comment to a task (#210) and return it as a <see cref="CommentItem"/>

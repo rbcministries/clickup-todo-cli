@@ -471,6 +471,21 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         });
 
     /// <summary>
+    /// A single task mapped to the stable <see cref="TaskItem"/> shape (#291): <c>GET /task/{id}</c> →
+    /// <see cref="Map"/> (not <see cref="MapDetail"/>), so it carries <c>parent</c>, structured assignees,
+    /// and field colours — everything the shared row renderer needs. Mirrors
+    /// <see cref="GetTaskDetailAsync"/>'s fetch; the Task Tree tab (F, #291) uses it to walk a task's
+    /// ancestry one parent at a time.
+    /// </summary>
+    public Task<TaskItem> GetTaskItemAsync(string taskId, CancellationToken ct = default)
+        => Guard("GetTask", async () =>
+        {
+            var t = await _client.V2.Task[taskId].GetAsync(cancellationToken: ct)
+                    ?? throw new InvalidOperationException($"ClickUp returned no task for id '{taskId}'.");
+            return Map(t);
+        });
+
+    /// <summary>
     /// The comments on a task, <b>de-paged</b>, mapped to the stable <see cref="CommentItem"/> shape and
     /// stamped with <paramref name="taskId"/> so a caller aggregating comments across tasks (the feed,
     /// #109) can attribute each one. ClickUp returns comments most-recent-first, 25 per page, and

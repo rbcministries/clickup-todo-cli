@@ -499,6 +499,83 @@ public sealed class TaskService(
     public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskCommentsAsync(taskId, ct);
 
+    /// <summary>The most ancestry levels the Task Tree tab (#291) walks up before stopping — a shallow
+    /// detail tree never needs many, and the cap bounds a pathological (or cyclic) parent chain.</summary>
+    internal const int MaxAncestorFetches = 10;
+
+    /// <summary>The most <see cref="GetSubtasksAsync"/> round-trips the Task Tree tab (#291) spends
+    /// gathering descendants, bounding a deep/wide subtree so one detail view can't fan out unboundedly
+    /// (mirrors the foreign-subtask budget's discipline, #87).</summary>
+    internal const int MaxTreeSubtaskFetches = 25;
+
+    /// <summary>
+    /// Assembles the Task Tree tab's rows (#291) for <paramref name="taskId"/>: the task's ancestry
+    /// (parent chain, walked up one fetch at a time via <see cref="IClickUpClient.GetTaskItemAsync"/>),
+    /// the task itself, and its descendants (a bounded BFS over <see cref="GetSubtasksAsync"/>), arranged
+    /// and indented by the pure <see cref="TaskTreeArranger"/>. The ancestry walk and the descendant BFS
+    /// are both <b>best-effort</b> — a failed level is skipped rather than failing the whole tree — and
+    /// both are capped (<see cref="MaxAncestorFetches"/> / <see cref="MaxTreeSubtaskFetches"/>) and
+    /// cycle-safe. Only the initial fetch of the task itself propagates its error, so a genuinely
+    /// unreachable task surfaces as a load failure rather than an empty tree.
+    /// </summary>
+    public async Task<IReadOnlyList<TaskTreeRow>> GetTaskTreeAsync(string taskId, CancellationToken ct = default)
+    {
+        var current = await client.GetTaskItemAsync(taskId, ct);
+
+        // Ancestry: one fetch per level up the parent chain, cycle-safe (the seen-set) and capped. A
+        // failed parent fetch just ends the walk — the tree still shows the task + what we resolved.
+        var ancestors = new List<TaskItem>();
+        var seen = new HashSet<string>(StringComparer.Ordinal) { current.Id };
+        var parentId = current.ParentId;
+        while (!string.IsNullOrEmpty(parentId) && seen.Add(parentId!) && ancestors.Count < MaxAncestorFetches)
+        {
+            TaskItem parent;
+            try
+            {
+                parent = await client.GetTaskItemAsync(parentId!, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                break;
+            }
+            ancestors.Add(parent);
+            parentId = parent.ParentId;
+        }
+        ancestors.Reverse(); // top-most ancestor first, so it anchors the arranged chain
+
+        // Descendants: bounded BFS over GetSubtasksAsync, deduped against the ancestry + each other and
+        // best-effort per branch. The seen-set carries the ancestry ids so a subtask that echoes an
+        // ancestor can't loop the tree back on itself.
+        var descendants = new List<TaskItem>();
+        var descSeen = new HashSet<string>(seen, StringComparer.Ordinal);
+        var queue = new Queue<string>();
+        queue.Enqueue(taskId);
+        var fetches = 0;
+        while (queue.Count > 0 && fetches < MaxTreeSubtaskFetches)
+        {
+            var parent = queue.Dequeue();
+            fetches++;
+            IReadOnlyList<TaskItem> children;
+            try
+            {
+                children = await client.GetSubtasksAsync(parent, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                continue;
+            }
+            foreach (var child in children)
+            {
+                if (string.IsNullOrEmpty(child.Id) || !descSeen.Add(child.Id))
+                    continue;
+                descendants.Add(child);
+                queue.Enqueue(child.Id);
+            }
+        }
+
+        return TaskTreeArranger.Build(taskId, ancestors, current, descendants);
+    }
+
     /// <summary>Posts a plain-text comment to a task (#216, over the #210 facade) and returns it as a
     /// <see cref="CommentItem"/> so the detail view can append it optimistically.</summary>
     public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default)
