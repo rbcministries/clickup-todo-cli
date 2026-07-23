@@ -4,9 +4,10 @@ Ctrl+N opens it → the fields render with the current user seeded as a locked �
 default → the List selector is seeded with the cursor's list as the ✓ (home) primary
 (#240) → the locked default assignee refuses removal → the optional Priority selector
 (four canonical priorities + "(no priority)") and Due-date field (#215) render and
-accept input → typing a name + setting priority/due + Save creates in the primary list
-(round-trips through the create facade) and returns to the list. Asserts each step on
-the pyte screen."""
+accept input → typing a name + setting priority/due + adding a second list + Save creates in the
+primary list and adds the task to the additional selected list (#241) — a subsequent
+detail fetch then shows the full multi-list membership — before returning to the list.
+Asserts each step on the pyte screen."""
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte
 
@@ -119,6 +120,30 @@ try:
     assert "New task" not in v, f"Save did not close the New Task screen:\n{v}"
     assert "Task" in v, f"did not return to the task list after Save:\n{v}"
     print("SAVE ok — task created (round-tripped) and returned to the list")
+
+    # #241: Save didn't just create in the primary — it added the task to the second selected list too
+    # (the additional-list membership write). Because the create-then-add orchestration finishes before the
+    # screen closes, the fake backend's shared membership set already holds that second list, so a
+    # subsequent detail fetch shows the full "Tasks in Multiple Lists" membership. Open the cursor task's
+    # detail and cycle to the Other tab (Ctrl+→ ×2, #315), where the multi-list "Lists:" line renders.
+    send(b"\r", 3.0)         # Enter → open detail (async fetch + screen swap)
+    assert "Description" in visible(), f"detail screen did not open:\n{visible()}"
+    # Cycle to the Other tab (Ctrl+→, #315). The tab the detail opens on comes from persisted view
+    # settings (Stream/Description/Comments/Other), so step through until the Other tab's header
+    # attributes render — its "Priority:" / "Status:" labels are unique to that tab's body.
+    other = ""
+    for _ in range(5):
+        v = visible()
+        if "Priority:" in v and "Status:" in v:
+            other = v
+            break
+        send(b"\x1b[1;5C", 1.2)  # Ctrl+→ → next tab
+    assert "Priority:" in other and "Status:" in other, \
+        f"could not reach the Other tab after cycling:\n{visible()}"
+    assert "Lists:" in other, f"multi-list membership line not shown on the Other tab (#241):\n{other}"
+    assert "Personal Tasks" in other, f"home list missing from the multi-list membership (#241):\n{other}"
+    assert "Ministry Ops" in other, f"the added second list is missing from a subsequent detail fetch (#241):\n{other}"
+    print("MEMBERSHIP ok — the second list the Save added shows in a subsequent detail fetch (#241)")
     print("NEW TASK E2E: PASS")
 finally:
     try: os.killpg(os.getpgid(proc.pid), signal.SIGKILL)

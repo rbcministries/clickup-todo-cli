@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using ClickUpTodo.ClickUp;
+using ClickUpTodo.Services;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
@@ -43,12 +44,15 @@ public sealed class NewTaskScreen : Screen
     private readonly TextField _due;
     private readonly Button _save;
     private readonly Func<string, NewTaskRequest, CancellationToken, Task<TaskItem>> _createAsync;
+    private readonly Func<string, string, CancellationToken, Task> _addToListAsync;
     private readonly CancellationTokenSource _cts = new();
     private bool _busy;
 
-    /// <summary>Raised on a successful create with the server-mapped task, so the host can refresh the
-    /// list and select the new task. The screen closes itself immediately after.</summary>
-    public event EventHandler<TaskItem>? Created;
+    /// <summary>Raised on a successful create with the create outcome (#241) — the server-mapped task plus
+    /// any additional lists that couldn't be added — so the host can refresh the list, select the new task,
+    /// and report a partial multi-list failure. The task always exists once this fires; the screen closes
+    /// itself immediately after.</summary>
+    public event EventHandler<NewTaskCreateResult>? Created;
 
     /// <param name="match">Substring match over the candidate pool, excluding the given ids — i.e.
     /// <c>AssigneeFrequencyCache.Match</c>.</param>
@@ -66,6 +70,9 @@ public sealed class NewTaskScreen : Screen
     /// <param name="createAsync">Creates the task in the given list from the built request and returns it
     /// mapped; run off the UI thread. The host wires this to the create facade; the target list id comes
     /// from the List selector's <c>Primary</c>, not a fixed host constant.</param>
+    /// <param name="addToListAsync">Adds the created task to an additional selected list (#237/#241); run
+    /// off the UI thread. The host wires this to the membership-write facade. When only the primary list is
+    /// selected it is never called (single-list path).</param>
     public NewTaskScreen(
         Func<string, ISet<long>, IReadOnlyList<TaskAssignee>> match,
         Func<int, ISet<long>, IReadOnlyList<TaskAssignee>> topFrequent,
@@ -73,9 +80,11 @@ public sealed class NewTaskScreen : Screen
         Func<string, ISet<string>, IReadOnlyList<NamedEntity>> listMatch,
         Func<int, ISet<string>, IReadOnlyList<NamedEntity>> listTopFrequent,
         NamedEntity primaryList,
-        Func<string, NewTaskRequest, CancellationToken, Task<TaskItem>> createAsync)
+        Func<string, NewTaskRequest, CancellationToken, Task<TaskItem>> createAsync,
+        Func<string, string, CancellationToken, Task> addToListAsync)
     {
         _createAsync = createAsync;
+        _addToListAsync = addToListAsync;
         Title = "New task";
 
         var nameLabel = new Label { X = 1, Y = 0, Text = "Name (required):" };
@@ -191,8 +200,11 @@ public sealed class NewTaskScreen : Screen
         var assigneeIds = _assignees.Selection.Select(a => a.Id).ToList();
         var priorityLevel = QuickUpdatesModel.PriorityLevelForRow(_priority.SelectedItem ?? QuickUpdatesModel.NoPriorityRow);
         // The create target is the List selector's primary (first-selected / home) list; null when the user
-        // removed every list, which TryBuild rejects with ListRequiredError (#240).
-        var primaryListId = _lists.Primary?.Id;
+        // removed every list, which TryBuild rejects with ListRequiredError (#240). The full ordered
+        // selection drives the additional-list adds (#241).
+        var primary = _lists.Primary;
+        var selection = _lists.Selection;
+        var primaryListId = primary?.Id;
         if (!NewTaskForm.TryBuild(
                 _name.Text?.ToString(), _description.Text?.ToString(), assigneeIds,
                 priorityLevel, _due.Text?.ToString(), primaryListId, out var request, out var error))
@@ -217,12 +229,16 @@ public sealed class NewTaskScreen : Screen
         {
             try
             {
-                var created = await _createAsync(primaryListId!, request!, token).ConfigureAwait(false);
+                // Create in the primary/home list, then add to any additional selected lists (#241). A
+                // primary-create failure throws out (task not created); a failed additional add is carried
+                // in the result without discarding the created task.
+                var result = await NewTaskCreator.CreateAsync(
+                    primary!, selection, request!, _createAsync, _addToListAsync, token).ConfigureAwait(false);
                 Application.Invoke(() =>
                 {
                     if (token.IsCancellationRequested)
                         return;
-                    Created?.Invoke(this, created);
+                    Created?.Invoke(this, result);
                     Close();
                 });
             }
