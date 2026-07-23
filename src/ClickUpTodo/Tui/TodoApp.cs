@@ -1111,17 +1111,32 @@ public sealed class TodoApp
             listMatch: (query, exclude) => _lists.Match(query, exclude),
             listTopFrequent: (n, exclude) => _lists.TopMostFrequent(n, exclude),
             primaryList: primaryList,
-            createAsync: (targetListId, request, ct) => _tasks.CreateTaskAsync(targetListId, request, ct));
-        screen.Created += (_, created) =>
+            createAsync: (targetListId, request, ct) => _tasks.CreateTaskAsync(targetListId, request, ct),
+            addToListAsync: (taskId, targetListId, ct) => _tasks.AddTaskToListAsync(taskId, targetListId, ct));
+        screen.Created += (_, result) =>
         {
             // Land the next refresh on the new task, then kick that refresh directly (RequestRefresh's
-            // own "Refreshing…" flash would clobber this confirmation).
+            // own "Refreshing…" flash would clobber this confirmation). The task always exists here (#241);
+            // when an additional-list add failed, name the lists so the outcome is unambiguous. (While
+            // multi-list create is disabled pending #365, no adds fire, so the partial-failure branch is
+            // dormant — kept wired for when the NewTaskScreen re-enables the additional-list adds.)
+            var created = result.Created;
             _pendingSelectId = created.Id;
-            Flash($"Created “{created.Name}” · refreshing…");
+            Flash(result.AllListsSucceeded
+                ? $"Created “{created.Name}” · refreshing…"
+                : $"Created “{created.Name}”, but couldn't add to {DescribeLists(result.FailedAdditionalLists)} · refreshing…");
             _refresh.RequestRefresh();
         };
         ShowScreen(screen, static () => { });
     }
+
+    /// <summary>
+    /// Names the additional lists a multi-list create couldn't add the task to (#241), for the confirmation
+    /// flash — the list names, comma-separated, falling back to the list id when a name is blank so the
+    /// message never renders an empty entry.
+    /// </summary>
+    private static string DescribeLists(IReadOnlyList<NamedEntity> lists)
+        => string.Join(", ", lists.Select(l => string.IsNullOrWhiteSpace(l.Name) ? l.Id : l.Name));
 
     /// <summary>
     /// Ctrl+O — opens the quick-open entry surface (#303) over the list. Guarded on
