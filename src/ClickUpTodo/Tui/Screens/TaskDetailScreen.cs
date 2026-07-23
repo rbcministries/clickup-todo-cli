@@ -3,6 +3,7 @@ using System.Drawing;
 using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
+using ClickUpTodo.Services;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
@@ -194,6 +195,32 @@ public sealed class TaskDetailScreen : Screen
     // toggle re-arms it. Applied by FlushStreamAutoScrollIfActive when Stream is (or becomes) front-most.
     private bool _streamAutoScrollPending = true;
 
+    // ── Task Tree tab (#291) ───────────────────────────────────────────────────
+    // The Task Tree tab's ListView (its own scroll target), or null when no tree loader was supplied
+    // (the tab is then absent — e.g. single-task launch mode, where "Esc returns to the list" has no
+    // meaning). Built from TaskRowRenderer rows exactly like the main list, so ancestry/children badge
+    // identically. Loaded lazily the first time the user cycles to the tab.
+    private readonly ListView? _treeList;
+    // Fetches the tree (ancestry + task + descendants) off the UI thread; injected by the host so the
+    // screen stays service-free. Null ⇒ the tab is absent (mirrors the postComment/setDescription seams).
+    private readonly Func<CancellationToken, Task<IReadOnlyList<TaskTreeRow>>>? _loadTaskTreeAsync;
+    // Rendering inputs threaded from the host: the signed-in user's id (the trailing Assignees badge #161)
+    // and the badge mode. The tab renders with a fixed BadgeDisplay.Text ("{glyph} {name}" — icon + text,
+    // no F6 toggle, per #291); _badgeDisplay is kept for parity should the host ever pass another mode.
+    private readonly long? _currentUserId;
+    private readonly BadgeDisplay _treeBadgeDisplay;
+    // Parallel to the tree ListView's rows: the TaskItem each row renders (null for a placeholder/message
+    // row), so a keyboard Enter or a double-click resolves the clicked task via the shared RowHitTester.
+    private List<TaskItem?> _treeRows = [];
+    // True once the lazy tree load has been kicked off (guarding against re-fetching on every tab cycle).
+    private bool _treeLoaded;
+
+    /// <summary>Raised when the user activates a tree row (Enter or double-click) for a task other than
+    /// the one being shown (#291). The host navigates the detail screen to that task — replacing the
+    /// current detail in place so a single Esc returns to the main list, not an ever-growing back-stack.
+    /// Inert on the current-task row (a no-op, flashed).</summary>
+    public event EventHandler<string>? OpenTaskRequested;
+
     /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>
     public bool OpenBrowserRequested { get; private set; }
 
@@ -268,7 +295,10 @@ public sealed class TaskDetailScreen : Screen
         LaunchLocation defaultLaunchLocation = LaunchLocation.NewWindow,
         Func<string>? workingDirectoryPreFill = null,
         Func<string, CancellationToken, Task<CommentItem>>? postCommentAsync = null,
-        Func<string, CancellationToken, Task<string?>>? setDescriptionAsync = null)
+        Func<string, CancellationToken, Task<string?>>? setDescriptionAsync = null,
+        long? currentUserId = null,
+        BadgeDisplay treeBadgeDisplay = BadgeDisplay.Text,
+        Func<CancellationToken, Task<IReadOnlyList<TaskTreeRow>>>? loadTaskTreeAsync = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
@@ -276,6 +306,9 @@ public sealed class TaskDetailScreen : Screen
         _workingDirectoryPreFill = workingDirectoryPreFill;
         _postCommentAsync = postCommentAsync;
         _setDescriptionAsync = setDescriptionAsync;
+        _currentUserId = currentUserId;
+        _treeBadgeDisplay = treeBadgeDisplay;
+        _loadTaskTreeAsync = loadTaskTreeAsync;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
@@ -324,8 +357,32 @@ public sealed class TaskDetailScreen : Screen
         _otherSignature = OtherTabSignature(headerLines, customFieldsBody);
         _otherTab = new DetailOtherTabView(headerLines, customFieldsBody);
 
-        _tabContents = [_streamPane, _descriptionPane, _commentsPane, _otherTab];
-        _scrollTargets = [_streamPane, _descriptionPane, _commentsPane, _otherTab.ScrollTarget];
+        // The Task Tree tab (#291): a focusable ListView showing the task's ancestry + itself + its
+        // descendants, indented and badged like the main list (via the shared TaskRowRenderer). Appended
+        // as a fifth tab only when the host supplied a loader — so single-task launch mode (whose Esc
+        // means "quit the tab", not "return to the list") stays a four-tab screen. It's its own scroll
+        // target; CycleTab/FocusCurrentPane/ScrollActiveTab are array-length-driven and pick it up. Rows
+        // load lazily on first cycle to the tab (EnsureTreeLoaded), so opening any detail isn't slowed.
+        var tabContents = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab };
+        var scrollTargets = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab.ScrollTarget };
+        if (_loadTaskTreeAsync is not null)
+        {
+            _treeList = new ListView
+            {
+                Title = "Task Tree",
+                Width = Dim.Fill(),
+                Height = Dim.Fill(),
+            };
+            _treeList.SetSource(new ObservableCollection<string>(["Loading task tree…"]));
+            _treeRows = [null];
+            // Double-click a tree row → navigate to that task (the mouse equivalent of Enter), via the
+            // shared row hit-test (A, #286). Single-click keeps native selection.
+            _treeList.MouseEvent += OnTreeMouse;
+            tabContents.Add(_treeList);
+            scrollTargets.Add(_treeList);
+        }
+        _tabContents = [.. tabContents];
+        _scrollTargets = [.. scrollTargets];
 
         for (var i = 0; i < _tabContents.Length; i++)
             _tabs.InsertTab(i, _tabContents[i]);
@@ -683,6 +740,16 @@ public sealed class TaskDetailScreen : Screen
         // the draft.
         if (_commentBox.Visible || _descriptionBox.Visible)
             return;
+
+        // Enter on the Task Tree tab (#291) navigates the detail screen to the selected row's task
+        // (the current-task row no-ops). Guarded on the tree being the front-most tab, so Enter on the
+        // read-only text panes (which ignore it) is undisturbed.
+        if (key.KeyCode == KeyCode.Enter && _treeList is not null && ReferenceEquals(_tabs.Value, _treeList))
+        {
+            key.Handled = true;
+            NavigateTreeSelection();
+            return;
+        }
 
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
         {
@@ -1469,6 +1536,126 @@ public sealed class TaskDetailScreen : Screen
         // If the Stream tab wasn't the default, its auto-scroll (#107) was deferred until it's shown —
         // apply it now that its viewport is laid out.
         FlushStreamAutoScrollIfActive();
+        // Lazy-load the Task Tree tab (#291) the first time it becomes front-most.
+        EnsureTreeLoaded();
+    }
+
+    // ── Task Tree tab (#291) ───────────────────────────────────────────────────
+
+    /// <summary>Kicks off the one-time, off-thread tree fetch the first time the Task Tree tab becomes
+    /// front-most; the placeholder "Loading task tree…" shows until it lands. A failure renders as a
+    /// single message row rather than an empty tab. Guarded so it fires at most once and only for the
+    /// tree tab.</summary>
+    private void EnsureTreeLoaded()
+    {
+        if (_treeList is null || _treeLoaded || _loadTaskTreeAsync is null)
+            return;
+        if (!ReferenceEquals(_tabs.Value, _treeList))
+            return;
+        _treeLoaded = true;
+        var loader = _loadTaskTreeAsync;
+        // Fully-qualified: this screen exposes a `Task` property (the shown TaskDetail), which would
+        // otherwise shadow System.Threading.Tasks.Task here (mirrors the comment/description posts).
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                var rows = await loader(CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    if (_disposed)
+                        return;
+                    PopulateTree(rows);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    if (_disposed)
+                        return;
+                    _treeList!.SetSource(new ObservableCollection<string>([$"Could not load task tree: {ShortError(ex)}"]));
+                    _treeRows = [null];
+                });
+            }
+        });
+    }
+
+    /// <summary>Renders the fetched tree rows into the tab's ListView via the shared
+    /// <see cref="TaskRowRenderer"/> (fixed <see cref="BadgeDisplay.Text"/> — icon + text, no F6 toggle,
+    /// per #291) and overlays badge colours through <see cref="StatusBadgeListSource"/>, exactly as the
+    /// main list does. Type-ahead searches by title (#12). Lands the cursor on the current task's row.</summary>
+    private void PopulateTree(IReadOnlyList<TaskTreeRow> rows)
+    {
+        if (_treeList is null)
+            return;
+        if (rows.Count == 0)
+        {
+            _treeList.SetSource(new ObservableCollection<string>(["(no task tree)"]));
+            _treeRows = [null];
+            return;
+        }
+
+        var display = new ObservableCollection<string>();
+        var badges = new List<IReadOnlyList<StatusBadgeListSource.Badge>>(rows.Count);
+        var searchKeys = new List<string>(rows.Count);
+        var taskRows = new List<TaskItem?>(rows.Count);
+        var currentIndex = 0;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            var (text, rowBadges) = TaskRowRenderer.Render(row.Task, _treeBadgeDisplay, _currentUserId, row.Depth);
+            display.Add(text);
+            badges.Add(rowBadges);
+            searchKeys.Add(row.Task.Name);
+            taskRows.Add(row.Task);
+            if (row.IsCurrent)
+                currentIndex = i;
+        }
+
+        _treeRows = taskRows;
+        // Assigning .Source (not SetSource) lets us pass our colour-overlaying source; the ListView
+        // disposes the previous one. Mirrors TodoApp.Render's main-list wiring.
+        _treeList.Source = new StatusBadgeListSource(display, badges, headerAttrs: null, searchKeys: searchKeys);
+        _treeList.SelectedItem = currentIndex;
+    }
+
+    /// <summary>Enter on the tree tab: navigate to the highlighted row's task.</summary>
+    private void NavigateTreeSelection()
+    {
+        if (_treeList?.SelectedItem is not int i || i < 0 || i >= _treeRows.Count)
+            return;
+        NavigateToTreeTask(_treeRows[i]);
+    }
+
+    /// <summary>Double-click a tree row → navigate to its task (the mouse equivalent of Enter), resolved
+    /// via the shared <see cref="RowHitTester"/> (A, #286). A message/placeholder row (null task) or a
+    /// click in the empty space beneath the rows no-ops. Single-click keeps native selection.</summary>
+    private void OnTreeMouse(object? sender, Mouse e)
+    {
+        if (_treeList is null)
+            return;
+        if (!e.Flags.HasFlag(MouseFlags.LeftButtonDoubleClicked) || e.Position is not { } pos)
+            return;
+        var task = RowHitTester.TaskAt(pos.Y, _treeList.Viewport.Y, _treeRows);
+        if (task is null)
+            return;
+        e.Handled = true;
+        NavigateToTreeTask(task);
+    }
+
+    /// <summary>Raises <see cref="OpenTaskRequested"/> for a non-current task; the current-task row is a
+    /// no-op (flashed), so clicking the task you're already viewing does nothing surprising.</summary>
+    private void NavigateToTreeTask(TaskItem? task)
+    {
+        if (task is null)
+            return;
+        if (string.Equals(task.Id, _task.Id, StringComparison.Ordinal))
+        {
+            RequestFlash("Already viewing this task.");
+            return;
+        }
+        OpenTaskRequested?.Invoke(this, task.Id);
     }
 
     // A read-only, word-wrapped pane. DetailPaneView draws the inter-block separator rules

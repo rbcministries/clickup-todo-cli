@@ -1689,7 +1689,7 @@ public sealed class TodoApp
     /// the feed and a second Enter is a no-op (the detail is by then active). Esc closes the detail and
     /// the screen seam restores the layer beneath with its selection intact.
     /// </summary>
-    private void OpenTaskDetail(string taskId)
+    private void OpenTaskDetail(string taskId, Screen? replacing = null)
     {
         var requester = ActiveScreen;
         Flash("Loading details…");
@@ -1728,7 +1728,14 @@ public sealed class TodoApp
                         postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(taskId, text, ct),
                         // Ctrl+E (#217) edits the plain-text description; the screen owns the editor +
                         // dirty-check + in-place reflection, the host owns the off-thread ClickUp write.
-                        setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(taskId, text, ct));
+                        setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(taskId, text, ct),
+                        // The Task Tree tab (#291) renders ancestry/children with the trailing Assignees
+                        // badge (#161), so it needs the signed-in user's id; badges are fixed to Text
+                        // ("{glyph} {name}" — icon + text, no F6 toggle) per the issue. The tree itself is
+                        // fetched lazily off the UI thread on first cycle to the tab.
+                        currentUserId: _tasks.UserId,
+                        treeBadgeDisplay: BadgeDisplay.Text,
+                        loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(taskId, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the
@@ -1741,6 +1748,11 @@ public sealed class TodoApp
                     // Ctrl+U opens Quick Updates for the detail's task, stacked over it; Esc pops back
                     // here (#159). Reads the screen's current task so a mid-view refresh is reflected.
                     screen.QuickUpdatesRequested += (_, _) => OpenQuickUpdatesForDetail(screen);
+                    // The Task Tree tab (#291): Enter/double-click a tree row navigates the detail to
+                    // that task by replacing THIS detail in place (replacing: screen), so a single Esc
+                    // returns to the main list instead of unwinding an ever-growing stack of visited
+                    // tasks. Opening detail from the list (replacing: null) is unchanged.
+                    screen.OpenTaskRequested += (_, id) => OpenTaskDetail(id, replacing: screen);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -1748,6 +1760,11 @@ public sealed class TodoApp
                         if (screen.OpenBrowserRequested)
                             LaunchBrowser(detail.Url, detail.Name);
                     });
+                    // Replace-in-place navigation (#291): now that the new detail is on top, tear down
+                    // the detail it navigated from so the stack stays [list, detail] and Esc lands on the
+                    // list. Guarded inside CloseScreen against a screen no longer on the stack.
+                    if (replacing is not null)
+                        CloseScreen(replacing);
                 });
             }
             catch (Exception ex)
