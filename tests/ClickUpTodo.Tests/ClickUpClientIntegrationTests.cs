@@ -111,6 +111,25 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task GetListCustomFields_ReturnsDefinitions()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(ListId),
+            "Set CLICKUP_TOKEN and CLICKUP_LIST_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        // A list may legitimately have no custom fields, so we don't assert non-empty; we assert the call
+        // succeeds and every returned definition is well-formed (non-blank id + type), which is what the
+        // New Task widget/required-enforcement follow-ups depend on.
+        var fields = await client.GetListCustomFieldsAsync(ListId!);
+
+        Assert.All(fields, f =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(f.Id));
+            Assert.False(string.IsNullOrWhiteSpace(f.Type));
+        });
+    }
+
+    [SkippableFact]
     public async Task CreateTask_CreatesTaskInList_AndReturnsItMapped()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(ListId),

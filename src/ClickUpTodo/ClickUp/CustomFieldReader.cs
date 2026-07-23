@@ -28,7 +28,13 @@ public static class CustomFieldReader
         return (value, options);
     }
 
-    private static IReadOnlyList<CustomFieldOption> ReadOptions(JsonElement field)
+    /// <summary>
+    /// Extracts a field's <c>type_config.options</c> (empty when absent) — the drop-down/label choices.
+    /// Shared by the task-value read path (<see cref="Read"/>) and the list field-definition read path
+    /// (<see cref="ClickUpClient.GetListCustomFieldsAsync"/>, #249), which both source options from the
+    /// identical <c>type_config.options</c> shape.
+    /// </summary>
+    public static IReadOnlyList<CustomFieldOption> ReadOptions(JsonElement field)
     {
         if (!field.TryGetProperty("type_config", out var config) || config.ValueKind != JsonValueKind.Object)
             return [];
