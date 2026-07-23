@@ -23,8 +23,12 @@ namespace ClickUpTodo.Tests;
 ///   up via <c>GetListTasksAsync(CLICKUP_LIST_ID)</c>, can find it), point <c>CLICKUP_TASK_ID</c> at it,
 ///   run the suite, then delete it (<see cref="ClickUpClient.DeleteTaskAsync"/>).</item>
 ///   <item><c>CLICKUP_SECONDARY_LIST_ID</c> — a second List id the task is <i>not</i> already in, for the
-///   "Tasks in Multiple Lists" test. That test self-skips if the (paid) ClickApp is disabled, and is
-///   self-cleaning (adds then removes the membership) when it is enabled.</item>
+///   "Tasks in Multiple Lists" test. Prefer a <b>second scratch list you own</b>, for the same reason as
+///   <c>CLICKUP_LIST_ID</c>: the test writes into it (it adds the task, then removes the membership in a
+///   <c>finally</c>). If you can't create one — the personal API token may lack list-create permission —
+///   any list the task isn't already in works, since the test is self-cleaning and self-skips when the
+///   (paid) ClickApp is disabled; but avoid a busy shared/team list so a stray add/remove can't disturb
+///   real work.</item>
 ///   <item><c>CLICKUP_OAUTH_CLIENT_ID</c> / <c>CLICKUP_OAUTH_CLIENT_SECRET</c> / <c>CLICKUP_OAUTH_CODE</c>
 ///   — for <see cref="ClickUpOAuthIntegrationTests"/>. The code is a <b>single-use authorization code</b>
 ///   from a fresh browser OAuth redirect, so that test can't be automated and stays skipped in unattended
