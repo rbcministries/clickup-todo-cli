@@ -86,10 +86,11 @@ public sealed class ClickUpClientCustomFieldDefinitionsTests
     }
 
     [Fact]
-    public async Task Map_MalformedTypeConfig_DegradesToIdentityOnly()
+    public async Task Map_NonObjectTypeConfig_YieldsNoOptions()
     {
-        // A type_config that isn't the expected object/array shape must not sink the field: it degrades
-        // to identity + required with no options (mirroring MapCustomField's defensive fallback).
+        // A type_config that isn't the expected object shape must not sink the field: the shared reader
+        // is fully defensive (returns no options rather than throwing), so the field still maps to its
+        // identity + required with an empty option set.
         var def = await DeserializeAsync("""
             {"id":"cf5","name":"Weird","type":"drop_down","required":true,"type_config":"not-an-object"}
             """);

@@ -15,8 +15,6 @@ namespace ClickUpTodo.ClickUp.Generated.Models
     {
         /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
         public IDictionary<string, object> AdditionalData { get; set; }
-        /// <summary>The hide_from_guests property</summary>
-        public bool? HideFromGuests { get; set; }
         /// <summary>The id property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -68,7 +66,6 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         {
             return new Dictionary<string, Action<IParseNode>>
             {
-                { "hide_from_guests", n => { HideFromGuests = n.GetBoolValue(); } },
                 { "id", n => { Id = n.GetStringValue(); } },
                 { "name", n => { Name = n.GetStringValue(); } },
                 { "required", n => { Required = n.GetBoolValue(); } },
@@ -82,7 +79,6 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         public virtual void Serialize(ISerializationWriter writer)
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
-            writer.WriteBoolValue("hide_from_guests", HideFromGuests);
             writer.WriteStringValue("id", Id);
             writer.WriteStringValue("name", Name);
             writer.WriteBoolValue("required", Required);

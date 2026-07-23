@@ -475,8 +475,7 @@
           "id": { "type": "string", "nullable": true },
           "name": { "type": "string", "nullable": true },
           "type": { "type": "string", "nullable": true },
-          "required": { "type": "boolean", "nullable": true },
-          "hide_from_guests": { "type": "boolean", "nullable": true }
+          "required": { "type": "boolean", "nullable": true }
         }
       },
       "CustomFieldsResponse": {
