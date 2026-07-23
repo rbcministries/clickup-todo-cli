@@ -444,9 +444,9 @@
       },
       "CreateCommentResponse": {
         "type": "object",
-        "description": "ClickUp's create-comment response is minimal: it returns the new comment's id, a hist_id, and the server date (epoch ms). It does NOT echo the text, author, or structured blocks.",
+        "description": "ClickUp's create-comment response is minimal: it returns the new comment's id, a hist_id, and the server date (epoch ms). It does NOT echo the text, author, or structured blocks. NOTE: on create the id comes back as a JSON number (int64), whereas the GET /comment read path returns it as a string — the client stringifies it so both paths agree.",
         "properties": {
-          "id": { "type": "string" },
+          "id": { "type": "integer", "format": "int64" },
           "hist_id": { "type": "string", "nullable": true },
           "date": { "type": "integer", "format": "int64", "nullable": true }
         }

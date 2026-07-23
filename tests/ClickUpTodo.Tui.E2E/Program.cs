@@ -109,9 +109,11 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
             body = """{"user":{"id":1,"username":"bench","email":"bench@example.com"}}""";
         // POST /task/{id}/comment (#216): the create-comment write returns the minimal created-comment
         // shape (id + date + hist_id) the CreateCommentResponse deserializer reads, so a comment posted
-        // from the detail composer round-trips truthfully. Must precede the GET /comment branch below.
+        // from the detail composer round-trips truthfully. The id comes back as a JSON *number* on create
+        // (the GET read path returns it as a string) — mirror that so the fake matches the real API (#144).
+        // Must precede the GET /comment branch below.
         else if (request.Method == HttpMethod.Post && path.Contains("/task/") && path.EndsWith("/comment"))
-            body = """{"id":"newc1","hist_id":"h1","date":1751500000000}""";
+            body = """{"id":9014000000001,"hist_id":"h1","date":1751500000000}""";
         else if (path.Contains("/task/") && path.EndsWith("/comment"))
             body = CommentsJson(TaskIdOfComment(path));
         else if (path.Contains("/task/") && request.Method == HttpMethod.Put)

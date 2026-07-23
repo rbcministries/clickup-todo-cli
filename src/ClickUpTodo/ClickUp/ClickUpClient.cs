@@ -454,8 +454,10 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         {
             var request = new CreateCommentRequest { CommentText = text, NotifyAll = false };
             var created = await _client.V2.Task[taskId].Comment.PostAsync(request, cancellationToken: ct);
+            // ClickUp returns the new comment's id as a JSON number on create but as a string on the
+            // GET read path; stringify so callers see the same id from both (and re-fetch matches).
             return new CommentItem(
-                Id: created?.Id ?? "",
+                Id: created?.Id?.ToString(CultureInfo.InvariantCulture) ?? "",
                 Author: "",
                 DateMs: created?.Date,
                 Text: text,

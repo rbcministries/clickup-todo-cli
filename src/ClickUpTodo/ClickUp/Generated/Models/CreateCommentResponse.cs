@@ -8,7 +8,7 @@ using System;
 namespace ClickUpTodo.ClickUp.Generated.Models
 {
     /// <summary>
-    /// ClickUp&apos;s create-comment response is minimal: it returns the new comment&apos;s id, a hist_id, and the server date (epoch ms). It does NOT echo the text, author, or structured blocks.
+    /// ClickUp&apos;s create-comment response is minimal: it returns the new comment&apos;s id, a hist_id, and the server date (epoch ms). It does NOT echo the text, author, or structured blocks. NOTE: on create the id comes back as a JSON number (int64), whereas the GET /comment read path returns it as a string — the client stringifies it so both paths agree.
     /// </summary>
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     public partial class CreateCommentResponse : IAdditionalDataHolder, IParsable
@@ -26,13 +26,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         public string HistId { get; set; }
 #endif
         /// <summary>The id property</summary>
-#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
-#nullable enable
-        public string? Id { get; set; }
-#nullable restore
-#else
-        public string Id { get; set; }
-#endif
+        public long? Id { get; set; }
         /// <summary>
         /// Instantiates a new <see cref="global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentResponse"/> and sets the default values.
         /// </summary>
@@ -60,7 +54,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             {
                 { "date", n => { Date = n.GetLongValue(); } },
                 { "hist_id", n => { HistId = n.GetStringValue(); } },
-                { "id", n => { Id = n.GetStringValue(); } },
+                { "id", n => { Id = n.GetLongValue(); } },
             };
         }
         /// <summary>
@@ -72,7 +66,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
             writer.WriteLongValue("date", Date);
             writer.WriteStringValue("hist_id", HistId);
-            writer.WriteStringValue("id", Id);
+            writer.WriteLongValue("id", Id);
             writer.WriteAdditionalData(AdditionalData);
         }
     }
