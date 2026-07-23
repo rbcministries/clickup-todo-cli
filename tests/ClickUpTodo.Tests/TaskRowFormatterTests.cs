@@ -197,6 +197,20 @@ public sealed class TaskRowFormatterTests
     }
 
     [Fact]
+    public void FoldMarkerSpan_IsAbsentSentinel_ForABlankGutter()
+    {
+        var task = new TaskItem { Id = "1", Name = "Leaf", StatusName = "to do" };
+
+        // A non-foldable row in the nested view gets FoldMarker's two-space blank gutter, not a real
+        // arrow — it must still report the (-1, 0) sentinel so a click on that gutter is never a hit,
+        // independent of any caller-side FoldState gate (protects RowHitTester's #291 reuse).
+        var row = TaskRowFormatter.Format(task, marker: "  ");
+
+        Assert.Equal(-1, row.MarkerStart);
+        Assert.Equal(0, row.MarkerLength);
+    }
+
+    [Fact]
     public void FoldMarkerSpan_TracksTheMarker_InTextMode()
     {
         var task = new TaskItem { Id = "1", Name = "Ship it", StatusName = "to do", PriorityName = "High" };

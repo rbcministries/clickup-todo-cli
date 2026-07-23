@@ -24,9 +24,9 @@ public static class TaskRowFormatter
     /// searches the decoupled title-only keys instead (#76). The Assignees badge trails the title/metadata.
     /// When a badge is absent (unset, grouped away, or hidden) its <c>*Length</c> is 0 and its
     /// <c>*Start</c> is -1. <c>MarkerStart</c>/<c>MarkerLength</c> are the char span of the leading fold
-    /// marker (#76) within <paramref name="Text"/> — the placement of the <paramref name="marker"/>
-    /// argument, whatever it is (a <c>▶ </c>/<c>▼ </c> arrow on a foldable parent, or a blank gutter),
-    /// so a mouse hit-test can resolve the arrow column (#287); <c>(-1, 0)</c> when no marker was inserted.
+    /// <em>arrow</em> (#76) within <paramref name="Text"/>, so a mouse hit-test can resolve the arrow
+    /// column (#287). Only a real <c>▶ </c>/<c>▼ </c> arrow gets a span; a blank gutter or an empty marker
+    /// reports the <c>(-1, 0)</c> "no marker" sentinel.
     /// </summary>
     public readonly record struct Row(
         string Text,
@@ -179,9 +179,12 @@ public static class TaskRowFormatter
 
         text += indent;
         // Capture the fold marker's char span the same incremental way as the badges, so the arrow's
-        // offset stays exact regardless of indent, badges, or wide/emoji runes ahead of it (#287). A
-        // caller decides whether the row is actually foldable (from its FoldState) before hit-testing.
-        var (markerStart, markerLength) = marker.Length > 0 ? (text.Length, marker.Length) : (-1, 0);
+        // offset stays exact regardless of indent, badges, or wide/emoji runes ahead of it (#287). Only a
+        // real ▶/▼ arrow gets a span; a blank gutter (the "  " FoldMarker emits for a non-foldable row in
+        // the nested view) reports the (-1, 0) "no marker" sentinel, so a hit-test can never mistake a
+        // leaf/child row's gutter for a clickable arrow — independent of any caller-side FoldState gate.
+        var hasArrow = marker.Trim().Length > 0;
+        var (markerStart, markerLength) = hasArrow ? (text.Length, marker.Length) : (-1, 0);
         text += marker + task.Name;
 
         if (groupedBy != TaskField.List && !string.IsNullOrWhiteSpace(task.ListName))

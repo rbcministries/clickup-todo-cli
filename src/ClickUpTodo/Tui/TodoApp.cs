@@ -660,7 +660,9 @@ public sealed class TodoApp
             if (index < 0 || index >= _folds.Count
                 || _folds[index] is not (FoldState.Collapsed or FoldState.Expanded))
                 return;
-            var (markerStart, markerLength) = index < _markerSpans.Count ? _markerSpans[index] : (-1, 0);
+            // _markerSpans is parallel to _folds/_display (grown together in AddTask/AddHeader/AddSpacer),
+            // so the _folds bound above covers it and _display[index] below.
+            var (markerStart, markerLength) = _markerSpans[index];
             // Measure with the same grapheme/column-aware GetColumns the renderer uses, so wide/emoji
             // badges ahead of the arrow don't shift the target column (mirrors HelpLine.HitTest).
             if (!RowHitTester.IsWithinFoldMarker(pos.X, _display[index], markerStart, markerLength, static s => s.GetColumns()))

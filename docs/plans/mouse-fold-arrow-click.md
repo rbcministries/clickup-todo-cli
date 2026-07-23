@@ -71,9 +71,11 @@ gestures (single-click arrow = toggle, double-click title = open) are clean.
   `CollapseOrJumpToParent` into a private `SetFold(index, expand)` so mouse and
   keyboard converge on one path that keeps `_expanded` + the arranger
   authoritative. No behaviour change to the keyboard path.
-- Unit tests: marker span offsets (icons/text/hidden, indented); `IsWithinFoldMarker`
-  (hit, miss left/right, wide-rune prefix, absent marker); `SetFold`-backed
-  keyboard fold unchanged.
+- Unit tests: marker span offsets (icons/text/hidden, indented; blank gutter →
+  `(-1, 0)` sentinel); `IsWithinFoldMarker` (hit, miss left/right, wide-rune
+  prefix, absent marker). The `SetFold` refactor lives in `TodoApp`, which isn't
+  unit-tested (per the codebase), so keyboard-fold parity is verified by
+  inspection + the existing E2E rather than a new unit test.
 
 ### Phase 2 — wire single-click fold toggle in TodoApp + E2E
 
