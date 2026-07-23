@@ -81,6 +81,19 @@ var browserLog = Environment.GetEnvironmentVariable("E2E_BROWSER_LOG");
 IBrowserLauncher browser = string.IsNullOrEmpty(browserLog)
     ? new NullBrowserLauncher()
     : new RecordingBrowserLauncher(browserLog);
+
+// Single-task launch mode (#296): E2E_SINGLE_TASK=<id> boots SingleTaskApp straight into that task's
+// detail view — the harness equivalent of `clickup-todo --task <id>` — instead of the dashboard. It
+// shares the same #304 browser launcher so a Ctrl+B host rewrite is observable in single-task mode too.
+var singleTaskId = Environment.GetEnvironmentVariable("E2E_SINGLE_TASK");
+if (!string.IsNullOrWhiteSpace(singleTaskId))
+{
+    var launchTask = await tasks.GetTaskDetailAsync(singleTaskId);
+    var launchComments = await tasks.GetTaskCommentsAsync(singleTaskId);
+    new SingleTaskApp(tasks, config, launchTask, launchComments, browser).Run("ansi");
+    return;
+}
+
 new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser).Run("ansi");
 return;
 
