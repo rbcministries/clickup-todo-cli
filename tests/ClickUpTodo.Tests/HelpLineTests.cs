@@ -249,7 +249,7 @@ public sealed class HelpLineTests
     public void HelpItem_TwoArgConstruction_IsAnActionWithNoExplicitChord()
     {
         // The pre-#289 two-argument form must still build (and equal) an action item with no chord —
-        // this is what keeps records like `new("Ctrl+N", "new task")` equal across the sets and tests.
+        // this is what keeps record equality/construction working in tests (the label here is arbitrary).
         var item = new HelpItem("Ctrl+N", "new task");
 
         Assert.True(item.IsAction);
