@@ -94,6 +94,7 @@ public static class HelpItemSets
         new("→|", "next section"),
         new("Ctrl+U", "quick update"),
         new("↩", "detail"),
+        new("Ctrl+O", "open by id"),
         new("Ctrl+N", "new task"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+P", "📌"),
@@ -167,6 +168,15 @@ public static class HelpItemSets
         new("Enter", "apply status/priority"),
         new("F1", "help"),
         new("Esc", "exit"),
+    ];
+
+    /// <summary>The quick-open entry surface (Ctrl+O, #303): a single field for a task id, custom id, or
+    /// URL; Enter (or the default Open button) resolves and opens, Esc cancels, F1 help.</summary>
+    public static readonly IReadOnlyList<HelpItem> QuickOpen =
+    [
+        new("Enter/Open", "open"),
+        new("F1", "help"),
+        new("Esc", "cancel"),
     ];
 
     /// <summary>The New Task compose screen (Ctrl+N, #213/#240): Tab moves between

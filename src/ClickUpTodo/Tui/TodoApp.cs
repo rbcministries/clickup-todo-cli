@@ -502,6 +502,12 @@ public sealed class TodoApp
                     key.Handled = true;
                     OpenNewTask();
                     break;
+                case KeyCode.O:
+                    // Ctrl+O opens the quick-open-by-id entry surface (#303). A chord (bare letters are
+                    // reserved for the ListView type-ahead, #12).
+                    key.Handled = true;
+                    OpenQuickOpen();
+                    break;
                 case KeyCode.U:
                     // Ctrl+U opens Quick Updates (#159). Standardized to match Task Detail's Ctrl+U so
                     // the same action uses the same key everywhere (#290); the old bare-Space launcher is
@@ -1109,6 +1115,99 @@ public sealed class TodoApp
             _refresh.RequestRefresh();
         };
         ShowScreen(screen, static () => { });
+    }
+
+    /// <summary>
+    /// Ctrl+O — opens the quick-open entry surface (#303) over the list. Guarded on
+    /// <see cref="ActiveScreen"/> like the other list-initiated opens. The modal only collects the typed
+    /// text; the parse/resolve/navigate runs in <see cref="ResolveAndOpen"/> once the modal has closed
+    /// (deferred to the next loop iteration) so the Task Detail view opens over the list rather than
+    /// stacking on top of the entry surface.
+    /// </summary>
+    private void OpenQuickOpen()
+    {
+        if (ActiveScreen is not null)
+            return;
+
+        var screen = new QuickOpenScreen();
+        ShowScreen(screen, () =>
+        {
+            // Run the resolve on a later main-loop iteration so this entry surface is fully torn down
+            // first: doing it inline in the close handler fires it while the modal is still mounted, so
+            // OpenTaskDetail captures the modal as its "requester" and then skips the mount once the modal
+            // closes (observed under the tui-validate harness — "Loading details…" stuck, detail never
+            // shown). AddTimeout guarantees the later iteration.
+            if (screen.Result is { } text)
+                Application.AddTimeout(TimeSpan.FromMilliseconds(1), () =>
+                {
+                    ResolveAndOpen(text);
+                    return false;
+                });
+        });
+    }
+
+    /// <summary>
+    /// Resolves a quick-open input to a task and opens its Task Detail (#303). Cache-first: a task in the
+    /// current working set opens with no round-trip; an uncached one flashes "Fetching task…" first and
+    /// resolves via the API (a plain id straight through <see cref="OpenTaskDetail"/>; a custom id via the
+    /// <c>custom_task_ids</c> lookup, then opened by its real id). An unparseable input, a missing
+    /// workspace for a custom id, or a not-found task flashes an error and leaves the list unchanged.
+    /// </summary>
+    private void ResolveAndOpen(string text)
+    {
+        var reference = QuickOpenParser.Parse(text);
+        if (reference.Kind == QuickOpenKind.Invalid)
+        {
+            Flash($"Couldn’t open “{Ellipsize(text)}” — enter a task id, custom id, or ClickUp task URL.");
+            return;
+        }
+
+        // 1. Cache hit → open immediately (its own "Loading details…").
+        if (QuickOpenParser.FindInCache(CandidateUniverse(), reference) is { } cached)
+        {
+            OpenTaskDetail(cached.Id);
+            return;
+        }
+
+        // 2. Uncached plain id → straight through the detail load (its own "Loading details…" flash IS
+        // the fetch; there's no separate resolve step, so no redundant "Fetching task…" here).
+        if (reference.Kind == QuickOpenKind.TaskId)
+        {
+            OpenTaskDetail(reference.Value);
+            return;
+        }
+
+        // 3. A custom id needs the workspace (team) id and a resolve step — the custom-id lookup returns
+        // the task's real id, which is then opened through the ordinary detail load. "Fetching task…"
+        // covers that resolve round-trip (visible while the off-thread lookup is in flight), after which
+        // OpenTaskDetail's "Loading details…" covers the load.
+        var teamId = _config.WorkspaceId;
+        if (string.IsNullOrWhiteSpace(teamId))
+        {
+            Flash($"Can’t resolve custom id “{Ellipsize(reference.Value)}” — no workspace is configured.");
+            return;
+        }
+
+        Flash("Fetching task…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var detail = await _tasks.GetTaskDetailByCustomIdAsync(reference.Value, teamId);
+                Application.Invoke(() => OpenTaskDetail(detail.Id));
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Couldn’t find task “{Ellipsize(reference.Value)}”: {Short(ex)}"));
+            }
+        });
+    }
+
+    /// <summary>Clips an echoed user input to a short, single-line snippet for a flash message.</summary>
+    private static string Ellipsize(string s)
+    {
+        s = s.ReplaceLineEndings(" ").Trim();
+        return s.Length <= 40 ? s : s[..39] + "…";
     }
 
     // ── Screen navigation seam ─────────────────────────────────────────────────

@@ -405,6 +405,24 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         });
 
     /// <summary>
+    /// Full detail for a task addressed by its workspace <b>custom id</b> (#303) — the same
+    /// <c>GET /task/{id}</c> endpoint with <c>custom_task_ids=true&amp;team_id={teamId}</c> so ClickUp
+    /// resolves the custom id within the workspace. The response is a normal task, so the mapped
+    /// <see cref="TaskDetail.Id"/> is the task's <b>plain</b> id — the quick-open host then opens it
+    /// through the ordinary <see cref="GetTaskDetailAsync"/> path.
+    /// </summary>
+    public Task<TaskDetail> GetTaskDetailByCustomIdAsync(string customId, string teamId, CancellationToken ct = default)
+        => Guard("GetTaskByCustomId", async () =>
+        {
+            var t = await _client.V2.Task[customId].GetAsync(cfg =>
+            {
+                cfg.QueryParameters.CustomTaskIds = true;
+                cfg.QueryParameters.TeamId = teamId;
+            }, ct) ?? throw new InvalidOperationException($"ClickUp returned no task for custom id '{customId}'.");
+            return MapDetail(t);
+        });
+
+    /// <summary>
     /// The direct subtasks of a task, regardless of assignee, mapped to the stable <see cref="TaskItem"/>
     /// shape (#70). Uses <c>GET /task/{id}?include_subtasks=true</c>; the archived ones are dropped to
     /// mirror the list/team fetches. The result carries each child's own <c>parent</c>, so the caller can

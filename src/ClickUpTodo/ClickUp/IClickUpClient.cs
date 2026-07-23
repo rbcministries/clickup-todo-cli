@@ -65,6 +65,16 @@ public interface IClickUpClient
     Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement task↔list membership writes.");
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
+
+    /// <summary>Full detail for a task addressed by its workspace <b>custom id</b> (#303, Ctrl+O
+    /// quick-open) via <c>custom_task_ids=true&amp;team_id=…</c>. The returned <see cref="TaskDetail.Id"/>
+    /// is the task's <b>plain</b> id, so the caller can then open it through the normal path. Default
+    /// throwing implementation so read-only fakes needn't implement a lookup they never call (mirrors the
+    /// membership writes); <see cref="ClickUpClient"/> overrides it. See
+    /// <see cref="ClickUpClient.GetTaskDetailByCustomIdAsync"/>.</summary>
+    Task<TaskDetail> GetTaskDetailByCustomIdAsync(string customId, string teamId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement custom-id task lookup.");
+
     Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default);
     Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default);
 

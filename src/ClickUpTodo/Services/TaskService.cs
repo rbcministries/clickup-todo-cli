@@ -476,6 +476,11 @@ public sealed class TaskService(
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskDetailAsync(taskId, ct);
 
+    /// <summary>Full detail for a task addressed by its workspace custom id (#303, Ctrl+O quick-open);
+    /// the mapped <see cref="TaskDetail.Id"/> is the task's plain id.</summary>
+    public Task<TaskDetail> GetTaskDetailByCustomIdAsync(string customId, string teamId, CancellationToken ct = default)
+        => client.GetTaskDetailByCustomIdAsync(customId, teamId, ct);
+
     /// <summary>The comments on a task, for the detail view's Comments tab (#17).</summary>
     public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskCommentsAsync(taskId, ct);

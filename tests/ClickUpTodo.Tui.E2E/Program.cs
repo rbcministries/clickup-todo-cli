@@ -202,6 +202,15 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
         }
         else if (path.Contains("/task/"))
         {
+            // #303 quick-open not-found path: a GET for the sentinel id "tmissing" returns a 404 so the
+            // Ctrl+O resolve can flash an error and leave the list unchanged. Off every other scenario's
+            // path (no check opens "tmissing").
+            if (path[(path.LastIndexOf('/') + 1)..] == "tmissing")
+                return new HttpResponseMessage(HttpStatusCode.NotFound)
+                {
+                    Content = new StringContent(
+                        """{"err":"Task not found","ECODE":"ITEM_100"}""", Encoding.UTF8, "application/json"),
+                };
             if (_foreign)
                 body = ForeignTaskGet(path, query);
             else
