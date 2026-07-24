@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Services;
@@ -42,6 +43,7 @@ public sealed class SingleTaskApp
 {
     private readonly TaskService _tasks;
     private readonly AppConfig _config;
+    private readonly ConfigStore _configStore;
     private readonly IBrowserLauncher _browser;
     private readonly string _taskId;
 
@@ -63,13 +65,22 @@ public sealed class SingleTaskApp
     // so an earlier fetch can't land after a later one with stale data. UI-thread-only, like TodoApp's.
     private bool _refreshing;
 
+    // Composes the seed prompt + launches a `claude` session for the detail view's Ctrl+A dispatch
+    // (#345). Built once in Build() from the persisted AgentDispatch settings (#91) — single-task mode
+    // has no F2 settings dialog, so unlike TodoApp it never needs rebuilding.
+    private AgentDispatcher _agent = null!;
+    // True while a dispatch is in flight, so a rapid second submit doesn't launch a duplicate session.
+    // UI-thread-only (set in DispatchAgent, cleared via Application.Invoke) — mirrors TodoApp.
+    private bool _dispatching;
+
     private string _status;
 
-    public SingleTaskApp(TaskService tasks, AppConfig config, TaskDetail task, IReadOnlyList<CommentItem> comments,
-        IBrowserLauncher? browserLauncher = null)
+    public SingleTaskApp(TaskService tasks, AppConfig config, ConfigStore configStore, TaskDetail task,
+        IReadOnlyList<CommentItem> comments, IBrowserLauncher? browserLauncher = null)
     {
         _tasks = tasks;
         _config = config;
+        _configStore = configStore;
         _browser = browserLauncher ?? new SystemBrowserLauncher();
         _task = task;
         _comments = comments;
@@ -121,6 +132,10 @@ public sealed class SingleTaskApp
     {
         _window = new Window { Title = AppBranding.WindowTitle(_config.WorkspaceName) };
 
+        // Build the agent dispatcher from the persisted settings (#91), same as the dashboard's
+        // BuildAgentDispatcher — the preferred terminal / claude path / launch-location default apply.
+        _agent = new AgentDispatcher(new TerminalLauncher(), _config.AgentDispatch.ToLauncherOptions());
+
         // Root the Dispatch pane's working-dir browser at the saved base dir (#92), falling back to home
         // if it doesn't exist yet — same resolution the dashboard uses when opening Task Detail.
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -141,21 +156,30 @@ public sealed class SingleTaskApp
 
         // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data — refetch just this one task.
         _detail.RefreshRequested += (_, _) => RefreshTask();
-        // Ctrl+B sets OpenBrowserRequested then closes; Esc closes directly. Either way the root closing
-        // means "quit the tab" (there's no list to return to), launching the browser first if asked.
+        // Ctrl+B sets OpenBrowserRequested then closes; Esc closes directly. The detail is the launch-task
+        // root (#298), so its close is back-at-root: Ctrl+B opens the browser then quits, and a plain Esc
+        // hands off to the exit seam (RequestExit, #299) — which today quits the tab (there's no list to
+        // return to). Only fires while the detail is front-most; with an overlay up, Esc goes to it.
         _detail.Closed += (_, _) =>
         {
             if (_detail.OpenBrowserRequested)
+            {
                 LaunchBrowser(_task.Url);
-            Application.RequestStop();
+                Application.RequestStop();
+                return;
+            }
+
+            RequestExit();
         };
-        // Deferred in single-task mode (see the plan / PR): Quick Updates needs sub-issue (5) #297 to
-        // decouple its write path from the dashboard's working-set snapshot; agent dispatch needs the
-        // host-coupled DispatchAgent extracted. Flash rather than silently no-op so the gap is legible.
+        // Quick Updates stays deferred in single-task mode: it needs sub-issue (5) #297 to decouple its
+        // write path from the dashboard's working-set snapshot. Flash rather than silently no-op so the
+        // gap is legible.
         _detail.QuickUpdatesRequested += (_, _) =>
             Flash("Quick Updates isn't available in single-task mode yet (tracked on #297).");
-        _detail.AgentDispatchRequested += (_, _) =>
-            Flash("Agent dispatch isn't available in single-task mode yet.");
+        // Agent dispatch (Ctrl+A) now runs through the shared DispatchCoordinator (#345), so a
+        // single-task tab composes + launches a session with the dashboard's exact working-dir /
+        // post-to-Comments / launch-location semantics.
+        _detail.AgentDispatchRequested += (_, request) => DispatchAgent(request);
         _detail.FlashRequested += (_, message) => Flash(message);
         _detail.HelpRequested += (_, _) => OpenHelp();
 
@@ -186,7 +210,7 @@ public sealed class SingleTaskApp
             try
             {
                 var detail = await _tasks.GetTaskDetailAsync(_taskId);
-                var comments = await _tasks.GetTaskCommentsAsync(_taskId);
+                var comments = await _tasks.GetTaskCommentsWithRepliesAsync(_taskId);
                 Application.Invoke(() =>
                 {
                     _task = detail;
@@ -205,6 +229,52 @@ public sealed class SingleTaskApp
         });
     }
 
+    // ── Agent dispatch (Ctrl+A) ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Ctrl+A from a single-task tab: dispatches an agent for the launch task through the shared
+    /// <see cref="DispatchCoordinator"/> (#345) — an interactive terminal session or, in one-off mode
+    /// (#94), a background <c>claude -p</c> run rendered in an <see cref="Screens.AgentRunScreen"/> — with
+    /// the same working-dir (#91/#95/#96/#98), post-to-Comments (#97), and launch-location (#275)
+    /// semantics as the dashboard. Runs on the UI thread (invoked from the detail screen's key handler).
+    /// </summary>
+    private void DispatchAgent(DispatchRequest request)
+    {
+        // Re-entrancy guard: a second submit before the first launch finishes would spawn a duplicate
+        // session. UI-thread-only, cleared back on the UI thread — no locking needed (mirrors TodoApp).
+        if (_dispatching)
+        {
+            Flash("A Claude session is already launching…");
+            return;
+        }
+        _dispatching = true;
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var plan = DispatchCoordinator.Plan(_config.AgentDispatch, request, _task, _config.DefaultWorkingDirectory, home);
+
+        // Persist an explicit non-default working-dir pick for this task (#96) so the next dispatch
+        // pre-fills it; reverting to the default clears the entry. Save only when the cache changed.
+        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, _taskId, plan))
+            _configStore.Save(_config);
+
+        // One-off mode runs as a background child with output in a screen (#99); interactive opens a
+        // real terminal below (an interactive session needs a live TTY). The run screen mounts through
+        // this host's own ShowScreen (Esc cancels/closes it back to the detail root).
+        if (plan.OneOff)
+        {
+            DispatchCoordinator.RunBackground(
+                _agent, _task, _comments, plan,
+                mount: (screen, onClosed) => ShowScreen(screen, onClosed),
+                clearDispatching: () => _dispatching = false);
+            return;
+        }
+
+        Flash($"Launching Claude for '{_task.Name}'…");
+        DispatchCoordinator.RunInteractive(
+            _agent, _task, _comments, plan,
+            report: message => { _dispatching = false; Flash(message); });
+    }
+
     // ── Help overlay (F1) ────────────────────────────────────────────────────
 
     /// <summary>F1 stacks a <see cref="HelpScreen"/> over the detail; Esc pops back to it.</summary>
@@ -215,7 +285,7 @@ public sealed class SingleTaskApp
         ShowScreen(new HelpScreen());
     }
 
-    private void ShowScreen(Screen screen)
+    private void ShowScreen(Screen screen, Action? onClosed = null)
     {
         // Hide the currently-visible layer so only the new top draws/focuses (one visible screen — #3).
         (ActiveScreen as View).Visible = false;
@@ -228,8 +298,13 @@ public sealed class SingleTaskApp
                 return;
             screen.Closed -= handler;
             // Defer teardown out of the screen's own key handler (disposing mid-keypress can leave
-            // Terminal.Gui's focus machinery pointing at a freed view), like TodoApp.CloseScreen.
-            Application.Invoke(() => CloseScreen(screen));
+            // Terminal.Gui's focus machinery pointing at a freed view), like TodoApp.CloseScreen. Run the
+            // caller's onClosed first (e.g. #345's cancel-the-run cleanup) while the screen is intact.
+            Application.Invoke(() =>
+            {
+                onClosed?.Invoke();
+                CloseScreen(screen);
+            });
         };
         screen.Closed += handler;
         screen.FlashRequested += (_, message) => Flash(message);
@@ -259,6 +334,16 @@ public sealed class SingleTaskApp
         below.SetFocus();
         UpdateHelpLine();
     }
+
+    /// <summary>
+    /// The single "quit from the launch-task root" chokepoint — the exit-confirmation seam (#298, #299
+    /// sub-issue 7). <c>Esc</c> is the canonical Back key; the launch task is this mode's root, so Back
+    /// <em>at the root</em> is a quit. Today it stops the app (quits the tab, since single-task mode has
+    /// no list to return to); when #299 lands, its confirmation modal plugs in here instead of quitting
+    /// directly. Per #298 the planned Alt+←/→ chord was dropped (it collides with terminal-emulator
+    /// split-pane navigation) and there is no Forward key; forward/back across visited tasks rides #291.
+    /// </summary>
+    private void RequestExit() => Application.RequestStop();
 
     // ── Footer / status ──────────────────────────────────────────────────────
 

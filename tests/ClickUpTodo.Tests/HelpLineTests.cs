@@ -29,8 +29,8 @@ public sealed class HelpLineTests
     public void Format_MainList_RendersTheFullFooter()
     {
         const string expected =
-            "↑/↓ move · →| next section · Ctrl+U quick update · ↩ detail · Ctrl+O open by id · Ctrl+N new task · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
-            + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 ↻ · F6 badges · F12 completed · "
+            "↑/↓ move · →| next section · Ctrl+U quick update · ↩ detail · Ctrl+O open by id · Ctrl+N ➕ · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
+            + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 ↻ · F6 badges · F12 👁✅ · "
             + "→/← expand/collapse · Ctrl+→/← all · Ctrl+Q quit · type to search";
 
         Assert.Equal(expected, HelpLine.Format(HelpItemSets.MainList));
@@ -46,9 +46,10 @@ public sealed class HelpLineTests
             "Enter/Open open · F1 help · Esc cancel",
             HelpLine.Format(HelpItemSets.QuickOpen));
 
+    // The New Task action is on Ctrl+N; its label tightened to the ➕ glyph in #343 (key hint kept).
     [Fact]
     public void MainList_CarriesCtrlNNewTask()
-        => Assert.Contains(new HelpItem("Ctrl+N", "new task"), HelpItemSets.MainList);
+        => Assert.Contains(new HelpItem("Ctrl+N", "➕"), HelpItemSets.MainList);
 
     // #290 — the "quick update" action must use one shortcut everywhere. It launches Quick Updates from
     // both the main list and Task Detail, so both help sets must advertise the same key (Ctrl+U).
@@ -85,7 +86,7 @@ public sealed class HelpLineTests
     [Fact]
     public void Format_NotificationsFeed_RendersMoveMentionsHelpAndBack()
         => Assert.Equal(
-            "↑/↓ move · Enter open · F3 mentions only · F5 ↻ · F6 activity · F12 completed · Ctrl+E list · F1 help · Esc back",
+            "↑/↓ move · Enter open · F3 mentions only · F5 ↻ · F6 activity · F12 👁✅ · Ctrl+E list · F1 help · Esc back",
             HelpLine.Format(HelpItemSets.NotificationsFeed));
 
     [Fact]
@@ -166,7 +167,7 @@ public sealed class HelpLineTests
     [Fact]
     public void Fit_ReturnsSetUnchanged_WhenEverythingFits()
     {
-        // Far wider than the 205-column full main-list footer.
+        // Far wider than the full main-list footer at any width.
         var result = HelpLine.Fit(HelpItemSets.MainList, width: 1000, Cols);
 
         Assert.Same(HelpItemSets.MainList, result);
@@ -248,7 +249,7 @@ public sealed class HelpLineTests
     public void HelpItem_TwoArgConstruction_IsAnActionWithNoExplicitChord()
     {
         // The pre-#289 two-argument form must still build (and equal) an action item with no chord —
-        // this is what keeps records like `new("Ctrl+N", "new task")` equal across the sets and tests.
+        // this is what keeps record equality/construction working in tests (the label here is arbitrary).
         var item = new HelpItem("Ctrl+N", "new task");
 
         Assert.True(item.IsAction);

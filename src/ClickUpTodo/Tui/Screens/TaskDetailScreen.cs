@@ -1615,9 +1615,11 @@ public sealed class TaskDetailScreen : Screen
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
-            var (text, rowBadges) = TaskRowRenderer.Render(row.Task, _treeBadgeDisplay, _currentUserId, row.Depth);
-            display.Add(text);
-            badges.Add(rowBadges);
+            // The tree renders fully expanded with no ▶/▼ fold arrows, so the renderer's marker-offset
+            // fields (used only for fold-arrow hit-testing on the main list) are ignored here.
+            var rendered = TaskRowRenderer.Render(row.Task, _treeBadgeDisplay, _currentUserId, row.Depth);
+            display.Add(rendered.Text);
+            badges.Add(rendered.Badges);
             searchKeys.Add(row.Task.Name);
             taskRows.Add(row.Task);
             if (row.IsCurrent)

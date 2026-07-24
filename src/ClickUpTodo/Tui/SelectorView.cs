@@ -289,6 +289,13 @@ public class SelectorView : View
     private void ApplyRemove(SelectorItem item)
     {
         RemoveFromSelection(item.Id);
+        // Collect mode has no server round-trip (no Reconcile), so prune the distinguished/locked marker
+        // sets here — mirroring what Reconcile does after an immediate-apply write — or a de-selected
+        // seed keeps its marker on a re-surfaced top-frequent row (#370). Immediate-apply must NOT prune
+        // here: its success path reconciles (and prunes) from the server-confirmed set, and its
+        // failure-revert re-adds the item and needs the marker still present to restore it.
+        if (_mode == SelectorMode.CollectSelection)
+            SelectorModel.PruneMarkersToSelection(_selectedIds, _lockedIds, _distinguishedIds);
         RenderCurrent();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
         if (_mode == SelectorMode.ImmediateApply)
@@ -338,9 +345,9 @@ public class SelectorView : View
         _selectedIds.Clear();
         foreach (var item in confirmed)
             AddToSelection(item);
-        // A locked / distinguished entry the server dropped is no longer meaningfully marked.
-        _lockedIds.RemoveWhere(id => !_selectedIds.Contains(id));
-        _distinguishedIds.RemoveWhere(id => !_selectedIds.Contains(id));
+        // A locked / distinguished entry the server dropped is no longer meaningfully marked (same
+        // prune the collect-mode removal path applies — see SelectorModel.PruneMarkersToSelection).
+        SelectorModel.PruneMarkersToSelection(_selectedIds, _lockedIds, _distinguishedIds);
         RenderCurrent();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }

@@ -31,11 +31,14 @@ public static class TaskRowRenderer
     /// from <see cref="StatusBadgeColor.PreferDarkText"/> (white on dark gray).</summary>
     public const string CustomIdBadgeColor = "5a5a5a";
 
-    /// <summary>The rendered row: the display line and its zero-or-more colour badge spans, ready to
-    /// feed a <see cref="StatusBadgeListSource"/> (parallel <c>_display</c>/<c>_badges</c> entries).
-    /// A positional record struct, so it deconstructs to <c>(text, badges)</c> at the call site.</summary>
+    /// <summary>The rendered row: the display line, its zero-or-more colour badge spans (ready to feed a
+    /// <see cref="StatusBadgeListSource"/> — parallel <c>_display</c>/<c>_badges</c> entries), and the
+    /// char span of the leading fold marker within <c>Text</c> (<c>(-1, 0)</c> when none), so a mouse
+    /// hit-test can resolve the arrow column (#287). A positional record struct, so it deconstructs to
+    /// <c>(text, badges, markerStart, markerLength)</c> at the call site.</summary>
     public readonly record struct RenderedRow(
-        string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges);
+        string Text, IReadOnlyList<StatusBadgeListSource.Badge> Badges,
+        int MarkerStart, int MarkerLength);
 
     /// <summary>
     /// Formats a task row and pairs each badge span with its colour. The text and spans come from
@@ -79,6 +82,6 @@ public static class TaskRowRenderer
         // span sentinel makes TryCreate return null so nothing is shaded when it's not shown.
         if (StatusBadgeListSource.TryCreate(row.AssigneesStart, row.AssigneesLength, AssigneesBadgeColor) is { } assignees)
             badges.Add(assignees);
-        return new RenderedRow(row.Text, badges);
+        return new RenderedRow(row.Text, badges, row.MarkerStart, row.MarkerLength);
     }
 }
