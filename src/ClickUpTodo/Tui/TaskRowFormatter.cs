@@ -23,14 +23,18 @@ public static class TaskRowFormatter
     /// title — so <paramref name="Text"/> no longer starts with the title; the ListView's type-ahead
     /// searches the decoupled title-only keys instead (#76). The Assignees badge trails the title/metadata.
     /// When a badge is absent (unset, grouped away, or hidden) its <c>*Length</c> is 0 and its
-    /// <c>*Start</c> is -1.
+    /// <c>*Start</c> is -1. <c>MarkerStart</c>/<c>MarkerLength</c> are the char span of the leading fold
+    /// <em>arrow</em> (#76) within <paramref name="Text"/>, so a mouse hit-test can resolve the arrow
+    /// column (#287). Only a real <c>▶ </c>/<c>▼ </c> arrow gets a span; a blank gutter or an empty marker
+    /// reports the <c>(-1, 0)</c> "no marker" sentinel.
     /// </summary>
     public readonly record struct Row(
         string Text,
         int StatusStart, int StatusLength,
         int PriorityStart, int PriorityLength,
         int CustomIdStart, int CustomIdLength,
-        int AssigneesStart, int AssigneesLength);
+        int AssigneesStart, int AssigneesLength,
+        int MarkerStart, int MarkerLength);
 
     /// <summary>Two spaces of indent per nesting level in the F4 subtasks view (#46).</summary>
     private const string IndentUnit = "  ";
@@ -173,7 +177,15 @@ public static class TaskRowFormatter
                 break;
         }
 
-        text += indent + marker + task.Name;
+        text += indent;
+        // Capture the fold marker's char span the same incremental way as the badges, so the arrow's
+        // offset stays exact regardless of indent, badges, or wide/emoji runes ahead of it (#287). Only a
+        // real ▶/▼ arrow gets a span; a blank gutter (the "  " FoldMarker emits for a non-foldable row in
+        // the nested view) reports the (-1, 0) "no marker" sentinel, so a hit-test can never mistake a
+        // leaf/child row's gutter for a clickable arrow — independent of any caller-side FoldState gate.
+        var hasArrow = marker.Trim().Length > 0;
+        var (markerStart, markerLength) = hasArrow ? (text.Length, marker.Length) : (-1, 0);
+        text += marker + task.Name;
 
         if (groupedBy != TaskField.List && !string.IsNullOrWhiteSpace(task.ListName))
             text += $"  · {task.ListName}";
@@ -193,7 +205,8 @@ public static class TaskRowFormatter
 
         return new Row(
             text, statusStart, statusLength, priorityStart, priorityLength,
-            customIdStart, customIdLength, assigneesStart, assigneesLength);
+            customIdStart, customIdLength, assigneesStart, assigneesLength,
+            markerStart, markerLength);
     }
 
     /// <summary>The identifier shown on the row: the task's Space-defined custom id when set, else its

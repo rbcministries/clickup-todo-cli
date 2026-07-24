@@ -50,12 +50,20 @@ On first launch the app walks you through a short setup:
 4. **Pick a refresh interval** (default 60 seconds).
 
 Settings are saved to `%APPDATA%\clickup-todo\config.json` (on Windows) or
-`~/.config/clickup-todo/config.json` elsewhere. On **Windows** the token is stored
-**encrypted at rest** using DPAPI (current-user scope). On **other platforms** it currently
-falls back to an **unencrypted file** on disk — strengthening this with the OS secret store
-(macOS Keychain / Linux Secret Service) is tracked in
-[#306](https://github.com/rbcministries/clickup-todo-cli/issues/306) and is a prerequisite for
-publishing pre-built macOS/Linux binaries. Running from source is unaffected.
+`~/.config/clickup-todo/config.json` elsewhere. The token is stored in your **OS secret store**
+wherever one is available:
+
+- **Windows** — encrypted at rest with DPAPI (current-user scope).
+- **macOS** — the login **Keychain** (via the built-in `security` tool).
+- **Linux** — the **Secret Service** (GNOME Keyring / KWallet) via `secret-tool` (from `libsecret`).
+
+When no secret store is reachable — a headless/SSH box, or a minimal container without `secret-tool`
+or a session keyring — the token falls back to an **unencrypted file** (`token.bin`) in the config
+directory. The first-run setup states, in plain words, exactly where your token was stored and warns
+you when the plaintext fallback was used (with a hint for enabling the secure path). To get the secure
+path on Linux, install `libsecret` (which provides `secret-tool`) and run a Secret Service such as
+`gnome-keyring`. An older build that wrote a plaintext `token.bin` is migrated into the secret store
+automatically on the next launch, and the cleartext file is removed.
 
 Run `clickup-todo --reset` to forget the token and settings and start over.
 
@@ -97,8 +105,9 @@ this repo:
    the local listener can't bind (locked-down environment), it falls back to letting you **paste the
    `code`** from the browser's address bar.
 
-The OAuth access token is stored the same way as a personal token (encrypted at rest), and the active
-auth mode is recorded in `config.json` so startup uses the right scheme. To use a different registered
+The OAuth access token is stored the same way as a personal token (in the OS secret store where one is
+available — see [First-run setup](#first-run-setup)), and the active auth mode is recorded in
+`config.json` so startup uses the right scheme. To use a different registered
 redirect URL, set `CLICKUP_OAUTH_REDIRECT_URI` (it must match the URL registered in your app).
 
 ## Keyboard shortcuts

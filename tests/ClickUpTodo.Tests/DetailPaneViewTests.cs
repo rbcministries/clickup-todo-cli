@@ -67,6 +67,71 @@ public sealed class DetailPaneViewTests
         Assert.DoesNotContain(cells, IsSeparatorTagged);
     }
 
+    // ── Link tagging (#317) ────────────────────────────────────────────────────────────────────────
+    // BuildCells tags the cells covered by each detected link, by kind, so the draw override can style
+    // them. These round-trip through the real Cell.ToCellList, so ClassifyCell reflects what actually
+    // lands in the loaded cells (no driver needed to build the model).
+
+    // The substring of `line` whose cells are tagged with `style`, contiguous — used to verify a link
+    // tag covers exactly the URL characters and nothing else.
+    private static string TaggedText(string line, DetailPaneView.DetailCellStyle style)
+    {
+        var cells = DetailPaneView.BuildCells(line, Sep).Single();
+        var chars = cells.Where(c => DetailPaneView.ClassifyCell(c) == style)
+                         .Select(c => c.Grapheme ?? "");
+        return string.Concat(chars);
+    }
+
+    private static bool AllNormal(string line)
+        => DetailPaneView.BuildCells(line, Sep).Single()
+            .All(c => DetailPaneView.ClassifyCell(c) == DetailPaneView.DetailCellStyle.Normal);
+
+    [Fact]
+    public void BuildCells_TagsWebLinkCells()
+    {
+        const string line = "See https://example.com/docs for details.";
+        Assert.Equal("https://example.com/docs", TaggedText(line, DetailPaneView.DetailCellStyle.WebLink));
+        // Nothing spuriously tagged as a task link.
+        Assert.Equal("", TaggedText(line, DetailPaneView.DetailCellStyle.TaskLink));
+    }
+
+    [Fact]
+    public void BuildCells_TagsTaskLinkCells()
+    {
+        const string line = "Related: https://app.clickup.com/t/abc123 (context)";
+        Assert.Equal("https://app.clickup.com/t/abc123", TaggedText(line, DetailPaneView.DetailCellStyle.TaskLink));
+        Assert.Equal("", TaggedText(line, DetailPaneView.DetailCellStyle.WebLink));
+    }
+
+    [Fact]
+    public void BuildCells_TagsMixedTaskAndWebLinksOnOneLine()
+    {
+        const string line = "task https://app.clickup.com/t/t1 and web https://example.com end";
+        Assert.Equal("https://app.clickup.com/t/t1", TaggedText(line, DetailPaneView.DetailCellStyle.TaskLink));
+        Assert.Equal("https://example.com", TaggedText(line, DetailPaneView.DetailCellStyle.WebLink));
+    }
+
+    [Fact]
+    public void BuildCells_LeavesTheSurroundingTextAndLinkFreeLinesNormal()
+    {
+        // The non-URL characters around a link stay Normal…
+        const string line = "See https://example.com now";
+        var cells = DetailPaneView.BuildCells(line, Sep).Single();
+        var normal = string.Concat(cells.Where(c => DetailPaneView.ClassifyCell(c) == DetailPaneView.DetailCellStyle.Normal)
+                                        .Select(c => c.Grapheme ?? ""));
+        Assert.Equal("See  now", normal);
+        // …and a line with no URL is entirely Normal (guards the existing uncoloured-content invariant).
+        Assert.True(AllNormal("A comment with no links at all."));
+    }
+
+    [Fact]
+    public void BuildCells_DoesNotRunLinkDetectionOnSeparatorLines()
+    {
+        // The separator rule contains no URL, but assert explicitly it stays a Separator (never a link).
+        var cells = DetailPaneView.BuildCells(Sep, Sep).Single();
+        Assert.All(cells, c => Assert.Equal(DetailPaneView.DetailCellStyle.Separator, DetailPaneView.ClassifyCell(c)));
+    }
+
     // Exercises the real SetBody → TextView.Load path (no driver needed to load the model) and inspects
     // the loaded cells. This is the reviewer's concern (PR #184): the terminal-default (Color.None)
     // background must stay on the separator line only, and must not carry forward to the comment/
