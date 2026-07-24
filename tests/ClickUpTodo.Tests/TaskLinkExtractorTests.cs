@@ -248,4 +248,125 @@ public sealed class TaskLinkExtractorTests
         Assert.False(TaskLinkExtractor.TryParseTaskUrl(url, out var id));
         Assert.Equal(string.Empty, id);
     }
+
+    // --- #356: markdown [text](url) link spans -----------------------------------------------------------
+
+    [Fact]
+    public void Extract_MarkdownWebLink_SpansVisibleTextWithResolvedUrl()
+    {
+        const string text = "See [the docs](https://example.com/docs) here";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal(LinkKind.Web, span.Kind);
+        Assert.Null(span.TaskId);
+        Assert.Equal("https://example.com/docs", span.Url);
+        // The span covers the *visible text*, not the "[...](...)" markup.
+        Assert.Equal("the docs", text.Substring(span.Start, span.Length));
+    }
+
+    [Fact]
+    public void Extract_MarkdownTaskLink_ClassifiedAsTaskWithId()
+    {
+        const string text = "fixed in [that task](https://app.clickup.com/t/86c1abced) today";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal(LinkKind.Task, span.Kind);
+        Assert.Equal("86c1abced", span.TaskId);
+        Assert.False(span.IsCustomTaskId);
+        Assert.Equal("https://app.clickup.com/t/86c1abced", span.Url);
+        Assert.Equal("that task", text.Substring(span.Start, span.Length));
+    }
+
+    [Theory]
+    [InlineData("[email me](mailto:someone@example.com)")]   // non-http scheme
+    [InlineData("[relative](/local/page)")]                  // not absolute
+    [InlineData("[missing]()")]                              // no url (fails the mdurl group)
+    [InlineData("[](https://example.com)")]                  // empty visible text
+    public void Extract_MarkdownLinkWithoutNavigableHttpTarget_YieldsNoSpan(string text)
+    {
+        Assert.Empty(TaskLinkExtractor.Extract(text));
+    }
+
+    [Fact]
+    public void Extract_MarkdownLinkDoesNotAlsoEmitBareSpanForItsOwnUrl()
+    {
+        // The markdown alternative consumes the whole "[text](url)", so the URL inside the parens must not
+        // be re-detected as a second, bare span.
+        const string text = "[docs](https://example.com/docs)";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal("docs", text.Substring(span.Start, span.Length));
+        Assert.Equal("https://example.com/docs", span.Url);
+    }
+
+    [Fact]
+    public void Extract_MarkdownAndBareLinkMixed_BothInDocumentOrder()
+    {
+        const string text = "[a task](https://app.clickup.com/t/T1) and https://example.com/plain";
+        var spans = TaskLinkExtractor.Extract(text);
+
+        Assert.Equal(2, spans.Count);
+        Assert.Equal(LinkKind.Task, spans[0].Kind);
+        Assert.Equal("T1", spans[0].TaskId);
+        Assert.Equal("a task", text.Substring(spans[0].Start, spans[0].Length));
+        Assert.Equal(LinkKind.Web, spans[1].Kind);
+        Assert.Equal("https://example.com/plain", text.Substring(spans[1].Start, spans[1].Length));
+        Assert.True(spans[0].Start < spans[1].Start);
+    }
+
+    // --- #356: custom-id task URLs ------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("https://app.clickup.com/t/9014107164/ABC-123", "ABC-123")]
+    [InlineData("https://app.clickup.com/t/9014107164/ABC-123/", "ABC-123")]
+    [InlineData("https://clickup.com/t/42/GH-9", "GH-9")]
+    public void Extract_CustomIdTaskUrl_ClassifiedAsTaskAndFlagged(string url, string expectedId)
+    {
+        var span = Assert.Single(TaskLinkExtractor.Extract(url));
+
+        Assert.Equal(LinkKind.Task, span.Kind);
+        Assert.Equal(expectedId, span.TaskId);
+        Assert.True(span.IsCustomTaskId);
+    }
+
+    [Fact]
+    public void Extract_ApiIdTaskUrl_IsNotFlaggedCustom()
+    {
+        var span = Assert.Single(TaskLinkExtractor.Extract("https://app.clickup.com/t/86c1abced"));
+
+        Assert.Equal(LinkKind.Task, span.Kind);
+        Assert.False(span.IsCustomTaskId);
+    }
+
+    [Fact]
+    public void Extract_MarkdownCustomIdTaskLink_FlaggedCustom()
+    {
+        const string text = "[ticket](https://app.clickup.com/t/42/GH-9)";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal(LinkKind.Task, span.Kind);
+        Assert.Equal("GH-9", span.TaskId);
+        Assert.True(span.IsCustomTaskId);
+        Assert.Equal("ticket", text.Substring(span.Start, span.Length));
+    }
+
+    [Theory]
+    [InlineData("https://app.clickup.com/t/9014107164/ABC-123", "ABC-123")]
+    [InlineData("https://clickup.com/t/42/GH-9", "GH-9")]
+    public void TryParseTaskUrl_CustomIdForm_ReportsCustom(string url, string expectedId)
+    {
+        Assert.True(TaskLinkExtractor.TryParseTaskUrl(url, out var id, out var isCustom));
+        Assert.Equal(expectedId, id);
+        Assert.True(isCustom);
+    }
+
+    [Theory]
+    [InlineData("https://app.clickup.com/t/86c1abced", "86c1abced")]
+    [InlineData("https://app.clickup.com/9014107164/t/xyz", "xyz")]
+    public void TryParseTaskUrl_ApiIdForm_NotCustom(string url, string expectedId)
+    {
+        Assert.True(TaskLinkExtractor.TryParseTaskUrl(url, out var id, out var isCustom));
+        Assert.Equal(expectedId, id);
+        Assert.False(isCustom);
+    }
 }
