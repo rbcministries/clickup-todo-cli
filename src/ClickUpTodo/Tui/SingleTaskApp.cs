@@ -58,7 +58,8 @@ public sealed class SingleTaskApp
     private ContextualFooter _footer = null!;
     private TaskDetailScreen _detail = null!;
 
-    // Screens stacked over the root detail (only Help, via F1). Empty ⇒ the detail is front-most.
+    // Screens stacked over the root detail: Help (F1), a one-off agent run (#345), and the exit
+    // confirmation (#299). Empty ⇒ the detail is front-most.
     private readonly List<Screen> _stack = [];
 
     // Coalesces overlapping refreshes (F5/Ctrl+R racing the 30s tick): skip a tick while one is in flight

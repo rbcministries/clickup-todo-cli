@@ -1,4 +1,5 @@
 using ClickUpTodo.Tui.Screens;
+using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 
 namespace ClickUpTodo.Tests;
@@ -54,15 +55,32 @@ public sealed class ExitConfirmTests
 
     // ── ExitConfirmScreen.Classify: key → answer ─────────────────────────────
 
-    // Y and Enter confirm; N and Esc decline. Both the table-bound keys (Y / Esc) and the undisplayed
-    // aliases (Enter / N) are pinned here, so an alias can't quietly stop working.
+    // Y and Enter confirm; N and Esc decline — in *either* case for the letters. Both the table-bound
+    // keys (Y / Esc) and the undisplayed aliases (Enter / N) are pinned here, so an alias can't quietly
+    // stop working. The lowercase rows are not redundant: Terminal.Gui gives a plain `y` press a bare
+    // KeyCode.Y while `Key.TryParse("Y")` yields KeyCode.Y|ShiftMask (pinned below), so without them the
+    // most common physical keypress — an unshifted letter — would go unasserted.
     [Theory]
     [InlineData("Y", ExitConfirmModel.ConfirmKey.Yes)]
+    [InlineData("y", ExitConfirmModel.ConfirmKey.Yes)]
     [InlineData("Enter", ExitConfirmModel.ConfirmKey.Yes)]
     [InlineData("N", ExitConfirmModel.ConfirmKey.No)]
+    [InlineData("n", ExitConfirmModel.ConfirmKey.No)]
     [InlineData("Esc", ExitConfirmModel.ConfirmKey.No)]
     public void Classify_RecognizesBothAnswersAndTheirAliases(string token, ExitConfirmModel.ConfirmKey expected)
         => Assert.Equal(expected, ExitConfirmScreen.Classify(Parse(token)));
+
+    // The Terminal.Gui encoding the classifier is written against, pinned so the two cases above can't
+    // silently collapse into one input again: a parsed uppercase letter carries ShiftMask, lowercase does
+    // not. This is also why the screen classifies by hand rather than through KeybindingDispatcher, which
+    // matches the table token's exact KeyCode ("Y" → the shifted one) and would miss a plain `y`.
+    [Fact]
+    public void ParsedLetters_DifferByShiftMask_WhichIsWhyBothCasesAreTested()
+    {
+        Assert.Equal(KeyCode.Y | KeyCode.ShiftMask, Parse("Y").KeyCode);
+        Assert.Equal(KeyCode.Y, Parse("y").KeyCode);
+        Assert.NotEqual(Parse("y").KeyCode, Parse("Y").KeyCode);
+    }
 
     // Shift is stripped, so a shifted answer still answers (the repo's existing Y/N confirm idiom).
     [Theory]
@@ -71,15 +89,34 @@ public sealed class ExitConfirmTests
     public void Classify_TolerantOfShift(string token, ExitConfirmModel.ConfirmKey expected)
         => Assert.Equal(expected, ExitConfirmScreen.Classify(Parse(token)));
 
-    // A Ctrl/Alt chord is never an answer: a half-remembered chord must not read as "yes, exit". Ctrl+Q
-    // is the quit key itself — pressing it again at the prompt is the likeliest such slip.
+    // An arbitrary Ctrl/Alt chord is never an answer: a half-remembered chord must not read as
+    // "yes, exit" — nor as a "no" that dismisses the question the user asked for.
     [Theory]
     [InlineData("Ctrl+Y")]
     [InlineData("Ctrl+N")]
-    [InlineData("Ctrl+Q")]
+    [InlineData("Ctrl+E")]
     [InlineData("Alt+Y")]
-    public void Classify_NeverReadsAChordAsAnAnswer(string token)
+    [InlineData("Alt+N")]
+    public void Classify_NeverReadsAnArbitraryChordAsAnAnswer(string token)
         => Assert.Equal(ExitConfirmModel.ConfirmKey.Other, ExitConfirmScreen.Classify(Parse(token)));
+
+    // The app's own quit chords are the exception — pressing the key that raised the question again is an
+    // unambiguous second "yes", and swallowing them would leave both the quit command and the terminal's
+    // conventional interrupt dead while a modal asks a question.
+    [Theory]
+    [InlineData("Ctrl+Q")]  // Keybindings[MainList, Quit]
+    [InlineData("Ctrl+C")]  // its undisplayed alias in TodoApp.OnListKey
+    public void Classify_TreatsTheQuitChordsAsAConfirmingSecondPress(string token)
+        => Assert.Equal(ExitConfirmModel.ConfirmKey.Yes, ExitConfirmScreen.Classify(Parse(token)));
+
+    // Anti-drift: if the quit key is ever rebound in the central table, the classifier above must follow.
+    [Fact]
+    public void Classify_ConfirmsWhicheverKeyTheTableBindsToQuit()
+    {
+        var quit = Parse(Keybindings.Token(ScreenContext.MainList, KeyAction.Quit));
+
+        Assert.Equal(ExitConfirmModel.ConfirmKey.Yes, ExitConfirmScreen.Classify(quit));
+    }
 
     [Theory]
     [InlineData("F1")]

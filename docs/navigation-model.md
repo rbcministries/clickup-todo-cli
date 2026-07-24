@@ -68,8 +68,9 @@ One chokepoint, evaluated top-down:
    filled:** `RequestExit()` mounts the `ExitConfirmScreen` modal (`Y`/`Enter` exits, `N`/`Esc`
    dismisses back to the root) instead of stopping the app directly. The confirm screen is itself
    a transient modal under rule 1 — it is never a history entry, and because it consumes every key,
-   nothing but an explicit `Y`/`Enter` can leave the app while it is up (`Esc` there is the "no"
-   answer, `Ctrl+Q` is ignored).
+   nothing but a deliberate answer can leave the app while it is up: `Y`/`Enter`, or a second press
+   of the quit chord that raised it (`Ctrl+Q`/`Ctrl+C`). `Esc` there is the "no" answer, and any
+   other chord does nothing.
 
 **Invariant.** `history.Current` always names the top-most **destination** on `_screens`, ignoring
 any modals layered above it. Modals are transparent to history — that is the entire point of the

@@ -34,8 +34,13 @@ exactly where the user was. Non-root `Esc` still navigates back with no modal.
   dashboard gets a mouse affordance for free without this screen knowing about the mouse.
 - **Pure decision logic in `ExitConfirmModel`**, glue-free and unit-tested, mirroring
   `DescriptionEditorModel` / `PromptTemplateEditor`: the Terminal.Gui handler classifies a key
-  into `Yes`/`No`/`Other` (using the repo's established `KeyCode & ~ShiftMask` idiom so a
-  shifted `Y`/`N` answers too) and the model decides what that means.
+  into `Yes`/`No`/`Other` (using the repo's established `KeyCode & ~ShiftMask` idiom so either
+  case of `Y`/`N` answers) and the model decides what that means.
+- **The quit chord answers "yes" a second time.** An arbitrary `Ctrl`/`Alt` chord is not an
+  answer, but `Ctrl+Q` — and `Ctrl+C`, which `TodoApp` routes to the same seam — is: pressing the
+  key that raised the question again is unambiguous intent, and swallowing it would leave both
+  the quit command and the terminal's conventional interrupt dead while a modal asks a question.
+  (Added after review; the first cut ignored every chord.)
 
 ## Scope (this PR)
 
@@ -89,9 +94,12 @@ The `F1` help screen and the README shortcut table say the quit keys confirm fir
 
 ## Tests
 
-- **Unit (`ExitConfirmModelTests`):** `Yes → Exit`, `No → Cancel`, `Other → Ignore`, and the
-  prompt text is a question naming the exit (guards accidental copy drift into something
-  ambiguous).
+- **Unit (`ExitConfirmTests`):** `Yes → Exit`, `No → Cancel`, `Other → Ignore`, and the prompt
+  text is a question naming the exit (guards accidental copy drift into something ambiguous).
+  Classification covers both cases of the letters, the `Enter`/`N` aliases, the quit chords, and
+  arbitrary chords — plus a test pinning that `Key.TryParse("Y")` carries `ShiftMask` while `"y"`
+  does not, so the upper/lower rows can't silently collapse into one input (and recording why
+  `KeybindingDispatcher`, which matches the token's exact `KeyCode`, is the wrong tool here).
 - **Unit (`HelpLineTests` / `KeybindingsTests`):** the new footer set renders
   `Y/↩ yes, exit · Esc/N no, stay`, is non-empty, and every `ExitConfirm` table binding is
   advertised on it under a parseable key (the existing theories pick the new context up once

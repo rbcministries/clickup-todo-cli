@@ -74,16 +74,38 @@ public sealed class ExitConfirmScreen : Screen
     public override void OnShown() => SetFocus();
 
     /// <summary>
-    /// Classifies a keypress into one of <see cref="ExitConfirmModel.ConfirmKey"/>'s answers. <c>Shift</c>
-    /// is stripped so a shifted <c>Y</c>/<c>N</c> answers too (the repo's existing Y/N confirm idiom — see
-    /// <c>PromptTemplateEditorScreen</c>), while a <c>Ctrl</c>/<c>Alt</c> chord is never an answer: a
-    /// half-remembered chord shouldn't be read as "yes, exit". Public and static so the mapping is
-    /// unit-testable without instantiating the view (the suite never calls <c>Application.Init</c>).
+    /// Classifies a keypress into one of <see cref="ExitConfirmModel.ConfirmKey"/>'s answers.
+    /// <para>
+    /// <c>Shift</c> is stripped, so both cases of the letters answer (the repo's existing Y/N confirm
+    /// idiom — see <c>PromptTemplateEditorScreen</c>). Terminal.Gui encodes lowercase <c>y</c> as a bare
+    /// <c>KeyCode.Y</c> and uppercase <c>Y</c> as <c>KeyCode.Y | ShiftMask</c> — which is also why this
+    /// screen classifies by hand instead of going through <see cref="ClickUpTodo.Tui.KeybindingDispatcher"/>:
+    /// that matches the table token's exact <see cref="KeyCode"/>, and <c>Key.TryParse("Y")</c> yields the
+    /// <em>shifted</em> one, so dispatch would miss a plain <c>y</c>.
+    /// </para>
+    /// <para>
+    /// An arbitrary <c>Ctrl</c>/<c>Alt</c> chord is never an answer — a half-remembered chord shouldn't be
+    /// read as "yes, exit". The app's own <b>quit</b> chords are the exception: pressing the key that
+    /// raised this question again (<c>Ctrl+Q</c>, or <c>Ctrl+C</c> which <c>TodoApp</c> routes to the same
+    /// exit seam) is an unambiguous second "yes", not a stray press — and swallowing them would leave the
+    /// terminal's conventional escape hatch dead while a modal asks a question.
+    /// </para>
+    /// Public and static so the mapping is unit-testable without instantiating the view (the suite never
+    /// calls <c>Application.Init</c>).
     /// </summary>
     public static ExitConfirmModel.ConfirmKey Classify(Key key)
     {
-        if (key.IsCtrl || key.IsAlt)
+        if (key.IsAlt)
             return ExitConfirmModel.ConfirmKey.Other;
+
+        if (key.IsCtrl)
+            return (key.KeyCode & ~KeyCode.CtrlMask) switch
+            {
+                // Keep these in step with the quit paths that route to RequestExit (Ctrl+Q is
+                // Keybindings[MainList, Quit]; Ctrl+C is its undisplayed alias in TodoApp.OnListKey).
+                KeyCode.Q or KeyCode.C => ExitConfirmModel.ConfirmKey.Yes,
+                _ => ExitConfirmModel.ConfirmKey.Other,
+            };
 
         return (key.KeyCode & ~KeyCode.ShiftMask) switch
         {

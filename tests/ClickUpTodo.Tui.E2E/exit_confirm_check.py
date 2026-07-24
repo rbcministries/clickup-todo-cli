@@ -6,9 +6,12 @@ acceptance criterion that no unit test can reach.
 
 Per root: the quit key at the root shows the confirmation and the process stays alive →
 declining (N on the dashboard, Esc in single-task mode, so both answer keys are covered) tears
-the modal down and restores the root view → Esc again re-asks → Y exits the process. The
-dashboard leg asks the first time with Ctrl+Q (its footer quit command) and the second with Esc,
-so both of the trigger keys #299 names are covered; single-task mode only binds Esc.
+the modal down and restores the root view → Esc again re-asks → confirming exits the process.
+The dashboard leg asks the first time with Ctrl+Q (its footer quit command) and the second with
+Esc, so both of the trigger keys #299 names are covered; single-task mode only binds Esc. The
+confirming keys differ per leg on purpose: a second Ctrl+Q on the dashboard (the quit chord is
+an affirmative answer, so the prompt never leaves it dead) and a lowercase y in single-task mode
+(the unshifted keycode a real keypress produces, unlike the uppercase Y elsewhere).
 
 Self-contained (drives both legs, sets its own env). Like single_task_launch_check.py this is
 a single-run behavioural check, not an A/B: there is no stock baseline for a new screen."""
@@ -83,8 +86,9 @@ class App:
             pass
 
 
-def check_root(app, label, root_marker, quit_key, quit_name, decline_key, decline_name, stages):
-    """quit key → prompt → decline → root back → Esc → Y → the process exits."""
+def check_root(app, label, root_marker, quit_key, quit_name, decline_key, decline_name,
+               confirm_key, confirm_name, stages):
+    """quit key → prompt → decline → root back → Esc → confirm key → the process exits."""
     boot = app.visible()
     stages.append((f"{label}-boot", boot))
     assert root_marker in boot, f"{label}: root view did not render:\n{boot}"
@@ -110,27 +114,34 @@ def check_root(app, label, root_marker, quit_key, quit_name, decline_key, declin
     assert PROMPT in v, f"{label}: a second Esc at the root did not re-ask:\n{v}"
     assert app.alive(), f"{label}: the second Esc quit without confirming"
 
-    # 4. …and Y exits.
-    os.write(app.master, b"Y")
-    assert app.wait_for_exit(), f"{label}: Y at the confirmation did not exit:\n{app.visible()}"
-    print(f"{label} ok — {quit_name}/Esc ask, {decline_name} cancels, Y exits")
+    # 4. …and confirming exits.
+    os.write(app.master, confirm_key)
+    assert app.wait_for_exit(), \
+        f"{label}: {confirm_name} at the confirmation did not exit:\n{app.visible()}"
+    print(f"{label} ok — {quit_name}/Esc ask, {decline_name} cancels, {confirm_name} exits")
 
 
 stages = []
 dash = None
 single = None
 try:
-    # ── The dashboard root: the main list. Ask with Ctrl+Q (the footer's quit command),
-    #    decline with N. ─────────────────────────────────────────────────────────────────────
+    # ── The dashboard root: the main list. Ask with Ctrl+Q (the footer's quit command), decline
+    #    with N, then confirm with a *second* Ctrl+Q — pressing the key that raised the question
+    #    again is an affirmative answer, so neither the quit command nor Ctrl+C is left dead
+    #    while the prompt is up. ──────────────────────────────────────────────────────────────
     dash = App(E2E_TASKS="20", E2E_REFRESH="600")
     dash.pump(6.0)
-    check_root(dash, "dashboard", "next section", CTRL_Q, "Ctrl+Q", b"N", "N", stages)
+    check_root(dash, "dashboard", "next section", CTRL_Q, "Ctrl+Q", b"N", "N",
+               CTRL_Q, "a second Ctrl+Q", stages)
 
-    # ── The single-task root: the launch task's detail (#296). Esc is the only quit key
-    #    bound there; decline with Esc too. ──────────────────────────────────────────────────
+    # ── The single-task root: the launch task's detail (#296). Esc is the only quit key bound
+    #    there; decline with Esc too, and confirm with a *lowercase* y — the unshifted keycode a
+    #    real keypress produces, which the uppercase Y in single_task_launch_check.py doesn't
+    #    exercise. ───────────────────────────────────────────────────────────────────────────
     single = App(E2E_SINGLE_TASK="t5", E2E_TASKS="20", E2E_REFRESH="600")
     single.pump(6.0)
-    check_root(single, "single-task", "Description", ESC, "Esc", ESC, "Esc", stages)
+    check_root(single, "single-task", "Description", ESC, "Esc", ESC, "Esc",
+               b"y", "lowercase y", stages)
 
     if OUT:
         with open(OUT, "w") as f:
