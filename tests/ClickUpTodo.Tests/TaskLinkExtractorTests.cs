@@ -282,9 +282,37 @@ public sealed class TaskLinkExtractorTests
     [InlineData("[relative](/local/page)")]                  // not absolute
     [InlineData("[missing]()")]                              // no url (fails the mdurl group)
     [InlineData("[](https://example.com)")]                  // empty visible text
+    [InlineData("[   ](https://example.com)")]               // whitespace-only visible text
     public void Extract_MarkdownLinkWithoutNavigableHttpTarget_YieldsNoSpan(string text)
     {
         Assert.Empty(TaskLinkExtractor.Extract(text));
+    }
+
+    [Fact]
+    public void Extract_MarkdownUrlWithBalancedParens_KeepsFullUrl()
+    {
+        // The markdown URL delimiter is ')', but a URL that itself contains a balanced "(...)"
+        // (Wikipedia-style) must not be truncated at its inner '(' — mirrors the bare-URL path.
+        const string text = "[wiki](https://en.wikipedia.org/wiki/Foo_(bar))";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal(LinkKind.Web, span.Kind);
+        Assert.Equal("https://en.wikipedia.org/wiki/Foo_(bar)", span.Url);
+        Assert.Equal("wiki", text.Substring(span.Start, span.Length));
+    }
+
+    [Fact]
+    public void Extract_MarkdownVisibleTextDoesNotSpanNewline()
+    {
+        // mdtext is single-line, so a "[" that is never closed on its own line does not swallow the
+        // newline into a visible-text span (a span always sits on one rendered line). The bare task URL
+        // on the next line is still detected.
+        const string text = "[unclosed\nhttps://app.clickup.com/t/T9";
+        var span = Assert.Single(TaskLinkExtractor.Extract(text));
+
+        Assert.Equal(LinkKind.Task, span.Kind);
+        Assert.Equal("T9", span.TaskId);
+        Assert.Equal("https://app.clickup.com/t/T9", text.Substring(span.Start, span.Length));
     }
 
     [Fact]

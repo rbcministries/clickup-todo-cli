@@ -61,10 +61,13 @@ public static class TaskLinkExtractor
     // URL). A malformed markdown link (no closing ')') fails the first alternative; its URL, if bare, is
     // still caught by the second. Case-insensitive so an upper-cased scheme ("HTTPS://…", as some clients
     // emit) is still detected. Compiled once — the panes re-extract on every (re)render.
-    //   md   → "[text](url)": mdtext = the visible text, mdurl = the (whitespace/paren-free) target.
+    //   md   → "[text](url)": mdtext = the visible text (single line — it may not span a newline, so a
+    //          span always sits on one rendered line); mdurl = the target, a run of non-space/non-paren
+    //          chars that also admits one level of balanced "(...)" so a URL like
+    //          ".../Foo_(bar)" isn't truncated at its inner '(' (mirrors the bare path's TrimUrl handling).
     //   bare → a run of non-whitespace after the scheme; trailing sentence punctuation is trimmed by TrimUrl.
     private static readonly Regex LinkPattern = new(
-        @"(?<md>\[(?<mdtext>[^\]]*)\]\((?<mdurl>[^)\s]+)\))|(?<bare>https?://[^\s]+)",
+        @"(?<md>\[(?<mdtext>[^\r\n\]]*)\]\((?<mdurl>(?:[^()\s]|\([^()\s]*\))+)\))|(?<bare>https?://[^\s]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     // Trailing characters trimmed off a matched URL: sentence punctuation and closing brackets. A closing
@@ -92,9 +95,9 @@ public static class TaskLinkExtractor
             {
                 var visible = m.Groups["mdtext"];
                 // A markdown URL is already delimited by ')', so it needs no trailing-punctuation trim.
-                // Guard well-formedness the same way as bare URLs, and skip an empty visible text
-                // ("[](url)") — there is nothing for the reader to see or click.
-                if (visible.Length == 0
+                // Guard well-formedness the same way as bare URLs, and skip a blank visible text
+                // ("[](url)" / "[   ](url)") — there is nothing for the reader to see or click.
+                if (string.IsNullOrWhiteSpace(visible.Value)
                     || !Uri.TryCreate(m.Groups["mdurl"].Value, UriKind.Absolute, out var mdUri)
                     || !IsHttpUrl(mdUri))
                     continue;

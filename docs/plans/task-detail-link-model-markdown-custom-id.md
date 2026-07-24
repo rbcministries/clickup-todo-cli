@@ -72,9 +72,12 @@ markdown alternative and its URL, if bare, is still caught by the bare branch.
 
 Per branch:
 - **markdown**: validate `mdurl` (absolute http(s) with host); skip if it fails
-  the guard or if `mdtext` is empty (nothing to render/click). No trailing-trim
-  — the `)` delimiter already bounds the URL. Span = `mdtext` range; `Url` =
-  `mdurl`; classify via the shared task parser.
+  the guard or if `mdtext` is blank/whitespace (nothing to render/click). No
+  trailing-trim — the `)` delimiter bounds the URL — but `mdurl` admits one level
+  of balanced `(...)` so a URL like `.../Foo_(bar)` isn't truncated at its inner
+  `(` (mirrors the bare path's `TrimUrl`/balanced-paren handling). `mdtext` is
+  single-line (`[^\r\n\]]*`) so a visible-text span never crosses a newline.
+  Span = `mdtext` range; `Url` = `mdurl`; classify via the shared task parser.
 - **bare**: unchanged — `TrimUrl` + well-formedness guard + classify.
 
 ### 3. Custom-id task URLs + discriminator
