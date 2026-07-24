@@ -153,8 +153,10 @@ public static class HelpLine
 /// vocabulary; extended here). The less-literal glyphs, for maintainers: <c>ℹ</c> help/shortcuts,
 /// <c>🗁</c> open-by-id, <c>⧩</c> filter, <c>▼▲</c> sort / order activity, <c>⛚</c> group,
 /// <c>✨</c> dispatch to Claude, <c>✏</c> edit description, <c>➕</c> new/add, <c>🌐</c> browser,
-/// <c>📌</c> pin, <c>⚙</c> settings, <c>↻</c> refresh, <c>👁✅</c> show/hide completed. Each glyph
-/// keeps its <c>Key</c> hint so the shortcut stays discoverable and the item stays clickable (#289).
+/// <c>🔔</c> mentions/comments feed, <c>📌</c> pin, <c>⚙</c> settings, <c>↻</c> refresh,
+/// <c>👁✅</c> show/hide completed. Each glyph keeps its <c>Key</c> hint so the shortcut stays
+/// discoverable and the item stays clickable (#289). The <c>HelpScreen</c> mirrors these glyphs
+/// beside each explanation so users can match a footer icon to its concept.
 /// </para>
 /// </summary>
 public static class HelpItemSets
@@ -173,7 +175,7 @@ public static class HelpItemSets
         new("Ctrl+N", "➕"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+P", "📌"),
-        new("Ctrl+E", "feed"),
+        new("Ctrl+E", "🔔"),
         new("F1", "ℹ"),
         new("F2", "⚙"),
         new("F3", "⧩ ▼▲ ⛚"),
