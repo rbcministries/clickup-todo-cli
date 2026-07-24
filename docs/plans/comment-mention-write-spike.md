@@ -52,20 +52,31 @@ ClickUp accepts a **structured `comment` blocks array** on `POST /v2/task/{task_
 }
 ```
 
-Shape rules confirmed:
+Shape rules, **per ClickUp's published example** (not a captured live request — see the
+caveat below):
 
 - **Plain run:** `{ "text": "…" }`.
 - **@-mention run:** `{ "type": "tag", "user": { "id": <numericUserId> } }`. The tag block
-  needs **only** `type` + `user.id`; no `text` and no `attributes` are required for a
-  mention. ClickUp fills the rendered `@Name` text server-side and, on read-back, stores the
-  block as `{ text:"@Name", type:"tag", user:{ id } }` — exactly what our read-side
-  `CommentBlock` / `MapMentionedUserIds` (#167) already consumes.
+  appears to need **only** `type` + `user.id`; the example carries no `text` and no
+  `attributes` on the tag block. ClickUp fills the rendered `@Name` text server-side and, on
+  read-back, stores the block as `{ text:"@Name", type:"tag", user:{ id } }` — exactly what
+  our read-side `CommentBlock` / `MapMentionedUserIds` (#167) already consumes.
 - **Multiple tags per request** are allowed; text can precede and follow each tag.
 - **`comment_text` is not required alongside the blocks.** ClickUp's example sends `comment`
-  only. When both are present the blocks are authoritative for rendering; sending both risks
-  a duplicated body. **Recommendation for H:** send the `comment` blocks array *by itself*
+  only. The behavior when *both* are sent is unverified (it may duplicate the body), so
+  **send only one**. **Recommendation for H:** send the `comment` blocks array *by itself*
   when there is at least one mention, and leave the existing plain-text-only path
   (`comment_text`) untouched for mention-free comments.
+
+> **⚠️ Confidence caveat (the `attributes` question #321 flagged).** `developer.clickup.com`
+> is egress-blocked this session, so the tag-block shape above comes from ClickUp's *published
+> example* + our read-side model, **not** from a captured live write request/response as
+> #321's AC ideally wanted. The specific claim "a mention tag needs no `attributes`" is
+> therefore documented-not-captured. **The integration test in the test plan below (self-mention
+> → re-fetch → assert `MentionedUserIds` contains the id) is the confirmation gate**: H should
+> run it once under `CLICKUP_TOKEN` to lock the shape before hard-coding the block builder. If
+> a bare `{type:"tag",user:{id}}` is rejected or the mention doesn't materialize, add the
+> `attributes` object per the read-side #167 note.
 - **`notify_all`** stays a sibling top-level field (unchanged from the plain path).
 - **`attributes`** (per-block object) exists for *rich formatting* — `code-block`, `list`
   (`bullet`/`ordered`/`checked`), bold/italic, links — and is **out of scope for H**, which
@@ -81,9 +92,11 @@ picker (J) selects and #325 (K) will hand to the composer.
 Our read `Comment` schema's `comment` blocks property is generated as **`CommentProp`** — Kiota
 mangled it because the property name collided with the `Comment` class name (mirrors
 `StatusProp`/`PriorityProp`; see the #167 plan). On `CreateCommentRequest` the property `comment`
-does **not** collide with the class name `CreateCommentRequest`, so it will most likely generate
-as a `Comment` property of type `List<CommentBlock>`. H must **verify the actual generated
-member name after regen** and bind the facade to whatever Kiota emits (do not assume). Reusing
+doesn't collide with its *containing* class name — but a **sibling schema type `Comment` exists
+in the same namespace**, and the PascalCased property `Comment` could still be mangled to avoid
+colliding with that type (so a `CommentProp`-style rename is plausibly *more* likely than not).
+H must therefore **verify the actual generated member name after regen** and bind the facade to
+whatever Kiota emits (do not assume it is `Comment`). Reusing
 the existing `CommentBlock` component keeps the mapping identical and the generated surface
 minimal — Kiota omits unset properties, so a write block built as
 `new CommentBlock { Type = "tag", User = new User { Id = 1234567 } }` serializes to exactly
@@ -115,6 +128,24 @@ v2 API.**
 2. **Defer description @-mentions entirely** until ClickUp exposes a structured description
    write (or a v3 capability — see #2), tracking it as a known API limitation.
 
+**Exact spec delta for L option 1** (the markdown structured-write, no mention links). Add a
+`markdown_content` field alongside the existing plain `description` on `UpdateTaskRequest`:
+
+```jsonc
+// components.schemas.UpdateTaskRequest.properties  (L option 1)
+"markdown_content": {
+  "type": "string",
+  "description": "Task description as Markdown (ClickUp renders it). Use INSTEAD of `description` for a formatted write; ClickUp reads back the rendered form via text_content/markdown_description. Carries plain @name text only — not a linked mention (see Finding 2)."
+}
+```
+
+`SetTaskDescriptionAsync` then sends `markdown_content` instead of `description` (guard: still
+reject `null`; empty string clears). No mention plumbing. **Note this delta is provisional on
+the maintainer accepting the L rescope** — if L stays "real description mentions", it is
+blocked at the API and the delta is moot; the concrete change lands in L's own PR once the
+rescope is confirmed. That keeps #321's "exact delta for L" clause consciously answered
+(feasible slice specified) rather than left implicit.
+
 **One live check worth doing before L lands** (H/L, gated on `CLICKUP_TOKEN`): `PUT` a
 description containing `@Name` via `markdown_content` and read the task back to confirm it
 does *not* materialize as a linked mention. Expected: literal text. This removes the last
@@ -142,6 +173,15 @@ public v2 comment API cannot trigger it as a mention.
 **Verdict:** exclude @Brain / Super-Agent tagging from H and the #324/#325 mention picker
 scope. The picker should surface **human workspace members only**. If ClickUp later exposes AI
 agents as mentionable identities (or via a dedicated endpoint), reopen this as a new issue.
+
+> **Caveat on the evidence.** This is an **empirical result for the current workspace**, not an
+> exhaustive check of every ClickUp AI/agent API. Two limits: (a) "535 members, all human" is a
+> keyword scan (`brain`/`bot`/`agent`/`ai`/`assistant`/`super`) — an agent member named
+> off-pattern would be missed; (b) whether ClickUp Brain / Super Agents are even *provisioned*
+> in this workspace was not independently confirmed, so absence-from-`GET /team` can't fully
+> distinguish "the v2 comment API can't express agent mentions" from "no agent identities exist
+> here to tag." The practical conclusion for H/the picker (surface human members only) holds
+> regardless; treat the categorical "v2 can't do it" as strongly indicated rather than proven.
 
 ---
 
