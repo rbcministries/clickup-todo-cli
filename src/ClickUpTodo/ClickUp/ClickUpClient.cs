@@ -751,13 +751,14 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         try
         {
             var (value, options) = CustomFieldReader.Read(SerializeToJson(f));
-            return new CustomFieldItem(f.Name!, f.Type, value, options);
+            return new CustomFieldItem(f.Name!, f.Type, value, options, f.Id);
         }
         catch
         {
             // One malformed/unexpected field must never sink the whole task's detail — degrade to
-            // name/type only (the same shape the tab showed before values were surfaced).
-            return new CustomFieldItem(f.Name!, f.Type);
+            // name/type/id only (the same shape the tab showed before values were surfaced; the id is
+            // kept so strand detection, #365, still identifies the field).
+            return new CustomFieldItem(f.Name!, f.Type, Id: f.Id);
         }
     }
 
