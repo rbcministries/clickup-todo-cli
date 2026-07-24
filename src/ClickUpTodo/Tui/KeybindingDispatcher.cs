@@ -37,7 +37,12 @@ public sealed class KeybindingDispatcher(ScreenContext context)
             throw new InvalidOperationException(
                 $"Keybinding '{token}' for {Context}/{action} is not a parseable key.");
 
-        _handlers[key.KeyCode] = handler;
+        // Fail fast on a collision rather than silently letting the later registration win — two
+        // actions resolving to the same key in one context is a wiring bug, surfaced here at startup.
+        if (!_handlers.TryAdd(key.KeyCode, handler))
+            throw new InvalidOperationException(
+                $"Key '{token}' is already bound in {Context}; {action} would collide with an existing action.");
+
         return this;
     }
 

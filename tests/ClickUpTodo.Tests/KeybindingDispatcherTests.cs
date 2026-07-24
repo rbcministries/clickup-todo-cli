@@ -54,6 +54,17 @@ public sealed class KeybindingDispatcherTests
         Assert.Throws<KeyNotFoundException>(() => dispatcher.On(KeyAction.QuickUpdate, () => { }));
     }
 
+    [Fact]
+    public void On_Throws_WhenTwoRegistrationsCollideOnTheSameKey()
+    {
+        var dispatcher = new KeybindingDispatcher(ScreenContext.MainList)
+            .On(KeyAction.QuickUpdate, () => { });
+
+        // Re-binding the same key (here via the same action, Ctrl+U) is a wiring bug: fail fast rather
+        // than let the second registration silently shadow the first.
+        Assert.Throws<InvalidOperationException>(() => dispatcher.On(KeyAction.QuickUpdate, () => { }));
+    }
+
     // Closes the loop for the migrated context: every main-list command's table key dispatches to its
     // own handler and to no other. Together with the footer-agreement guard in KeybindingsTests, this
     // proves dispatch == table == footer for the main list.
