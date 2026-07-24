@@ -16,9 +16,10 @@ public enum QuickOpenKind
     Invalid,
 }
 
-/// <summary>A parsed quick-open target: its <see cref="Kind"/> and the extracted id/custom-id
-/// <see cref="Value"/> (empty for <see cref="QuickOpenKind.Invalid"/>).</summary>
-public readonly record struct QuickOpenRef(QuickOpenKind Kind, string Value)
+/// <summary>A parsed quick-open target: its <see cref="Kind"/>, the extracted id/custom-id
+/// <see cref="Value"/> (empty for <see cref="QuickOpenKind.Invalid"/>), and — only for a custom id
+/// carried in a <c>/t/{team_id}/{custom_id}</c> URL — the URL's own <see cref="TeamId"/> (else null).</summary>
+public readonly record struct QuickOpenRef(QuickOpenKind Kind, string Value, string? TeamId = null)
 {
     /// <summary>The "couldn't parse" result.</summary>
     public static readonly QuickOpenRef Invalid = new(QuickOpenKind.Invalid, "");
@@ -26,8 +27,10 @@ public readonly record struct QuickOpenRef(QuickOpenKind Kind, string Value)
     /// <summary>A plain-task-id reference.</summary>
     public static QuickOpenRef Task(string id) => new(QuickOpenKind.TaskId, id);
 
-    /// <summary>A custom-id reference.</summary>
-    public static QuickOpenRef Custom(string id) => new(QuickOpenKind.CustomId, id);
+    /// <summary>A custom-id reference. <paramref name="teamId"/> carries the workspace/team id when it
+    /// came from a <c>/t/{team_id}/{custom_id}</c> URL (so the caller can resolve against the URL's own
+    /// workspace instead of the configured one); null for a bare custom id.</summary>
+    public static QuickOpenRef Custom(string id, string? teamId = null) => new(QuickOpenKind.CustomId, id, teamId);
 }
 
 /// <summary>
@@ -110,8 +113,9 @@ public static class QuickOpenParser
     /// <summary>
     /// Extracts the task/custom id from a ClickUp URL path. The task segment is <c>/t/</c>: one
     /// trailing segment ⇒ a plain id, two-or-more ⇒ a custom id preceded by the team id
-    /// (<c>/t/{team_id}/{custom_id}</c>). A path without <c>/t/</c> (or with nothing after it) is not a
-    /// task link.
+    /// (<c>/t/{team_id}/{custom_id}</c>) — the team id is carried on the ref (<see cref="QuickOpenRef.TeamId"/>)
+    /// so the caller can resolve the custom id against the URL's own workspace, not the configured one.
+    /// A path without <c>/t/</c> (or with nothing after it) is not a task link.
     /// </summary>
     private static QuickOpenRef FromTaskPath(string path)
     {
@@ -126,7 +130,7 @@ public static class QuickOpenParser
         {
             0 => QuickOpenRef.Invalid,
             1 => QuickOpenRef.Task(segments[0]),
-            _ => QuickOpenRef.Custom(segments[1]),
+            _ => QuickOpenRef.Custom(segments[1], segments[0]),
         };
     }
 }

@@ -495,6 +495,27 @@ public sealed class TaskService(
     public Task<TaskDetail> GetTaskDetailByCustomIdAsync(string customId, string teamId, CancellationToken ct = default)
         => client.GetTaskDetailByCustomIdAsync(customId, teamId, ct);
 
+    /// <summary>
+    /// Full detail for a quick-open token that parsed as a plain id but may actually be a
+    /// <b>hyphenless custom id</b> (#353): try the plain <c>GET /task/{id}</c> first, and only if that
+    /// 404s — and a workspace/team id is available — retry it as a custom id via
+    /// <see cref="GetTaskDetailByCustomIdAsync"/>. Any other failure (or a 404 with no team id to retry
+    /// against) propagates unchanged, so a genuinely missing id still surfaces its error. A valid plain
+    /// id costs a single call — the fallback fires only on the 404.
+    /// </summary>
+    public async Task<TaskDetail> GetTaskDetailWithCustomIdFallbackAsync(
+        string idOrCustomId, string? teamId, CancellationToken ct = default)
+    {
+        try
+        {
+            return await client.GetTaskDetailAsync(idOrCustomId, ct).ConfigureAwait(false);
+        }
+        catch (ClickUpApiException ex) when (ex.StatusCode == 404 && !string.IsNullOrWhiteSpace(teamId))
+        {
+            return await client.GetTaskDetailByCustomIdAsync(idOrCustomId, teamId, ct).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>The comments on a task, for the detail view's Comments tab (#17).</summary>
     public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskCommentsAsync(taskId, ct);
