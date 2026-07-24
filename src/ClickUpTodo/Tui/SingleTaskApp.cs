@@ -61,14 +61,11 @@ public sealed class SingleTaskApp
     // Browser-style navigation history (#298): the launch task's detail is the immutable root, and the
     // only thing that navigates over it today is the F1 Help overlay. Back (Esc/Alt+←) at the root hands
     // off to RequestExit (the exit-confirmation seam, #299); forward (Alt+→) re-opens a backed-out overlay.
-    private NavigationHistory<NavEntry> _history = null!;
+    // Each entry is the factory that (re)creates its overlay screen; the root's factory is null — the root
+    // is the always-mounted base detail, not an overlay to build.
+    private NavigationHistory<Func<Screen>?> _history = null!;
     // The overlay currently mounted over the base detail (Help), or null when the detail root is showing.
     private Screen? _overlay;
-
-    /// <summary>One node in the navigation history: a <paramref name="Label"/> for the footer/logs and a
-    /// <paramref name="Open"/> factory that (re)creates the overlay screen. The root's factory is
-    /// <c>null</c> — the root is the always-mounted base detail, not an overlay to build.</summary>
-    private sealed record NavEntry(string Label, Func<Screen>? Open);
 
     // Coalesces overlapping refreshes (F5/Ctrl+R racing the 30s tick): skip a tick while one is in flight
     // so an earlier fetch can't land after a later one with stale data. UI-thread-only, like TodoApp's.
@@ -182,7 +179,7 @@ public sealed class SingleTaskApp
 
         // The launch task seeds the navigation history as its immutable root (#298). Its factory is null:
         // the root is the always-mounted base detail, not an overlay the history rebuilds.
-        _history = new NavigationHistory<NavEntry>(new NavEntry("detail", Open: null));
+        _history = new NavigationHistory<Func<Screen>?>(root: null);
 
         _window.Add(_detail, _statusLabel, _helpLabel);
         // Alt+←/Alt+→ drive the navigation history from anywhere in the window: keys the focused pane and
@@ -257,14 +254,14 @@ public sealed class SingleTaskApp
     {
         if (_overlay is HelpScreen)
             return;
-        Navigate(new NavEntry("help", () => new HelpScreen()));
+        Navigate(() => new HelpScreen());
     }
 
-    /// <summary>Pushes <paramref name="entry"/> onto the history and mounts it (truncating any forward
-    /// entries — browser semantics, handled by the model).</summary>
-    private void Navigate(NavEntry entry)
+    /// <summary>Pushes an overlay <paramref name="open"/> factory onto the history and mounts it (truncating
+    /// any forward entries — browser semantics, handled by the model).</summary>
+    private void Navigate(Func<Screen> open)
     {
-        _history.Push(entry);
+        _history.Push(open);
         ShowCurrent();
     }
 
@@ -304,7 +301,7 @@ public sealed class SingleTaskApp
         if (previous is not null)
             previous.Visible = false;
 
-        var factory = _history.Current.Open;
+        var factory = _history.Current;
         if (factory is null)
         {
             // Root: the base detail is front-most again.

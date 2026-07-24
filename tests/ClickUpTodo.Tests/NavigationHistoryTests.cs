@@ -110,6 +110,46 @@ public sealed class NavigationHistoryTests
 
     [Theory]
     [MemberData(nameof(Roots))]
+    public void Push_AfterMultipleBacks_TruncatesTheWholeForwardStack(string root)
+    {
+        var history = new NavigationHistory<string>(root);
+        history.Push("a");
+        history.Push("b");
+        history.Push("c");
+        history.Push("d");
+        history.TryBack(out _); // c
+        history.TryBack(out _); // b
+        history.TryBack(out _); // a — b, c, d are all ahead
+
+        history.Push("e"); // one fresh navigation drops the entire forward run (b, c, d)
+
+        Assert.Equal("e", history.Current);
+        Assert.False(history.CanGoForward);
+        Assert.Equal(new[] { root, "a", "e" }, history.Entries);
+    }
+
+    [Theory]
+    [MemberData(nameof(Roots))]
+    public void Push_UpToExactlyMaxDepth_RetainsEveryEntry_WithNoEviction(string root)
+    {
+        var history = new NavigationHistory<string>(root, maxDepth: 4);
+
+        history.Push("a");
+        history.Push("b");
+        history.Push("c"); // [root, a, b, c] — exactly at the cap, nothing evicted
+
+        Assert.Equal(4, history.Count);
+        Assert.Equal(new[] { root, "a", "b", "c" }, history.Entries);
+
+        // All four are reachable by walking back to the still-pinned root.
+        Assert.True(history.TryBack(out var b)); Assert.Equal("b", b);
+        Assert.True(history.TryBack(out var a)); Assert.Equal("a", a);
+        Assert.True(history.TryBack(out var r)); Assert.Equal(root, r);
+        Assert.True(history.AtRoot);
+    }
+
+    [Theory]
+    [MemberData(nameof(Roots))]
     public void Push_EvictsOldestNonRoot_WhenExceedingCap_KeepingRootPinned(string root)
     {
         var history = new NavigationHistory<string>(root, maxDepth: 3);
