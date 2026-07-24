@@ -216,9 +216,9 @@ public sealed class TaskDetailScreen : Screen
     private bool _treeLoaded;
 
     /// <summary>Raised when the user activates a tree row (Enter or double-click) for a task other than
-    /// the one being shown (#291). The host navigates the detail screen to that task — replacing the
-    /// current detail in place so a single Esc returns to the main list, not an ever-growing back-stack.
-    /// Inert on the current-task row (a no-op, flashed).</summary>
+    /// the one being shown (#291). The host opens that task's detail stacked over this one, so Esc walks
+    /// back one task at a time — the canonical "Esc = Back" model (#401/#298), uniform with the Ctrl+O
+    /// detail→detail path (#387). Inert on the current-task row (a no-op, flashed).</summary>
     public event EventHandler<string>? OpenTaskRequested;
 
     /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>

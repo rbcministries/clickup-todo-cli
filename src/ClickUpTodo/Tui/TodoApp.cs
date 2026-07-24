@@ -1766,7 +1766,7 @@ public sealed class TodoApp
     /// the feed and a second Enter is a no-op (the detail is by then active). Esc closes the detail and
     /// the screen seam restores the layer beneath with its selection intact.
     /// </summary>
-    private void OpenTaskDetail(string taskId, Screen? replacing = null)
+    private void OpenTaskDetail(string taskId)
     {
         var requester = ActiveScreen;
         Flash("Loading details…");
@@ -1825,11 +1825,11 @@ public sealed class TodoApp
                     // Ctrl+U opens Quick Updates for the detail's task, stacked over it; Esc pops back
                     // here (#159). Reads the screen's current task so a mid-view refresh is reflected.
                     screen.QuickUpdatesRequested += (_, _) => OpenQuickUpdatesForDetail(screen);
-                    // The Task Tree tab (#291): Enter/double-click a tree row navigates the detail to
-                    // that task by replacing THIS detail in place (replacing: screen), so a single Esc
-                    // returns to the main list instead of unwinding an ever-growing stack of visited
-                    // tasks. Opening detail from the list (replacing: null) is unchanged.
-                    screen.OpenTaskRequested += (_, id) => OpenTaskDetail(id, replacing: screen);
+                    // The Task Tree tab (#291): Enter/double-click a tree row opens that task's detail
+                    // stacked over this one, so Esc walks back one task at a time — uniform with the
+                    // canonical "Esc = Back" decision (#401/#298) and with the Ctrl+O detail→detail path
+                    // (#387). No replace-in-place: the visited-task chain is the single _screens back-stack.
+                    screen.OpenTaskRequested += (_, id) => OpenTaskDetail(id);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -1837,11 +1837,6 @@ public sealed class TodoApp
                         if (screen.OpenBrowserRequested)
                             LaunchBrowser(detail.Url, detail.Name);
                     });
-                    // Replace-in-place navigation (#291): now that the new detail is on top, tear down
-                    // the detail it navigated from so the stack stays [list, detail] and Esc lands on the
-                    // list. Guarded inside CloseScreen against a screen no longer on the stack.
-                    if (replacing is not null)
-                        CloseScreen(replacing);
                 });
             }
             catch (Exception ex)

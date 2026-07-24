@@ -122,26 +122,32 @@ try:
     for token in ("ANCESTOR", "ROOT", "CHILDONE", "GRANDKID", "CHILDTWO"):
         assert token in v, f"tree tab missing {token}:\n{v}"
 
-    # ── 2) Enter-navigate into a child; 3) single Esc returns to the MAIN LIST ─────────────────
+    # ── 2) Enter-navigate into a child; 3) Esc WALKS BACK one task at a time ───────────────────
     # Move to the bottom row (the ListView clamps there) so the selection is deterministically a
     # non-current task — CHILDTWO, the last arranged row — regardless of the initial cursor.
     for _ in range(4):
         send(DOWN)
         pump(0.2)
-    send(ENTER)          # navigate the detail to CHILDTWO (replace in place)
+    send(ENTER)          # open CHILDTWO's detail stacked over t0's (no replace-in-place)
     pump(3.0)
     v = visible()
     assert "CHILDTWO" in v, "Enter did not navigate to the child task:\n" + v
     assert "GRANDKID" not in v, "expected the new detail on its Stream tab, not the tree:\n" + v
     assert "Release task" not in v, "still showing the task we navigated from:\n" + v
 
-    send(ESC)            # a single Esc must land on the list, not the task we came from
+    # A single Esc = Back: return to the PREVIOUS task (t0's detail, still on its Task Tree tab),
+    # NOT straight to the list — the walkable-back model (#401/#298), uniform with Ctrl+O (#387).
+    send(ESC)
     pump(2.0)
     v = visible()
-    assert "Task 0" in v, "single Esc did not return to the main list:\n" + v
-    assert "CHILDONE" not in v, "Esc left a detail screen open instead of the list:\n" + v
+    assert "Release task" in v, "Esc did not walk back to the previous task's detail:\n" + v
+    assert "Task 0 —" not in v, "Esc jumped past the previous task straight to the list:\n" + v
+    # A second Esc from the root detail returns to the main list.
+    send(ESC)
+    pump(2.0)
+    assert "Task 0" in visible(), "second Esc did not return to the main list:\n" + visible()
 
-    # ── 4) Double-click a tree row navigates the same way ─────────────────────────────────────
+    # ── 4) Double-click a tree row navigates the same way (stacked) ────────────────────────────
     open_tree_tab()
     y = row_of("CHILDONE")
     assert y >= 0, "CHILDONE row not found for double-click:\n" + visible()
@@ -152,9 +158,12 @@ try:
     assert "GRANDKID" not in v, "double-click did not land on the new detail's Stream tab:\n" + v
     assert "CHILDTWO" not in v, "double-click did not land on the new detail's Stream tab:\n" + v
 
-    send(ESC)
+    send(ESC)            # back to t0's detail (walkable back)
     pump(2.0)
-    assert "Task 0" in visible(), "Esc after double-click did not return to the list:\n" + visible()
+    assert "Release task" in visible(), "Esc did not walk back to the previous detail:\n" + visible()
+    send(ESC)            # back to the list
+    pump(2.0)
+    assert "Task 0" in visible(), "second Esc after double-click did not return to the list:\n" + visible()
 
     # ── 5) Clicking the "Task Tree" tab header (mouse) lazy-loads the tree ─────────────────────
     # Selecting the tab by clicking its header must trigger the same lazy load as Ctrl+←/→, not leave

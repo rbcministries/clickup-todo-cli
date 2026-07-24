@@ -16,22 +16,27 @@ back is unchanged.
 
 ## Key design decisions
 
-### Navigation = host-driven "replace in place"
+### Navigation = host-driven stacking (walkable back)
 
 `TaskDetailScreen` holds no services and its write callbacks are bound per-task by the host, so
 detail→detail navigation is host-driven:
 
 - Add `event EventHandler<string>? OpenTaskRequested` to `TaskDetailScreen` (mirrors
   `NotificationsFeedScreen`). The tree tab raises it with the target task id.
-- `TodoApp.OpenTaskDetail` gains an optional `Screen? replacing = null`. It wires
-  `screen.OpenTaskRequested += (_, id) => OpenTaskDetail(id, replacing: screen);` and, after
-  `ShowScreen(newScreen, …)`, calls `CloseScreen(replacing)` when `replacing` is non-null.
+- `TodoApp` wires `screen.OpenTaskRequested += (_, id) => OpenTaskDetail(id);` — the target's
+  detail is **stacked over** the current one on the single `_screens` back-stack.
 
-Net stack effect of tree navigation from detail **A** to task **B**: `ShowScreen(B)` pushes B
-over A (`[list, A, B]`), then `CloseScreen(A)` removes A (`[list, B]`). So the stack never grows
-past `[list, detail]` and a single Esc on B pops straight back to the list. First-open-from-list
-(`replacing: null`) is untouched — Esc still pops the one detail back to the list. This is the
-**replace-vs-stack** decision the issue flags; documented here + in the PR.
+Net stack effect of tree navigation from detail **A** to task **B**: `[list, A]` → `[list, A, B]`.
+`Esc` = Back walks back one task at a time (`B` → `A` → list), and at the list root `Esc`/Quit
+hands off to the exit seam (`RequestExit`). First-open-from-list is unchanged.
+
+> **Alignment note (updated for #401/#298/#387):** an earlier revision of this PR did
+> detail→detail as **replace-in-place** (close the prior detail so one `Esc` returned straight to
+> the list). Per the maintainer decision recorded in #401 — `Esc` = Back is canonical, browse the
+> visited-task chain — and to stay uniform with #387's Ctrl+O detail→detail path, this PR now
+> **stacks** instead. There is one back-stack (`_screens`), not a discarded history. Wiring the
+> shared pure `NavigationHistory<T>` model (#401, currently unused) as the logical mirror is a
+> coordination point with the in-flight #387 (which also opens details) — see the PR discussion.
 
 ### Data: reuse `SubtaskArranger`, no `Generated/` or spec change
 
