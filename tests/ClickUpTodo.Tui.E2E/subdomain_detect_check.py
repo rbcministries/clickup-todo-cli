@@ -60,7 +60,7 @@ def send(seq, wait=1.2):
 
 F2 = b"\x1bOQ"
 ESC = b"\x1b"
-BACKTAB = b"\x1b[Z"  # Shift+Tab — wraps focus to the last control (the Detect button, added last)
+TAB = b"\t"
 SPACE = b" "
 
 try:
@@ -76,8 +76,11 @@ try:
     assert "odbm" not in v, f"subdomain unexpectedly already set before Detect:\n{v}"
     print("SETTINGS ok — subdomain blank, Detect button present")
 
-    # Shift+Tab wraps from the initial focus (refresh field) to the Detect button; Space activates it.
-    send(BACKTAB, 0.8)
+    # Focus starts on the refresh field; the Detect button sits right after the subdomain field, so five
+    # Tabs (refresh → feed-refresh → feed-lookback → working-dir → subdomain → Detect) lands on it. Space
+    # activates it.
+    for _ in range(5):
+        send(TAB, 0.3)
     send(SPACE, 0.5)
     # Poll for the async detect (Task.Run → Application.Invoke) to land the value in the field.
     deadline = time.monotonic() + 6.0

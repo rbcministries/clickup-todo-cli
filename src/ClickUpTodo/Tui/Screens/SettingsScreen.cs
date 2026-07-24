@@ -140,7 +140,9 @@ public sealed class SettingsScreen : Screen
         {
             X = Pos.Right(subdomainLabel) + 1,
             Y = 8,
-            Width = 14,
+            // Narrow enough that the adjacent Detect button stays inside the left column (which the other
+            // rows cap at Dim.Percent(48)) rather than overlapping the right column at ~80-col widths.
+            Width = 10,
             Text = workspaceSubdomain,
         };
 
@@ -148,12 +150,23 @@ public sealed class SettingsScreen : Screen
         // host, so the user needn't type it. Only shown when a detector is wired (prod: SubdomainProbe;
         // tests/E2E: an injected stub). It runs off the UI thread — the app's Task.Run → Application.Invoke
         // pattern — and fails soft: a blank result (no redirect / network error) leaves the field untouched
-        // and just labels the button "none" so the manual value stays authoritative. One more control on
-        // the existing modal — no second focusable pane (#3), no new bare-letter shortcut (#12).
+        // and flashes an outcome so the manual value stays authoritative. One more control on the existing
+        // modal — no second focusable pane (#3), no new bare-letter shortcut (#12).
         Button? detectButton = null;
         if (detectSubdomain is not null)
         {
             var detect = new Button { X = Pos.Right(subdomainField) + 1, Y = 8, Text = "Detect" };
+            // A probe can outlive the screen (user Esc'd before it returned): the field/button are then
+            // disposed and touching them from the marshalled callback would throw on the UI loop. Cancel the
+            // in-flight probe on close, and track disposal so the callback bails — Terminal.Gui exposes no
+            // public IsDisposed to poll.
+            var detectCts = new CancellationTokenSource();
+            var disposed = false;
+            detect.Disposing += (_, _) =>
+            {
+                disposed = true;
+                detectCts.Cancel();
+            };
             detect.Accepting += (_, e) =>
             {
                 e.Handled = true;
@@ -164,7 +177,7 @@ public sealed class SettingsScreen : Screen
                     string found;
                     try
                     {
-                        found = await detectSubdomain(CancellationToken.None);
+                        found = await detectSubdomain(detectCts.Token);
                     }
                     catch
                     {
@@ -172,10 +185,18 @@ public sealed class SettingsScreen : Screen
                     }
                     Application.Invoke(() =>
                     {
-                        if (!string.IsNullOrEmpty(found))
-                            subdomainField.Text = found;
+                        if (disposed)
+                            return;
+                        // Button label stays fixed (stable width); the outcome is a transient flash.
                         detect.Enabled = true;
-                        detect.Text = string.IsNullOrEmpty(found) ? "Detect (none)" : "Detect";
+                        detect.Text = "Detect";
+                        if (string.IsNullOrEmpty(found))
+                        {
+                            RequestFlash("No workspace subdomain detected — enter it manually.");
+                            return;
+                        }
+                        subdomainField.Text = found;
+                        RequestFlash($"Detected workspace subdomain: {found}");
                     });
                 });
             };
@@ -324,7 +345,8 @@ public sealed class SettingsScreen : Screen
             }
         };
 
-        Add([
+        var views = new List<View>
+        {
             refreshLabel, _refreshField, feedRefreshLabel, _feedRefreshField,
             feedLookbackLabel, _feedLookbackField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
@@ -334,11 +356,14 @@ public sealed class SettingsScreen : Screen
             fixedDirLabel, fixedDirField, templateButton,
             sessionModeButton, postToCommentsButton, launchLocationButton,
             save, cancel,
-        ]);
+        };
 
-        // Added after the array so it's only present when a detector is wired (#351).
+        // Place Detect right after the subdomain field (when wired) so tab order matches its visual
+        // position instead of trailing after Save/Cancel (#351).
         if (detectButton is not null)
-            Add(detectButton);
+            views.Insert(views.IndexOf(subdomainField) + 1, detectButton);
+
+        Add(views.ToArray());
     }
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Settings;

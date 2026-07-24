@@ -19,16 +19,20 @@ public static class ClickUpUrl
     public const string BaseDomain = "clickup.com";
 
     /// <summary>
-    /// The <c>*.clickup.com</c> labels that are ClickUp's own service hosts, never a workspace subdomain
+    /// Common <c>*.clickup.com</c> labels that are ClickUp's own service hosts, never a workspace subdomain
     /// (#351). <see cref="SubdomainFromWorkspaceHost"/> rejects these so an auto-detect probe that lands on
     /// e.g. a login (<c>app</c>) or marketing (<c>www</c>) host doesn't record a bogus subdomain. Kept
     /// broader than <see cref="NormalizeSubdomain"/>'s <c>app</c>/<c>api</c> guard, which is about
-    /// user-typed input rather than a redirect target.
+    /// user-typed input rather than a redirect target. This is a <b>best-effort denylist</b>, not
+    /// exhaustive — but it only backstops the probe (which starts from <c>app.clickup.com</c> and is very
+    /// unlikely to be redirected to an unlisted service host), and the user still reviews the filled value
+    /// before saving, so an unlisted host is low-risk.
     /// </summary>
     public static readonly IReadOnlySet<string> ReservedSubdomains =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "app", "api", "www", "help", "support", "docs", "sso", "sharing",
+            "status", "blog", "university", "community", "cdn", "download",
         };
 
     /// <summary>

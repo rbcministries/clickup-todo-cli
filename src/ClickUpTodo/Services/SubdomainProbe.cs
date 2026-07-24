@@ -48,9 +48,16 @@ public sealed class SubdomainProbe
             // RequestMessage.RequestUri reflects the final URL after the client followed the redirect chain.
             return ClickUpUrl.SubdomainFromFinalUrl(response.RequestMessage?.RequestUri);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
-                                       or OperationCanceledException or InvalidOperationException or UriFormatException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            // Caller cancellation is a real signal, not a "couldn't detect" — let it propagate.
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException
+                                       or InvalidOperationException or UriFormatException)
+        {
+            // Transport error, the HttpClient timeout (a TaskCanceledException with ct *not* cancelled), or
+            // an unparseable final URL — all mean "not detected", so the manual value is kept.
             return "";
         }
     }

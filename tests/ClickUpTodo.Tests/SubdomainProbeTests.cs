@@ -16,6 +16,7 @@ public sealed class SubdomainProbeTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (throwOf is not null)
                 throw throwOf;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
@@ -59,8 +60,19 @@ public sealed class SubdomainProbeTests
     [Fact]
     public async Task DetectAsync_ReturnsBlankOnTimeout()
     {
-        // HttpClient surfaces its timeout as a TaskCanceledException; the probe treats it as "not detected".
+        // HttpClient surfaces its timeout as a TaskCanceledException with the *caller's* token not cancelled;
+        // the probe treats that as "not detected" rather than a caller-requested cancellation.
         var probe = ProbeReturning(null, new TaskCanceledException("timed out"));
         Assert.Equal("", await probe.DetectAsync());
+    }
+
+    [Fact]
+    public async Task DetectAsync_PropagatesCallerCancellation()
+    {
+        // A caller that cancels its token gets an OperationCanceledException, not a silent "".
+        var probe = ProbeReturning("https://odbm.clickup.com/");
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => probe.DetectAsync(cts.Token));
     }
 }

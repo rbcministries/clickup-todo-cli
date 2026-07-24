@@ -130,6 +130,8 @@ public sealed class ClickUpUrlTests
     [InlineData("www.clickup.com")]     // marketing host — reserved
     [InlineData("help.clickup.com")]    // reserved service host
     [InlineData("sharing.clickup.com")] // reserved service host
+    [InlineData("status.clickup.com")]  // reserved service host
+    [InlineData("blog.clickup.com")]    // reserved service host
     [InlineData("clickup.com")]         // bare base domain — no subdomain
     [InlineData("a.b.clickup.com")]     // deeper host, not a single workspace label
     [InlineData("odbm.example.com")]    // not a clickup.com host at all
