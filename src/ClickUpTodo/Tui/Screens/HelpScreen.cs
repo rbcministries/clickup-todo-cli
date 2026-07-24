@@ -46,7 +46,7 @@ public sealed class HelpScreen : Screen
                 + "  → / ←       Expand / collapse the selected parent's subtasks (▶ collapsed, ▼ expanded)\n"
                 + "  Ctrl+→ / ←  Expand / collapse all parents at once\n"
                 + "              (F4's 'all' state also nests subtasks not assigned to you)\n"
-                + "  Ctrl+Q/Esc  Quit\n"
+                + "  Ctrl+Q/Esc  Quit — asks to confirm first (Y or Enter exits, N or Esc stays)\n"
                 + "\n"
                 + "  Settings, Quick Updates, the task detail, and this help open as full-window\n"
                 + "  screens; Esc returns to the task list (your cursor stays on the same task).\n"

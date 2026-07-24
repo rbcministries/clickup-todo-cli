@@ -146,6 +146,7 @@ public sealed class HelpLineTests
         HelpItemSets.QuickOpen,
         HelpItemSets.NotificationsFeed,
         HelpItemSets.Help,
+        HelpItemSets.ExitConfirm,
     };
 
     [Theory]
