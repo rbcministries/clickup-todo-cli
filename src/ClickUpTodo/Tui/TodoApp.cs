@@ -539,7 +539,7 @@ public sealed class TodoApp
             .On(KeyAction.Refresh, RequestRefresh)          // F5 (Ctrl+R is the undisplayed alias below)
             .On(KeyAction.CycleBadges, CycleBadgeDisplay)
             .On(KeyAction.ToggleCompleted, CycleShowCompleted)
-            .On(KeyAction.Quit, () => Application.RequestStop());
+            .On(KeyAction.Quit, RequestExit);   // #298/#299 exit seam (see RequestExit)
 
     private void OnListKey(object? sender, Key key)
     {
@@ -565,7 +565,7 @@ public sealed class TodoApp
                 case KeyCode.C:
                     // Ctrl+C as a quit alias (the OS/terminal may intercept it first).
                     key.Handled = true;
-                    Application.RequestStop();
+                    RequestExit();
                     break;
                 case KeyCode.CursorRight:
                     // Ctrl+→/Ctrl+← = expand-all / collapse-all — the bulk counterpart to the per-parent
@@ -611,10 +611,11 @@ public sealed class TodoApp
                 }
                 break;
             case KeyCode.Esc:
-                // Esc quits from the main list — an undisplayed alias for Ctrl+Q (the footer shows the
-                // Ctrl+Q command). The quit-vs-back drift is tracked separately (#298/#299).
+                // Esc on the list is at the root (no screen is open — screens handle their own Esc), so
+                // this is back-at-root: hand off to the exit seam (#298/#299) rather than quitting inline.
+                // It stays an undisplayed alias for Ctrl+Q (the footer shows the Ctrl+Q command).
                 key.Handled = true;
-                Application.RequestStop();
+                RequestExit();
                 break;
         }
     }
@@ -1371,6 +1372,22 @@ public sealed class TodoApp
         }
         UpdateHelpLine();
     }
+
+    /// <summary>
+    /// The single "quit from the list root" chokepoint — the exit-confirmation seam (#298, #299
+    /// sub-issue 7). <c>Esc</c> is the canonical Back key; the dashboard's root is the main list, so
+    /// Back <em>at the root</em> is a quit, and every quit path there (the <see cref="KeyAction.Quit"/>
+    /// binding, <c>Esc</c>, <c>Ctrl+C</c>) routes here instead of calling <c>Application.RequestStop</c>
+    /// directly, so when #299 lands its confirmation modal plugs in here. Today it preserves the existing
+    /// behavior — stop the app.
+    /// <para>
+    /// Per #298 the planned Alt+←/→ chord was dropped (it collides with terminal-emulator split-pane
+    /// navigation, e.g. Windows Terminal); <c>Esc</c> = Back is canonical and there is no Forward key.
+    /// Browser-style forward/back <em>across visited tasks</em> — and the <see cref="NavigationHistory{T}"/>
+    /// this PR lands as its mechanism — is driven by the detail→detail navigation in #291.
+    /// </para>
+    /// </summary>
+    private void RequestExit() => Application.RequestStop();
 
     /// <summary>Routes a screen's transient message (e.g. a validation error) to the status line.</summary>
     private void OnScreenFlash(object? sender, string message) => Flash(message);

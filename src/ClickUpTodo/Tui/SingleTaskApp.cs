@@ -156,13 +156,20 @@ public sealed class SingleTaskApp
 
         // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data — refetch just this one task.
         _detail.RefreshRequested += (_, _) => RefreshTask();
-        // Ctrl+B sets OpenBrowserRequested then closes; Esc closes directly. Either way the root closing
-        // means "quit the tab" (there's no list to return to), launching the browser first if asked.
+        // Ctrl+B sets OpenBrowserRequested then closes; Esc closes directly. The detail is the launch-task
+        // root (#298), so its close is back-at-root: Ctrl+B opens the browser then quits, and a plain Esc
+        // hands off to the exit seam (RequestExit, #299) — which today quits the tab (there's no list to
+        // return to). Only fires while the detail is front-most; with an overlay up, Esc goes to it.
         _detail.Closed += (_, _) =>
         {
             if (_detail.OpenBrowserRequested)
+            {
                 LaunchBrowser(_task.Url);
-            Application.RequestStop();
+                Application.RequestStop();
+                return;
+            }
+
+            RequestExit();
         };
         // Quick Updates stays deferred in single-task mode: it needs sub-issue (5) #297 to decouple its
         // write path from the dashboard's working-set snapshot. Flash rather than silently no-op so the
@@ -327,6 +334,16 @@ public sealed class SingleTaskApp
         below.SetFocus();
         UpdateHelpLine();
     }
+
+    /// <summary>
+    /// The single "quit from the launch-task root" chokepoint — the exit-confirmation seam (#298, #299
+    /// sub-issue 7). <c>Esc</c> is the canonical Back key; the launch task is this mode's root, so Back
+    /// <em>at the root</em> is a quit. Today it stops the app (quits the tab, since single-task mode has
+    /// no list to return to); when #299 lands, its confirmation modal plugs in here instead of quitting
+    /// directly. Per #298 the planned Alt+←/→ chord was dropped (it collides with terminal-emulator
+    /// split-pane navigation) and there is no Forward key; forward/back across visited tasks rides #291.
+    /// </summary>
+    private void RequestExit() => Application.RequestStop();
 
     // ── Footer / status ──────────────────────────────────────────────────────
 
