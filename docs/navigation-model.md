@@ -20,8 +20,10 @@ Notifications Feed**) is a *transient modal* that rides the `_screens` view-stac
 **never** recorded in history. `Esc` obeys one three-rule contract evaluated top-down (dismiss modal
 → walk history → `RequestExit()`), and `history.Current` always names the top-most destination on
 `_screens`, with modals transparent to it. The feed's ambiguous case (#403 case 2) is resolved by
-treating it as a modal: a task opened *from* the feed is **not** pushed onto history, reusing the
-existing quick-open "requester" skip.
+recording the task opened *from* the feed as a normal **list-rooted** history entry (the feed screen
+itself is not an entry): back-navigation from a feed-opened task — and any detail→detail trail beyond
+it — walks back to the main list, bypassing the feed. This intentionally changes today's #115
+"Esc returns to the feed" behaviour.
 
 ## Two categories
 
@@ -70,40 +72,56 @@ without teaching it about every overlay.
 
 ## The feed (resolving #403 case 2)
 
-Opening a task from the feed makes the view-stack `[list, feed, detail]` while a list-rooted task
-history is `[list, task]` — the two diverge on `Esc` (the view restores the feed; a naive history
-pop would go to the list). **Decision: the feed is transparent to history (feed-as-modal).**
+Opening a task from the feed makes the view-stack `[list, feed, detail]` while the list-rooted task
+history is `[list, task]`. **Decision: the task opened from the feed is a first-class, list-rooted
+history entry; the feed screen itself is not.**
 
-- Classify `NotificationsFeedScreen` as a transient modal.
-- A task opened *from* the feed is **not** pushed onto `NavigationHistory`. Reuse the exact
-  mechanism quick-open already uses to skip its own mount: `OpenTaskDetail` captures the modal as
-  its "requester" and skips the history push when the open originates from a modal surface (see the
-  quick-open "requester" note in `TodoApp.ShowQuickOpenSurface`).
-- Result: history stays `[list]`; the `_screens` stack alone drives the feed→detail sub-flow, and
-  `Esc` from a feed-opened detail restores the feed (correct UX) with history untouched at the root.
+- The feed screen (Ctrl+E) is a transient modal — not a history entry.
+- A task opened *from* the feed is pushed onto the single list-rooted `NavigationHistory` at the
+  normal `OpenTaskDetail` site, exactly like a task opened from the list. **No feed special-casing,
+  no requester-skip** — the feed uses the same push-site as every other task-detail open.
+- Back-navigation therefore runs `task_n → … → task1 → list`: the first (feed-opened) detail goes
+  back to the **main list**, and any detail→detail trail opened beyond it walks back through those
+  tasks to that first task, then to the list.
+- The feed is a **launcher, not a back-stop.** Because destinations are rooted at the list and
+  transient modals never sit on the destination back-stack, the feed modal is left behind when you
+  navigate into the task chain. Whether #403 dismisses the feed eagerly (on open) or tears it down
+  when back-navigation passes the first task is an implementation choice; the observable contract is
+  only that back from the feed-opened task lands on the **list**.
 
-Rationale: this is the smaller blast radius, matches the "tasks-only history" framing, and the
-requester-skip plumbing already exists. The accepted cost is that detail→detail navigation started
-*inside* a feed launch is not recorded in the shared history.
+**Behavioural change to flag — not a silent regression.** This intentionally changes today's #115
+behaviour, where `Esc` from a feed-opened detail returns to the *feed*. Under this model that `Esc`
+returns to the *list*, and the feed is reached again via Ctrl+E. The feed E2E scenario (currently
+asserting "Esc returns here") must be updated to assert the list; #403 should treat that as an
+intended contract change, not a regression against #402's no-regression criterion.
 
-**Alternative, deferred:** make the feed a first-class nav target (`T` is already a nav-target
-union — list *or* task — so a feed variant fits), giving `[list, feed, task]` that mirrors
-`_screens` faithfully and walks in lockstep under a future Forward key. Revisit only if/when a
-Forward key or breadcrumb actually consumes the history and the feed needs to be a reachable
-"forward" step.
+**Why this over the earlier "feed-as-modal-with-skip" proposal.** Recording the feed-opened task
+keeps one coherent back-trail from feed-launched deep navigation all the way to the list, and makes
+the taxonomy table literally true (the `TaskDetailScreen` row already lists "feed row" as a push
+trigger). The earlier skip left feed-launched detail→detail navigation outside history entirely — a
+gap this closes.
+
+**Rejected alternatives:**
+- *Feed-as-modal with requester-skip* (the earlier proposal): the feed-opened task is not recorded;
+  `Esc` returns to the feed via the view-stack. Rejected — leaves feed-launched navigation out of
+  history.
+- *Feed as a first-class nav target* (`[list, feed, task]`): records the task **and** returns to the
+  feed on back. Rejected per maintainer preference — back from a feed-opened task should go to the
+  list, bypassing the feed. Revisit only if return-to-feed is later wanted.
 
 ## Consequences
 
 - **#403** wires one `NavigationHistory` per host, pushed at the single `OpenTaskDetail` site,
-  covering the tree and Ctrl+O paths; the feed path is guarded by the requester-skip so it does not
-  push. The reconciliation for the three #403 design questions is fully specified above (case 1 =
-  contract rule 1; case 2 = the feed decision; case 3 = `SingleTaskApp` root under contract rules 2
-  and 3).
+  covering the tree, Ctrl+O, **and feed** paths — the feed uses the same push-site with no skip. The
+  reconciliation for the three #403 design questions is fully specified above (case 1 = contract rule
+  1; case 2 = the feed decision; case 3 = `SingleTaskApp` root under contract rules 2 and 3).
 - **#346**'s shared `ScreenStackHost` wraps the `_screens` seam once #403 lands, and needs to model
   only the destination back-stack plus modal overlay/dismiss — not two competing history mechanisms.
-- **No behavioural regression** is expected: `Esc` = Back already walks `_screens` one screen at a
-  time today; this ADR makes `NavigationHistory` the logical mirror of that walk rather than changing
-  it. Verified via the existing `tui-validate` detail/quick-open/tree/feed scenarios (CLAUDE.md).
+- **One deliberate behavioural change, otherwise no regression.** `Esc` = Back already walks
+  `_screens` one screen at a time today; this ADR makes `NavigationHistory` the logical mirror of
+  that walk. The single intended change is the feed back-target (`Esc` from a feed-opened detail now
+  lands on the list, not the feed — see above), which requires updating the feed `tui-validate`
+  scenario. The detail / quick-open / tree scenarios stay green unchanged.
 - **Native modals** for the transient-modal category are an open exploration
   ([#404](https://github.com/rbcministries/clickup-todo-cli/issues/404)); this ADR classifies those
   surfaces as modals regardless of whether they stay on the custom `_screens` host or migrate to
