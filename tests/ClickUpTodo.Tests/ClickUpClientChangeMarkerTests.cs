@@ -111,6 +111,66 @@ public sealed class ClickUpClientChangeMarkerTests
     }
 
     [Fact]
+    public async Task AddTaskToList_OnSuccess_RecordsListsMarkerWithNullServerDate()
+    {
+        // The membership endpoints (POST /list/{list}/task/{task}) return an empty body — no
+        // date_updated to carry — so the nudge records a null serverDateUpdated by design (#348).
+        var recorder = new RecordingChangeMarkerStore();
+        using var client = new ClickUpClient(
+            "pk_x", new HttpClient(Ok("{}")), changeMarkers: recorder);
+
+        await client.AddTaskToListAsync("t1", "list1");
+
+        var m = Assert.Single(recorder.Records);
+        Assert.Equal("t1", m.TaskId);
+        Assert.Null(m.ServerDateUpdatedMs);
+        Assert.Equal(["lists"], m.ChangedFields);
+    }
+
+    [Fact]
+    public async Task RemoveTaskFromList_OnSuccess_RecordsListsMarker()
+    {
+        var recorder = new RecordingChangeMarkerStore();
+        using var client = new ClickUpClient(
+            "pk_x", new HttpClient(Ok("{}")), changeMarkers: recorder);
+
+        await client.RemoveTaskFromListAsync("t1", "list1");
+
+        var m = Assert.Single(recorder.Records);
+        Assert.Equal("t1", m.TaskId);
+        Assert.Null(m.ServerDateUpdatedMs);
+        Assert.Equal(["lists"], m.ChangedFields);
+    }
+
+    [Fact]
+    public async Task AddTaskToList_FeatureDisabled_RecordsNoMarker()
+    {
+        // The 2xx gate: ClickUp returns HTTP 400 (OV_016) when "Tasks in Multiple Lists" is off, which
+        // throws before the nudge is reached, so nothing is recorded — mirroring the failed-write case.
+        var recorder = new RecordingChangeMarkerStore();
+        using var client = new ClickUpClient(
+            "pk_x", new HttpClient(Status(HttpStatusCode.BadRequest, """{ "err": "nope", "ECODE": "OV_016" }""")),
+            changeMarkers: recorder);
+
+        await Assert.ThrowsAsync<ClickUpApiException>(() => client.AddTaskToListAsync("t1", "list1"));
+
+        Assert.Empty(recorder.Records);
+    }
+
+    [Fact]
+    public async Task RemoveTaskFromList_ApiError_RecordsNoMarker()
+    {
+        var recorder = new RecordingChangeMarkerStore();
+        using var client = new ClickUpClient(
+            "pk_x", new HttpClient(Status(HttpStatusCode.NotFound, """{ "err": "not found", "ECODE": "ITEM_100" }""")),
+            changeMarkers: recorder);
+
+        await Assert.ThrowsAsync<ClickUpApiException>(() => client.RemoveTaskFromListAsync("t1", "list1"));
+
+        Assert.Empty(recorder.Records);
+    }
+
+    [Fact]
     public async Task Write_MissingDateUpdatedInResponse_RecordsMarkerWithNullServerDate()
     {
         var recorder = new RecordingChangeMarkerStore();
