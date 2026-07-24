@@ -26,6 +26,8 @@ public sealed class HelpScreen : Screen
                 + "  Space       Quick Updates for the focused task — Enter applies its status or priority\n"
                 + "              (Tab switches panes; ✓ marks the current value; Assignees pane; Esc exits)\n"
                 + "  Enter       Open the task detail view (description, comments, attributes)\n"
+                + "  Ctrl+Enter  Open the focused task in a new terminal tab (also Ctrl+Left-Click a row);\n"
+                + "              falls back to a new window, or copies the command if no terminal can open\n"
                 + "  Ctrl+A      In the detail view: dispatch a Claude session (a one-off run shows its\n"
                 + "              output in the app; press Esc there to cancel a run in progress)\n"
                 + "  Ctrl+B      Open the task in your browser\n"
