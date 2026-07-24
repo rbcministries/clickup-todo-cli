@@ -44,19 +44,44 @@ public sealed class TerminalLauncher : ITerminalLauncher
         if (candidates.Count == 0)
             return Task.FromResult(LaunchResult.Fail("No terminal emulator found to launch Claude."));
 
+        if (TryStart(candidates, ct) is not { } spec)
+            return Task.FromResult(LaunchResult.Fail("Found a terminal but failed to start it."));
+
+        var note = _exists(options.ClaudeExecutable)
+            ? null
+            : $"'{options.ClaudeExecutable}' was not found on PATH — it must be available in the new terminal.";
+        return Task.FromResult(LaunchResult.Ok(spec.DisplayName, note));
+    }
+
+    public Task<LaunchResult> LaunchAppAsync(
+        AppLaunchCommand command, TerminalLauncherOptions options, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        var candidates = TerminalCommandPlanner.PlanAppLaunch(_os, _exists, _getEnv, command, options);
+        if (candidates.Count == 0)
+            return Task.FromResult(LaunchResult.Fail("No terminal emulator found to open the task in a new tab."));
+
+        if (TryStart(candidates, ct) is not { } spec)
+            return Task.FromResult(LaunchResult.Fail("Found a terminal but failed to start it."));
+
+        var note = _exists(command.FileName)
+            ? null
+            : $"'{command.FileName}' was not found on PATH — install the CLI so the new tab can run it.";
+        return Task.FromResult(LaunchResult.Ok(spec.DisplayName, note));
+    }
+
+    /// <summary>Starts each candidate in order and returns the first that launches, or null if none did.
+    /// Honours cancellation before each start (so nothing is spawned once cancelled).</summary>
+    private LaunchSpec? TryStart(IReadOnlyList<LaunchSpec> candidates, CancellationToken ct)
+    {
         foreach (var spec in candidates)
         {
             ct.ThrowIfCancellationRequested();
             if (_start(spec))
-            {
-                var note = _exists(options.ClaudeExecutable)
-                    ? null
-                    : $"'{options.ClaudeExecutable}' was not found on PATH — it must be available in the new terminal.";
-                return Task.FromResult(LaunchResult.Ok(spec.DisplayName, note));
-            }
+                return spec;
         }
-
-        return Task.FromResult(LaunchResult.Fail("Found a terminal but failed to start it."));
+        return null;
     }
 
     private static OSPlatformKind CurrentOS()
@@ -70,8 +95,10 @@ public sealed class TerminalLauncher : ITerminalLauncher
         return OSPlatformKind.Unknown;
     }
 
-    /// <summary>True if <paramref name="name"/> resolves to an executable on the current PATH.</summary>
-    private static bool ExecutableOnPath(string name)
+    /// <summary>True if <paramref name="name"/> resolves to an executable on the current PATH. Public so
+    /// the app-launch command resolver (<see cref="AppLaunchCommand.ForTask(string)"/>) can probe the
+    /// same way the launcher does.</summary>
+    public static bool ExecutableOnPath(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
             return false;
