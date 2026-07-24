@@ -251,7 +251,17 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
             // #303 quick-open not-found path: a GET for the sentinel id "tmissing" returns a 404 so the
             // Ctrl+O resolve can flash an error and leave the list unchanged. Off every other scenario's
             // path (no check opens "tmissing").
-            if (path[(path.LastIndexOf('/') + 1)..] == "tmissing")
+            var idSeg = path[(path.LastIndexOf('/') + 1)..];
+            if (idSeg == "tmissing")
+                return new HttpResponseMessage(HttpStatusCode.NotFound)
+                {
+                    Content = new StringContent(
+                        """{"err":"Task not found","ECODE":"ITEM_100"}""", Encoding.UTF8, "application/json"),
+                };
+            // #353 hyphenless-custom-id fallback: the sentinel id "PROJ123" (a hyphenless custom id that
+            // parses as a plain id) 404s on the plain GET but resolves once retried with
+            // custom_task_ids=true — proving the plain-id→custom-id 404 fallback end-to-end.
+            if (idSeg == "PROJ123" && !query.Contains("custom_task_ids=true", StringComparison.OrdinalIgnoreCase))
                 return new HttpResponseMessage(HttpStatusCode.NotFound)
                 {
                     Content = new StringContent(

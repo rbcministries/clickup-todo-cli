@@ -189,6 +189,7 @@ public static class HelpItemSets
         new("Ctrl+E", "edit description"),
         new("Ctrl+B", "browser"),
         new("Ctrl+U", "quick update"),
+        new("Ctrl+O", "open by id"),
         new("F5", "↻"),
         new("F1", "help"),
         new("Esc", "back"),
