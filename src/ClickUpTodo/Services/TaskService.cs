@@ -499,6 +499,25 @@ public sealed class TaskService(
     public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskCommentsAsync(taskId, ct);
 
+    /// <summary>Default cap on how many reply threads
+    /// <see cref="GetTaskCommentsWithRepliesAsync"/> fetches concurrently for one task's comments.</summary>
+    public const int DefaultMaxReplyConcurrency = CommentThreadLoader.DefaultMaxConcurrency;
+
+    /// <summary>
+    /// The comments on a task with their reply threads loaded (#328): fetches the flat comments, then
+    /// fetches replies for the comments that report a thread (<see cref="CommentItem.ReplyCount"/> &gt; 0)
+    /// and attaches them to each parent's <see cref="CommentItem.Replies"/>. The returned list is the same
+    /// flat top-level comments, now thread-enriched — comments without replies are unchanged and incur no
+    /// extra call. Batched (bounded by <see cref="DefaultMaxReplyConcurrency"/>) and best-effort per thread
+    /// so it rides the detail view's existing refresh cadence without an N+1 fetch storm.
+    /// </summary>
+    public async Task<IReadOnlyList<CommentItem>> GetTaskCommentsWithRepliesAsync(string taskId, CancellationToken ct = default)
+    {
+        var comments = await client.GetTaskCommentsAsync(taskId, ct);
+        return await CommentThreadLoader.LoadRepliesAsync(
+            comments, client.GetThreadedCommentsAsync, DefaultMaxReplyConcurrency, ct);
+    }
+
     /// <summary>Posts a plain-text comment to a task (#216, over the #210 facade) and returns it as a
     /// <see cref="CommentItem"/> so the detail view can append it optimistically.</summary>
     public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default)

@@ -266,7 +266,10 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// collection), so an unset description/priority/due-date and an empty assignee set send no key,
     /// leaving ClickUp to apply its list defaults. <paramref name="task"/>'s <c>PriorityLevel</c> is
     /// ClickUp's importance level (1=Urgent … 4=Low); assignees are sent as a flat id array (the create
-    /// endpoint's shape, unlike the add/rem of an update).
+    /// endpoint's shape, unlike the add/rem of an update). Any <see cref="NewTaskRequest.CustomFields"/>
+    /// (#368) are sent as ClickUp's <c>custom_fields: [{ id, value }]</c> array (loosely typed, so carried
+    /// on <c>AdditionalData</c> as an <see cref="UntypedNode"/> tree — no spec change); an empty set sends
+    /// no key.
     /// </summary>
     public Task<TaskItem> CreateTaskAsync(string listId, NewTaskRequest task, CancellationToken ct = default)
     {
@@ -284,6 +287,19 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 Priority = task.PriorityLevel,
                 DueDate = task.DueDateMs,
             };
+            // Custom-field values (#368) are loosely typed, so they ride on AdditionalData as a Kiota
+            // UntypedNode tree (no spec change / no regen — see docs/plans/new-task-custom-field-values.md)
+            // rather than a rigid generated property. Empty ⇒ no key, leaving today's create body untouched.
+            if (task.CustomFields is { Count: > 0 } customFields)
+            {
+                request.AdditionalData["custom_fields"] = new UntypedArray(customFields
+                    .Where(f => !string.IsNullOrWhiteSpace(f.Id))
+                    .Select(f => (UntypedNode)new UntypedObject(new Dictionary<string, UntypedNode>
+                    {
+                        ["id"] = new UntypedString(f.Id),
+                        ["value"] = ToUntyped(f.Value),
+                    })));
+            }
             var created = await _client.V2.List[listId].Task.PostAsync(request, cancellationToken: ct)
                 ?? throw new InvalidOperationException($"ClickUp returned no task for the create in list '{listId}'.");
             return Map(created);
@@ -414,6 +430,10 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         => Guard("AddTaskToList", async () =>
         {
             using var _ = await _client.V2.List[listId].Task[taskId].PostAsync(cancellationToken: ct);
+            // A membership change alters what another tab's list-membership views show, so nudge (#348).
+            // The endpoint returns an empty body (no date_updated), so the marker carries a null server
+            // date — the consumer simply always re-fetches on a lists nudge, same as the comment case.
+            _changeMarkers.Record(taskId, serverDateUpdatedMs: null, ListsFields);
         });
 
     /// <summary>
@@ -425,6 +445,9 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         => Guard("RemoveTaskFromList", async () =>
         {
             using var _ = await _client.V2.List[listId].Task[taskId].DeleteAsync(cancellationToken: ct);
+            // Inverse of AddTaskToListAsync — nudge on the confirmed removal too (#348). Empty body ⇒
+            // null server date (consumer always re-fetches on a lists nudge).
+            _changeMarkers.Record(taskId, serverDateUpdatedMs: null, ListsFields);
         });
 
     /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>
@@ -596,6 +619,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     private static readonly string[] DescriptionFields = ["description"];
     private static readonly string[] AssigneeFields = ["assignees"];
     private static readonly string[] CommentFields = ["comment"];
+    private static readonly string[] ListsFields = ["lists"];
 
     /// <summary>
     /// Records a change-marker nudge for a confirmed <c>PUT /task</c> write (#294), carrying the
@@ -727,13 +751,14 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         try
         {
             var (value, options) = CustomFieldReader.Read(SerializeToJson(f));
-            return new CustomFieldItem(f.Name!, f.Type, value, options);
+            return new CustomFieldItem(f.Name!, f.Type, value, options, f.Id);
         }
         catch
         {
             // One malformed/unexpected field must never sink the whole task's detail — degrade to
-            // name/type only (the same shape the tab showed before values were surfaced).
-            return new CustomFieldItem(f.Name!, f.Type);
+            // name/type/id only (the same shape the tab showed before values were surfaced; the id is
+            // kept so strand detection, #365, still identifies the field).
+            return new CustomFieldItem(f.Name!, f.Type, Id: f.Id);
         }
     }
 
@@ -759,6 +784,27 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             return new CustomFieldDefinition(f.Id ?? "", f.Name ?? "", f.Type, f.Required ?? false);
         }
     }
+
+    /// <summary>
+    /// Converts a neutral <see cref="JsonElement"/> (the domain-side shape of a custom-field value, #368)
+    /// into the Kiota <see cref="UntypedNode"/> the JSON serializer writes to the request body. Lives at
+    /// the facade boundary so the loosely-typed value can cross into the generated client without a domain
+    /// type ever referencing a Kiota type. Recurses arrays/objects; integral numbers become
+    /// <see cref="UntypedLong"/> so an epoch-ms date/option-id-count doesn't gain a spurious decimal.
+    /// </summary>
+    internal static UntypedNode ToUntyped(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => new UntypedString(value.GetString()),
+        JsonValueKind.True or JsonValueKind.False => new UntypedBoolean(value.GetBoolean()),
+        JsonValueKind.Number => value.TryGetInt64(out var l)
+            ? new UntypedLong(l)
+            : new UntypedDouble(value.GetDouble()),
+        JsonValueKind.Array => new UntypedArray(value.EnumerateArray().Select(ToUntyped)),
+        JsonValueKind.Object => new UntypedObject(value.EnumerateObject()
+            .ToDictionary(p => p.Name, p => ToUntyped(p.Value))),
+        // Null / Undefined and any unexpected kind serialize as an explicit JSON null.
+        _ => new UntypedNull(),
+    };
 
     /// <summary>Serializes any Kiota model to a detached <see cref="JsonElement"/>. Uses the JSON
     /// writer factory directly (no reliance on global serializer registration), and clones the root

@@ -107,6 +107,20 @@ timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/closed_bridge_check.py $DLL
 Self-contained (drives both legs, sets its own env). Expected: `ok — F12→All paints the warm
 closed set on the pre-refresh frame …`.
 
+**6. In-text link styling (#317)** — opens Task Detail and asserts, on the pyte screen, the two
+link styles rendered in the panes: the seeded ClickUp **task** link (Description) is underlined and
+keeps the normal body foreground; the seeded **web** link (Comments) is underlined and recoloured
+(uniform across the URL). Relational assertions (recoloured-vs-not, underlined) so it's robust to
+pyte's colour encoding; the unit tests pin the concrete attributes:
+
+```bash
+E2E_TASKS=20 timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/link_check.py $DLL
+```
+
+Self-contained (fixed COLS=120 so the seeded URLs don't wrap). Expected: `ok — task link
+underlined+default-fg (Description), web link underlined+recoloured (Comments)`. The colour/underline
+change is invisible to the text-only `detail_check.py` A/B, which stays identical.
+
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 
 - **Answer the terminal's queries or nothing ever renders.** Terminal.Gui's ANSI driver

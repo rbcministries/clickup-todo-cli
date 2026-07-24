@@ -67,4 +67,54 @@ public sealed class RowHitTesterTests
         Assert.Null(RowHitTester.TaskAt(5, 0, Rows));   // below the last row
         Assert.Null(RowHitTester.TaskAt(0, 0, []));     // empty list
     }
+
+    // ── Fold-arrow column hit-test (#287) ─────────────────────────────────────
+    // The marker "▶ "/"▼ " sits at a known char offset; a click's X is a terminal column, so the helper
+    // converts via the injected column measure (the renderer's GetColumns in the app, a fake here).
+
+    // ASCII rows: char offset == column, so an identity measure ("s => s.Length") suffices. The marker
+    // spans two columns [markerStart, markerStart+2): the arrow and its trailing space.
+    private static int Ascii(string s) => s.Length;
+
+    [Theory]
+    [InlineData(6, true)]    // the ▶ arrow column itself
+    [InlineData(7, true)]    // the marker's trailing space — still a toggle target (forgiving gutter)
+    [InlineData(5, false)]   // one column left of the marker (the indent/badge gutter)
+    [InlineData(8, false)]   // the title's first column, just right of the marker
+    [InlineData(0, false)]   // far left
+    public void IsWithinFoldMarker_ResolvesTheArrowColumns(int clickX, bool expected)
+    {
+        // "(TD)  ▶ Roll" → marker "▶ " starts at char index 6, length 2.
+        const string text = "(TD)  ▶ Roll up sprint";
+        Assert.Equal(expected, RowHitTester.IsWithinFoldMarker(clickX, text, markerStart: 6, markerLength: 2, Ascii));
+    }
+
+    [Fact]
+    public void IsWithinFoldMarker_FalseWhenRowHasNoMarker()
+    {
+        // A leaf/header row reports the (-1, 0) "no marker" sentinel — no column is ever a hit.
+        Assert.False(RowHitTester.IsWithinFoldMarker(0, "a leaf row", markerStart: -1, markerLength: 0, Ascii));
+        Assert.False(RowHitTester.IsWithinFoldMarker(3, "a leaf row", markerStart: 3, markerLength: 0, Ascii));
+    }
+
+    [Fact]
+    public void IsWithinFoldMarker_FalseWhenSpanExceedsText()
+    {
+        // Defensive: a span past the end of the text can't be a hit (never happens for real rows).
+        Assert.False(RowHitTester.IsWithinFoldMarker(2, "ab", markerStart: 1, markerLength: 5, Ascii));
+    }
+
+    [Fact]
+    public void IsWithinFoldMarker_WideRunesAheadShiftTheArrowColumn()
+    {
+        // A wide (2-column) rune ahead of the arrow means char offset != column: the fake measure counts
+        // '#' as two columns (standing in for an emoji badge glyph). Marker "▶ " is at char 1, so its
+        // column start is 2 (past the 2-column '#'), and it occupies columns [2, 4).
+        int WideHash(string s) => s.Sum(c => c == '#' ? 2 : 1);
+        const string text = "#▶ Task";
+        Assert.True(RowHitTester.IsWithinFoldMarker(2, text, markerStart: 1, markerLength: 2, WideHash));  // arrow column
+        Assert.True(RowHitTester.IsWithinFoldMarker(3, text, markerStart: 1, markerLength: 2, WideHash));  // trailing space
+        Assert.False(RowHitTester.IsWithinFoldMarker(1, text, markerStart: 1, markerLength: 2, WideHash)); // inside the wide '#'
+        Assert.False(RowHitTester.IsWithinFoldMarker(4, text, markerStart: 1, markerLength: 2, WideHash)); // the title 'T'
+    }
 }
