@@ -90,7 +90,7 @@ if (!string.IsNullOrWhiteSpace(singleTaskId))
 {
     var launchTask = await tasks.GetTaskDetailAsync(singleTaskId);
     var launchComments = await tasks.GetTaskCommentsAsync(singleTaskId);
-    new SingleTaskApp(tasks, config, launchTask, launchComments, browser).Run("ansi");
+    new SingleTaskApp(tasks, config, configStore, launchTask, launchComments, browser).Run("ansi");
     return;
 }
 

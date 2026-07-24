@@ -146,7 +146,7 @@ if (launch.HasId)
         return 1;
     }
 
-    new SingleTaskApp(taskService, config, launchTask, launchComments).Run(driverName);
+    new SingleTaskApp(taskService, config, configStore, launchTask, launchComments).Run(driverName);
     return 0;
 }
 
