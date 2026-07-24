@@ -114,11 +114,11 @@ public sealed class TodoApp
     private Window _window = null!;
     private FrameView _frame = null!;
     private ListView _list = null!;
-    private Label _statusLabel = null!;
-    // The single window-owned contextual help line (#103): shows the active screen's shortcuts, or the
-    // list's when no screen is open. One shared bottom row — screens no longer hand-roll their own.
-    private Label _helpLabel = null!;
-    // The items currently rendered on _helpLabel (post-Fit), cached so a footer click (#289) can
+    // The shared bottom rows (#103/#346): a transient status line plus the single window-owned
+    // contextual help line (the active screen's shortcuts, or the list's when idle). Screens no longer
+    // hand-roll their own. Built in Build.
+    private ContextualFooter _footer = null!;
+    // The items currently rendered on the help line (post-Fit), cached so a footer click (#289) can
     // hit-test the click column against exactly what's on screen at the present width.
     private IReadOnlyList<HelpItem> _helpFooter = HelpItemSets.MainList;
     // The main list's command shortcuts, dispatched through the central (context, action) → key table
@@ -189,6 +189,8 @@ public sealed class TodoApp
     // Ids of parents the user has expanded this session (#76). Empty = all collapsed (the default). Only
     // meaningful while the subtasks view (F4) is on; ephemeral (never persisted to config, per the issue).
     private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
+    // The status line's seed text, composed before Build (the driver annotation is appended in Run);
+    // once Build creates the footer, the live status lives on _footer (#346).
     private string _status = "Loading…";
     private string _signature = "";
 
@@ -253,7 +255,7 @@ public sealed class TodoApp
                 fetch: FetchAsync,
                 intervalSeconds: _config.RefreshSeconds,
                 onUpdate: tasks => Application.Invoke(() => OnTasksLoaded(tasks)),
-                onError: ex => Application.Invoke(() => Flash($"Refresh failed: {Short(ex)}")));
+                onError: ex => Application.Invoke(() => Flash($"Refresh failed: {ErrorText.Short(ex)}")));
             _refresh.Start();
             ArmMarkerPoll();
             Application.Run(_window);
@@ -262,21 +264,12 @@ public sealed class TodoApp
         {
             _refresh?.Dispose();
             // Application.Shutdown restores the terminal (cooked mode, alt-screen off), so it must run no
-            // matter how _window.Dispose fares — hence the nested try/finally. Terminal.Gui 2.4.10 can
-            // throw ArgumentOutOfRange from View/Tabs.Dispose while tearing down a tabbed view's subviews
-            // (the same bug CloseScreen guards); any screen open at quit is still mounted here, so swallow
-            // that known teardown bug (at worst a leak of views the process is about to drop anyway). An
-            // unexpected exception still propagates — but only after Shutdown has restored the terminal.
+            // matter how _window.Dispose fares — hence the nested try/finally. Any screen open at quit is
+            // still mounted here, so the shared teardown guard swallows Terminal.Gui 2.4.10's known
+            // tabbed-view dispose bug (#346) rather than crash after the run loop exits.
             try
             {
-                try
-                {
-                    _window?.Dispose();
-                }
-                catch (Exception ex) when (ex is ArgumentOutOfRangeException or IndexOutOfRangeException)
-                {
-                    Debug.WriteLine($"Window dispose threw (Terminal.Gui teardown bug), ignoring: {ex}");
-                }
+                TuiTeardown.DisposeSwallowingTeardownBug(_window, "Window");
             }
             finally
             {
@@ -498,22 +491,16 @@ public sealed class TodoApp
         _list.MouseEvent += OnListMouse;
         _frame.Add(_list);
 
-        _statusLabel = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = _status };
-        // The single contextual help line (#103). Seeded with the list's shortcuts; UpdateHelpLine swaps
-        // in the active screen's shortcuts on show and back to the list's on close. Format of the list
-        // set is byte-for-byte the pre-#103 text, so the default footer is unchanged.
-        _helpLabel = new Label
-        {
-            X = 1,
-            Y = Pos.AnchorEnd(1),
-            Width = Dim.Fill(1),
-            Text = HelpLine.Format(HelpItemSets.MainList),
-        };
+        // The shared status + contextual help footer (#103/#346). The help line is seeded with the
+        // list's shortcuts — byte-for-byte the pre-#103 text, so the default footer is unchanged;
+        // UpdateHelpLine swaps in the active screen's shortcuts on show and back to the list's on close.
+        _footer = new ContextualFooter(_status, initialHelp: HelpLine.Format(HelpItemSets.MainList));
         // Clicking an action hint on the footer fires its shortcut (#289). The Label stays
         // CanFocus=false, so this adds a mouse affordance without a second focusable pane (#3/#38).
-        _helpLabel.MouseEvent += OnHelpBarMouse;
+        _footer.HelpLabel.MouseEvent += OnHelpBarMouse;
 
-        _window.Add(_frame, _statusLabel, _helpLabel);
+        _window.Add(_frame);
+        _footer.AddTo(_window);
         // Re-fit the help line whenever the window re-lays out (i.e. on terminal resize). Terminal.Gui
         // 2.4 has no static Application size-changed event; SubViewsLaidOut is the framework's
         // post-layout hook. UpdateHelpLine only reassigns the text when it changed, so this can't loop.
@@ -746,7 +733,7 @@ public sealed class TodoApp
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => { _launchingTab = false; FlashLaunchFallback(command, Short(ex)); });
+                Application.Invoke(() => { _launchingTab = false; FlashLaunchFallback(command, ErrorText.Short(ex)); });
             }
         });
     }
@@ -855,7 +842,7 @@ public sealed class TodoApp
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => Flash($"Could not load feed: {Short(ex)}"));
+                Application.Invoke(() => Flash($"Could not load feed: {ErrorText.Short(ex)}"));
             }
         });
     }
@@ -949,7 +936,7 @@ public sealed class TodoApp
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => Flash($"Could not refresh feed: {Short(ex)}"));
+                Application.Invoke(() => Flash($"Could not refresh feed: {ErrorText.Short(ex)}"));
             }
             finally
             {
@@ -1385,7 +1372,7 @@ public sealed class TodoApp
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => Flash($"Couldn’t find task “{Ellipsize(reference.Value)}”: {Short(ex)}"));
+                Application.Invoke(() => Flash($"Couldn’t find task “{Ellipsize(reference.Value)}”: {ErrorText.Short(ex)}"));
             }
         });
     }
@@ -1527,20 +1514,9 @@ public sealed class TodoApp
     /// is only reassigned when it actually changes, so that layout pass can't loop.
     /// </summary>
     private void UpdateHelpLine()
-    {
-        var items = HelpLine.ForActiveScreen(ActiveScreen?.HelpItems, HelpItemSets.MainList);
-        // The label's laid-out content width. Before the first layout it's 0 — render the full set and
-        // let the first SubViewsLaidOut re-fit it.
-        var width = _helpLabel.Frame.Width;
-        var fitted = width > 0
-            ? HelpLine.Fit(items, width, static s => s.GetColumns())
-            : items;
-        // Cache exactly what's rendered so a footer click hit-tests against the on-screen items (#289).
-        _helpFooter = fitted;
-        var text = HelpLine.Format(fitted);
-        if (_helpLabel.Text != text)
-            _helpLabel.Text = text;
-    }
+        // The footer fits the items to its current width and returns exactly what it rendered; cache that
+        // so a footer click hit-tests against the on-screen items (#289).
+        => _helpFooter = _footer.RenderHelp(HelpLine.ForActiveScreen(ActiveScreen?.HelpItems, HelpItemSets.MainList));
 
     /// <summary>
     /// A left-click on the contextual footer (#289): resolves the clicked item via
@@ -1841,7 +1817,7 @@ public sealed class TodoApp
         }
         catch (Exception ex)
         {
-            Application.Invoke(() => Flash($"Could not update focus: {Short(ex)}"));
+            Application.Invoke(() => Flash($"Could not update focus: {ErrorText.Short(ex)}"));
             return;
         }
 
@@ -1861,29 +1837,25 @@ public sealed class TodoApp
     /// <summary>Opens a task URL in the system browser, or flashes why it couldn't.</summary>
     private void LaunchBrowser(string? url, string? name)
     {
-        if (string.IsNullOrWhiteSpace(url))
+        // Shared rewrite (app.clickup.com → workspace subdomain, #304) + parse + open (#346); the
+        // dashboard has a live status line, so unlike the single-task host it flashes each outcome.
+        var (result, target) = ClickUpTaskBrowser.Open(_browser, url, _config.WorkspaceSubdomain);
+        switch (result)
         {
-            Flash("No URL for this task.");
-            return;
+            case ClickUpTaskBrowser.Result.NoUrl:
+                Flash("No URL for this task.");
+                break;
+            case ClickUpTaskBrowser.Result.InvalidUrl:
+                Flash($"Not a valid URL: {target}");
+                break;
+            case ClickUpTaskBrowser.Result.Opened:
+                Flash($"Opened: {name}");
+                break;
+            case ClickUpTaskBrowser.Result.LaunchFailed:
+                var hint = BrowserLaunchPlanner.OpenerHint(BrowserLaunchPlanner.CurrentOS());
+                Flash(hint is null ? $"Couldn't open a browser — copy the URL: {target}" : $"Couldn't open a browser ({hint}) — copy the URL: {target}");
+                break;
         }
-
-        // Rewrite an app.clickup.com link onto the configured workspace subdomain (#304) so the launch
-        // skips the app→subdomain redirect; unset/non-app URLs pass through unchanged.
-        var target = ClickUpUrl.RewriteHost(url, _config.WorkspaceSubdomain);
-        if (!Uri.TryCreate(target, UriKind.Absolute, out var uri))
-        {
-            Flash($"Not a valid URL: {target}");
-            return;
-        }
-
-        if (_browser.TryOpen(uri))
-        {
-            Flash($"Opened: {name}");
-            return;
-        }
-
-        var hint = BrowserLaunchPlanner.OpenerHint(BrowserLaunchPlanner.CurrentOS());
-        Flash(hint is null ? $"Couldn't open a browser — copy the URL: {target}" : $"Couldn't open a browser ({hint}) — copy the URL: {target}");
     }
 
     private void OpenDetail()
@@ -1988,7 +1960,7 @@ public sealed class TodoApp
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => Flash($"Could not load task detail: {Short(ex)}"));
+                Application.Invoke(() => Flash($"Could not load task detail: {ErrorText.Short(ex)}"));
             }
         });
     }
@@ -2029,7 +2001,7 @@ public sealed class TodoApp
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => Flash($"Could not refresh task: {Short(ex)}"));
+                Application.Invoke(() => Flash($"Could not refresh task: {ErrorText.Short(ex)}"));
             }
             finally
             {
@@ -2288,7 +2260,7 @@ public sealed class TodoApp
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => Flash($"Could not load statuses: {Short(ex)}"));
+                Application.Invoke(() => Flash($"Could not load statuses: {ErrorText.Short(ex)}"));
             }
         });
     }
@@ -2342,7 +2314,7 @@ public sealed class TodoApp
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => Flash($"Could not load statuses: {Short(ex)}"));
+                Application.Invoke(() => Flash($"Could not load statuses: {ErrorText.Short(ex)}"));
             }
         });
     }
@@ -2595,7 +2567,7 @@ public sealed class TodoApp
                         target.Apply(t with { StatusName = previousStatus }, sending: false); // revert
                     ReconcileScreenStatus(screen, previousStatus);
                     ReflectDetailStatus(detailOrigin, previousStatus, previousColor);
-                    Flash($"Could not set status: {Short(ex)}");
+                    Flash($"Could not set status: {ErrorText.Short(ex)}");
                 });
             }
         });
@@ -2649,7 +2621,7 @@ public sealed class TodoApp
                         target.Apply(WithPriority(t, previousLevel), sending: false); // revert
                     ReconcileScreenPriority(screen, previousLevel);
                     ReflectDetailPriority(detailOrigin, previousLevel);
-                    Flash($"Could not set priority: {Short(ex)}");
+                    Flash($"Could not set priority: {ErrorText.Short(ex)}");
                 });
             }
         });
@@ -2777,7 +2749,7 @@ public sealed class TodoApp
         // Mark how stale the painted set is (#124) so the instant paint reads honestly as cached, not
         // freshly loaded; the live refresh replaces it (and this line) moments later.
         var age = RelativeTime.Format(DateTimeOffset.UtcNow - cached.CapturedAt);
-        _status = $"Showing cached tasks from {age} · {cached.Items.Count} task(s) · refreshing…";
+        _footer.Status = $"Showing cached tasks from {age} · {cached.Items.Count} task(s) · refreshing…";
         _signature = CurrentSignature(cached.Items);
         Render(keepTaskId: null);
     }
@@ -2802,11 +2774,11 @@ public sealed class TodoApp
         // every poll; the walk (#236) seeds the long tail separately from RunWorkspaceListWalkStepAsync.
         _lists.RecordFromTasks(tasks);
 
-        _status = $"Updated {DateTime.Now:HH:mm:ss} · {tasks.Count} task(s) · refresh every {_config.RefreshSeconds}s";
+        _footer.Status = $"Updated {DateTime.Now:HH:mm:ss} · {tasks.Count} task(s) · refresh every {_config.RefreshSeconds}s";
         // Surface an adaptive-fetch cap (#87) on the persisted status line — a Flash here would be
         // repainted away by this same success path, so it's folded into the line the path writes.
         if (_foreignSubtasksTruncated)
-            _status += " · some subtasks omitted";
+            _footer.Status += " · some subtasks omitted";
 
         // Warm the status cache for the lists currently on screen (best-effort, off the UI thread), so
         // pressing Space opens the picker from cache instead of paying a round-trip (#10).
@@ -2826,7 +2798,7 @@ public sealed class TodoApp
         var signature = CurrentSignature(tasks);
         if (signature == _signature)
         {
-            _statusLabel.Text = _status;
+            _footer.CommitStatus();
             return;
         }
         _signature = signature;
@@ -3020,7 +2992,7 @@ public sealed class TodoApp
         if (target >= 0 && _display.Count > 0)
             _list.SelectedItem = target;
 
-        _statusLabel.Text = _status;
+        _footer.CommitStatus();
     }
 
     /// <summary>
@@ -3079,11 +3051,5 @@ public sealed class TodoApp
             _ => "  ",
         };
 
-    private void Flash(string message)
-    {
-        _status = message;
-        _statusLabel.Text = message;
-    }
-
-    private static string Short(Exception ex) => ex is ClickUpApiException c ? c.Message : ex.Message;
+    private void Flash(string message) => _footer.Flash(message);
 }
