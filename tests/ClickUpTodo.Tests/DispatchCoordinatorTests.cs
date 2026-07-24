@@ -146,6 +146,44 @@ public sealed class DispatchCoordinatorTests
     }
 
     [Fact]
+    public void Plan_TaskDerived_NullDefaultWorkingDirectory_FallsBackToTheDefaultBaseDir()
+    {
+        var settings = new AgentDispatchSettings(); // TaskDerived
+        var request = new DispatchRequest("go");
+
+        var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), defaultWorkingDirectory: null, home: Home);
+
+        // A blank/absent base dir resolves to {home}/<default folder>, not to null/empty.
+        var expectedBase = SettingsForm.ResolveDefaultWorkingDirectory(null, Home);
+        Assert.Equal(expectedBase, plan.WorkingDir);
+        Assert.Equal(expectedBase, plan.ResolvedDefault);
+        Assert.True(plan.UseTaskDerived);
+    }
+
+    [Fact]
+    public void Plan_FixedMode_ResolvedDefaultIsTildeExpanded_SoAnEquivalentPickRevertsTheCache()
+    {
+        var settings = new AgentDispatchSettings
+        {
+            WorkingDirectory = AgentWorkingDirectory.Fixed,
+            FixedWorkingDirectory = "~/fixed",
+        };
+        var expandedFixed = Path.Combine(Home, "fixed");
+
+        // An explicit "~/fixed" pick expands to the same absolute path the Fixed default resolves to,
+        // and ResolvedDefault is ~-expanded to match — the case the coordinator comment calls out.
+        var plan = DispatchCoordinator.Plan(settings, new DispatchRequest("go", WorkingDirectory: "~/fixed"), TaskWith(), BaseDir, Home);
+        Assert.Equal(expandedFixed, plan.ChosenDir);
+        Assert.Equal(expandedFixed, plan.ResolvedDefault);
+
+        // So reconciling a pick equal to the (expanded) Fixed default clears any stored entry rather
+        // than persisting a redundant one.
+        var cache = new Dictionary<string, string> { ["9xyz"] = "/old/pick" };
+        Assert.True(DispatchCoordinator.ReconcileCache(cache, "9xyz", plan));
+        Assert.False(cache.ContainsKey("9xyz"));
+    }
+
+    [Fact]
     public void ReconcileCache_StoresAnExplicitPick_ThenClearsOnRevertToDefault()
     {
         var cache = new Dictionary<string, string>();
