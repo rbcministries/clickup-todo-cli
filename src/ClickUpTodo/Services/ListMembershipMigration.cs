@@ -28,9 +28,11 @@ public static class ListMembershipMigration
     /// <para>Errs to the <b>safe</b> side (over-report, never under-report): if the removed list's
     /// definitions are absent from <paramref name="perListDefinitions"/> (a failed preflight fetch),
     /// every set value is treated as potentially list-local and flagged unless a <i>known</i> remaining
-    /// list clearly still defines it. A remaining list whose definitions are absent rescues nothing.</para>
-    /// <para>Returns distinct field names in the task's field order; fields with a blank id (unmatchable)
-    /// or no value are skipped.</para>
+    /// list clearly still defines it. A remaining list whose definitions are absent rescues nothing. A
+    /// <i>present</i> key is assumed to be that list's <b>complete</b> field set (as ClickUp's
+    /// <c>GET /list/{id}/field</c> returns it).</para>
+    /// <para>Returns the affected fields deduped by id, in the task's field order; fields with a blank id
+    /// (unmatchable) or no value are skipped.</para>
     /// </summary>
     /// <param name="taskFields">The task's custom fields with their values (<see cref="TaskDetail.CustomFields"/>).</param>
     /// <param name="listToRemove">The id of the additional list being removed.</param>
@@ -52,10 +54,13 @@ public static class ListMembershipMigration
         var removedIds = removedKnown ? DefinitionIds(removedDefs!) : null;
 
         // Union of field ids still reachable through a KNOWN remaining list (an unfetched remaining
-        // list contributes nothing — it can't be relied on to rescue a value).
+        // list contributes nothing — it can't be relied on to rescue a value). Defensively skip the
+        // removed list itself if a caller mistakenly leaves it in the remaining set: unioning its own
+        // defs into coverage would mask exactly the strands this method exists to catch.
         var coveredIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var listId in remainingListIds)
-            if (perListDefinitions.TryGetValue(listId, out var defs))
+            if (!string.Equals(listId, listToRemove, StringComparison.Ordinal)
+                && perListDefinitions.TryGetValue(listId, out var defs))
                 coveredIds.UnionWith(DefinitionIds(defs));
 
         var stranded = new List<string>();

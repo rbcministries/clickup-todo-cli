@@ -137,6 +137,31 @@ public sealed class ListMembershipMigrationTests
     }
 
     [Fact]
+    public void DuplicateFieldId_IsReportedOnce()
+    {
+        // Same field id present twice on the task (defensive) → the name appears once (dedup by id).
+        var fields = new[] { Field("f1", "Sprint Points"), Field("f1", "Sprint Points") };
+        var defs = Defs(("A", [Def("f1")]), ("B", []));
+
+        var stranded = ListMembershipMigration.StrandedFieldsOnRemove(fields, "A", defs, ["B"]);
+
+        Assert.Equal(["Sprint Points"], stranded);
+    }
+
+    [Fact]
+    public void ListToRemoveLeftInRemaining_StillDetectsStrand()
+    {
+        // Defensive: even if a caller mistakenly leaves the removed list in the remaining set, its own
+        // definitions must not mask the strand it would cause.
+        var fields = new[] { Field("f1", "Sprint Points") };
+        var defs = Defs(("A", [Def("f1")]), ("B", [Def("f2")]));
+
+        var stranded = ListMembershipMigration.StrandedFieldsOnRemove(fields, "A", defs, ["A", "B"]);
+
+        Assert.Equal(["Sprint Points"], stranded);
+    }
+
+    [Fact]
     public void EmptyFields_ReturnsEmpty()
     {
         var stranded = ListMembershipMigration.StrandedFieldsOnRemove(
