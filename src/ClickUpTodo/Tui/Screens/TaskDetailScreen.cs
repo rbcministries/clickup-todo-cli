@@ -224,6 +224,14 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     public event EventHandler? QuickUpdatesRequested;
 
+    /// <summary>
+    /// Raised when the user asks to quick-open another task by id / custom id / URL (Ctrl+O, #353) from
+    /// within the detail view. The host opens the same entry surface it uses from the main list, stacked
+    /// over this detail; resolving a target opens its Task Detail over the current one (Esc walks back),
+    /// mirroring how Quick Updates (Ctrl+U) stacks.
+    /// </summary>
+    public event EventHandler? QuickOpenRequested;
+
     /// <param name="defaultSessionMode">
     /// Seeds the pane's one-off/interactive toggle (#94) from the persisted default (#101); the user
     /// can flip it per dispatch. Defaults to <see cref="AgentSessionMode.Interactive"/>.
@@ -733,6 +741,16 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             QuickUpdatesRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        // Ctrl+O quick-opens another task (#353) — the same entry surface as the main list, so you can
+        // jump between tasks without Esc-ing back first. Same chord shape as Ctrl+U above and inert while
+        // the Dispatch prompt is open, so it never interferes with typing a prompt or a read-only pane.
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.O && !_promptBox.Visible)
+        {
+            key.Handled = true;
+            QuickOpenRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 

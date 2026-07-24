@@ -1150,6 +1150,23 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
+        ShowQuickOpenSurface();
+    }
+
+    /// <summary>
+    /// Ctrl+O from an open Task Detail (#353): opens the same quick-open entry surface stacked over the
+    /// detail. Unlike the list entry point it does not guard on <see cref="ActiveScreen"/> (the detail
+    /// <em>is</em> the active screen); resolving a target opens its Task Detail over the current one, so
+    /// Esc walks back — mirroring how Quick Updates (Ctrl+U) stacks over the detail.
+    /// </summary>
+    private void OpenQuickOpenFromScreen() => ShowQuickOpenSurface();
+
+    /// <summary>Shared entry-surface opener behind both quick-open entry points (list Ctrl+O and detail
+    /// Ctrl+O, #303/#353). The parse/resolve/navigate runs in <see cref="ResolveAndOpen"/> once the modal
+    /// has closed (deferred to the next loop iteration) so the Task Detail opens over whatever was beneath
+    /// the entry surface rather than stacking on top of the surface itself.</summary>
+    private void ShowQuickOpenSurface()
+    {
         var screen = new QuickOpenScreen();
         ShowScreen(screen, () =>
         {
@@ -1751,6 +1768,9 @@ public sealed class TodoApp
                     // Ctrl+U opens Quick Updates for the detail's task, stacked over it; Esc pops back
                     // here (#159). Reads the screen's current task so a mid-view refresh is reflected.
                     screen.QuickUpdatesRequested += (_, _) => OpenQuickUpdatesForDetail(screen);
+                    // Ctrl+O quick-opens another task from within the detail (#353), stacked over it; the
+                    // resolved Task Detail opens over this one, so Esc walks back through them.
+                    screen.QuickOpenRequested += (_, _) => OpenQuickOpenFromScreen();
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
