@@ -4,9 +4,11 @@ asserts the guard on both roots — the dashboard's main list (TodoApp) and sing
 launch task (SingleTaskApp) — since "the same behaviour in both launch modes" is the
 acceptance criterion that no unit test can reach.
 
-Per root: Esc at the root shows the confirmation and the process stays alive → declining
-(N on the dashboard, Esc in single-task mode, so both answer keys are covered) tears the
-modal down and restores the root view → Esc again re-asks → Y exits the process.
+Per root: the quit key at the root shows the confirmation and the process stays alive →
+declining (N on the dashboard, Esc in single-task mode, so both answer keys are covered) tears
+the modal down and restores the root view → Esc again re-asks → Y exits the process. The
+dashboard leg asks the first time with Ctrl+Q (its footer quit command) and the second with Esc,
+so both of the trigger keys #299 names are covered; single-task mode only binds Esc.
 
 Self-contained (drives both legs, sets its own env). Like single_task_launch_check.py this is
 a single-run behavioural check, not an A/B: there is no stock baseline for a new screen."""
@@ -18,6 +20,7 @@ DLL = sys.argv[1]
 OUT = sys.argv[2] if len(sys.argv) > 2 else None
 
 ESC = b"\x1b"
+CTRL_Q = b"\x11"
 PROMPT = "Are you sure you want to exit?"
 FOOTER = "yes, exit"
 
@@ -80,19 +83,19 @@ class App:
             pass
 
 
-def check_root(app, label, root_marker, decline_key, decline_name, stages):
-    """Esc → prompt → decline → root back → Esc → Y → the process exits."""
+def check_root(app, label, root_marker, quit_key, quit_name, decline_key, decline_name, stages):
+    """quit key → prompt → decline → root back → Esc → Y → the process exits."""
     boot = app.visible()
     stages.append((f"{label}-boot", boot))
     assert root_marker in boot, f"{label}: root view did not render:\n{boot}"
     assert PROMPT not in boot, f"{label}: the exit prompt is showing before any Esc:\n{boot}"
 
-    # 1. Esc at the root asks instead of quitting.
-    v = app.send(ESC, 2.0)
+    # 1. The quit key at the root asks instead of quitting.
+    v = app.send(quit_key, 2.0)
     stages.append((f"{label}-asked", v))
-    assert PROMPT in v, f"{label}: Esc at the root did not show the confirmation:\n{v}"
+    assert PROMPT in v, f"{label}: {quit_name} at the root did not show the confirmation:\n{v}"
     assert FOOTER in v, f"{label}: the confirmation's footer hints are missing:\n{v}"
-    assert app.alive(), f"{label}: Esc at the root quit without confirming"
+    assert app.alive(), f"{label}: {quit_name} at the root quit without confirming"
 
     # 2. Declining restores the root view untouched.
     v = app.send(decline_key, 2.0)
@@ -110,22 +113,24 @@ def check_root(app, label, root_marker, decline_key, decline_name, stages):
     # 4. …and Y exits.
     os.write(app.master, b"Y")
     assert app.wait_for_exit(), f"{label}: Y at the confirmation did not exit:\n{app.visible()}"
-    print(f"{label} ok — Esc asks, {decline_name} cancels, Y exits")
+    print(f"{label} ok — {quit_name}/Esc ask, {decline_name} cancels, Y exits")
 
 
 stages = []
 dash = None
 single = None
 try:
-    # ── The dashboard root: the main list. Decline with N. ────────────────────────────────
+    # ── The dashboard root: the main list. Ask with Ctrl+Q (the footer's quit command),
+    #    decline with N. ─────────────────────────────────────────────────────────────────────
     dash = App(E2E_TASKS="20", E2E_REFRESH="600")
     dash.pump(6.0)
-    check_root(dash, "dashboard", "next section", b"N", "N", stages)
+    check_root(dash, "dashboard", "next section", CTRL_Q, "Ctrl+Q", b"N", "N", stages)
 
-    # ── The single-task root: the launch task's detail (#296). Decline with Esc. ───────────
+    # ── The single-task root: the launch task's detail (#296). Esc is the only quit key
+    #    bound there; decline with Esc too. ──────────────────────────────────────────────────
     single = App(E2E_SINGLE_TASK="t5", E2E_TASKS="20", E2E_REFRESH="600")
     single.pump(6.0)
-    check_root(single, "single-task", "Description", ESC, "Esc", stages)
+    check_root(single, "single-task", "Description", ESC, "Esc", ESC, "Esc", stages)
 
     if OUT:
         with open(OUT, "w") as f:
