@@ -499,9 +499,10 @@ public sealed class TaskService(
     /// Full detail for a quick-open token that parsed as a plain id but may actually be a
     /// <b>hyphenless custom id</b> (#353): try the plain <c>GET /task/{id}</c> first, and only if that
     /// 404s — and a workspace/team id is available — retry it as a custom id via
-    /// <see cref="GetTaskDetailByCustomIdAsync"/>. Any other failure (or a 404 with no team id to retry
-    /// against) propagates unchanged, so a genuinely missing id still surfaces its error. A valid plain
-    /// id costs a single call — the fallback fires only on the 404.
+    /// <see cref="GetTaskDetailByCustomIdAsync"/>. A non-404 failure (or a 404 with no team id to retry
+    /// against) propagates unchanged; when the retry runs and the token is neither a real id nor a custom
+    /// id, the retry's own not-found error surfaces. A valid plain id costs a single call — the fallback
+    /// fires only on the 404.
     /// </summary>
     public async Task<TaskDetail> GetTaskDetailWithCustomIdFallbackAsync(
         string idOrCustomId, string? teamId, CancellationToken ct = default)
