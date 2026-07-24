@@ -29,7 +29,7 @@ public sealed class HelpLineTests
     public void Format_MainList_RendersTheFullFooter()
     {
         const string expected =
-            "↑/↓ move · →| next section · Ctrl+U quick update · ↩ detail · Ctrl+O open by id · Ctrl+N ➕ · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
+            "↑/↓ move · →| next section · Ctrl+U quick update · ↩ detail · Ctrl+O open by id · Ctrl+↩ new tab · Ctrl+N ➕ · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
             + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 ↻ · F6 badges · F12 👁✅ · "
             + "→/← expand/collapse · Ctrl+→/← all · Ctrl+Q quit · type to search";
 
@@ -50,6 +50,17 @@ public sealed class HelpLineTests
     [Fact]
     public void MainList_CarriesCtrlNNewTask()
         => Assert.Contains(new HelpItem("Ctrl+N", "➕"), HelpItemSets.MainList);
+
+    [Fact]
+    public void MainList_CarriesCtrlEnterNewTab_ReRaisingCtrlEnter()
+    {
+        // #301: the glyph key `Ctrl+↩` re-raises the parseable `Ctrl+Enter` chord when the footer item
+        // is clicked (#289), converging on the same OnListKey handler as the keypress.
+        var item = HelpItemSets.MainList.Single(i => i.Label == "new tab");
+        Assert.Equal("Ctrl+↩", item.Key);
+        Assert.Equal("Ctrl+Enter", item.ActionKey);
+        Assert.True(item.IsAction);
+    }
 
     // #290 — the "quick update" action must use one shortcut everywhere. It launches Quick Updates from
     // both the main list and Task Detail, so both help sets must advertise the same key (Ctrl+U).

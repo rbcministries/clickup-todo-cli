@@ -44,6 +44,7 @@ public enum KeyAction
 
     // Main list commands.
     OpenDetail,
+    OpenInNewTab,
     NewTask,
     QuickOpen,
     TogglePin,
@@ -86,6 +87,7 @@ public static class Keybindings
             // ── Main list ─────────────────────────────────────────────────────────────────────
             [(ScreenContext.MainList, KeyAction.QuickUpdate)] = "Ctrl+U",
             [(ScreenContext.MainList, KeyAction.OpenDetail)] = "Enter",
+            [(ScreenContext.MainList, KeyAction.OpenInNewTab)] = "Ctrl+Enter",
             [(ScreenContext.MainList, KeyAction.QuickOpen)] = "Ctrl+O",
             [(ScreenContext.MainList, KeyAction.NewTask)] = "Ctrl+N",
             [(ScreenContext.MainList, KeyAction.OpenInBrowser)] = "Ctrl+B",

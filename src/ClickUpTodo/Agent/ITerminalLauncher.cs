@@ -28,4 +28,21 @@ public interface ITerminalLauncher
         TerminalLauncherOptions options,
         bool oneOff = false,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Launch a terminal running <b>this app</b> for a single task — <c>clickup-todo --task &lt;id&gt;</c>
+    /// (#301) — in a new tab/window per <paramref name="options"/>. Unlike <see cref="LaunchAsync"/> there
+    /// is no prompt file: the command is a plain executable invocation.
+    /// <para>
+    /// A default-throwing member (mirroring the repo's default-throwing interface members) so existing
+    /// test doubles that implement only <see cref="LaunchAsync"/> keep compiling; the real
+    /// <see cref="TerminalLauncher"/> overrides it.
+    /// </para>
+    /// </summary>
+    Task<LaunchResult> LaunchAppAsync(
+        AppLaunchCommand command,
+        TerminalLauncherOptions options,
+        CancellationToken ct = default)
+        => throw new NotSupportedException(
+            "This ITerminalLauncher does not support launching the app in a new terminal.");
 }

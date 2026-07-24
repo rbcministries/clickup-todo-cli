@@ -37,11 +37,36 @@ public static class TerminalCommandPlanner
         TerminalLauncherOptions options,
         bool oneOff = false) => os switch
         {
-            OSPlatformKind.Windows => PlanWindows(exists, getEnv, promptFilePath, workingDir, options, oneOff),
-            OSPlatformKind.MacOS => PlanMacOS(exists, getEnv, promptFilePath, workingDir, options, oneOff),
-            OSPlatformKind.Linux => PlanLinux(exists, getEnv, promptFilePath, workingDir, options, oneOff),
+            OSPlatformKind.Windows => PlanWindows(exists, getEnv, PwshCommand(promptFilePath, workingDir, options, oneOff), workingDir, options, oneOff),
+            OSPlatformKind.MacOS => PlanMacOS(exists, getEnv, PosixCommand(promptFilePath, workingDir, options, oneOff), workingDir, options, oneOff),
+            OSPlatformKind.Linux => PlanLinux(exists, getEnv, PosixCommand(promptFilePath, workingDir, options, oneOff), workingDir, options, oneOff),
             _ => [],
         };
+
+    /// <summary>
+    /// The ordered launch candidates for opening <b>this app</b> in a new terminal tab/window running
+    /// <c>clickup-todo --task &lt;id&gt;</c> (#301). Reuses the exact per-OS emulator matrix (and new-tab
+    /// detection gates) as <see cref="Plan"/> — only the inner command differs: a plain executable
+    /// invocation (no prompt-file indirection, no one-off <c>-p</c>, no keep-alive — the app is a
+    /// long-running TUI that owns the new terminal), with no working directory (a single-task tab needs
+    /// none). New-tab is honoured per <paramref name="options"/> and stays detection-gated per emulator.
+    /// </summary>
+    public static IReadOnlyList<LaunchSpec> PlanAppLaunch(
+        OSPlatformKind os,
+        Func<string, bool> exists,
+        Func<string, string?> getEnv,
+        AppLaunchCommand command,
+        TerminalLauncherOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return os switch
+        {
+            OSPlatformKind.Windows => PlanWindows(exists, getEnv, PwshAppCommand(command), null, options, oneOff: false),
+            OSPlatformKind.MacOS => PlanMacOS(exists, getEnv, PosixAppCommand(command), null, options, oneOff: false),
+            OSPlatformKind.Linux => PlanLinux(exists, getEnv, PosixAppCommand(command), null, options, oneOff: false),
+            _ => [],
+        };
+    }
 
     // ── New-tab launch location (#255) ──────────────────────────────────────────
     //
@@ -68,9 +93,11 @@ public static class TerminalCommandPlanner
     // last and is reached only if the direct launches fail to start, or when it's explicitly preferred.
 
     private static IReadOnlyList<LaunchSpec> PlanWindows(
-        Func<string, bool> exists, Func<string, string?> getEnv, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
+        Func<string, bool> exists, Func<string, string?> getEnv, string command, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
-        var command = PwshCommand(file, cwd, options, oneOff); // `Set-Location …; & 'claude' [-p] … (Get-Content -Raw '<file>')`
+        // <paramref name="command"/> is the pwsh command to run in the host — built by the caller
+        // (`Set-Location …; & 'claude' [-p] … (Get-Content -Raw '<file>')` for a dispatch, or
+        // `& 'clickup-todo' '--task' '<id>'` for an app launch).
 
         // Windows Terminal is the only Windows host with a tab notion: `wt -w 0 new-tab` targets the
         // current window (vs. today's `wt new-tab`, which opens a new window). Gated on WT_SESSION so
@@ -125,12 +152,13 @@ public static class TerminalCommandPlanner
     // ── macOS: osascript drives Terminal to run the bash command ──
 
     private static IReadOnlyList<LaunchSpec> PlanMacOS(
-        Func<string, bool> exists, Func<string, string?> getEnv, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
+        Func<string, bool> exists, Func<string, string?> getEnv, string inner, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
         if (!exists("osascript"))
             return [];
 
-        var inner = PosixCommand(file, cwd, options, oneOff); // `cd …; 'claude' [-p] … "$(cat '<file>')"`
+        // <paramref name="inner"/> is the POSIX shell command to run — `cd …; 'claude' [-p] …
+        // "$(cat '<file>')"` for a dispatch, or `'clickup-todo' '--task' '<id>'` for an app launch.
 
         // Terminal.app new-window path (the historical default) — `do script` only ever makes windows,
         // so it stays window-only and doubles as the fallback for the iTerm tab path below.
@@ -164,9 +192,10 @@ public static class TerminalCommandPlanner
     // ── Linux: honor $TERMINAL, else probe common emulators ──
 
     private static IReadOnlyList<LaunchSpec> PlanLinux(
-        Func<string, bool> exists, Func<string, string?> getEnv, string file, string? cwd, TerminalLauncherOptions options, bool oneOff)
+        Func<string, bool> exists, Func<string, string?> getEnv, string inner, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
-        var inner = PosixCommand(file, cwd, options, oneOff);
+        // <paramref name="inner"/> is the POSIX shell command run via `bash -lc` (or tmux) — built by
+        // the caller (a `cd …; 'claude' …` dispatch, or an `'clickup-todo' '--task' '<id>'` app launch).
         var tab = NewTabRequested(options, oneOff);
 
         // Tab specs are collected separately and returned *ahead* of the window specs. The launcher
@@ -305,6 +334,24 @@ public static class TerminalCommandPlanner
             command = $"cd {PosixQuote(cwd)} && {command}";
         return oneOff ? command + PosixKeepAlive : command;
     }
+
+    /// <summary>
+    /// PowerShell command that runs the app for a single-task launch (#301): <c>&amp; 'clickup-todo'
+    /// '--task' '&lt;id&gt;'</c>. No prompt-file indirection, no one-off flag, no keep-alive, no working
+    /// directory — the app is a long-running TUI that takes over the new terminal. The host still
+    /// launches with <c>-NoExit</c>, so the pwsh prompt stays after the app quits.
+    /// </summary>
+    private static string PwshAppCommand(AppLaunchCommand command)
+        => string.Join(" ", new[] { "&", PwshQuote(command.FileName) }.Concat(command.Arguments.Select(PwshQuote)));
+
+    /// <summary>
+    /// POSIX shell command that runs the app for a single-task launch (#301): <c>'clickup-todo' '--task'
+    /// '&lt;id&gt;'</c>, run via <c>bash -lc</c> (or the emulator equivalent). No <c>$(cat …)</c>, no
+    /// one-off <c>-p</c>, and no keep-alive — when the TUI exits the shell exits and the tab closes,
+    /// which is the natural lifetime for a single-task tab.
+    /// </summary>
+    private static string PosixAppCommand(AppLaunchCommand command)
+        => string.Join(" ", new[] { command.FileName }.Concat(command.Arguments).Select(PosixQuote));
 
     /// <summary>
     /// Appended after a one-off POSIX/macOS <c>claude -p</c> run so the terminal stays open until the

@@ -79,6 +79,13 @@ public sealed class TodoApp
     // True while a dispatch is in flight, so a rapid second submit doesn't launch a duplicate session.
     // Only touched on the UI thread (set in DispatchAgent, cleared via Application.Invoke).
     private bool _dispatching;
+    // Opens a task in its own terminal tab (#301) via the shared cross-platform launcher (#25/#307).
+    // Interactive-only, so a plain field (not rebuilt on F2 like _agent); the tab launch reads the
+    // preferred-terminal setting at call time.
+    private readonly ITerminalLauncher _tabLauncher = new TerminalLauncher();
+    // True while a new-tab launch is in flight, so a rapid second Ctrl+Enter can't spawn duplicate tabs.
+    // UI-thread-only (set in LaunchTaskInNewTab, cleared via Application.Invoke), like _dispatching.
+    private bool _launchingTab;
     // True while a feed / detail auto- or manual refresh fetch is outstanding, so ticks coalesce
     // instead of piling up when a fan-out outlasts the cadence. UI-thread-only (like _dispatching).
     private bool _refreshingFeed;
@@ -528,6 +535,7 @@ public sealed class TodoApp
             .On(KeyAction.QuickUpdate, OpenQuickUpdates)   // #159/#290, standardized to Ctrl+U
             .On(KeyAction.OpenDetail, OpenDetail)
             .On(KeyAction.QuickOpen, OpenQuickOpen)         // #303
+            .On(KeyAction.OpenInNewTab, () => LaunchTaskInNewTab(CurrentTask()))   // #301
             .On(KeyAction.NewTask, OpenNewTask)             // #213
             .On(KeyAction.OpenInBrowser, OpenInBrowser)
             .On(KeyAction.TogglePin, TogglePin)
@@ -625,6 +633,9 @@ public sealed class TodoApp
     /// click's viewport-relative Y plus the list's scroll offset <c>Viewport.Y</c>). Guarded on
     /// <see cref="ActiveScreen"/> so nothing fires while a screen is stacked over the list:
     /// <list type="bullet">
+    /// <item><b>Ctrl+Left-Click a task row → open it in its own terminal tab</b> (#301), the mouse
+    /// equivalent of Ctrl+Enter. Checked first so a Ctrl-modified click launches a tab rather than
+    /// toggling a fold or opening detail; a header/spacer row no-ops.</item>
     /// <item><b>Double-click a task row → open Task Detail</b> (A, #286), the mouse equivalent of Enter.
     /// A double-click on a header/spacer row or the empty space beneath a short list resolves to a null
     /// task and no-ops, exactly like Enter there.</item>
@@ -640,6 +651,19 @@ public sealed class TodoApp
     {
         if (e.Position is not { } pos || ActiveScreen is not null)
             return;
+
+        // Ctrl+Left-Click opens the clicked task in its own terminal tab (#301) — the mouse equivalent
+        // of Ctrl+Enter. Checked before the fold/double-click branches so a Ctrl-modified click launches
+        // a tab rather than toggling a fold or opening detail. Resolves the row via the shared hit-tester.
+        if (e.Flags.HasFlag(MouseFlags.LeftButtonClicked) && e.Flags.HasFlag(MouseFlags.Ctrl))
+        {
+            if (RowHitTester.TaskAt(pos.Y, _list.Viewport.Y, _rows) is { } ctrlTask)
+            {
+                e.Handled = true;
+                LaunchTaskInNewTab(ctrlTask);
+            }
+            return;
+        }
 
         // Double-click → open detail (A). Checked first and independent of the subtasks view.
         if (e.Flags.HasFlag(MouseFlags.LeftButtonDoubleClicked))
@@ -667,6 +691,89 @@ public sealed class TodoApp
                 return;
             e.Handled = true;
             ToggleFoldAt(index);
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+Enter / Ctrl+Left-Click — open <paramref name="task"/> in its own terminal tab (#301):
+    /// resolves how to relaunch this app (<see cref="AppLaunchCommand.ForTask(string)"/>) and hands it to
+    /// the shared cross-platform launcher off the UI thread, preferring a new tab of the current terminal
+    /// (falling back to a new window per emulator support). On success the status line names the terminal;
+    /// when no emulator can be launched, it flashes the exact command and copies it to the clipboard so
+    /// the user can run it themselves (the issue's documented fallback). A null task (header/spacer row)
+    /// no-ops. Re-entrancy-guarded so a rapid second gesture can't spawn duplicate tabs.
+    /// </summary>
+    private void LaunchTaskInNewTab(TaskItem? task)
+    {
+        if (task is null || ActiveScreen is not null)
+            return;
+        if (_launchingTab)
+        {
+            Flash("A task tab is already opening…");
+            return;
+        }
+
+        // Resolve the command before arming the re-entrancy guard: ForTask is pure and could in principle
+        // throw (a blank id), and doing it first means such a throw can't leave _launchingTab stuck true.
+        var command = AppLaunchCommand.ForTask(task.Id);
+        // A new tab of the current terminal where the host supports it (#255's LaunchLocation), honouring
+        // the user's preferred-terminal setting on Windows. ClaudeExecutable/ExtraArgs don't apply to an
+        // app launch, so a purpose-built options value (not AgentDispatch.ToLauncherOptions) is used.
+        var options = new TerminalLauncherOptions
+        {
+            LaunchLocation = LaunchLocation.NewTab,
+            Preferred = _config.AgentDispatch.PreferredTerminal,
+        };
+        _launchingTab = true;
+        var name = task.Name;
+        Flash($"Opening '{name}' in a new terminal tab…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var result = await _tabLauncher.LaunchAppAsync(command, options);
+                Application.Invoke(() =>
+                {
+                    _launchingTab = false;
+                    if (!result.Success)
+                    {
+                        FlashLaunchFallback(command);
+                        return;
+                    }
+                    var message = $"Opened '{name}' in a new tab ({result.LaunchedWith}).";
+                    Flash(string.IsNullOrWhiteSpace(result.Note) ? message : $"{message} {result.Note}");
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => { _launchingTab = false; FlashLaunchFallback(command, Short(ex)); });
+            }
+        });
+    }
+
+    /// <summary>The no-terminal fallback (#301): flash the exact command and copy it to the clipboard so
+    /// the user can open the task tab themselves. <paramref name="reason"/> names the failure when the
+    /// launch threw (vs. simply finding no emulator).</summary>
+    private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
+    {
+        var cmd = command.ToDisplayCommand();
+        var lead = reason is null ? "Couldn't open a terminal tab." : $"Couldn't open a terminal tab ({reason}).";
+        Flash(TryCopyToClipboard(cmd)
+            ? $"{lead} Command copied to clipboard: {cmd}"
+            : $"{lead} Run: {cmd}");
+    }
+
+    /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard just yields
+    /// false so the caller shows the run-it-yourself form instead.</summary>
+    private static bool TryCopyToClipboard(string text)
+    {
+        try
+        {
+            return Clipboard.TrySetClipboardData(text);
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 

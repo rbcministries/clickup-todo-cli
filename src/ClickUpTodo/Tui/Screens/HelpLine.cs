@@ -161,6 +161,7 @@ public static class HelpItemSets
         new("Ctrl+U", "quick update"),
         new("↩", "detail", Chord: "Enter"),
         new("Ctrl+O", "open by id"),
+        new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
         new("Ctrl+N", "➕"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+P", "📌"),

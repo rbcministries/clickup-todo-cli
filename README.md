@@ -122,6 +122,7 @@ list (each screen shows its own contextual shortcuts on the footer).
 | `Tab`         | Jump to the next section (**Current Focus** ↔ **Tasks**)      |
 | `Ctrl+U`      | Quick Updates — set status / priority / assignees             |
 | `Enter`       | Open the focused task in **Task Detail**                      |
+| `Ctrl+Enter`  | Open the focused task in a **new terminal tab** (`Ctrl+`Left-Click a row does the same) |
 | `Ctrl+B`      | Open the focused task in your browser                         |
 | `Ctrl+P`      | Pin / unpin the focused task to the Focus pane                |
 | `Ctrl+N`      | New task                                                      |
@@ -141,6 +142,20 @@ list (each screen shows its own contextual shortcuts on the footer).
 Quick Updates opens with `Ctrl+U` from both the main list and Task Detail. Pinned tasks persist
 across restarts. The list refreshes in the background on your configured interval, and your cursor
 stays on the same task across refreshes so the screen stays steady.
+
+### Open a task in a new terminal tab
+
+`Ctrl+Enter` (or `Ctrl+`Left-Click on a row) opens the focused task in **its own terminal tab**,
+running `clickup-todo --task <id>` there — handy for parking a task you're actively working in its
+own tab while triaging the rest in the main list. It uses the same cross-platform terminal detection
+as agent dispatch: on **Windows** it opens a Windows Terminal tab (or a PowerShell/cmd window);
+on **macOS**, an iTerm2 tab or a Terminal.app window; on **Linux**, a tab in gnome-terminal/konsole
+(or a window via `$TERMINAL` / a detected emulator, and a `tmux` window when you're inside tmux).
+Where a tab can't be targeted it opens a new **window**; and where no terminal can be launched at all
+(e.g. a locked-down or headless session), the exact command is **copied to your clipboard** and shown
+on the status line so you can run it yourself. Requires `clickup-todo` to be installed on your `PATH`
+(the global tool) — a `dotnet run` dev launch can't relaunch itself, so it shows the copy-command
+fallback.
 
 ## Mentions & Comments feed
 
