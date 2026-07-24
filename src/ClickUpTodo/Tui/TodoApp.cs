@@ -1186,6 +1186,15 @@ public sealed class TodoApp
     /// detail. Unlike the list entry point it does not guard on <see cref="ActiveScreen"/> (the detail
     /// <em>is</em> the active screen); resolving a target opens its Task Detail over the current one, so
     /// Esc walks back — mirroring how Quick Updates (Ctrl+U) stacks over the detail.
+    /// <para>
+    /// This detail→detail navigation rides the single <see cref="_screens"/> back-stack, which is
+    /// #401/#298's model: <c>Esc</c> = Back walks it one screen at a time and, at the list root,
+    /// <see cref="RequestExit"/> handles quit. #401 shipped the reusable <see cref="NavigationHistory{T}"/>
+    /// but no host consumes it yet (its first host consumer is #291, PR #373, which the issue says
+    /// <em>drives</em> the shared history). When #291 introduces the dashboard's <c>NavigationHistory</c>,
+    /// this open is the other detail→detail source that must push onto that same history so there is one
+    /// back-stack, not two — see the note left on #373.
+    /// </para>
     /// </summary>
     private void OpenQuickOpenFromScreen() => ShowQuickOpenSurface();
 
