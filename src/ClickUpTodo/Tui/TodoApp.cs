@@ -533,7 +533,7 @@ public sealed class TodoApp
                 case KeyCode.Q:
                 case KeyCode.C: // Ctrl+C as a quit alias (the OS/terminal may intercept it first).
                     key.Handled = true;
-                    Application.RequestStop();
+                    RequestExit();
                     break;
                 case KeyCode.CursorRight:
                     // Ctrl+→/Ctrl+← = expand-all / collapse-all — the bulk counterpart to the per-parent
@@ -583,8 +583,10 @@ public sealed class TodoApp
                 }
                 break;
             case KeyCode.Esc:
+                // Esc on the list is at the root (no screen is open — screens handle their own Esc), so
+                // this is back-at-root: hand off to the exit seam (#298/#299) rather than quitting inline.
                 key.Handled = true;
-                Application.RequestStop();
+                RequestExit();
                 break;
             case KeyCode.F1:
                 key.Handled = true;
@@ -1322,6 +1324,20 @@ public sealed class TodoApp
         }
         UpdateHelpLine();
     }
+
+    /// <summary>
+    /// The single "quit from the list root" chokepoint — the exit-confirmation seam (#298, #299
+    /// sub-issue 7). The dashboard's root is the main list; "back"/quit there (Esc, Ctrl+Q, Ctrl+C)
+    /// routes here instead of calling <c>Application.RequestStop</c> inline, so when #299 lands its
+    /// confirmation modal plugs in here. Today it preserves the existing behavior — stop the app.
+    /// <para>
+    /// Browser-style back/forward <em>across the dashboard's screen stack</em> (Alt+←/→ between visited
+    /// tasks) lands with the detail→detail navigation in #291, which the issue says drives this history;
+    /// this PR establishes the shared <see cref="NavigationHistory{T}"/> mechanism and the root/exit seam
+    /// (fully wired in single-task mode) so #291 plugs into one back-stack.
+    /// </para>
+    /// </summary>
+    private void RequestExit() => Application.RequestStop();
 
     /// <summary>Routes a screen's transient message (e.g. a validation error) to the status line.</summary>
     private void OnScreenFlash(object? sender, string message) => Flash(message);

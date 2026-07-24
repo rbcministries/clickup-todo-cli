@@ -6,6 +6,8 @@ using ClickUpTodo.Setup;
 using ClickUpTodo.Tui.Screens;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
+using Terminal.Gui.Drivers;
+using Terminal.Gui.Input;
 using Terminal.Gui.Text;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
@@ -56,8 +58,17 @@ public sealed class SingleTaskApp
     private Label _helpLabel = null!;
     private TaskDetailScreen _detail = null!;
 
-    // Screens stacked over the root detail (only Help, via F1). Empty ⇒ the detail is front-most.
-    private readonly List<Screen> _stack = [];
+    // Browser-style navigation history (#298): the launch task's detail is the immutable root, and the
+    // only thing that navigates over it today is the F1 Help overlay. Back (Esc/Alt+←) at the root hands
+    // off to RequestExit (the exit-confirmation seam, #299); forward (Alt+→) re-opens a backed-out overlay.
+    private NavigationHistory<NavEntry> _history = null!;
+    // The overlay currently mounted over the base detail (Help), or null when the detail root is showing.
+    private Screen? _overlay;
+
+    /// <summary>One node in the navigation history: a <paramref name="Label"/> for the footer/logs and a
+    /// <paramref name="Open"/> factory that (re)creates the overlay screen. The root's factory is
+    /// <c>null</c> — the root is the always-mounted base detail, not an overlay to build.</summary>
+    private sealed record NavEntry(string Label, Func<Screen>? Open);
 
     // Coalesces overlapping refreshes (F5/Ctrl+R racing the 30s tick): skip a tick while one is in flight
     // so an earlier fetch can't land after a later one with stale data. UI-thread-only, like TodoApp's.
@@ -77,7 +88,7 @@ public sealed class SingleTaskApp
         _status = $"Loaded: {task.Name}";
     }
 
-    private Screen ActiveScreen => _stack.Count > 0 ? _stack[^1] : _detail;
+    private Screen ActiveScreen => _overlay ?? _detail;
 
     public void Run(string? driverName = null)
     {
@@ -141,13 +152,20 @@ public sealed class SingleTaskApp
 
         // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data — refetch just this one task.
         _detail.RefreshRequested += (_, _) => RefreshTask();
-        // Ctrl+B sets OpenBrowserRequested then closes; Esc closes directly. Either way the root closing
-        // means "quit the tab" (there's no list to return to), launching the browser first if asked.
+        // Ctrl+B sets OpenBrowserRequested then closes; Esc closes directly. The detail is the launch-task
+        // root (#298), so its close is back-at-root: Ctrl+B opens the browser then quits, and a plain Esc
+        // hands off to the exit seam (RequestExit, #299) — which today quits the tab (there's no list to
+        // return to). Only fires while the detail is front-most; with Help up, Esc goes to Help.
         _detail.Closed += (_, _) =>
         {
             if (_detail.OpenBrowserRequested)
+            {
                 LaunchBrowser(_task.Url);
-            Application.RequestStop();
+                Application.RequestStop();
+                return;
+            }
+
+            RequestExit();
         };
         // Deferred in single-task mode (see the plan / PR): Quick Updates needs sub-issue (5) #297 to
         // decouple its write path from the dashboard's working-set snapshot; agent dispatch needs the
@@ -162,7 +180,14 @@ public sealed class SingleTaskApp
         _statusLabel = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = _status };
         _helpLabel = new Label { X = 1, Y = Pos.AnchorEnd(1), Width = Dim.Fill(1) };
 
+        // The launch task seeds the navigation history as its immutable root (#298). Its factory is null:
+        // the root is the always-mounted base detail, not an overlay the history rebuilds.
+        _history = new NavigationHistory<NavEntry>(new NavEntry("detail", Open: null));
+
         _window.Add(_detail, _statusLabel, _helpLabel);
+        // Alt+←/Alt+→ drive the navigation history from anywhere in the window: keys the focused pane and
+        // the detail screen leave unhandled bubble up to here (they claim only Ctrl chords, Esc and F-keys).
+        _window.KeyDown += OnWindowKey;
         // Re-fit the contextual footer whenever the window re-lays out (terminal resize); the text is
         // only reassigned when it changes, so this can't loop (mirrors TodoApp).
         _window.SubViewsLaidOut += (_, _) => UpdateHelpLine();
@@ -205,60 +230,124 @@ public sealed class SingleTaskApp
         });
     }
 
-    // ── Help overlay (F1) ────────────────────────────────────────────────────
+    // ── Navigation history (Esc/Alt+←/Alt+→) ─────────────────────────────────
 
-    /// <summary>F1 stacks a <see cref="HelpScreen"/> over the detail; Esc pops back to it.</summary>
+    /// <summary>Alt+← = back, Alt+→ = forward (#298). Bubbles up here from the focused pane / detail
+    /// screen, which claim only Ctrl chords, Esc and F-keys, so the bare Alt+arrow chords reach the host.</summary>
+    private void OnWindowKey(object? sender, Key key)
+    {
+        if (!key.IsAlt || key.IsCtrl)
+            return;
+
+        switch (key.KeyCode & ~KeyCode.AltMask)
+        {
+            case KeyCode.CursorLeft:
+                key.Handled = true;
+                GoBack();
+                break;
+            case KeyCode.CursorRight:
+                key.Handled = true;
+                GoForward();
+                break;
+        }
+    }
+
+    /// <summary>F1 opens Help as an overlay over the detail — a forward navigation onto the history.</summary>
     private void OpenHelp()
     {
-        if (ActiveScreen is HelpScreen)
+        if (_overlay is HelpScreen)
             return;
-        ShowScreen(new HelpScreen());
+        Navigate(new NavEntry("help", () => new HelpScreen()));
     }
 
-    private void ShowScreen(Screen screen)
+    /// <summary>Pushes <paramref name="entry"/> onto the history and mounts it (truncating any forward
+    /// entries — browser semantics, handled by the model).</summary>
+    private void Navigate(NavEntry entry)
     {
-        // Hide the currently-visible layer so only the new top draws/focuses (one visible screen — #3).
-        (ActiveScreen as View).Visible = false;
-        _stack.Add(screen);
-
-        EventHandler? handler = null;
-        handler = (_, _) =>
-        {
-            if (!_stack.Contains(screen))
-                return;
-            screen.Closed -= handler;
-            // Defer teardown out of the screen's own key handler (disposing mid-keypress can leave
-            // Terminal.Gui's focus machinery pointing at a freed view), like TodoApp.CloseScreen.
-            Application.Invoke(() => CloseScreen(screen));
-        };
-        screen.Closed += handler;
-        screen.FlashRequested += (_, message) => Flash(message);
-
-        _window.Add(screen);
-        UpdateHelpLine();
-        screen.OnShown();
+        _history.Push(entry);
+        ShowCurrent();
     }
 
-    private void CloseScreen(Screen screen)
+    /// <summary>Back (Esc/Alt+←): steps the history back and re-shows, or — at the launch-task root —
+    /// hands off to the exit seam (#299), which today quits the tab.</summary>
+    private void GoBack()
     {
-        if (!_stack.Remove(screen))
-            return;
+        if (_history.TryBack(out _))
+            ShowCurrent();
+        else
+            RequestExit();
+    }
 
-        _window.Remove(screen);
-        try
+    /// <summary>Forward (Alt+→): re-opens an overlay a prior back stepped out of, or flashes when there's
+    /// nothing ahead.</summary>
+    private void GoForward()
+    {
+        if (_history.TryForward(out _))
+            ShowCurrent();
+        else
+            Flash("Nothing to go forward to.");
+    }
+
+    /// <summary>
+    /// Mounts the overlay for the current history entry (root ⇒ the base detail), tearing down whatever
+    /// overlay was showing first. One visible/focusable screen at a time (the #3 invariant). Teardown is
+    /// deferred through <c>Application.Invoke</c> when triggered by a screen's own key handler so disposing
+    /// a view mid-keypress can't leave Terminal.Gui's focus machinery pointing at a freed view.
+    /// </summary>
+    private void ShowCurrent()
+    {
+        // Hide the outgoing overlay now (no visual gap) but defer its Remove/Dispose out of the current
+        // keypress: disposing a view mid-key can leave Terminal.Gui's focus machinery pointing at a freed
+        // view (the bug TodoApp.CloseScreen guards). Focus moves to the incoming view below first.
+        var previous = _overlay;
+        _overlay = null;
+        if (previous is not null)
+            previous.Visible = false;
+
+        var factory = _history.Current.Open;
+        if (factory is null)
         {
-            screen.Dispose();
+            // Root: the base detail is front-most again.
+            _detail.Visible = true;
+            _detail.SetFocus();
         }
-        catch (Exception ex) when (ex is ArgumentOutOfRangeException or IndexOutOfRangeException)
+        else
         {
-            Debug.WriteLine($"Screen dispose threw (Terminal.Gui teardown bug), ignoring: {ex}");
+            _detail.Visible = false;
+            var screen = factory();
+            _overlay = screen;
+            // The overlay's own Esc/Enter (it raises Closed) is a back navigation, like Alt+←.
+            screen.Closed += (_, _) => GoBack();
+            screen.FlashRequested += (_, message) => Flash(message);
+            _window.Add(screen);
+            screen.OnShown();
         }
 
-        var below = ActiveScreen as View;
-        below.Visible = true;
-        below.SetFocus();
+        if (previous is not null)
+        {
+            Application.Invoke(() =>
+            {
+                _window.Remove(previous);
+                try
+                {
+                    previous.Dispose();
+                }
+                catch (Exception ex) when (ex is ArgumentOutOfRangeException or IndexOutOfRangeException)
+                {
+                    Debug.WriteLine($"Screen dispose threw (Terminal.Gui teardown bug), ignoring: {ex}");
+                }
+            });
+        }
+
         UpdateHelpLine();
     }
+
+    /// <summary>
+    /// The single "quit from the launch-task root" chokepoint — the exit-confirmation seam (#298, #299
+    /// sub-issue 7). Today it stops the app (quits the tab, since single-task mode has no list to return
+    /// to); when #299 lands, its confirmation modal plugs in here instead of quitting directly.
+    /// </summary>
+    private void RequestExit() => Application.RequestStop();
 
     // ── Footer / status ──────────────────────────────────────────────────────
 
