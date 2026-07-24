@@ -781,9 +781,10 @@ public sealed class TodoApp
 
     /// <summary>F6 on the Task Detail's Task Tree tab (#415) — the tab's counterpart to the main list's
     /// <see cref="CycleBadgeDisplay"/>. Cycles + persists the shared <see cref="AppConfig.BadgeDisplay"/>
-    /// (Icons → Text → Hidden), reflects the new mode into the tree (a pure in-place re-render), and also
-    /// re-renders the hidden main list so Esc-ing back shows the same mode. Runs on the UI thread from the
-    /// screen's key handler; no-op if that screen isn't front-most.</summary>
+    /// (Icons → Text → Hidden), reflects the new mode into <b>every</b> stacked detail's tree (a pure
+    /// in-place re-render) and the hidden main list, so Esc-ing back through the visited-task chain shows
+    /// the same mode everywhere. Runs on the UI thread from the screen's key handler; no-op if the raising
+    /// screen isn't front-most.</summary>
     private void CycleTreeBadgeDisplay(TaskDetailScreen screen)
     {
         if (!ReferenceEquals(ActiveScreen, screen))
@@ -792,7 +793,13 @@ public sealed class TodoApp
         var mode = _config.BadgeDisplay.Next();
         _config.BadgeDisplay = mode;
         _configStore.Save(_config);
-        screen.SetTreeBadgeDisplay(mode);
+        // Reflect into every detail on the back-stack, not just the front-most: the tree tab navigates
+        // detail→detail (Enter a child stacks its detail over this one, #291), so a cycle here must keep
+        // the trees beneath in step or Esc-ing back would surface a stale mode. Each call is a no-op for a
+        // detail whose tree hasn't loaded, so the beneath-screens just adopt the mode for their next render.
+        foreach (var stacked in _screens)
+            if (stacked is TaskDetailScreen detail)
+                detail.SetTreeBadgeDisplay(mode);
         // Keep the (hidden) main list in step so the badges match when the detail closes — the same
         // pure re-decorate the main list's own F6 does. Its cursor stays on the current task.
         Render(keepTaskId: CurrentTask()?.Id);

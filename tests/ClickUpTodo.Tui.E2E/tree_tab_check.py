@@ -173,6 +173,18 @@ try:
     assert "GRANDKID" not in v, "expected the new detail on its Stream tab, not the tree:\n" + v
     assert "Release task" not in v, "still showing the task we navigated from:\n" + v
 
+    # Shared badge state across the visited-task stack (#415): the mode is currently hidden (end of §1).
+    # Cycle to CHILDTWO's own Task Tree tab and F6 there (hidden -> icons). Because the host reflects the
+    # cycle into every stacked detail — not just the front-most — t0's tree beneath must adopt it too, so
+    # Esc-ing back below shows t0's tree in icons, not the stale hidden it was last rendered in.
+    for _ in range(4):   # CHILDTWO detail: Stream -> Description -> Comments -> Other -> Task Tree
+        send(CTRL_RIGHT)
+        pump(0.4)
+    pump(2.0)            # let CHILDTWO's (ancestry-only) tree load
+    assert rows_with("in progress") == 1, "child tree did not open in the shared hidden state:\n" + visible()
+    send(F6); pump(1.0)  # hidden -> icons on the child's tree
+    assert "(IP)" in visible(), "F6 on the child tree did not switch to icon badges:\n" + visible()
+
     # A single Esc = Back: return to the PREVIOUS task (t0's detail, still on its Task Tree tab),
     # NOT straight to the list — the walkable-back model (#401/#298), uniform with Ctrl+O (#387).
     send(ESC)
@@ -180,6 +192,7 @@ try:
     v = visible()
     assert "Release task" in v, "Esc did not walk back to the previous task's detail:\n" + v
     assert "Task 0 —" not in v, "Esc jumped past the previous task straight to the list:\n" + v
+    assert "(IP)" in v, "t0's stacked tree did not adopt the badge mode cycled on the child (#415):\n" + v
     # A second Esc from the root detail returns to the main list.
     send(ESC)
     pump(2.0)
