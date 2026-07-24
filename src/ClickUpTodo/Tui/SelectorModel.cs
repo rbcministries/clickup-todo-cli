@@ -138,6 +138,27 @@ public static class SelectorModel
     }
 
     /// <summary>
+    /// Drop from each marker set (the distinguished/locked id sets) every id that is no longer in
+    /// <paramref name="selectedIds"/>, so a de-selected distinguished (primary/home) or locked seed
+    /// stops being marked — including when its id later re-surfaces as an unselected top-up candidate
+    /// (the stray <c>" (home)"</c> marker in #370). Mutates the passed <paramref name="markerSets"/> in
+    /// place. The <see cref="SelectorView"/> calls this on a collect-mode removal (which has no server
+    /// round-trip to reconcile from) and its immediate-apply reconcile shares the same rule, so the
+    /// "an unselected seed is never still marked" invariant lives in one place. A blank
+    /// <paramref name="markerSets"/> is a no-op.
+    /// </summary>
+    public static void PruneMarkersToSelection(ISet<string> selectedIds, params ISet<string>[] markerSets)
+    {
+        foreach (var markerSet in markerSets)
+        {
+            // Materialise the stale ids before removing so we don't mutate the set while enumerating it.
+            var stale = markerSet.Where(id => !selectedIds.Contains(id)).ToList();
+            foreach (var id in stale)
+                markerSet.Remove(id);
+        }
+    }
+
+    /// <summary>
     /// Whether a debounce timer that was scheduled for keystroke <paramref name="capturedStamp"/> should
     /// still run its search: only when no newer keystroke has arrived since (i.e. it equals the
     /// <paramref name="currentStamp"/>). The View bumps a monotonic stamp on every keystroke and
