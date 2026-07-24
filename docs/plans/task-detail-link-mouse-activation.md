@@ -63,9 +63,18 @@ into the tests below):
   lengths converts cell index → char offset exactly.
 - `TextView` only maps positions for an **unmodified** click: its handler tests
   `Flags == LeftButtonClicked`, so a `Ctrl`+click leaves the caret (and the
-  reported position) **stale**. The fix is to resolve the position by handing the
-  base a synthesized *plain* click at the same point, then act on the modifiers
-  ourselves. Harmless — the panes are read-only, so a caret move is invisible.
+  reported position) **stale** — and it still re-raises the position event with
+  that old value, so there is no "declined to map" signal to detect. A modified
+  click therefore resolves its position by handing the base a synthesized *plain*
+  click at the same point (harmless — the panes are read-only, so a caret move is
+  invisible), and every modifier other than `Ctrl` is **refused outright**: a
+  `Shift`/`Alt`+click isn't an activation gesture, and admitting one would
+  activate whichever link the caret last sat on.
+- Handling a click can **scroll `Viewport.X` to 1** — the base view keeping the
+  caret visible when it lands on a full-width wrapped row's last column — and it
+  stays there for later clicks. So the width guard ignores `Viewport.X` entirely
+  (word wrap means content never scrolls horizontally) and the vertical guard uses
+  the viewport as captured *before* the base sees the event.
 
 Two guards are required, both from probed false-positive cases:
 
@@ -197,9 +206,15 @@ guard in turn: `Click_RightOfAWrappedRowsText_ActivatesNothing` and
 The harness already seeds a task link in the description and a web link in a
 comment (#317's `link_check.py`). Drive real SGR mouse clicks under the PTY and
 assert the resulting navigation: plain click on the description's task link →
-Task Detail for that task; `Ctrl`+click → no navigation and the footer reports
-the browser open (the fake `IBrowserLauncher` in the harness records the URL);
-plain click on the comment's web link → same browser report, no navigation.
+Task Detail for that task; `Ctrl`+click → no navigation and the browser opens
+(asserted from the harness's `E2E_BROWSER_LOG` recorder, so it's a file fact
+rather than a screen guess); plain click on the comment's web link → same browser
+report, no navigation. Plus the two host/gate paths that have no unit-level
+equivalent: a click under each of the three overlays (`Ctrl+N` composer,
+`Ctrl+A` Dispatch pane, `Ctrl+E` description editor) is inert, and the
+single-task host (`E2E_SINGLE_TASK`) sends both actions to the browser while
+leaving the tab running. Each of those five arms was verified to fail the check
+when its arm of the gate (or the host wiring) is removed.
 
 ### Regression
 

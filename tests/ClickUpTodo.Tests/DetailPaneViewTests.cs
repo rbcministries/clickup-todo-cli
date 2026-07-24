@@ -187,27 +187,33 @@ public sealed class DetailPaneViewTests
 
     // A pane laid out at a fixed size (so wrapping is deterministic) with its activation requests captured.
     private static (DetailPaneView Pane, List<LinkActivationRequest> Requests) ClickablePane(
-        string body, int width = 30, int height = 10)
+        string body, int width = 30, int height = 10, string separator = Sep)
     {
         var pane = new DetailPaneView { Frame = new Rectangle(0, 0, width, height) };
-        pane.SetBody(body, Sep);
+        pane.SetBody(body, separator);
         // SetBody's TextView.Load leaves the model *unwrapped* until Terminal.Gui's own draw/viewport pass
         // re-wraps it — which always happens before a user can click, but never here, because a unit test
         // has no driver to draw with. Toggling WordWrap performs that wrap, so these clicks land on the
         // wrapped layout a user actually sees.
-        pane.WordWrap = false;
-        pane.WordWrap = true;
+        Rewrap(pane);
         var requests = new List<LinkActivationRequest>();
         pane.LinkActivationRequested += (_, request) => requests.Add(request);
         return (pane, requests);
     }
 
     private static void Click(DetailPaneView pane, Point at, bool ctrl = false)
-        => pane.NewMouseEvent(new Mouse
-        {
-            Position = at,
-            Flags = MouseFlags.LeftButtonClicked | (ctrl ? MouseFlags.Ctrl : MouseFlags.None),
-        });
+        => ClickWith(pane, at, MouseFlags.LeftButtonClicked | (ctrl ? MouseFlags.Ctrl : MouseFlags.None));
+
+    private static void ClickWith(DetailPaneView pane, Point at, MouseFlags flags)
+        => pane.NewMouseEvent(new Mouse { Position = at, Flags = flags });
+
+    // Re-wraps the model the way Terminal.Gui's draw/viewport pass does (see ClickablePane) — needed again
+    // after any SetBody, since TextView.Load leaves the model unwrapped.
+    private static void Rewrap(DetailPaneView pane)
+    {
+        pane.WordWrap = false;
+        pane.WordWrap = true;
+    }
 
     // The viewport (column, row) of `needle` in the pane's wrapped display lines. Positions are derived
     // from the real wrapped layout rather than hard-coded, and converted char index → cell index →
@@ -313,6 +319,20 @@ public sealed class DetailPaneViewTests
     }
 
     [Fact]
+    public void Click_OnASeparatorLineIsInertEvenIfItLooksLikeALink()
+    {
+        // BuildCells never runs link detection on a separator line, so a click there must never activate
+        // either — otherwise a click could act on something the pane never rendered as a link. The real
+        // rule holds no URL, so the invariant is pinned with a separator that does.
+        var separator = $"-- {WebUrl} --";
+        var (pane, requests) = ClickablePane($"body\n{separator}\nmore", width: 60, separator: separator);
+
+        Click(pane, Locate(pane, WebUrl));
+
+        Assert.Empty(requests);
+    }
+
+    [Fact]
     public void Click_BelowTheLastLine_ActivatesNothing()
     {
         // A tall pane over a short body whose last line *ends* with a link: the base view clamps a click
@@ -389,26 +409,91 @@ public sealed class DetailPaneViewTests
     }
 
     [Fact]
-    public void DoubleClick_DoesNotActivate()
+    public void DoubleClick_AndTripleClick_DoNotActivate()
     {
-        // A double-click is the base view's select-word gesture; activation is a single click only.
+        // Double-click is the base view's select-word gesture and each multi-click carries its own distinct
+        // flag, so neither reaches the activation path; activation is a single click only.
         var (pane, requests) = ClickablePane($"See {WebUrl} now", width: 60);
         var at = Locate(pane, WebUrl);
 
-        pane.NewMouseEvent(new Mouse { Position = at, Flags = MouseFlags.LeftButtonDoubleClicked });
+        ClickWith(pane, at, MouseFlags.LeftButtonDoubleClicked);
+        ClickWith(pane, at, MouseFlags.LeftButtonTripleClicked);
 
         Assert.Empty(requests);
+    }
+
+    [Theory]
+    [InlineData(MouseFlags.Shift)]
+    [InlineData(MouseFlags.Alt)]
+    [InlineData(MouseFlags.Shift | MouseFlags.Alt)]
+    public void Click_WithAnUnsupportedModifier_ActivatesNothing(MouseFlags modifier)
+    {
+        // Only a plain or Ctrl-modified click activates. This is a correctness guard, not a preference:
+        // TextView maps positions for a *bare* left click only, and re-reports the stale caret for anything
+        // else — so admitting a Shift/Alt+click would activate whichever link the caret last sat on. Here
+        // the caret is parked in the web link first, so a stale read would resolve to it.
+        var (pane, requests) = ClickablePane($"web {WebUrl}\ntask {TaskUrl}", width: 60);
+        Click(pane, Locate(pane, WebUrl));
+        Assert.Single(requests);
+
+        ClickWith(pane, Locate(pane, TaskUrl), MouseFlags.LeftButtonClicked | modifier);
+
+        Assert.Single(requests);   // still just the first, plain click
+    }
+
+    [Theory]
+    [InlineData(false)]   // plain click first
+    [InlineData(true)]    // Ctrl+click first — its caret nudge persists into the next click
+    public void Click_OnTheLastColumnOfAFullWidthWrappedLinkRow_Activates(bool ctrlFirst)
+    {
+        // Handling a click can scroll Viewport.X to 1 — the base view keeping the caret visible when it
+        // lands on a full-width row's last column — and it stays scrolled for later clicks. Letting that
+        // into the width guard made this one cell the only cell of a link that a click ignored, in whichever
+        // gesture came second. Both orders are pinned because the first fix (snapshotting the viewport)
+        // still failed the ctrl-then-plain order.
+        // One unbroken URL long enough to fill a 30-column row and spill onto the next, so row 0 has no
+        // wrap slack and its last column is the cell in question.
+        var body = WebUrl + WebUrl;
+        var (pane, requests) = ClickablePane(body, width: 30);
+        var lastColumn = pane.GetColumnsWidth(pane.GetLine(0)) - 1;
+        Assert.Equal(30, lastColumn + 1);                     // the row really is full width
+        var at = new Point(lastColumn, 0);
+
+        Click(pane, at, ctrl: ctrlFirst);
+        Click(pane, at, ctrl: !ctrlFirst);
+
+        Assert.Equal(2, requests.Count);
+        Assert.Equal(requests[0].Span, requests[1].Span);     // both gestures found the same span
+        Assert.All(requests, r => Assert.Equal(body, r.Url));
+    }
+
+    [Fact]
+    public void RepeatedIdenticalClicks_ActivateEveryTime()
+    {
+        // The position is read from a cached caret, and Terminal.Gui re-reports it on every click even when
+        // it hasn't moved. If that ever changed, clicking the same link twice would silently go inert.
+        var (pane, requests) = ClickablePane($"See {WebUrl} now", width: 60);
+        var at = Locate(pane, WebUrl);
+
+        Click(pane, at);
+        Click(pane, at);
+        Click(pane, at, ctrl: true);
+
+        Assert.Equal(3, requests.Count);
+        Assert.All(requests, r => Assert.Equal(WebUrl, r.Url));
     }
 
     [Fact]
     public void Click_AfterAReload_UsesTheNewBody()
     {
         // SetBody is called repeatedly (a refresh / an activity-order toggle re-renders in place), so the
-        // lines a click hit-tests against must be the ones currently loaded.
-        var (pane, requests) = ClickablePane($"first {WebUrl}", width: 60);
-        pane.SetBody($"second {TaskUrl}", Sep);
+        // lines a click hit-tests against must be the ones currently loaded — including when the new body
+        // wraps differently from the old one.
+        var (pane, requests) = ClickablePane($"first body with {WebUrl} in it", width: 30);
+        pane.SetBody($"second body, wrapping too, with {TaskUrl} in it", Sep);
+        Rewrap(pane);
 
-        Click(pane, Locate(pane, TaskUrl));
+        Click(pane, Locate(pane, "clickup.com"));
 
         var request = Assert.Single(requests);
         Assert.Equal(TaskUrl, request.Url);

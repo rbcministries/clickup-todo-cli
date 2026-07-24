@@ -3,6 +3,7 @@ using Terminal.Gui.Input;
 using Terminal.Gui.Views;
 using Attribute = Terminal.Gui.Drawing.Attribute;
 using Point = System.Drawing.Point;
+using Rectangle = System.Drawing.Rectangle;
 
 // TextView is marked obsolete in Terminal.Gui 2.4 in favour of a not-yet-shipped EditorView; it
 // remains the supported v2 read-only text pane the detail view uses (see TaskDetailScreen).
@@ -215,12 +216,18 @@ public sealed class DetailPaneView : TextView
     /// </para>
     /// <list type="bullet">
     /// <item><description>
-    /// <b>It only maps unmodified clicks.</b> <see cref="TextView"/>'s handler tests the flags for a bare
-    /// <see cref="MouseFlags.LeftButtonClicked"/>, so a <c>Ctrl</c>+click leaves the caret — and the
-    /// reported position — on the <em>previous</em> click. So a <em>modified</em> click's position is
-    /// resolved by handing the base a synthesized plain click at the same point (the panes are read-only,
-    /// so the caret move that entails is invisible, and it is what an unmodified click would have done
-    /// anyway), while an unmodified click is simply passed to the base first and its own mapping read.
+    /// <b>It only maps unmodified clicks</b>, and reports the <em>stale</em> caret for the rest.
+    /// <see cref="TextView"/>'s handler tests the flags for a bare
+    /// <see cref="MouseFlags.LeftButtonClicked"/>, so a modified click leaves the caret where it was — and
+    /// still re-raises <see cref="OnUnwrappedCursorPositionChanged"/> with that old position, so there is
+    /// no "it declined to map this" signal to detect. A <c>Ctrl</c>+click therefore resolves its position
+    /// by handing the base a synthesized plain click at the same point (the panes are read-only, so the
+    /// caret move that entails is invisible, and it is what an unmodified click would have done anyway),
+    /// an unmodified click is passed to the base and its own mapping read back, and <b>every other
+    /// modifier is refused outright</b> — a <c>Shift</c>/<c>Alt</c>+click isn't an activation gesture, and
+    /// admitting one would activate whatever link the caret last sat on. When #320 adds
+    /// <c>Ctrl+Shift</c>+click it joins the resolved-by-synthesized-click arm, since it carries
+    /// <c>Ctrl</c>.
     /// </description></item>
     /// <item><description>
     /// <b>It clamps a click outside the text onto the nearest position.</b> That turns two ordinary
@@ -230,28 +237,38 @@ public sealed class DetailPaneView : TextView
     /// <c>"short "</c> resolved onto the URL that follows it). Hence the two guards below; a click on the
     /// exclusive end of a span is separately not a hit (<see cref="LinkActivator.SpanAt"/>).
     /// </description></item>
+    /// <item><description>
+    /// <b>Handling a click can shift the viewport.</b> Keeping the caret visible sets <c>Viewport.X</c> to 1
+    /// when the caret lands on the last column of a full-width wrapped row, and it stays there for
+    /// subsequent clicks. The width guard therefore ignores <c>Viewport.X</c> altogether (the pane is
+    /// word-wrapped, so content never scrolls horizontally), and the vertical guard reads the viewport
+    /// <em>as it was when the user clicked</em>, captured before the base sees the event. Letting either
+    /// leak in made the last cell of a full-width row the one cell of a link that a click ignored.
+    /// </description></item>
     /// </list>
     /// </summary>
     protected override bool OnMouseEvent(Mouse mouseEvent)
     {
-        // Only a left click activates. Note the flags are tested with HasFlag (not equality) so a
-        // Ctrl-modified click still qualifies — that is the gesture #318 maps to "open in the browser".
+        // Only a plain or Ctrl-modified left click activates. Every other flag combination — a wheel, a
+        // press/release (drag), a double- or triple-click (each its own distinct flag), and any
+        // Shift/Alt-modified click — falls through to the base view untouched. Refusing the other
+        // modifiers is what keeps a gesture the base won't map from resolving to the stale caret (see
+        // above); it is not merely a taste call about which gestures mean "activate".
         if (!mouseEvent.Flags.HasFlag(MouseFlags.LeftButtonClicked)
-            || mouseEvent.Flags.HasFlag(MouseFlags.LeftButtonDoubleClicked)
+            || mouseEvent.Flags.HasFlag(MouseFlags.Shift)
+            || mouseEvent.Flags.HasFlag(MouseFlags.Alt)
             || mouseEvent.Position is not { } position)
             return base.OnMouseEvent(mouseEvent);
 
-        // Forget the previous click's position before the base maps this one, so a click the base declines
-        // to map can only resolve to "no position" — never to where the *last* click landed, which would
-        // activate a link the user didn't click.
-        _unwrappedCaret = null;
+        // The viewport as the user saw it — the base may scroll it while handling the click (see above).
+        var viewport = Viewport;
 
         // An unmodified click is the one the base view maps itself, so let it handle the real event and
         // read the position back; only a modified click needs the synthesized stand-in (see above), which
         // keeps the common gesture a single pass through the base.
         var ctrl = mouseEvent.Flags.HasFlag(MouseFlags.Ctrl);
         var handledByBase = !ctrl && base.OnMouseEvent(mouseEvent);
-        if (LinkAt(position, resolvePosition: ctrl) is not { } span)
+        if (LinkAt(position, viewport, resolvePosition: ctrl) is not { } span)
             return handledByBase;
 
         LinkActivationRequested?.Invoke(this, new LinkActivationRequest(span, LinkActivator.Resolve(span, ctrl)));
@@ -264,28 +281,39 @@ public sealed class DetailPaneView : TextView
     /// isn't on one. Guards first against the two ways the base view clamps a click outside the text onto
     /// a position that would read as a hit (see <see cref="OnMouseEvent"/>), then resolves the source
     /// (line, cell) the click landed on and hit-tests that line's links.
-    /// <paramref name="resolvePosition"/> asks the base view to map the position first — needed for a
-    /// modified click, which it would otherwise not map at all.
+    /// <paramref name="viewport"/> is the pane's viewport as it was when the user clicked (the base view
+    /// may scroll it while handling the click). <paramref name="resolvePosition"/> asks the base view to
+    /// map the position first — needed for a modified click, which it would otherwise not map at all.
     /// </summary>
-    private LinkSpan? LinkAt(Point position, bool resolvePosition)
+    private LinkSpan? LinkAt(Point position, Rectangle viewport, bool resolvePosition)
     {
         // Guard 1 — a click below the last wrapped row (the empty area under a short body). Lines is the
-        // wrapped line count while WordWrap is on, and Viewport.Y is the topmost displayed wrapped row.
-        var displayRow = Viewport.Y + position.Y;
+        // wrapped line count while WordWrap is on, and viewport.Y is the topmost displayed wrapped row.
+        // (GetLine clamps an out-of-range row to the last line, so without this the next guard would pass
+        // and the click would resolve into whatever the body's last line ends with.)
+        var displayRow = viewport.Y + position.Y;
         if (displayRow < 0 || displayRow >= Lines)
             return null;
 
         // Guard 2 — a click right of that row's rendered text. Measured in columns (GetColumnsWidth), so a
-        // row carrying wide runes isn't cut short of its real width.
-        if (position.X < 0 || Viewport.X + position.X >= GetColumnsWidth(GetLine(displayRow)))
+        // row carrying wide runes isn't cut short of its real width. Deliberately ignores viewport.X: the
+        // pane is word-wrapped, so its content never scrolls horizontally and a click's column *is* its
+        // column in the row. The only thing that moves viewport.X is the base view nudging it to keep the
+        // caret visible when the caret lands on a full-width row's last column — and letting that leak in
+        // here made the last cell of such a row the one cell of a link that a click ignored.
+        if (position.X < 0 || position.X >= GetColumnsWidth(GetLine(displayRow)))
             return null;
 
         // The click's source (line, cell), from the base view's own mapping.
         if (resolvePosition)
             base.OnMouseEvent(new Mouse { Position = position, Flags = MouseFlags.LeftButtonClicked });
-        if (_unwrappedCaret is not { } caret || caret.Y < 0 || caret.Y >= _lines.Length)
+        if (_unwrappedCaret is not { } caret || caret.X < 0 || caret.Y < 0 || caret.Y >= _lines.Length)
             return null;
 
+        // A separator rule is skipped exactly as BuildCells skips it, so a click can never activate a link
+        // on a line the renderer never tagged as one. (For the actual rule — a run of '─' — this is a
+        // no-op, since it holds no URL either way; it earns its keep only if a caller ever passes a
+        // separator with text in it, which the test pins.)
         var line = _lines[caret.Y];
         if (line == _separator)
             return null;
