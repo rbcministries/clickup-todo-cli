@@ -53,9 +53,11 @@ public sealed record AppLaunchCommand(string FileName, IReadOnlyList<string> Arg
     public static AppLaunchCommand ForTask(string taskId)
         => ForTask(taskId, TerminalLauncher.ExecutableOnPath, Environment.ProcessPath);
 
-    /// <summary>The shell-ready command string for the copy-to-clipboard / status-line fallback when no
-    /// terminal can be launched — quotes only the tokens that contain spaces, the way a user would type
-    /// it.</summary>
+    /// <summary>An <b>approximate</b>, human-readable command string for the copy-to-clipboard /
+    /// status-line fallback when no terminal can be launched — quotes only the tokens that contain
+    /// spaces, the way a user would type it. This is deliberately simpler than the real launch quoting
+    /// (<c>PwshQuote</c>/<c>PosixQuote</c> in the planner): it's for a human to read/paste, and task ids
+    /// are alphanumeric, so shell-metacharacter escaping isn't attempted here.</summary>
     public string ToDisplayCommand()
         => string.Join(" ", new[] { FileName }.Concat(Arguments).Select(QuoteForDisplay));
 

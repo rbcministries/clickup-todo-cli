@@ -690,8 +690,9 @@ public sealed class TodoApp
             Flash("A task tab is already opening…");
             return;
         }
-        _launchingTab = true;
 
+        // Resolve the command before arming the re-entrancy guard: ForTask is pure and could in principle
+        // throw (a blank id), and doing it first means such a throw can't leave _launchingTab stuck true.
         var command = AppLaunchCommand.ForTask(task.Id);
         // A new tab of the current terminal where the host supports it (#255's LaunchLocation), honouring
         // the user's preferred-terminal setting on Windows. ClaudeExecutable/ExtraArgs don't apply to an
@@ -701,6 +702,7 @@ public sealed class TodoApp
             LaunchLocation = LaunchLocation.NewTab,
             Preferred = _config.AgentDispatch.PreferredTerminal,
         };
+        _launchingTab = true;
         var name = task.Name;
         Flash($"Opening '{name}' in a new terminal tab…");
         _ = Task.Run(async () =>
