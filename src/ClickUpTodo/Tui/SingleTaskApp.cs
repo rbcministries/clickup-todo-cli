@@ -54,8 +54,8 @@ public sealed class SingleTaskApp
     private IReadOnlyList<CommentItem> _comments;
 
     private Window _window = null!;
-    private Label _statusLabel = null!;
-    private Label _helpLabel = null!;
+    // The shared status + contextual help footer (#346). Built in Build.
+    private ContextualFooter _footer = null!;
     private TaskDetailScreen _detail = null!;
 
     // Screens stacked over the root detail (only Help, via F1). Empty ⇒ the detail is front-most.
@@ -107,19 +107,11 @@ public sealed class SingleTaskApp
         }
         finally
         {
-            // Mirror TodoApp.Run's teardown: Shutdown restores the terminal no matter how Dispose fares,
-            // and Terminal.Gui 2.4.10 can throw ArgumentOutOfRange from a tabbed view's teardown (the same
-            // bug CloseScreen guards), so swallow that known bug rather than crash while quitting.
+            // Shutdown restores the terminal no matter how Dispose fares, so it must run even if the
+            // shared teardown guard swallows Terminal.Gui 2.4.10's tabbed-view dispose bug (#346).
             try
             {
-                try
-                {
-                    _window?.Dispose();
-                }
-                catch (Exception ex) when (ex is ArgumentOutOfRangeException or IndexOutOfRangeException)
-                {
-                    Debug.WriteLine($"Window dispose threw (Terminal.Gui teardown bug), ignoring: {ex}");
-                }
+                TuiTeardown.DisposeSwallowingTeardownBug(_window, "Window");
             }
             finally
             {
@@ -183,10 +175,10 @@ public sealed class SingleTaskApp
         _detail.FlashRequested += (_, message) => Flash(message);
         _detail.HelpRequested += (_, _) => OpenHelp();
 
-        _statusLabel = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = _status };
-        _helpLabel = new Label { X = 1, Y = Pos.AnchorEnd(1), Width = Dim.Fill(1) };
+        _footer = new ContextualFooter(_status);
 
-        _window.Add(_detail, _statusLabel, _helpLabel);
+        _window.Add(_detail);
+        _footer.AddTo(_window);
         // Re-fit the contextual footer whenever the window re-lays out (terminal resize); the text is
         // only reassigned when it changes, so this can't loop (mirrors TodoApp).
         _window.SubViewsLaidOut += (_, _) => UpdateHelpLine();
@@ -220,7 +212,7 @@ public sealed class SingleTaskApp
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => Flash($"Could not refresh task: {Short(ex)}"));
+                Application.Invoke(() => Flash($"Could not refresh task: {ErrorText.Short(ex)}"));
             }
             finally
             {
@@ -347,42 +339,25 @@ public sealed class SingleTaskApp
 
     // ── Footer / status ──────────────────────────────────────────────────────
 
-    private void UpdateHelpLine()
-    {
-        var items = ActiveScreen.HelpItems;
-        var width = _helpLabel.Frame.Width;
-        var text = width > 0
-            ? HelpLine.Format(HelpLine.Fit(items, width, static s => s.GetColumns()))
-            : HelpLine.Format(items);
-        if (_helpLabel.Text != text)
-            _helpLabel.Text = text;
-    }
+    private void UpdateHelpLine() => _footer.RenderHelp(ActiveScreen.HelpItems);
 
-    private void Flash(string message)
-    {
-        _status = message;
-        _statusLabel.Text = message;
-    }
+    private void Flash(string message) => _footer.Flash(message);
 
     // Ctrl+B launches the browser and immediately closes the tab (the detail screen sets
     // OpenBrowserRequested then Close()s), so — unlike TodoApp's LaunchBrowser — there is no live view
-    // left to flash success/failure onto; a launch failure is only debug-logged. Routes through the same
-    // IBrowserLauncher seam + app.clickup.com → workspace-subdomain rewrite the dashboard uses (#304).
+    // left to flash success/failure onto; a launch failure is only debug-logged. Shares the
+    // IBrowserLauncher seam + app.clickup.com → workspace-subdomain rewrite the dashboard uses (#304/#346).
     private void LaunchBrowser(string? url)
     {
-        if (string.IsNullOrWhiteSpace(url))
-            return;
-
-        var target = ClickUpUrl.RewriteHost(url, _config.WorkspaceSubdomain);
-        if (!Uri.TryCreate(target, UriKind.Absolute, out var uri))
+        var (result, target) = ClickUpTaskBrowser.Open(_browser, url, _config.WorkspaceSubdomain);
+        switch (result)
         {
-            Debug.WriteLine($"Not a valid URL to open: {target}");
-            return;
+            case ClickUpTaskBrowser.Result.InvalidUrl:
+                Debug.WriteLine($"Not a valid URL to open: {target}");
+                break;
+            case ClickUpTaskBrowser.Result.LaunchFailed:
+                Debug.WriteLine($"Could not open a browser for: {target}");
+                break;
         }
-
-        if (!_browser.TryOpen(uri))
-            Debug.WriteLine($"Could not open a browser for: {target}");
     }
-
-    private static string Short(Exception ex) => ex is ClickUpApiException c ? c.Message : ex.Message;
 }
