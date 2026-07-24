@@ -20,6 +20,7 @@ public enum ScreenContext
     NotificationsFeed,
     AgentRun,
     Help,
+    ExitConfirm,
 }
 
 /// <summary>
@@ -61,6 +62,9 @@ public enum KeyAction
 
     // Quick Updates.
     Apply,
+
+    // Exit confirmation (#299): the affirmative answer. Its "no" is the recurring Back/Esc above.
+    Confirm,
 
     // Notifications feed.
     MentionsOnly,
@@ -158,6 +162,13 @@ public static class Keybindings
 
             // ── Help (it is the help; no Help action, only Back to close) ──────────────────────
             [(ScreenContext.Help, KeyAction.Back)] = "Esc",
+
+            // ── Exit confirmation (#299) ──────────────────────────────────────────────────────
+            // Y confirms; Esc (Back, as everywhere) cancels. Enter/N are the undisplayed aliases and
+            // stay in the screen's handler, like the other alias keys. No Help action: a two-key yes/no
+            // shouldn't stack Help over itself.
+            [(ScreenContext.ExitConfirm, KeyAction.Confirm)] = "Y",
+            [(ScreenContext.ExitConfirm, KeyAction.Back)] = "Esc",
         };
 
     /// <summary>Every <c>(context, action) → token</c> entry, for cross-checking against the footer.</summary>
