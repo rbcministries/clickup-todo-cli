@@ -1481,16 +1481,33 @@ public sealed class TodoApp
     /// sub-issue 7). <c>Esc</c> is the canonical Back key; the dashboard's root is the main list, so
     /// Back <em>at the root</em> is a quit, and every quit path there (the <see cref="KeyAction.Quit"/>
     /// binding, <c>Esc</c>, <c>Ctrl+C</c>) routes here instead of calling <c>Application.RequestStop</c>
-    /// directly, so when #299 lands its confirmation modal plugs in here. Today it preserves the existing
-    /// behavior — stop the app.
+    /// directly, which is what lets #299's confirmation modal live here alone.
+    /// <para>
+    /// #299: it now asks before quitting. The <see cref="ExitConfirmScreen"/> is mounted like any other
+    /// transient modal (<c>docs/navigation-model.md</c>) over the hidden list; answering yes stops the
+    /// app, answering no tears the modal down and restores the list with the cursor untouched (a
+    /// <see cref="CloseScreen"/> never rebuilds the <c>ListView</c>). Re-entrancy is guarded so mashing
+    /// Esc/Ctrl+Q can't stack two questions.
+    /// </para>
     /// <para>
     /// Per #298 the planned Alt+←/→ chord was dropped (it collides with terminal-emulator split-pane
     /// navigation, e.g. Windows Terminal); <c>Esc</c> = Back is canonical and there is no Forward key.
     /// Browser-style forward/back <em>across visited tasks</em> — and the <see cref="NavigationHistory{T}"/>
-    /// this PR lands as its mechanism — is driven by the detail→detail navigation in #291.
+    /// #401 landed as its mechanism — is driven by the detail→detail navigation in #291.
     /// </para>
     /// </summary>
-    private void RequestExit() => Application.RequestStop();
+    private void RequestExit()
+    {
+        if (ActiveScreen is ExitConfirmScreen)
+            return;
+
+        var confirm = new ExitConfirmScreen();
+        ShowScreen(confirm, () =>
+        {
+            if (confirm.Confirmed)
+                Application.RequestStop();
+        });
+    }
 
     /// <summary>Routes a screen's transient message (e.g. a validation error) to the status line.</summary>
     private void OnScreenFlash(object? sender, string message) => Flash(message);

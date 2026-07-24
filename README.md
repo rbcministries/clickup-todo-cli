@@ -112,32 +112,59 @@ redirect URL, set `CLICKUP_OAUTH_REDIRECT_URI` (it must match the URL registered
 
 ## Keyboard shortcuts
 
-These are the main task-list shortcuts. Command actions use modifier chords / function keys so bare
-letters stay free for the list's type-ahead search. Press `F1` in the app for the full, per-screen
-list (each screen shows its own contextual shortcuts on the footer).
+Command actions use modifier chords / function keys so bare letters stay free for the list's
+type-ahead search. The **Icon** column is the glyph that labels each action on the app's bottom help
+bar, so you can match a footer icon to what it does. Press `F1` in the app for the same list on the
+full, per-screen help view (each screen also shows its own contextual shortcuts on the footer).
 
-| Key           | Action                                                        |
-| ------------- | ------------------------------------------------------------- |
-| `↑` / `↓`     | Move between tasks                                            |
-| `Tab`         | Jump to the next section (**Current Focus** ↔ **Tasks**)      |
-| `Ctrl+U`      | Quick Updates — set status / priority / assignees             |
-| `Enter`       | Open the focused task in **Task Detail**                      |
-| `Ctrl+Enter`  | Open the focused task in a **new terminal tab** (`Ctrl+`Left-Click a row does the same) |
-| `Ctrl+B`      | Open the focused task in your browser                         |
-| `Ctrl+P`      | Pin / unpin the focused task to the Focus pane                |
-| `Ctrl+N`      | New task                                                      |
-| `Ctrl+E`      | Toggle the mentions & comments feed                          |
-| `F1`          | Show help + full shortcut list                                |
-| `F2`          | Settings                                                      |
-| `F3`          | Filter / sort / group                                         |
-| `F4`          | Cycle the subtasks view                                       |
-| `F5`          | Refresh now (`Ctrl+R` is an alias)                           |
-| `F6`          | Cycle status/priority badges                                  |
-| `F12`         | Toggle completed tasks                                        |
-| `→` / `←`     | Expand / collapse the focused parent's subtasks              |
-| `Ctrl+→` / `Ctrl+←` | Expand-all / collapse-all subtasks                     |
-| `type`        | Type-ahead search by task title                               |
-| `Ctrl+Q` / `Esc` | Quit                                                      |
+### Task list
+
+| Key           | Icon | Action                                                        |
+| ------------- | :--: | ------------------------------------------------------------- |
+| `↑` / `↓`     |      | Move between tasks                                            |
+| `Tab`         |      | Jump to the next section (**Current Focus** ↔ **Tasks**)      |
+| `Ctrl+U`      |      | Quick Updates — set status / priority / assignees             |
+| `Enter`       |      | Open the focused task in **Task Detail**                      |
+| `Ctrl+O`      | 🗁   | Open a task by id, custom id, or URL                          |
+| `Ctrl+Enter`  |      | Open the focused task in a **new terminal tab** (`Ctrl+`Left-Click a row does the same) |
+| `Ctrl+N`      | ➕   | New task                                                      |
+| `Ctrl+B`      | 🌐   | Open the focused task in your browser                         |
+| `Ctrl+P`      | 📌   | Pin / unpin the focused task to the Focus pane                |
+| `Ctrl+E`      | 🔔   | Toggle the mentions & comments feed                          |
+| `F1`          | ℹ    | Show help + full shortcut list                                |
+| `F2`          | ⚙    | Settings                                                      |
+| `F3`          | ⧩ ▼▲ ⛚ | Filter / sort / group                                      |
+| `F4`          |      | Cycle the subtasks view                                       |
+| `F5`          | ↻    | Refresh now (`Ctrl+R` is an alias)                           |
+| `F6`          |      | Cycle status/priority badges                                  |
+| `F12`         | 👁✅  | Toggle completed tasks                                        |
+| `→` / `←`     |      | Expand / collapse the focused parent's subtasks              |
+| `Ctrl+→` / `Ctrl+←` | | Expand-all / collapse-all subtasks                        |
+| `type`        |      | Type-ahead search by task title                               |
+| `Ctrl+Q` / `Esc` |   | Quit — confirms first (`Y`/`Enter` exits, `N`/`Esc` stays)    |
+
+### Task Detail
+
+| Key                   | Icon | Action                                                 |
+| --------------------- | :--: | ------------------------------------------------------ |
+| `↑` / `↓`, `PgUp` / `PgDn` | | Scroll the pane                                      |
+| `Ctrl+←` / `Ctrl+→`   |      | Switch tab (Description / Comments / Other)            |
+| `Ctrl+PgUp` / `Ctrl+PgDn` | ▼▲ | Order the comments & activity feed                    |
+| `Ctrl+A`              | ✨   | Dispatch a Claude session for this task                |
+| `Ctrl+N`              | ➕   | Add a comment                                          |
+| `Ctrl+E`              | ✏    | Edit the description                                   |
+| `Ctrl+B`              | 🌐   | Open the task in your browser                          |
+| Left-click a link     |      | Follow it — see [Follow links in a task's text](#follow-links-in-a-tasks-text) |
+| `Ctrl+U`              |      | Quick Updates for this task                            |
+| `Ctrl+O`              | 🗁   | Open another task by id, custom id, or URL             |
+| `F5`                  | ↻    | Refresh                                                |
+| `F1`                  | ℹ    | Help                                                   |
+| `Esc`                 |      | Back to the list                                       |
+
+**Quitting asks first.** `Esc` means "go back" on every screen, so the one place it would be
+destructive — leaving the app — is guarded: `Esc` (or `Ctrl+Q`) from the main list, or from the launch
+task in a single-task tab (`--task`), shows a confirmation. `Y`/`Enter` exits; `N`/`Esc` returns you to
+exactly where you were, with your cursor and tab unchanged. `Esc` anywhere else still just goes back.
 
 Quick Updates opens with `Ctrl+U` from both the main list and Task Detail. Pinned tasks persist
 across restarts. The list refreshes in the background on your configured interval, and your cursor

@@ -42,16 +42,16 @@ public static class HelpLine
         => string.Join(" · ", items.Select(i => $"{i.Key} {i.Label}"));
 
     /// <summary>
-    /// The trailing item shown when the full set doesn't fit (#H2/#104): <c>F1 Help + Shortcuts</c>
+    /// The trailing item shown when the full set doesn't fit (#H2/#104): <c>F1 ℹ</c>
     /// opens the full list via the F1 <c>HelpScreen</c>, which #103 made reachable from every context.
     /// </summary>
-    public static readonly HelpItem HelpFallback = new("F1", "Help + Shortcuts");
+    public static readonly HelpItem HelpFallback = new("F1", "ℹ");
 
     /// <summary>
     /// Fits <paramref name="items"/> to <paramref name="width"/> display columns (#H2/#104). When the
     /// full line fits, returns <paramref name="items"/> unchanged. When it doesn't, returns the longest
     /// leading prefix that fits <em>alongside</em> a reserved trailing <see cref="HelpFallback"/>, with
-    /// the fallback appended — so <c>F1 Help + Shortcuts</c> is always the last thing shown when
+    /// the fallback appended — so <c>F1 ℹ</c> is always the last thing shown when
     /// truncated and the full list stays one keypress away. Item order is priority order: the leading
     /// (highest-value) shortcuts are kept first. Any existing F1-keyed item is dropped from the
     /// candidates while truncating (the fallback subsumes it) so F1 never renders twice. At a width too
@@ -148,6 +148,16 @@ public static class HelpLine
 /// screen) so the footer is consistent and testable; each screen exposes its set via
 /// <c>Screen.HelpItems</c> and the host renders the list's set (<see cref="MainList"/>) when no screen
 /// is open. Every screen set ends with an Esc/close item and (except Help itself) offers F1 → Help.
+/// <para>
+/// Action labels favour concise glyphs over words where a glyph reads clearly (#343 established the
+/// vocabulary; extended here). The less-literal glyphs, for maintainers: <c>ℹ</c> help/shortcuts,
+/// <c>🗁</c> open-by-id, <c>⧩</c> filter, <c>▼▲</c> sort / order activity, <c>⛚</c> group,
+/// <c>✨</c> dispatch to Claude, <c>✏</c> edit description, <c>➕</c> new/add, <c>🌐</c> browser,
+/// <c>🔔</c> mentions/comments feed, <c>📌</c> pin, <c>⚙</c> settings, <c>↻</c> refresh,
+/// <c>👁✅</c> show/hide completed. Each glyph keeps its <c>Key</c> hint so the shortcut stays
+/// discoverable and the item stays clickable (#289). The <c>HelpScreen</c> mirrors these glyphs
+/// beside each explanation so users can match a footer icon to its concept.
+/// </para>
 /// </summary>
 public static class HelpItemSets
 {
@@ -160,15 +170,15 @@ public static class HelpItemSets
         new("→|", "next section", IsAction: false),
         new("Ctrl+U", "quick update"),
         new("↩", "detail", Chord: "Enter"),
-        new("Ctrl+O", "open by id"),
+        new("Ctrl+O", "🗁 by ID"),
         new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
         new("Ctrl+N", "➕"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+P", "📌"),
-        new("Ctrl+E", "feed"),
-        new("F1", "help"),
+        new("Ctrl+E", "🔔"),
+        new("F1", "ℹ"),
         new("F2", "⚙"),
-        new("F3", "filter/sort/group"),
+        new("F3", "⧩ ▼▲ ⛚"),
         new("F4", "subtasks"),
         new("F5", "↻"),
         new("F6", "badges"),
@@ -184,15 +194,15 @@ public static class HelpItemSets
     [
         new("Ctrl+←/→", "switch tab", IsAction: false),
         new("↑/↓ PgUp/PgDn", "scroll", IsAction: false),
-        new("Ctrl+PgUp/PgDn", "order activity", IsAction: false),
-        new("Ctrl+A", "dispatch to Claude"),
-        new("Ctrl+N", "add comment"),
-        new("Ctrl+E", "edit description"),
-        new("Ctrl+B", "browser"),
+        new("Ctrl+PgUp/PgDn", "▼▲", IsAction: false),
+        new("Ctrl+A", "✨Dispatch"),
+        new("Ctrl+N", "➕Comment"),
+        new("Ctrl+E", "✏Description"),
+        new("Ctrl+B", "🌐"),
         new("Ctrl+U", "quick update"),
-        new("Ctrl+O", "open by id"),
+        new("Ctrl+O", "🗁 by ID"),
         new("F5", "↻"),
-        new("F1", "help"),
+        new("F1", "ℹ"),
         new("Esc", "back"),
     ];
 
@@ -203,7 +213,7 @@ public static class HelpItemSets
     [
         new("Tab", "editor/Save/Cancel"),
         new("Ctrl+Enter", "save"),
-        new("F1", "help"),
+        new("F1", "ℹ"),
         new("Esc", "cancel"),
     ];
 
@@ -212,7 +222,7 @@ public static class HelpItemSets
     [
         new("Tab", "moves"),
         new("Space", "cycles buttons"),
-        new("F1", "help"),
+        new("F1", "ℹ"),
         new("Esc", "cancels"),
     ];
 
@@ -222,7 +232,7 @@ public static class HelpItemSets
         new("Tab", "moves"),
         new("Enter", "in Value adds"),
         new("Del", "removes selected filter", Chord: "Delete"),
-        new("F1", "help"),
+        new("F1", "ℹ"),
         new("Esc", "cancels"),
     ];
 
@@ -235,7 +245,7 @@ public static class HelpItemSets
         new("Tab", "Status/Priority/Assignees"),
         new("↑/↓", "move", IsAction: false),
         new("Enter", "apply status/priority"),
-        new("F1", "help"),
+        new("F1", "ℹ"),
         new("Esc", "exit"),
     ];
 
@@ -244,7 +254,7 @@ public static class HelpItemSets
     public static readonly IReadOnlyList<HelpItem> QuickOpen =
     [
         new("Enter/Open", "open", Chord: "Enter"),
-        new("F1", "help"),
+        new("F1", "ℹ"),
         new("Esc", "cancel"),
     ];
 
@@ -256,7 +266,7 @@ public static class HelpItemSets
         new("Tab", "Name/Descr/Assignees/List"),
         new("Enter/Save", "saves", Chord: "Enter"),
         new("Esc", "cancels"),
-        new("F1", "help"),
+        new("F1", "ℹ"),
     ];
 
     /// <summary>The dispatch prompt-template editor (#100), reached from F2.</summary>
@@ -264,7 +274,7 @@ public static class HelpItemSets
     [
         new("Tab", "moves"),
         new("Ctrl+Alt+R", "reset to default"),
-        new("F1", "help"),
+        new("F1", "ℹ"),
         new("Esc", "cancel"),
     ];
 
@@ -281,7 +291,7 @@ public static class HelpItemSets
         new("F6", "activity"),
         new("F12", "👁✅"),
         new("Ctrl+E", "list"),
-        new("F1", "help"),
+        new("F1", "ℹ"),
         new("Esc", "back"),
     ];
 
@@ -290,7 +300,7 @@ public static class HelpItemSets
     public static readonly IReadOnlyList<HelpItem> AgentRun =
     [
         new("↑/↓ PgUp/PgDn", "scroll", IsAction: false),
-        new("F1", "help"),
+        new("F1", "ℹ"),
         new("Esc", "cancel/back"),
     ];
 
@@ -298,5 +308,14 @@ public static class HelpItemSets
     public static readonly IReadOnlyList<HelpItem> Help =
     [
         new("Esc/Enter", "close", Chord: "Esc"),
+    ];
+
+    /// <summary>The exit-confirmation modal (#299): a two-key yes/no, so no F1 (it would stack Help over
+    /// a question) and no movement hints. Both launch modes render this same set, which is what makes the
+    /// guard read identically on the dashboard's list root and single-task mode's launch-task root.</summary>
+    public static readonly IReadOnlyList<HelpItem> ExitConfirm =
+    [
+        new("Y/↩", "yes, exit", Chord: "Y"),
+        new("Esc/N", "no, stay", Chord: "Esc"),
     ];
 }

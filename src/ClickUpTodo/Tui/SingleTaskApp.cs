@@ -58,7 +58,8 @@ public sealed class SingleTaskApp
     private ContextualFooter _footer = null!;
     private TaskDetailScreen _detail = null!;
 
-    // Screens stacked over the root detail (only Help, via F1). Empty ⇒ the detail is front-most.
+    // Screens stacked over the root detail: Help (F1), a one-off agent run (#345), and the exit
+    // confirmation (#299). Empty ⇒ the detail is front-most.
     private readonly List<Screen> _stack = [];
 
     // Coalesces overlapping refreshes (F5/Ctrl+R racing the 30s tick): skip a tick while one is in flight
@@ -149,9 +150,11 @@ public sealed class SingleTaskApp
         // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data — refetch just this one task.
         _detail.RefreshRequested += (_, _) => RefreshTask();
         // Ctrl+B sets OpenBrowserRequested then closes; Esc closes directly. The detail is the launch-task
-        // root (#298), so its close is back-at-root: Ctrl+B opens the browser then quits, and a plain Esc
-        // hands off to the exit seam (RequestExit, #299) — which today quits the tab (there's no list to
-        // return to). Only fires while the detail is front-most; with an overlay up, Esc goes to it.
+        // root (#298), so its close is back-at-root: a plain Esc hands off to the exit seam (RequestExit),
+        // which asks for confirmation (#299) before quitting the tab. Ctrl+B is deliberately *not*
+        // confirmed: "open this task in the browser and close the tab" is an explicit, unambiguous
+        // request, not the ambiguous Esc that #290 flagged and #299 guards. Only fires while the detail is
+        // front-most; with an overlay up (incl. that confirmation), Esc goes to the overlay.
         _detail.Closed += (_, _) =>
         {
             if (_detail.OpenBrowserRequested)
@@ -335,12 +338,32 @@ public sealed class SingleTaskApp
     /// <summary>
     /// The single "quit from the launch-task root" chokepoint — the exit-confirmation seam (#298, #299
     /// sub-issue 7). <c>Esc</c> is the canonical Back key; the launch task is this mode's root, so Back
-    /// <em>at the root</em> is a quit. Today it stops the app (quits the tab, since single-task mode has
-    /// no list to return to); when #299 lands, its confirmation modal plugs in here instead of quitting
-    /// directly. Per #298 the planned Alt+←/→ chord was dropped (it collides with terminal-emulator
-    /// split-pane navigation) and there is no Forward key; forward/back across visited tasks rides #291.
+    /// <em>at the root</em> is a quit (there is no list to return to).
+    /// <para>
+    /// #299: it asks first, via the same <see cref="ExitConfirmScreen"/> and the same footer text the
+    /// dashboard uses — mounted through this host's own <see cref="ShowScreen"/> over the hidden detail.
+    /// Answering yes stops the app (closing the tab); answering no restores the launch-task detail on the
+    /// tab it was on — the detail is only hidden by the overlay, never torn down, since its
+    /// <c>Closed</c> event is what routed here. Re-entrancy is guarded so repeated Esc presses can't
+    /// stack two questions.
+    /// </para>
+    /// <para>
+    /// Per #298 the planned Alt+←/→ chord was dropped (it collides with terminal-emulator split-pane
+    /// navigation) and there is no Forward key; forward/back across visited tasks rides #291.
+    /// </para>
     /// </summary>
-    private void RequestExit() => Application.RequestStop();
+    private void RequestExit()
+    {
+        if (ActiveScreen is ExitConfirmScreen)
+            return;
+
+        var confirm = new ExitConfirmScreen();
+        ShowScreen(confirm, () =>
+        {
+            if (confirm.Confirmed)
+                Application.RequestStop();
+        });
+    }
 
     // ── Footer / status ──────────────────────────────────────────────────────
 

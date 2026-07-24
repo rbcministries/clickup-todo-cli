@@ -48,6 +48,7 @@ it — walks back to the main list, bypassing the feed. This intentionally chang
 | `AgentRunScreen` | over detail | Modal | 1st Esc cancels the in-flight run; when finished, Esc closes | No |
 | `PromptTemplateEditorScreen` | over Settings | Modal (nested) | Cancel | No |
 | `NotificationsFeedScreen` (Ctrl+E) | list ↔ feed | **Modal** (see "The feed", below) | Back to list | **No** |
+| `ExitConfirmScreen` (#299) | `RequestExit()` — contract rule 3 (and rule 2 at `SingleTaskApp`'s root) | Modal | Cancel — dismiss to the root view beneath | No |
 
 ## The `Esc` / `RequestExit` contract
 
@@ -61,9 +62,15 @@ One chokepoint, evaluated top-down:
      list root). The view-stack and the history move in lockstep.
    - returns `false` (at root) → hand off to `RequestExit()`. This only happens in `SingleTaskApp`,
      whose root *is* a detail.
-3. **At the host root with nothing stacked** → `Esc`/quit → `RequestExit()` (the
-   [#299](https://github.com/rbcministries/clickup-todo-cli/issues/299) exit-confirmation plug
-   point). `TodoApp` root = list; `SingleTaskApp` root = launch task.
+3. **At the host root with nothing stacked** → `Esc`/quit → `RequestExit()`. `TodoApp` root =
+   list; `SingleTaskApp` root = launch task. **As of
+   [#299](https://github.com/rbcministries/clickup-todo-cli/issues/299) this plug point is
+   filled:** `RequestExit()` mounts the `ExitConfirmScreen` modal (`Y`/`Enter` exits, `N`/`Esc`
+   dismisses back to the root) instead of stopping the app directly. The confirm screen is itself
+   a transient modal under rule 1 — it is never a history entry, and because it consumes every key,
+   nothing but a deliberate answer can leave the app while it is up: `Y`/`Enter`, or a second press
+   of the quit chord that raised it (`Ctrl+Q`/`Ctrl+C`). `Esc` there is the "no" answer, and any
+   other chord does nothing.
 
 **Invariant.** `history.Current` always names the top-most **destination** on `_screens`, ignoring
 any modals layered above it. Modals are transparent to history — that is the entire point of the
