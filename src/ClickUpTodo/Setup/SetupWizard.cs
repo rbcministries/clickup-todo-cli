@@ -143,6 +143,13 @@ public static class SetupWizard
         Console.WriteLine(string.IsNullOrEmpty(configStore.ConfigPath)
             ? "  Setup complete. Settings saved."
             : $"  Setup complete. Settings saved to {configStore.ConfigPath}");
+        // Disclose exactly how the token is stored — and warn plainly when it landed in a plaintext
+        // file because no OS secret store was available (see issue #306).
+        Console.WriteLine(tokenStore.IsSecure
+            ? $"  Token {tokenStore.StorageDescription}."
+            : $"  ⚠ Token {tokenStore.StorageDescription} — no OS secret store was available.");
+        if (tokenStore.InsecureStorageHint is { } secureHint)
+            Console.WriteLine($"    To store it securely: {secureHint}.");
         Console.WriteLine("  Starting…");
         await Task.Delay(600, ct);
         return true;
