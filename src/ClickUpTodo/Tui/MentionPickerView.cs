@@ -70,23 +70,15 @@ public sealed class MentionPickerView : SelectorView
     /// a de-select, so a host that closes on the first pick receives exactly one target.</summary>
     public event EventHandler<MentionTarget>? MemberPicked;
 
-    // Diff the current selection against what we've already announced: raise MemberPicked once per newly
-    // added member, and forget any member no longer selected so a later re-pick announces again. Runs on
-    // the UI thread (the base raises SelectionChanged there).
+    // Map the base's current selection to mention targets and raise MemberPicked for each newly-picked
+    // one — the "announce exactly once" decision lives in the pure, unit-tested MentionPickerModel. Runs
+    // on the UI thread (the base raises SelectionChanged there).
     private void OnSelectionChanged(object? sender, EventArgs e)
     {
-        var current = SelectedItems;
-        _announced.RemoveWhere(id => !current.Any(item => IsId(item, id)));
-        foreach (var item in current)
-        {
-            var target = MentionPickerModel.ToTarget(item);
-            if (target.UserId > 0 && _announced.Add(target.UserId))
-                MemberPicked?.Invoke(this, target);
-        }
+        var current = SelectedItems.Select(MentionPickerModel.ToTarget).ToList();
+        foreach (var target in MentionPickerModel.NewlyAnnounced(_announced, current))
+            MemberPicked?.Invoke(this, target);
     }
-
-    private static bool IsId(SelectorItem item, long id)
-        => long.TryParse(item.Id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed == id;
 
     // ── member ↔ base adapters ────────────────────────────────────────────────
     // A ClickUp userId is always positive; a non-positive id is dropped here so the base (which only

@@ -187,4 +187,53 @@ public sealed class MentionPickerModelTests
         Assert.Equal("grace", MentionPickerModel.ToTarget(new WorkspaceMember(2, null, "grace@x.io")).DisplayName);
         Assert.Equal("User 3", MentionPickerModel.ToTarget(new WorkspaceMember(3, null, null)).DisplayName);
     }
+
+    // ── NewlyAnnounced (raise MemberPicked exactly once per pick) ─────────────────
+
+    private static MentionTarget T(long id, string name) => new(id, name);
+
+    [Fact]
+    public void NewlyAnnounced_FirstPick_IsAnnouncedAndRecorded()
+    {
+        var announced = Ids();
+        var fresh = MentionPickerModel.NewlyAnnounced(announced, [T(1, "Ada")]);
+        Assert.Equal([T(1, "Ada")], fresh);
+        Assert.Equal([1L], announced.OrderBy(x => x));
+    }
+
+    [Fact]
+    public void NewlyAnnounced_UnchangedSelection_AnnouncesNothingAgain()
+    {
+        var announced = Ids(1);
+        Assert.Empty(MentionPickerModel.NewlyAnnounced(announced, [T(1, "Ada")]));
+        Assert.Equal([1L], announced.OrderBy(x => x));
+    }
+
+    [Fact]
+    public void NewlyAnnounced_DeselectThenRePick_AnnouncesAgain()
+    {
+        var announced = Ids(1);
+        // De-selected (selection now empty): the id is forgotten.
+        Assert.Empty(MentionPickerModel.NewlyAnnounced(announced, []));
+        Assert.Empty(announced);
+        // Re-picked: announced afresh.
+        Assert.Equal([T(1, "Ada")], MentionPickerModel.NewlyAnnounced(announced, [T(1, "Ada")]));
+    }
+
+    [Fact]
+    public void NewlyAnnounced_MultipleNewPicks_EachAnnouncedOnceInOrder()
+    {
+        var announced = Ids(1);
+        var fresh = MentionPickerModel.NewlyAnnounced(announced, [T(1, "Ada"), T(2, "Babbage"), T(3, "Curie")]);
+        Assert.Equal([T(2, "Babbage"), T(3, "Curie")], fresh); // 1 already announced, kept
+        Assert.Equal([1L, 2L, 3L], announced.OrderBy(x => x));
+    }
+
+    [Fact]
+    public void NewlyAnnounced_DropsNonPositiveTargets()
+    {
+        var announced = Ids();
+        Assert.Empty(MentionPickerModel.NewlyAnnounced(announced, [T(0, "Zero")]));
+        Assert.Empty(announced);
+    }
 }

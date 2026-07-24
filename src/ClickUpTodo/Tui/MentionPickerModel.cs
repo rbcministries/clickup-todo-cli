@@ -76,6 +76,28 @@ public static class MentionPickerModel
     public static bool ShouldRunSearch(long capturedStamp, long currentStamp)
         => SelectorModel.ShouldRunSearch(capturedStamp, currentStamp);
 
+    /// <summary>
+    /// The mention targets to raise for the current selection, deciding which picks are <b>new</b> —
+    /// the pure set arithmetic behind <see cref="MentionPickerView.MemberPicked"/>, kept here (not in the
+    /// CI-untestable view) so "announce each pick exactly once" is unit-tested. Mutates
+    /// <paramref name="announced"/> in place to the post-call state: first forgets any id no longer in
+    /// <paramref name="currentSelection"/> (so a member de-selected then re-picked announces again), then
+    /// records and returns each still-<c>&gt; 0</c> target that wasn't already announced (in selection
+    /// order). A steady call with an unchanged selection returns empty.
+    /// </summary>
+    public static IReadOnlyList<MentionTarget> NewlyAnnounced(
+        ISet<long> announced, IReadOnlyList<MentionTarget> currentSelection)
+    {
+        var selectedIds = new HashSet<long>(currentSelection.Select(t => t.UserId));
+        foreach (var id in announced.Where(id => !selectedIds.Contains(id)).ToList())
+            announced.Remove(id);
+        var fresh = new List<MentionTarget>();
+        foreach (var target in currentSelection)
+            if (target.UserId > 0 && announced.Add(target.UserId))
+                fresh.Add(target);
+        return fresh;
+    }
+
     // ── member ↔ base conversions ─────────────────────────────────────────────
 
     private static readonly ISet<string> EmptyStringSet = new HashSet<string>(StringComparer.Ordinal);
@@ -88,8 +110,10 @@ public static class MentionPickerModel
     /// candidate delegates onto the base.</summary>
     internal static SelectorItem ToItem(WorkspaceMember member) => new(Str(member.Id), member.DisplayName);
 
-    /// <summary>The <see cref="MentionTarget"/> for a chosen member — id = its own <c>userId</c>, no
-    /// matching involved. The picker's primary path (it supplies the exact member).</summary>
+    /// <summary>The <see cref="MentionTarget"/> for a member in hand — id = its own <c>userId</c>, no
+    /// matching involved. A convenience for a caller that already holds a <see cref="WorkspaceMember"/>
+    /// (the K/L consumers, #325/#326); the picker itself converts the <b>picked base row</b> via the
+    /// <see cref="SelectorItem"/> overload below.</summary>
     internal static MentionTarget ToTarget(WorkspaceMember member) => new(member.Id, member.DisplayName);
 
     /// <summary>The <see cref="MentionTarget"/> for a picked base <see cref="SelectorItem"/>: the parsed
