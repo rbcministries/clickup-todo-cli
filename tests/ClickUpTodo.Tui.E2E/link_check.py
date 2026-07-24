@@ -75,13 +75,14 @@ def url_cells(y, col, url):
     return [screen.buffer[y][col + i] for i in range(len(url))]
 
 
-def normal_ref_cell(y, url_col):
-    """A normal body cell on the same row, before the URL: the first alphabetic character."""
-    for x in range(url_col):
-        ch = screen.buffer[y][x].data
-        if ch.isalpha():
+def normal_ref_cell(y, url_col, url_len):
+    """A normal body cell on the same row, OUTSIDE the URL span: an alphabetic character. Prefers a
+    letter before the URL (e.g. "Parent ticket:" / "PR:"), but falls back to one after it, so the check
+    isn't coupled to wrap width — if word-wrap ever pushed a URL to column 0 there is still a reference."""
+    for x in list(range(url_col)) + list(range(url_col + url_len, COLS)):
+        if screen.buffer[y][x].data.isalpha():
             return screen.buffer[y][x]
-    raise AssertionError(f"no normal reference letter before the URL on row {y}: {row_text(y)!r}")
+    raise AssertionError(f"no normal reference letter outside the URL on row {y}: {row_text(y)!r}")
 
 
 try:
@@ -96,11 +97,14 @@ try:
     loc = find_url(TASK_URL)
     assert loc, "task link not found on the Description tab:\n" + visible()
     y, col = loc
-    ref = normal_ref_cell(y, col)
+    ref = normal_ref_cell(y, col, len(TASK_URL))
     cells = url_cells(y, col, TASK_URL)
     assert all(c.underscore for c in cells), \
         f"task link not underlined: {[(c.data, c.underscore) for c in cells]}"
     assert not ref.underscore, f"normal body text is underlined (ref {ref.data!r})"
+    # Task styling = the read-only foreground + underline, so the URL cells share the fg the driver
+    # emits for base read-only text (both go through the same Color→SGR path). A regression here would
+    # surface as a spurious fg mismatch rather than a wrong colour.
     assert all(c.fg == ref.fg for c in cells), \
         f"task link fg {sorted({c.fg for c in cells})} != normal body fg {ref.fg!r} (task = default fg + underline)"
 
@@ -114,7 +118,7 @@ try:
             break
     assert web, "web link not found after cycling tabs:\n" + visible()
     y, col = web
-    ref = normal_ref_cell(y, col)
+    ref = normal_ref_cell(y, col, len(WEB_URL))
     cells = url_cells(y, col, WEB_URL)
     assert all(c.underscore for c in cells), \
         f"web link not underlined: {[(c.data, c.underscore) for c in cells]}"
