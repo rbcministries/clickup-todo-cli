@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Single-task launch mode (#296): boots the harness with E2E_SINGLE_TASK=<id> — the
 equivalent of `clickup-todo --task <id>` — and asserts the app comes up straight in the
-Task Detail view (not the dashboard list), that its tabs cycle, and that Esc quits the
-tab (there is no list to fall back to, so Esc = exit the process).
+Task Detail view (not the dashboard list), that its tabs cycle, and that Esc at the
+launch-task root exits the tab (there is no list to fall back to, so Esc = exit) — now
+by way of the #299 confirmation: Esc asks, Y exits. The confirmation's own cancel /
+both-roots behaviour is exit_confirm_check.py; this only keeps the launch-mode leg honest.
 
 Unlike the A/B checks this is a single-run behavioural check (there is no stock baseline
 for a brand-new boot path); it drives the real SingleTaskApp under the PTY against the
@@ -81,12 +83,21 @@ try:
         stages.append((name, visible()))
     assert "Comments" in stages[-1][1] or "Comments" in boot, "tabs did not render"
 
-    # Esc at the root quits the tab (no list beneath) — the process should exit.
+    # Esc at the root quits the tab (no list beneath), asking first (#299): the confirmation
+    # comes up and the process stays alive until Y answers it.
     os.write(master, b"\x1b")
+    pump(2.0)
+    confirm = visible()
+    stages.append(("exit-confirm", confirm))
+    assert "Are you sure you want to exit?" in confirm, \
+        "Esc at the launch-task root did not ask to confirm:\n" + confirm
+    assert proc.poll() is None, "Esc quit the single-task tab without confirming"
+
+    os.write(master, b"Y")
     end = time.monotonic() + 5.0
     while time.monotonic() < end and proc.poll() is None:
         pump(0.3)
-    assert proc.poll() is not None, "Esc did not quit the single-task tab (process still alive)"
+    assert proc.poll() is not None, "Y at the confirmation did not quit the single-task tab"
 
     if OUT:
         with open(OUT, "w") as f:
