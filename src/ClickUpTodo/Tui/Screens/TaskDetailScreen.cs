@@ -221,6 +221,16 @@ public sealed class TaskDetailScreen : Screen
     /// detail→detail path (#387). Inert on the current-task row (a no-op, flashed).</summary>
     public event EventHandler<string>? OpenTaskRequested;
 
+    /// <summary>
+    /// Raised when the user clicks a link in one of the text panes (D, #318): a plain click on a ClickUp
+    /// task link asks for that task in-app, and a Ctrl+click — or a click on any other web link — asks for
+    /// the browser (<see cref="LinkActivator.Resolve"/>). The host owns both destinations, since they
+    /// differ per host: the dashboard opens the task stacked over this detail, while single-task launch
+    /// mode has no in-app task→task destination yet (#374). Inert while an overlay is up (see
+    /// <see cref="OnPaneLinkActivation"/>).
+    /// </summary>
+    public event EventHandler<LinkActivationRequest>? LinkActivationRequested;
+
     /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>
     public bool OpenBrowserRequested { get; private set; }
 
@@ -355,6 +365,11 @@ public sealed class TaskDetailScreen : Screen
         _descriptionPane = NewPane("Description", _descriptionText);
         _commentsText = TaskDetailFormatter.Comments(comments, _streamSort);
         _commentsPane = NewPane($"Comments ({comments.Count})", _commentsText);
+
+        // Click a link in any pane → act on it (D, #318). Each pane hit-tests its own body and resolves
+        // the action; the screen only gates it on no overlay owning input and forwards it to the host.
+        foreach (var pane in new[] { _streamPane, _descriptionPane, _commentsPane })
+            pane.LinkActivationRequested += OnPaneLinkActivation;
 
         // The Other tab colours its Priority/Status values (#66), which a plain TextView can't do. Its
         // content is a container (a coloured, fixed-height header view on top of the scrollable,
@@ -1673,6 +1688,20 @@ public sealed class TaskDetailScreen : Screen
             return;
         e.Handled = true;
         NavigateToTreeTask(task);
+    }
+
+    /// <summary>
+    /// A link click in one of the text panes (D, #318) — forwarded to the host as
+    /// <see cref="LinkActivationRequested"/>, except while an overlay is up. The Dispatch pane, the comment
+    /// composer and the description editor each own input while open (the same rule <see cref="OnKey"/>
+    /// applies to the screen's chords), and they only partially cover the panes — so without this guard a
+    /// click on the still-visible part of a pane could navigate away from an open draft.
+    /// </summary>
+    private void OnPaneLinkActivation(object? sender, LinkActivationRequest request)
+    {
+        if (_promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible)
+            return;
+        LinkActivationRequested?.Invoke(this, request);
     }
 
     /// <summary>Raises <see cref="OpenTaskRequested"/> for a non-current task; the current-task row is a

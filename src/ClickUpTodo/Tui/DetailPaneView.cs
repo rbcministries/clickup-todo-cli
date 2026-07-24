@@ -217,9 +217,10 @@ public sealed class DetailPaneView : TextView
     /// <item><description>
     /// <b>It only maps unmodified clicks.</b> <see cref="TextView"/>'s handler tests the flags for a bare
     /// <see cref="MouseFlags.LeftButtonClicked"/>, so a <c>Ctrl</c>+click leaves the caret — and the
-    /// reported position — on the <em>previous</em> click. So the position is always resolved by handing
-    /// the base a synthesized plain click at the same point. The panes are read-only, so the caret move
-    /// that entails is invisible, and it is what an unmodified click would have done anyway.
+    /// reported position — on the <em>previous</em> click. So a <em>modified</em> click's position is
+    /// resolved by handing the base a synthesized plain click at the same point (the panes are read-only,
+    /// so the caret move that entails is invisible, and it is what an unmodified click would have done
+    /// anyway), while an unmodified click is simply passed to the base first and its own mapping read.
     /// </description></item>
     /// <item><description>
     /// <b>It clamps a click outside the text onto the nearest position.</b> That turns two ordinary
@@ -237,12 +238,19 @@ public sealed class DetailPaneView : TextView
         // Ctrl-modified click still qualifies — that is the gesture #318 maps to "open in the browser".
         if (!mouseEvent.Flags.HasFlag(MouseFlags.LeftButtonClicked)
             || mouseEvent.Flags.HasFlag(MouseFlags.LeftButtonDoubleClicked)
-            || mouseEvent.Position is not { } position
-            || LinkAt(position) is not { } span)
+            || mouseEvent.Position is not { } position)
             return base.OnMouseEvent(mouseEvent);
 
-        LinkActivationRequested?.Invoke(
-            this, new LinkActivationRequest(span, LinkActivator.Resolve(span, mouseEvent.Flags.HasFlag(MouseFlags.Ctrl))));
+        // An unmodified click is the one the base view maps itself, so let it handle the real event and
+        // read the position back; only a modified click needs the synthesized stand-in (see above), which
+        // keeps the common gesture a single pass through the base.
+        var ctrl = mouseEvent.Flags.HasFlag(MouseFlags.Ctrl);
+        var handledByBase = !ctrl && base.OnMouseEvent(mouseEvent);
+        if (LinkAt(position, resolvePosition: ctrl) is not { } span)
+            return handledByBase;
+
+        LinkActivationRequested?.Invoke(this, new LinkActivationRequest(span, LinkActivator.Resolve(span, ctrl)));
+        mouseEvent.Handled = true;
         return true;
     }
 
@@ -251,8 +259,10 @@ public sealed class DetailPaneView : TextView
     /// isn't on one. Guards first against the two ways the base view clamps a click outside the text onto
     /// a position that would read as a hit (see <see cref="OnMouseEvent"/>), then resolves the source
     /// (line, cell) the click landed on and hit-tests that line's links.
+    /// <paramref name="resolvePosition"/> asks the base view to map the position first — needed for a
+    /// modified click, which it would otherwise not map at all.
     /// </summary>
-    private LinkSpan? LinkAt(Point position)
+    private LinkSpan? LinkAt(Point position, bool resolvePosition)
     {
         // Guard 1 — a click below the last wrapped row (the empty area under a short body). Lines is the
         // wrapped line count while WordWrap is on, and Viewport.Y is the topmost displayed wrapped row.
@@ -265,9 +275,10 @@ public sealed class DetailPaneView : TextView
         if (position.X < 0 || Viewport.X + position.X >= GetColumnsWidth(GetLine(displayRow)))
             return null;
 
-        // Resolve the click to a source (line, cell) via the base view's own mapping.
-        if (ResolveUnwrapped(position) is not { } caret
-            || caret.Y < 0 || caret.Y >= _lines.Length)
+        // The click's source (line, cell), from the base view's own mapping.
+        if (resolvePosition)
+            base.OnMouseEvent(new Mouse { Position = position, Flags = MouseFlags.LeftButtonClicked });
+        if (_unwrappedCaret is not { } caret || caret.Y < 0 || caret.Y >= _lines.Length)
             return null;
 
         var line = _lines[caret.Y];
@@ -280,18 +291,6 @@ public sealed class DetailPaneView : TextView
         var graphemes = Cell.ToCellList(line, null).Select(c => c.Grapheme).ToArray();
         var offset = LinkActivator.CharOffsetAtCell(graphemes, caret.X);
         return LinkActivator.SpanAt(TaskLinkExtractor.Extract(line), offset);
-    }
-
-    /// <summary>
-    /// Asks the base view to map <paramref name="position"/> to a text position, by handing it a
-    /// synthesized <em>plain</em> left click there (the only gesture it maps — see
-    /// <see cref="OnMouseEvent"/>), and returns the unwrapped source coordinates it reported. Falls back
-    /// to the last reported caret when the base raised nothing, which is where the caret already is.
-    /// </summary>
-    private Point? ResolveUnwrapped(Point position)
-    {
-        base.OnMouseEvent(new Mouse { Position = position, Flags = MouseFlags.LeftButtonClicked });
-        return _unwrappedCaret;
     }
 
     /// <inheritdoc/>
