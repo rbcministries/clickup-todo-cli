@@ -205,13 +205,17 @@ public sealed class TaskDetailScreen : Screen
     // screen stays service-free. Null ⇒ the tab is absent (mirrors the postComment/setDescription seams).
     private readonly Func<CancellationToken, Task<IReadOnlyList<TaskTreeRow>>>? _loadTaskTreeAsync;
     // Rendering inputs threaded from the host: the signed-in user's id (the trailing Assignees badge #161)
-    // and the badge mode. The tab renders with a fixed BadgeDisplay.Text ("{glyph} {name}" — icon + text,
-    // no F6 toggle, per #291); _badgeDisplay is kept for parity should the host ever pass another mode.
+    // and the badge mode. Seeded from the host's persisted BadgeDisplay so the tree opens in the same state
+    // as the main list, then cycled in place by F6 (#415) exactly like the main list — Icons → Text →
+    // Hidden — with the host persisting each step so both surfaces stay in sync.
     private readonly long? _currentUserId;
-    private readonly BadgeDisplay _treeBadgeDisplay;
+    private BadgeDisplay _treeBadgeDisplay;
     // Parallel to the tree ListView's rows: the TaskItem each row renders (null for a placeholder/message
     // row), so a keyboard Enter or a double-click resolves the clicked task via the shared RowHitTester.
     private List<TaskItem?> _treeRows = [];
+    // The fetched tree rows (empty until the lazy load lands), retained so an F6 badge cycle (#415) can
+    // re-render the list in place — icon/text/hidden is a pure display change over the same rows, no re-fetch.
+    private IReadOnlyList<TaskTreeRow> _loadedTreeRows = [];
     // True once the lazy tree load has been kicked off (guarding against re-fetching on every tab cycle).
     private bool _treeLoaded;
 
@@ -220,6 +224,13 @@ public sealed class TaskDetailScreen : Screen
     /// back one task at a time — the canonical "Esc = Back" model (#401/#298), uniform with the Ctrl+O
     /// detail→detail path (#387). Inert on the current-task row (a no-op, flashed).</summary>
     public event EventHandler<string>? OpenTaskRequested;
+
+    /// <summary>Raised when the user presses F6 on the Task Tree tab (#415) to cycle how that list renders
+    /// its Status/Priority badges (Icons → Text → Hidden), mirroring the main list's F6. The host owns the
+    /// single source of truth: it cycles + persists <c>AppConfig.BadgeDisplay</c> and reflects the new mode
+    /// back via <see cref="SetTreeBadgeDisplay"/> (a pure re-render, no re-fetch), so the main list and the
+    /// tree stay in step. Only meaningful when the tree tab exists (a loader was supplied).</summary>
+    public event EventHandler? CycleBadgeDisplayRequested;
 
     /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>
     public bool OpenBrowserRequested { get; private set; }
@@ -592,7 +603,11 @@ public sealed class TaskDetailScreen : Screen
     }
 
     public override IReadOnlyList<HelpItem> HelpItems =>
-        _descriptionBox.Visible ? HelpItemSets.DetailDescriptionEditor : HelpItemSets.Detail;
+        _descriptionBox.Visible ? HelpItemSets.DetailDescriptionEditor
+        // The Task Tree tab's F6 badge cycle (#415) is only offered when that tab exists (a loader was
+        // supplied). Single-task launch mode has no tree tab, so it keeps the F6-less Detail set.
+        : _treeList is not null ? HelpItemSets.DetailWithTaskTree
+        : HelpItemSets.Detail;
 
     public override void OnShown()
     {
@@ -770,6 +785,16 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             NavigateTreeSelection();
+            return;
+        }
+
+        // F6 on the Task Tree tab (#415) cycles the tree's badge display (Icons → Text → Hidden), matching
+        // the main list. Guarded on the tree being front-most, so F6 on the read-only text panes stays inert
+        // (they have no badges). The host owns the flip/persist and reflects it back via SetTreeBadgeDisplay.
+        if (key.KeyCode == KeyCode.F6 && _treeList is not null && ReferenceEquals(_tabs.Value, _treeList))
+        {
+            key.Handled = true;
+            CycleBadgeDisplayRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 
@@ -1614,13 +1639,15 @@ public sealed class TaskDetailScreen : Screen
     }
 
     /// <summary>Renders the fetched tree rows into the tab's ListView via the shared
-    /// <see cref="TaskRowRenderer"/> (fixed <see cref="BadgeDisplay.Text"/> — icon + text, no F6 toggle,
-    /// per #291) and overlays badge colours through <see cref="StatusBadgeListSource"/>, exactly as the
-    /// main list does. Type-ahead searches by title (#12). Lands the cursor on the current task's row.</summary>
+    /// <see cref="TaskRowRenderer"/> (in the current <see cref="_treeBadgeDisplay"/> mode, seeded from the
+    /// main list and cycled by F6 #415) and overlays badge colours through <see cref="StatusBadgeListSource"/>,
+    /// exactly as the main list does. Type-ahead searches by title (#12). Lands the cursor on the current
+    /// task's row; retains the rows so an F6 badge cycle can re-render in place.</summary>
     private void PopulateTree(IReadOnlyList<TaskTreeRow> rows)
     {
         if (_treeList is null)
             return;
+        _loadedTreeRows = rows;
         if (rows.Count == 0)
         {
             _treeList.SetSource(new ObservableCollection<string>(["(no task tree)"]));
@@ -1628,6 +1655,31 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        var currentIndex = RenderTreeRows(rows);
+        _treeList.SelectedItem = currentIndex;
+    }
+
+    /// <summary>Reflects a new badge mode (F6, #415) after the host has cycled + persisted it, re-rendering
+    /// the already-loaded tree rows in place — a pure display change (icons → text → hidden), no re-fetch.
+    /// The cursor stays on the same row across the rebuild. No-op until the tree has loaded (the eventual
+    /// <see cref="PopulateTree"/> then uses the updated mode). Must run on the UI thread.</summary>
+    public void SetTreeBadgeDisplay(BadgeDisplay mode)
+    {
+        _treeBadgeDisplay = mode;
+        if (_treeList is null || _loadedTreeRows.Count == 0)
+            return;
+        // Assigning .Source resets the selection, so capture and restore it around the rebuild.
+        var previous = _treeList.SelectedItem;
+        RenderTreeRows(_loadedTreeRows);
+        if (previous >= 0 && previous < _treeRows.Count)
+            _treeList.SelectedItem = previous;
+    }
+
+    /// <summary>Builds the tree ListView's colour-overlaying source (display text, badges, type-ahead keys)
+    /// from <paramref name="rows"/> in the current badge mode and assigns it, refreshing the parallel
+    /// <see cref="_treeRows"/> hit-test list. Returns the index of the current-task row (0 when absent).</summary>
+    private int RenderTreeRows(IReadOnlyList<TaskTreeRow> rows)
+    {
         var display = new ObservableCollection<string>();
         var badges = new List<IReadOnlyList<StatusBadgeListSource.Badge>>(rows.Count);
         var searchKeys = new List<string>(rows.Count);
@@ -1650,8 +1702,8 @@ public sealed class TaskDetailScreen : Screen
         _treeRows = taskRows;
         // Assigning .Source (not SetSource) lets us pass our colour-overlaying source; the ListView
         // disposes the previous one. Mirrors TodoApp.Render's main-list wiring.
-        _treeList.Source = new StatusBadgeListSource(display, badges, headerAttrs: null, searchKeys: searchKeys);
-        _treeList.SelectedItem = currentIndex;
+        _treeList!.Source = new StatusBadgeListSource(display, badges, headerAttrs: null, searchKeys: searchKeys);
+        return currentIndex;
     }
 
     /// <summary>Enter on the tree tab: navigate to the highlighted row's task.</summary>

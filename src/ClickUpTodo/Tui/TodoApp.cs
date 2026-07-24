@@ -779,6 +779,33 @@ public sealed class TodoApp
         Render(keepTaskId: CurrentTask()?.Id);
     }
 
+    /// <summary>F6 on the Task Detail's Task Tree tab (#415) — the tab's counterpart to the main list's
+    /// <see cref="CycleBadgeDisplay"/>. Cycles + persists the shared <see cref="AppConfig.BadgeDisplay"/>
+    /// (Icons → Text → Hidden), reflects the new mode into <b>every</b> stacked detail's tree (a pure
+    /// in-place re-render) and the hidden main list, so Esc-ing back through the visited-task chain shows
+    /// the same mode everywhere. Runs on the UI thread from the screen's key handler; no-op if the raising
+    /// screen isn't front-most.</summary>
+    private void CycleTreeBadgeDisplay(TaskDetailScreen screen)
+    {
+        if (!ReferenceEquals(ActiveScreen, screen))
+            return;
+
+        var mode = _config.BadgeDisplay.Next();
+        _config.BadgeDisplay = mode;
+        _configStore.Save(_config);
+        // Reflect into every detail on the back-stack, not just the front-most: the tree tab navigates
+        // detail→detail (Enter a child stacks its detail over this one, #291), so a cycle here must keep
+        // the trees beneath in step or Esc-ing back would surface a stale mode. Each call is a no-op for a
+        // detail whose tree hasn't loaded, so the beneath-screens just adopt the mode for their next render.
+        foreach (var stacked in _screens)
+            if (stacked is TaskDetailScreen detail)
+                detail.SetTreeBadgeDisplay(mode);
+        // Keep the (hidden) main list in step so the badges match when the detail closes — the same
+        // pure re-decorate the main list's own F6 does. Its cursor stays on the current task.
+        Render(keepTaskId: CurrentTask()?.Id);
+        Flash(mode.Describe());
+    }
+
     /// <summary>F5 (and its Ctrl+R alias) — refresh now: flashes and wakes the background poll loop.</summary>
     private void RequestRefresh()
     {
@@ -1939,12 +1966,13 @@ public sealed class TodoApp
                         // dirty-check + in-place reflection, the host owns the off-thread ClickUp write.
                         setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(resolvedId, text, ct),
                         // The Task Tree tab (#291) renders ancestry/children with the trailing Assignees
-                        // badge (#161), so it needs the signed-in user's id; badges are fixed to Text
-                        // ("{glyph} {name}" — icon + text, no F6 toggle) per the issue. The tree itself is
-                        // fetched lazily off the UI thread on first cycle to the tab, keyed off the
+                        // badge (#161), so it needs the signed-in user's id. Its badge mode is seeded from
+                        // the persisted BadgeDisplay so the tree opens in the same state as the main list
+                        // (#415), and F6 on the tab cycles it in place (see CycleTreeBadgeDisplay). The tree
+                        // itself is fetched lazily off the UI thread on first cycle to the tab, keyed off the
                         // RESOLVED id (identical to taskId for a real id; correct for a custom-id fallback).
                         currentUserId: _tasks.UserId,
-                        treeBadgeDisplay: BadgeDisplay.Text,
+                        treeBadgeDisplay: _config.BadgeDisplay,
                         loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(resolvedId, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
@@ -1963,6 +1991,9 @@ public sealed class TodoApp
                     // canonical "Esc = Back" decision (#401/#298) and with the Ctrl+O detail→detail path
                     // (#387). No replace-in-place: the visited-task chain is the single _screens back-stack.
                     screen.OpenTaskRequested += (_, id) => OpenTaskDetail(id);
+                    // F6 on the Task Tree tab (#415) cycles the tree's badge display just like the main
+                    // list; the host owns the flip/persist so both surfaces share one BadgeDisplay.
+                    screen.CycleBadgeDisplayRequested += (_, _) => CycleTreeBadgeDisplay(screen);
                     // Ctrl+O quick-opens another task from within the detail (#353), stacked over it; the
                     // resolved Task Detail opens over this one, so Esc walks back through them.
                     screen.QuickOpenRequested += (_, _) => OpenQuickOpenFromScreen();
