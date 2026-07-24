@@ -36,4 +36,27 @@ public static class RowHitTester
         var index = RowIndexAt(clickY, scrollOffset, rows.Count);
         return index >= 0 ? rows[index] : null;
     }
+
+    /// <summary>
+    /// Whether a click at column <paramref name="clickX"/> lands within a row's fold marker (the
+    /// <c>▶</c>/<c>▼</c> arrow, #287) — the mouse target that toggles a parent's subtasks. The marker's
+    /// char span (<paramref name="markerStart"/>/<paramref name="markerLength"/>) comes from
+    /// <see cref="ClickUpTodo.Tui.TaskRowFormatter.Row"/>; because a click's X is a terminal <em>column</em> while
+    /// those are <em>char</em> offsets, the char prefix and the marker are converted to columns via
+    /// <paramref name="columnWidth"/> — the caller passes the same grapheme/column-aware measure the
+    /// renderer uses (<c>StringExtensions.GetColumns</c>), so wide/emoji runes ahead of the arrow don't
+    /// skew the target. Pure (the measure is injected), mirroring <see cref="ClickUpTodo.Tui.Screens.HelpLine.HitTest"/>.
+    /// Returns <c>false</c> for a row with no marker (<paramref name="markerLength"/> &lt;= 0) or a click
+    /// left of / right of the arrow. The caller still gates on the row's <c>FoldState</c> so only a
+    /// genuinely foldable parent toggles.
+    /// </summary>
+    public static bool IsWithinFoldMarker(
+        int clickX, string rowText, int markerStart, int markerLength, Func<string, int> columnWidth)
+    {
+        if (markerLength <= 0 || markerStart < 0 || markerStart + markerLength > rowText.Length)
+            return false;
+        var startCol = columnWidth(rowText[..markerStart]);
+        var endCol = startCol + columnWidth(rowText.Substring(markerStart, markerLength));
+        return clickX >= startCol && clickX < endCol;
+    }
 }
