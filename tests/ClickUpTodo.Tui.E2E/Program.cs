@@ -94,7 +94,14 @@ if (!string.IsNullOrWhiteSpace(singleTaskId))
     return;
 }
 
-new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser).Run("ansi");
+// #351: when E2E_DETECT_SUBDOMAIN is set, inject a deterministic subdomain detector so a pyte check can
+// press the Settings "Detect" button and observe the field fill — the real probe hits app.clickup.com,
+// which isn't reachable under the PTY. Absent ⇒ null ⇒ the app uses its real SubdomainProbe.
+var detectStub = Environment.GetEnvironmentVariable("E2E_DETECT_SUBDOMAIN");
+Func<CancellationToken, Task<string>>? subdomainDetector =
+    detectStub is null ? null : _ => Task.FromResult(detectStub);
+
+new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser, subdomainDetector).Run("ansi");
 return;
 
 /// <summary>A browser launcher that succeeds without opening anything — the default under the PTY, where

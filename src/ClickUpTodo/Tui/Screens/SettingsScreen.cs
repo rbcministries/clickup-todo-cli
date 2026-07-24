@@ -2,6 +2,7 @@ using System.Globalization;
 using ClickUpTodo.Agent;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Services;
+using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
 using Terminal.Gui.Input;
 using Terminal.Gui.ViewBase;
@@ -63,7 +64,12 @@ public sealed class SettingsScreen : Screen
     /// </summary>
     public event EventHandler<PromptTemplateEditRequest>? EditPromptTemplateRequested;
 
-    public SettingsScreen(int refreshSeconds, int feedRefreshSeconds, int feedActivityLookbackDays, string defaultWorkingDirectory, string workspaceSubdomain, AgentDispatchSettings dispatch, DetailViewSettings detailView)
+    /// <param name="detectSubdomain">
+    /// Optional best-effort workspace-subdomain detector (#351). When supplied, a "Detect" button next to
+    /// the subdomain field runs it off the UI thread and fills the field on a non-empty result. Null (the
+    /// default) hides the button — keeping this screen constructible in tests without a network seam.
+    /// </param>
+    public SettingsScreen(int refreshSeconds, int feedRefreshSeconds, int feedActivityLookbackDays, string defaultWorkingDirectory, string workspaceSubdomain, AgentDispatchSettings dispatch, DetailViewSettings detailView, Func<CancellationToken, Task<string>>? detectSubdomain = null)
     {
         Title = "Settings";
         _promptTemplate = dispatch.PromptTemplate;
@@ -137,6 +143,44 @@ public sealed class SettingsScreen : Screen
             Width = 14,
             Text = workspaceSubdomain,
         };
+
+        // Opt-in auto-detect (#351): a best-effort probe fills the field from a redirect to the workspace
+        // host, so the user needn't type it. Only shown when a detector is wired (prod: SubdomainProbe;
+        // tests/E2E: an injected stub). It runs off the UI thread — the app's Task.Run → Application.Invoke
+        // pattern — and fails soft: a blank result (no redirect / network error) leaves the field untouched
+        // and just labels the button "none" so the manual value stays authoritative. One more control on
+        // the existing modal — no second focusable pane (#3), no new bare-letter shortcut (#12).
+        Button? detectButton = null;
+        if (detectSubdomain is not null)
+        {
+            var detect = new Button { X = Pos.Right(subdomainField) + 1, Y = 8, Text = "Detect" };
+            detect.Accepting += (_, e) =>
+            {
+                e.Handled = true;
+                detect.Enabled = false;
+                detect.Text = "Detecting…";
+                _ = Task.Run(async () =>
+                {
+                    string found;
+                    try
+                    {
+                        found = await detectSubdomain(CancellationToken.None);
+                    }
+                    catch
+                    {
+                        found = "";
+                    }
+                    Application.Invoke(() =>
+                    {
+                        if (!string.IsNullOrEmpty(found))
+                            subdomainField.Text = found;
+                        detect.Enabled = true;
+                        detect.Text = string.IsNullOrEmpty(found) ? "Detect (none)" : "Detect";
+                    });
+                });
+            };
+            detectButton = detect;
+        }
 
         // ── Detail view (#108): default tab, activity order, auto-scroll ────────
         // Cycle buttons mirror the Dispatch section's terminal/working-dir buttons. The activity order is
@@ -291,6 +335,10 @@ public sealed class SettingsScreen : Screen
             sessionModeButton, postToCommentsButton, launchLocationButton,
             save, cancel,
         ]);
+
+        // Added after the array so it's only present when a detector is wired (#351).
+        if (detectButton is not null)
+            Add(detectButton);
     }
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Settings;

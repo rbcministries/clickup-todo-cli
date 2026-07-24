@@ -66,6 +66,9 @@ public sealed class TodoApp
     // in the planner and is covered there. Injected (#304) so the E2E harness can swap in a recording
     // launcher; defaults to the real OS launcher.
     private readonly IBrowserLauncher _browser;
+    // Opt-in workspace-subdomain auto-detect (#351): the Settings "Detect" button runs this. Injected like
+    // _browser so the E2E harness can supply a deterministic stub; defaults to the real redirect probe.
+    private readonly Func<CancellationToken, Task<string>> _subdomainDetector;
     // How many candidates the Assignees pane wants available before it stops needing the deferred
     // workspace-members top-up (it fills its empty state up to 10 rows).
     private const int AssigneeCandidateTarget = 10;
@@ -167,7 +170,8 @@ public sealed class TodoApp
 
     public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
         IFocusStore focus, TaskCache taskCache, FeedCache feedCache, AssigneeFrequencyCache assignees,
-        ListFrequencyCache lists, IBrowserLauncher? browserLauncher = null)
+        ListFrequencyCache lists, IBrowserLauncher? browserLauncher = null,
+        Func<CancellationToken, Task<string>>? subdomainDetector = null)
     {
         _tasks = tasks;
         _feed = feed;
@@ -179,6 +183,7 @@ public sealed class TodoApp
         _assignees = assignees;
         _lists = lists;
         _browser = browserLauncher ?? new SystemBrowserLauncher();
+        _subdomainDetector = subdomainDetector ?? SubdomainProbe.Default().DetectAsync;
         _agent = BuildAgentDispatcher();
     }
 
@@ -1018,7 +1023,7 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.WorkspaceSubdomain, _config.AgentDispatch, _config.DetailView);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.WorkspaceSubdomain, _config.AgentDispatch, _config.DetailView, _subdomainDetector);
 
         // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
         // save it folds the edited template back into the settings screen via the request's callback, so
