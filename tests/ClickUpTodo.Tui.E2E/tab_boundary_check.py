@@ -5,11 +5,17 @@ Terminal.Gui 2.4.10's stock Tabs control binds the bare arrow keys to a tab-navi
 handler that, on cycling past the first or last tab, calls SetFocus() on the wrapped-to
 tab header — which throws `InvalidOperationException: FocusChanging was not cancelled and
 the HasFocus value did not change` and kills the process. The app owns tab switching via
-Ctrl+←/→ and disables the native arrow navigation (NavSafeTabs), so this drives bare
-→ well past the last tab and bare ← well past the first and asserts the app is still
-alive and rendering afterwards.
+Ctrl+←/→ and disables the native arrow navigation (NavSafeTabs).
 
-Run with E2E_TREE=1 so the crashing Task Tree tab (a ListView) is present as the last tab.
+A bare arrow only reaches the tab control after the focused view declines it, so this
+drives the boundary primarily from the Task Tree tab's ListView — which declines ↑ the
+instant the selection is on the top row (a read-only TextView pane instead walks its caret
+first, a weaker trigger). It cycles to that tab (the LAST tab), pushes bare → past it and
+bare ↑ past its top row, then also drives bare ←/→ on a text pane for good measure, and
+asserts the app stays alive and rendering throughout. Reproduces the reported crash on the
+stock control and passes on NavSafeTabs.
+
+Requires E2E_TREE=1 so the Task Tree tab (a ListView) is present as the last tab.
 """
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte
@@ -77,30 +83,12 @@ try:
     assert "Description" in visible(), "detail screen did not open:\n" + visible()
     assert alive(), "process died opening detail"
 
-    # Cycle tab focus onto the header bar the way the reporter did, then push bare → far past
-    # the last tab: 4 named tabs + Task Tree = 5, so 12 presses wraps the end several times.
-    for _ in range(12):
-        os.write(master, b"\x1b[C")   # bare Right arrow
-        pump(0.4)
-    assert alive(), "process CRASHED driving bare → past the last tab:\n" + visible()
-
-    # ...and bare ← far past the first tab (the second reported crash).
-    for _ in range(12):
-        os.write(master, b"\x1b[D")   # bare Left arrow
-        pump(0.4)
-    assert alive(), "process CRASHED driving bare ← past the first tab:\n" + visible()
-
-    # The screen must still be a live, rendering detail view (not a frozen last frame): the
-    # app's own Ctrl+→ tab cycle should still work and the tab bar keep rendering.
-    os.write(master, b"\x1b[1;5C")    # Ctrl+→ → next tab
-    pump(1.2)
-    assert alive(), "process died after boundary presses"
-    v = visible()
-    assert "Stream" in v, "detail view unresponsive after boundary presses:\n" + v
-
-    # ── Task Tree tab: ↑ must not switch tabs (was the reported asymmetry) ──────────
-    # Cycle with the app's own Ctrl+→ until the Task Tree tab (last of 5) is front-most and
-    # its lazy load has landed — position-independent so it doesn't depend on the current tab.
+    # The reliable reproduction path is the Task Tree tab: a bare arrow reaches the tab control
+    # only after the focused view declines it, and its ListView declines ↑ the instant the
+    # selection sits on the top row (no caret to walk, unlike the read-only TextView panes). So
+    # cycle to the Task Tree tab (last of 5: Stream/Description/Comments/Other/Task Tree) with the
+    # app's own Ctrl+→ and let its lazy load land — position-independent so it doesn't depend on
+    # the tab we happen to be on.
     tree = ""
     for _ in range(8):
         os.write(master, b"\x1b[1;5C")   # Ctrl+→
@@ -111,20 +99,49 @@ try:
     assert "ANCESTOR" in tree and "CHILDONE" in tree, \
         "Task Tree tab did not render its rows:\n" + tree
 
-    # ↓ moves the selection down through the subtasks (a ListView gesture) — the tree tokens
-    # stay on screen. ↑ from the top row previously bubbled to the stock Tabs and switched to
-    # the previous tab; with NavSafeTabs it's inert, so the tree stays put. Press ↑ well past
-    # the top and assert we're still on the Task Tree tab (its distinctive rows still shown).
+    # → from the Task Tree tab (the LAST tab) is the primary reported crash: the ListView declines
+    # it, it bubbles to the tab control, and the stock control's SelectNextTab wraps to the first
+    # tab and SetFocus()es its header — the throw site. Push it well past the boundary.
+    for _ in range(8):
+        os.write(master, b"\x1b[C")      # bare Right arrow — past the last tab
+        pump(0.4)
+    assert alive(), "process CRASHED driving bare → past the last tab:\n" + visible()
+
+    # ↓ walks the selection down through the subtasks (a ListView gesture) — the tree tokens stay
+    # on screen. ↑ from the top row previously bubbled to the stock Tabs and switched to the
+    # previous tab (the reported asymmetry) — and past the first tab it wraps + SetFocus()es,
+    # the second reported crash. With NavSafeTabs both are inert, so the tree stays put. Drive ↓
+    # then ↑ well past the top and assert we never left the Task Tree tab.
     for _ in range(3):
         os.write(master, b"\x1b[B")      # bare Down
         pump(0.3)
-    for _ in range(6):
-        os.write(master, b"\x1b[A")      # bare Up (past the top row)
+    for _ in range(8):
+        os.write(master, b"\x1b[A")      # bare Up — past the top row / first tab
         pump(0.3)
-    assert alive(), "process died driving ↑/↓ on the Task Tree tab"
+    assert alive(), "process CRASHED driving bare ↑ past the first tab / top row:\n" + visible()
     after = visible()
     assert "ANCESTOR" in after and "CHILDONE" in after, \
         "↑ on the Task Tree tab switched away from it (native tab-nav not disabled):\n" + after
+
+    # Secondary coverage from a text pane: land back on a scrollable pane and drive bare ←/→ at
+    # its scroll/caret edge too, so the guard isn't tied to ListView focus alone.
+    os.write(master, b"\x1b[1;5C")       # Ctrl+→ → wrap to Stream
+    pump(1.2)
+    for _ in range(6):
+        os.write(master, b"\x1b[D")      # bare Left arrow
+        pump(0.3)
+    for _ in range(6):
+        os.write(master, b"\x1b[C")      # bare Right arrow
+        pump(0.3)
+    assert alive(), "process CRASHED driving bare ←/→ on a text pane:\n" + visible()
+
+    # The screen must still be a live, rendering detail view (not a frozen last frame): the app's
+    # own Ctrl+→ tab cycle should still work and the tab bar keep rendering.
+    os.write(master, b"\x1b[1;5C")       # Ctrl+→ → next tab
+    pump(1.2)
+    assert alive(), "process died after boundary presses"
+    v = visible()
+    assert "Stream" in v, "detail view unresponsive after boundary presses:\n" + v
 
     print("ok — survived bare arrow navigation past both tab boundaries; "
           "↑ on the Task Tree tab stays on the tab")
