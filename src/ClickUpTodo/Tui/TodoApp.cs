@@ -1178,6 +1178,32 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
+        ShowQuickOpenSurface();
+    }
+
+    /// <summary>
+    /// Ctrl+O from an open Task Detail (#353): opens the same quick-open entry surface stacked over the
+    /// detail. Unlike the list entry point it does not guard on <see cref="ActiveScreen"/> (the detail
+    /// <em>is</em> the active screen); resolving a target opens its Task Detail over the current one, so
+    /// Esc walks back — mirroring how Quick Updates (Ctrl+U) stacks over the detail.
+    /// <para>
+    /// This detail→detail navigation rides the single <see cref="_screens"/> back-stack, which is
+    /// #401/#298's model: <c>Esc</c> = Back walks it one screen at a time and, at the list root,
+    /// <see cref="RequestExit"/> handles quit. #401 shipped the reusable <see cref="NavigationHistory{T}"/>
+    /// but no host consumes it yet (its first host consumer is #291, PR #373, which the issue says
+    /// <em>drives</em> the shared history). When #291 introduces the dashboard's <c>NavigationHistory</c>,
+    /// this open is the other detail→detail source that must push onto that same history so there is one
+    /// back-stack, not two — see the note left on #373.
+    /// </para>
+    /// </summary>
+    private void OpenQuickOpenFromScreen() => ShowQuickOpenSurface();
+
+    /// <summary>Shared entry-surface opener behind both quick-open entry points (list Ctrl+O and detail
+    /// Ctrl+O, #303/#353). The parse/resolve/navigate runs in <see cref="ResolveAndOpen"/> once the modal
+    /// has closed (deferred to the next loop iteration) so the Task Detail opens over whatever was beneath
+    /// the entry surface rather than stacking on top of the surface itself.</summary>
+    private void ShowQuickOpenSurface()
+    {
         var screen = new QuickOpenScreen();
         ShowScreen(screen, () =>
         {
@@ -1218,11 +1244,17 @@ public sealed class TodoApp
             return;
         }
 
+        // A custom-id URL carries its own team id (#353) — prefer it over the configured workspace so a
+        // URL pasted from a different workspace resolves against that workspace, not this one.
+        var teamId = string.IsNullOrWhiteSpace(reference.TeamId) ? _config.WorkspaceId : reference.TeamId;
+
         // 2. Uncached plain id → straight through the detail load (its own "Loading details…" flash IS
-        // the fetch; there's no separate resolve step, so no redundant "Fetching task…" here).
+        // the fetch; there's no separate resolve step, so no redundant "Fetching task…" here). A bare
+        // hyphenless token parses as a plain id but may actually be a custom id (#353): pass the team id
+        // as a fallback so OpenTaskDetail retries as a custom id if the plain load 404s.
         if (reference.Kind == QuickOpenKind.TaskId)
         {
-            OpenTaskDetail(reference.Value);
+            OpenTaskDetail(reference.Value, customIdFallbackTeamId: teamId);
             return;
         }
 
@@ -1230,7 +1262,6 @@ public sealed class TodoApp
         // the task's real id, which is then opened through the ordinary detail load. "Fetching task…"
         // covers that resolve round-trip (visible while the off-thread lookup is in flight), after which
         // OpenTaskDetail's "Loading details…" covers the load.
-        var teamId = _config.WorkspaceId;
         if (string.IsNullOrWhiteSpace(teamId))
         {
             Flash($"Can’t resolve custom id “{Ellipsize(reference.Value)}” — no workspace is configured.");
@@ -1766,7 +1797,7 @@ public sealed class TodoApp
     /// the feed and a second Enter is a no-op (the detail is by then active). Esc closes the detail and
     /// the screen seam restores the layer beneath with its selection intact.
     /// </summary>
-    private void OpenTaskDetail(string taskId)
+    private void OpenTaskDetail(string taskId, string? customIdFallbackTeamId = null)
     {
         var requester = ActiveScreen;
         Flash("Loading details…");
@@ -1776,8 +1807,13 @@ public sealed class TodoApp
         {
             try
             {
-                var detail = await _tasks.GetTaskDetailAsync(taskId);
-                var comments = await _tasks.GetTaskCommentsWithRepliesAsync(taskId);
+                // A bare hyphenless custom id parses as a plain id (#353); the fallback team id (when
+                // set) lets the fetch retry it as a custom id on a 404. For a real id it's a plain load.
+                var detail = await _tasks.GetTaskDetailWithCustomIdFallbackAsync(taskId, customIdFallbackTeamId);
+                // Load comments / wire the composer + editor by the RESOLVED id — identical to taskId for a
+                // real id, and correct when a fallback resolved a custom id to its real task id.
+                var resolvedId = detail.Id;
+                var comments = await _tasks.GetTaskCommentsWithRepliesAsync(resolvedId);
                 Application.Invoke(() =>
                 {
                     if (ActiveScreen != requester)
@@ -1802,10 +1838,10 @@ public sealed class TodoApp
                         workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, detail.Id),
                         // Ctrl+N (#216) composes + posts a plain-text comment; the screen owns the
                         // optimistic append/revert, the host owns the off-thread ClickUp write.
-                        postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(taskId, text, ct),
+                        postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(resolvedId, text, ct),
                         // Ctrl+E (#217) edits the plain-text description; the screen owns the editor +
                         // dirty-check + in-place reflection, the host owns the off-thread ClickUp write.
-                        setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(taskId, text, ct));
+                        setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(resolvedId, text, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the
@@ -1814,10 +1850,13 @@ public sealed class TodoApp
                     screen.AgentDispatchRequested += (_, request) => DispatchAgent(detail, comments, request);
                     // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data; re-fetch off the UI
                     // thread and feed it back into the still-open screen (its tab/scroll stay put).
-                    screen.RefreshRequested += (_, _) => RefreshDetail(screen, taskId);
+                    screen.RefreshRequested += (_, _) => RefreshDetail(screen, resolvedId);
                     // Ctrl+U opens Quick Updates for the detail's task, stacked over it; Esc pops back
                     // here (#159). Reads the screen's current task so a mid-view refresh is reflected.
                     screen.QuickUpdatesRequested += (_, _) => OpenQuickUpdatesForDetail(screen);
+                    // Ctrl+O quick-opens another task from within the detail (#353), stacked over it; the
+                    // resolved Task Detail opens over this one, so Esc walks back through them.
+                    screen.QuickOpenRequested += (_, _) => OpenQuickOpenFromScreen();
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly

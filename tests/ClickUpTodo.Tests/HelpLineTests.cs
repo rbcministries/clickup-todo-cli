@@ -63,6 +63,18 @@ public sealed class HelpLineTests
         Assert.Equal(listKey, detailKey);
     }
 
+    // #353 — quick-open (Ctrl+O) is now offered from Task Detail too, using the same key as the list so
+    // the footer stays consistent across both surfaces.
+    [Fact]
+    public void QuickOpen_UsesCtrlO_OnBothListAndDetail()
+    {
+        var listKey = HelpItemSets.MainList.Single(i => i.Label == "open by id").Key;
+        var detailKey = HelpItemSets.Detail.Single(i => i.Label == "open by id").Key;
+
+        Assert.Equal("Ctrl+O", listKey);
+        Assert.Equal(listKey, detailKey);
+    }
+
     // #290 — refresh is standardized on F5 (icon ↻) across every screen that can refresh, so the footer
     // never drifts. (Ctrl+R remains an undisplayed alias in each handler.)
     [Theory]

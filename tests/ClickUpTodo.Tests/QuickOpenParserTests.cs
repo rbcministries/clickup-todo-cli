@@ -29,6 +29,7 @@ public sealed class QuickOpenParserTests
         var r = QuickOpenParser.Parse(input);
         Assert.Equal(QuickOpenKind.CustomId, r.Kind);
         Assert.Equal(input, r.Value);
+        Assert.Null(r.TeamId); // a bare custom id carries no team id — resolves against the configured workspace
     }
 
     // ── Parse: URLs ───────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ public sealed class QuickOpenParserTests
         var r = QuickOpenParser.Parse(input);
         Assert.Equal(QuickOpenKind.TaskId, r.Kind);
         Assert.Equal(expectedId, r.Value);
+        Assert.Null(r.TeamId); // a plain-id URL has no team segment
     }
 
     [Theory]
@@ -54,13 +56,27 @@ public sealed class QuickOpenParserTests
         => Assert.Equal(QuickOpenKind.Invalid, QuickOpenParser.Parse(input).Kind);
 
     [Theory]
-    [InlineData("https://app.clickup.com/t/9014107164/ABC-123", "ABC-123")]
-    [InlineData("https://odbm.clickup.com/t/9014107164/DEV-42", "DEV-42")]
-    public void Parse_CustomIdUrl_ExtractsCustomId(string input, string expectedCustomId)
+    [InlineData("https://app.clickup.com/t/9014107164/ABC-123", "ABC-123", "9014107164")]
+    [InlineData("https://odbm.clickup.com/t/9014107164/DEV-42", "DEV-42", "9014107164")]
+    public void Parse_CustomIdUrl_ExtractsCustomIdAndTeamId(string input, string expectedCustomId, string expectedTeamId)
     {
         var r = QuickOpenParser.Parse(input);
         Assert.Equal(QuickOpenKind.CustomId, r.Kind);
         Assert.Equal(expectedCustomId, r.Value);
+        // #353 item 2: the URL's own team_id is carried so the caller resolves against that workspace,
+        // not the configured one (a custom-id URL pasted from a different workspace no longer 404s).
+        Assert.Equal(expectedTeamId, r.TeamId);
+    }
+
+    [Fact]
+    public void Parse_HyphenlessCustomIdUrl_IsCustomIdWithTeamId()
+    {
+        // A hyphenless custom id (e.g. PROJ123) in a /t/{team}/{custom} URL still classifies as a
+        // custom id (the URL shape disambiguates it), carrying its team id.
+        var r = QuickOpenParser.Parse("https://app.clickup.com/t/9014107164/PROJ123");
+        Assert.Equal(QuickOpenKind.CustomId, r.Kind);
+        Assert.Equal("PROJ123", r.Value);
+        Assert.Equal("9014107164", r.TeamId);
     }
 
     // ── Parse: invalid ────────────────────────────────────────────────────
