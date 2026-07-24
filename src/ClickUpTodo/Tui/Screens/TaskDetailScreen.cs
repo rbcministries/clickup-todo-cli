@@ -338,7 +338,10 @@ public sealed class TaskDetailScreen : Screen
             Height = headerHeight,
         };
 
-        _tabs = new Tabs
+        // NavSafeTabs, not the stock Tabs: its arrow-key tab navigation crashes the app in Terminal.Gui
+        // 2.4.10 when cycling past the first/last tab (→ from the last, ← from the first). Tab switching
+        // is owned here via Ctrl+←/→ (CycleTab), so the native arrow navigation is disabled.
+        _tabs = new NavSafeTabs
         {
             X = 0,
             Y = headerHeight + 1,
