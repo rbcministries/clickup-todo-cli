@@ -110,4 +110,55 @@ public sealed class ClickUpUrlTests
     [InlineData("")]
     public void RewriteHost_HandlesBlankUrl(string? url)
         => Assert.Equal("", ClickUpUrl.RewriteHost(url, "odbm"));
+
+    // ── SubdomainFromWorkspaceHost (#351) ───────────────────────────────────
+
+    [Theory]
+    [InlineData("odbm.clickup.com", "odbm")]        // a genuine workspace host
+    [InlineData("ODBM.ClickUp.com", "odbm")]        // case-insensitive
+    [InlineData("my-team.clickup.com", "my-team")]  // hyphens are valid
+    [InlineData("  odbm.clickup.com  ", "odbm")]    // trimmed
+    public void SubdomainFromWorkspaceHost_ExtractsWorkspaceLabel(string host, string expected)
+        => Assert.Equal(expected, ClickUpUrl.SubdomainFromWorkspaceHost(host));
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("app.clickup.com")]     // ClickUp's own web host, not a workspace
+    [InlineData("api.clickup.com")]     // the API host
+    [InlineData("www.clickup.com")]     // marketing host — reserved
+    [InlineData("help.clickup.com")]    // reserved service host
+    [InlineData("sharing.clickup.com")] // reserved service host
+    [InlineData("clickup.com")]         // bare base domain — no subdomain
+    [InlineData("a.b.clickup.com")]     // deeper host, not a single workspace label
+    [InlineData("odbm.example.com")]    // not a clickup.com host at all
+    [InlineData("odbm.clickup.com.evil.com")] // suffix trickery — not {label}.clickup.com
+    [InlineData("bad_label.clickup.com")]     // underscore isn't a valid DNS-label char
+    [InlineData("-odbm.clickup.com")]         // label can't start with a hyphen
+    public void SubdomainFromWorkspaceHost_ReturnsBlankForNonWorkspaceHosts(string? host)
+        => Assert.Equal("", ClickUpUrl.SubdomainFromWorkspaceHost(host));
+
+    // ── SubdomainFromFinalUrl (#351) ────────────────────────────────────────
+
+    [Fact]
+    public void SubdomainFromFinalUrl_ReadsHostFromRedirectedUrl()
+        => Assert.Equal("odbm", ClickUpUrl.SubdomainFromFinalUrl(new Uri("https://odbm.clickup.com/12345/home")));
+
+    [Fact]
+    public void SubdomainFromFinalUrl_ReturnsBlankWhenProbeStayedOnAppHost()
+        => Assert.Equal("", ClickUpUrl.SubdomainFromFinalUrl(new Uri("https://app.clickup.com/login")));
+
+    [Fact]
+    public void SubdomainFromFinalUrl_ReturnsBlankForNull()
+        => Assert.Equal("", ClickUpUrl.SubdomainFromFinalUrl(null));
+
+    [Fact]
+    public void SubdomainFromFinalUrl_RoundTripsThroughRewriteHost()
+    {
+        // A rewritten task URL's host is exactly what a redirect to the workspace would land on, so
+        // detecting from it recovers the original subdomain — the two #304/#351 seams are consistent.
+        var rewritten = ClickUpUrl.RewriteHost("https://app.clickup.com/t/abc", "odbm");
+        Assert.Equal("odbm", ClickUpUrl.SubdomainFromFinalUrl(new Uri(rewritten)));
+    }
 }
