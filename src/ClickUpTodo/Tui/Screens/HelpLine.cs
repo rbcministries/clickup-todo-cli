@@ -213,16 +213,16 @@ public static class HelpItemSets
     [
         new("Ctrl+←/→", "switch tab", IsAction: false),
         new("↑/↓ PgUp/PgDn", "scroll", IsAction: false),
-        new("Ctrl+PgUp/PgDn", "order activity", IsAction: false),
-        new("Ctrl+A", "dispatch to Claude"),
-        new("Ctrl+N", "add comment"),
-        new("Ctrl+E", "edit description"),
-        new("Ctrl+B", "browser"),
+        new("Ctrl+PgUp/PgDn", "▼▲", IsAction: false),
+        new("Ctrl+A", "✨Dispatch"),
+        new("Ctrl+N", "➕Comment"),
+        new("Ctrl+E", "✏Description"),
+        new("Ctrl+B", "🌐"),
         new("Ctrl+U", "quick update"),
-        new("Ctrl+O", "open by id"),
+        new("Ctrl+O", "🗁 by ID"),
         new("F5", "↻"),
         new("F6", "badges"),
-        new("F1", "help"),
+        new("F1", "ℹ"),
         new("Esc", "back"),
     ];
 
