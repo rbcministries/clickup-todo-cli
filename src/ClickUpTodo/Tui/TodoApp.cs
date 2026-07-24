@@ -1841,7 +1841,15 @@ public sealed class TodoApp
                         postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(resolvedId, text, ct),
                         // Ctrl+E (#217) edits the plain-text description; the screen owns the editor +
                         // dirty-check + in-place reflection, the host owns the off-thread ClickUp write.
-                        setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(resolvedId, text, ct));
+                        setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(resolvedId, text, ct),
+                        // The Task Tree tab (#291) renders ancestry/children with the trailing Assignees
+                        // badge (#161), so it needs the signed-in user's id; badges are fixed to Text
+                        // ("{glyph} {name}" — icon + text, no F6 toggle) per the issue. The tree itself is
+                        // fetched lazily off the UI thread on first cycle to the tab, keyed off the
+                        // RESOLVED id (identical to taskId for a real id; correct for a custom-id fallback).
+                        currentUserId: _tasks.UserId,
+                        treeBadgeDisplay: BadgeDisplay.Text,
+                        loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(resolvedId, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the
@@ -1854,6 +1862,11 @@ public sealed class TodoApp
                     // Ctrl+U opens Quick Updates for the detail's task, stacked over it; Esc pops back
                     // here (#159). Reads the screen's current task so a mid-view refresh is reflected.
                     screen.QuickUpdatesRequested += (_, _) => OpenQuickUpdatesForDetail(screen);
+                    // The Task Tree tab (#291): Enter/double-click a tree row opens that task's detail
+                    // stacked over this one, so Esc walks back one task at a time — uniform with the
+                    // canonical "Esc = Back" decision (#401/#298) and with the Ctrl+O detail→detail path
+                    // (#387). No replace-in-place: the visited-task chain is the single _screens back-stack.
+                    screen.OpenTaskRequested += (_, id) => OpenTaskDetail(id);
                     // Ctrl+O quick-opens another task from within the detail (#353), stacked over it; the
                     // resolved Task Detail opens over this one, so Esc walks back through them.
                     screen.QuickOpenRequested += (_, _) => OpenQuickOpenFromScreen();
