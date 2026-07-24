@@ -88,6 +88,21 @@ public sealed class TodoApp
     // UI-thread-only.
     private bool _feedRefreshPending;
     private bool _refreshingDetail;
+    // The cross-process nudge channel (#292). The producer (#294) records a marker after every confirmed
+    // write; this is the consumer side (#295) — a background scan that turns another instance's markers
+    // into a per-task re-fetch. `_changeMarkers` is the shared store (Null when the file-backed state
+    // store has no cross-process channel), `_markerConsumer` the pure cursor scan over it. UI-thread-only.
+    private readonly IChangeMarkerStore _changeMarkers;
+    private readonly ChangeMarkerConsumer _markerConsumer;
+    // True from a marker-poll's off-thread ReadAll through its UI-thread Advance+dispatch, so two scans
+    // can't overlap and the short cadence can't pile ReadAlls up. (The per-task fetches a scan dispatches
+    // are fire-and-forget and guarded separately — the detail path by _refreshingDetail, the row path by
+    // an UpdatedMs ordering check in RefreshNudgedRow.) UI-thread-only.
+    private bool _pollingMarkers;
+    // Marker-check cadence (#295), deliberately decoupled from the API poll: a `changes` read is a cheap,
+    // bounded DB-only op, so cross-tab updates propagate on a short fixed cadence while API fetches stay
+    // targeted, independent of the 60s-default RefreshSeconds.
+    private static readonly TimeSpan MarkerPollInterval = TimeSpan.FromSeconds(4);
 
     private Window _window = null!;
     private FrameView _frame = null!;
@@ -99,6 +114,11 @@ public sealed class TodoApp
     // The items currently rendered on _helpLabel (post-Fit), cached so a footer click (#289) can
     // hit-test the click column against exactly what's on screen at the present width.
     private IReadOnlyList<HelpItem> _helpFooter = HelpItemSets.MainList;
+    // The main list's command shortcuts, dispatched through the central (context, action) → key table
+    // (#355) so the key for each command and its footer label share one source of truth (Keybindings /
+    // HelpItemSets). Movement/arrow/Tab keys and undisplayed aliases (Ctrl+R, Ctrl+C, Esc quit) stay in
+    // OnListKey — they are intentionally not table-governed footer commands.
+    private KeybindingDispatcher _listKeys = null!;
     private RefreshService _refresh = null!;
     // The stack of full-window screens swapped in over the list (Settings / status picker / detail /
     // Help). The top is visible + focused; any beneath it are mounted-but-hidden so we can return to
@@ -129,6 +149,10 @@ public sealed class TodoApp
     // Per-row fold state, parallel to _display, so ←/→ can read the selected row's state and an in-place
     // update reproduces the correct ▶/▼ marker (#76). None on headers/spacers/leaves/context parents.
     private List<FoldState> _folds = [];
+    // Per-row char span of the leading ▶/▼ fold marker within the rendered text, parallel to _display, so
+    // a mouse click can hit-test the arrow column (#287). (-1, 0) on rows without a marker (headers,
+    // spacers, leaves, or when nesting is off). Length is always the 2-char "▶ "/"▼ " on a foldable row.
+    private List<(int Start, int Length)> _markerSpans = [];
     // Per-list color chips for List-grouped headers, resolved off the UI thread in FetchAsync and read
     // during Render; volatile to publish the reference safely across threads. (#61)
     private volatile IReadOnlyDictionary<string, string?> _listColors = EmptyListColors;
@@ -167,7 +191,8 @@ public sealed class TodoApp
 
     public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
         IFocusStore focus, TaskCache taskCache, FeedCache feedCache, AssigneeFrequencyCache assignees,
-        ListFrequencyCache lists, IBrowserLauncher? browserLauncher = null)
+        ListFrequencyCache lists, IBrowserLauncher? browserLauncher = null,
+        IChangeMarkerStore? changeMarkers = null)
     {
         _tasks = tasks;
         _feed = feed;
@@ -179,6 +204,10 @@ public sealed class TodoApp
         _assignees = assignees;
         _lists = lists;
         _browser = browserLauncher ?? new SystemBrowserLauncher();
+        // The nudge channel's read side (#295). Defaults to the no-op store so every existing caller/test
+        // is unchanged; the Null store's empty InstanceId disarms the marker poll (see Run).
+        _changeMarkers = changeMarkers ?? NullChangeMarkerStore.Instance;
+        _markerConsumer = new ChangeMarkerConsumer(_changeMarkers.InstanceId);
         _agent = BuildAgentDispatcher();
     }
 
@@ -219,6 +248,7 @@ public sealed class TodoApp
                 onUpdate: tasks => Application.Invoke(() => OnTasksLoaded(tasks)),
                 onError: ex => Application.Invoke(() => Flash($"Refresh failed: {Short(ex)}")));
             _refresh.Start();
+            ArmMarkerPoll();
             Application.Run(_window);
         }
         finally
@@ -456,6 +486,7 @@ public sealed class TodoApp
             Height = Dim.Fill(2),
         };
         _list = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
+        _listKeys = BuildListKeyDispatcher();
         _list.KeyDown += OnListKey;
         _list.MouseEvent += OnListMouse;
         _frame.Add(_list);
@@ -485,53 +516,54 @@ public sealed class TodoApp
 
     // ── Key handling ─────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// The main list's command shortcuts, wired through the central <see cref="Keybindings"/> table
+    /// (#355): each action's key is resolved from the table, so this method is the only place the
+    /// main-list bindings and their footer labels (<see cref="HelpItemSets.MainList"/>) are tied
+    /// together. Movement (arrows/Tab), the subtasks-guarded fold keys, and the undisplayed aliases
+    /// (Ctrl+R, Ctrl+C, Esc quit) are not footer commands and stay literal in <see cref="OnListKey"/>.
+    /// </summary>
+    private KeybindingDispatcher BuildListKeyDispatcher()
+        => new KeybindingDispatcher(ScreenContext.MainList)
+            .On(KeyAction.QuickUpdate, OpenQuickUpdates)   // #159/#290, standardized to Ctrl+U
+            .On(KeyAction.OpenDetail, OpenDetail)
+            .On(KeyAction.QuickOpen, OpenQuickOpen)         // #303
+            .On(KeyAction.NewTask, OpenNewTask)             // #213
+            .On(KeyAction.OpenInBrowser, OpenInBrowser)
+            .On(KeyAction.TogglePin, TogglePin)
+            .On(KeyAction.Feed, OpenNotificationsFeed)      // List ↔ Feed
+            .On(KeyAction.Help, ShowHelp)
+            .On(KeyAction.Settings, OpenSettings)
+            .On(KeyAction.FilterSortGroup, OpenViewSettings)
+            .On(KeyAction.CycleSubtasks, CycleSubtaskView)
+            .On(KeyAction.Refresh, RequestRefresh)          // F5 (Ctrl+R is the undisplayed alias below)
+            .On(KeyAction.CycleBadges, CycleBadgeDisplay)
+            .On(KeyAction.ToggleCompleted, CycleShowCompleted)
+            .On(KeyAction.Quit, () => Application.RequestStop());
+
     private void OnListKey(object? sender, Key key)
     {
-        // Command shortcuts use modifier chords / function keys. Bare letters are left unhandled so
-        // the ListView's type-ahead search (keyed on the task title) keeps working.
+        // Table-driven command shortcuts first (#355). Bare letters never match (the table only holds
+        // chords / function keys), so the ListView's type-ahead search (keyed on the task title) is
+        // untouched.
+        if (_listKeys.Dispatch(key))
+        {
+            key.Handled = true;
+            return;
+        }
+
+        // Undisplayed aliases and movement — intentionally not table-governed footer commands.
         if (key.IsCtrl)
         {
             switch (key.KeyCode & ~KeyCode.CtrlMask)
             {
-                case KeyCode.P:
-                    key.Handled = true;
-                    TogglePin();
-                    break;
                 case KeyCode.R:
                     // Ctrl+R is the (undisplayed) alias for the F5 refresh key.
                     key.Handled = true;
                     RequestRefresh();
                     break;
-                case KeyCode.N:
-                    // Ctrl+N opens the New Task compose screen (#213). A chord, since bare letters are
-                    // reserved for the ListView type-ahead (#12).
-                    key.Handled = true;
-                    OpenNewTask();
-                    break;
-                case KeyCode.O:
-                    // Ctrl+O opens the quick-open-by-id entry surface (#303). A chord (bare letters are
-                    // reserved for the ListView type-ahead, #12).
-                    key.Handled = true;
-                    OpenQuickOpen();
-                    break;
-                case KeyCode.U:
-                    // Ctrl+U opens Quick Updates (#159). Standardized to match Task Detail's Ctrl+U so
-                    // the same action uses the same key everywhere (#290); the old bare-Space launcher is
-                    // retired, freeing Space for the ListView type-ahead (#12).
-                    key.Handled = true;
-                    OpenQuickUpdates();
-                    break;
-                case KeyCode.E:
-                    // Ctrl+E toggles to the mentions & comments feed — List ↔ Feed navigation.
-                    key.Handled = true;
-                    OpenNotificationsFeed();
-                    break;
-                case KeyCode.B:
-                    key.Handled = true;
-                    OpenInBrowser();
-                    break;
-                case KeyCode.Q:
-                case KeyCode.C: // Ctrl+C as a quit alias (the OS/terminal may intercept it first).
+                case KeyCode.C:
+                    // Ctrl+C as a quit alias (the OS/terminal may intercept it first).
                     key.Handled = true;
                     Application.RequestStop();
                     break;
@@ -558,10 +590,6 @@ public sealed class TodoApp
 
         switch (key.KeyCode)
         {
-            case KeyCode.Enter:
-                key.Handled = true;
-                OpenDetail();
-                break;
             case KeyCode.Tab:
                 key.Handled = true;
                 JumpToNextSection();
@@ -583,63 +611,62 @@ public sealed class TodoApp
                 }
                 break;
             case KeyCode.Esc:
+                // Esc quits from the main list — an undisplayed alias for Ctrl+Q (the footer shows the
+                // Ctrl+Q command). The quit-vs-back drift is tracked separately (#298/#299).
                 key.Handled = true;
                 Application.RequestStop();
-                break;
-            case KeyCode.F1:
-                key.Handled = true;
-                ShowHelp();
-                break;
-            case KeyCode.F2:
-                key.Handled = true;
-                OpenSettings();
-                break;
-            case KeyCode.F3:
-                key.Handled = true;
-                OpenViewSettings();
-                break;
-            case KeyCode.F4:
-                key.Handled = true;
-                CycleSubtaskView();
-                break;
-            case KeyCode.F5:
-                // F5 is the refresh key (icon ↻); Ctrl+R is its undisplayed alias.
-                key.Handled = true;
-                RequestRefresh();
-                break;
-            case KeyCode.F6:
-                key.Handled = true;
-                CycleBadgeDisplay();
-                break;
-            case KeyCode.F12:
-                key.Handled = true;
-                CycleShowCompleted();
                 break;
         }
     }
 
     /// <summary>
-    /// Double-click a task row → open its Task Detail, the mouse equivalent of Enter (#286). We handle
-    /// only the double-click and leave every other mouse event unhandled, so the ListView's native
-    /// single-click select and drag-scroll are untouched. A double-click on a header/spacer row or in the
-    /// empty space beneath a short list resolves to a null task and no-ops, exactly like Enter there.
-    /// Guarded on <see cref="ActiveScreen"/> so a click can't fire while a screen is stacked over the
-    /// list. The click's viewport-relative Y plus the list's scroll offset (<c>Viewport.Y</c>) resolves
-    /// the row via the shared <see cref="RowHitTester"/> (reused by B/F, #287/#291).
+    /// Mouse gestures on the task list, all resolved through the shared <see cref="RowHitTester"/> (the
+    /// click's viewport-relative Y plus the list's scroll offset <c>Viewport.Y</c>). Guarded on
+    /// <see cref="ActiveScreen"/> so nothing fires while a screen is stacked over the list:
+    /// <list type="bullet">
+    /// <item><b>Double-click a task row → open Task Detail</b> (A, #286), the mouse equivalent of Enter.
+    /// A double-click on a header/spacer row or the empty space beneath a short list resolves to a null
+    /// task and no-ops, exactly like Enter there.</item>
+    /// <item><b>Single-click a parent's ▶/▼ arrow → toggle its subtasks</b> (B, #287), the mouse
+    /// equivalent of →/←. Gated on the subtasks view like the keyboard fold, and scoped to the narrow
+    /// arrow column — a click anywhere else on the row is left unhandled so the ListView's native
+    /// single-click selection still moves the cursor, and the row body stays free for A's
+    /// double-click-to-open (so a title double-click can't be mistaken for two fold toggles).</item>
+    /// </list>
+    /// Every other mouse event is left unhandled, so native selection and drag-scroll are untouched.
     /// </summary>
     private void OnListMouse(object? sender, Mouse e)
     {
-        if (!e.Flags.HasFlag(MouseFlags.LeftButtonDoubleClicked) || e.Position is not { } pos)
-            return;
-        if (ActiveScreen is not null)
+        if (e.Position is not { } pos || ActiveScreen is not null)
             return;
 
-        var task = RowHitTester.TaskAt(pos.Y, _list.Viewport.Y, _rows);
-        if (task is null)
+        // Double-click → open detail (A). Checked first and independent of the subtasks view.
+        if (e.Flags.HasFlag(MouseFlags.LeftButtonDoubleClicked))
+        {
+            if (RowHitTester.TaskAt(pos.Y, _list.Viewport.Y, _rows) is not { } task)
+                return;
+            e.Handled = true;
+            OpenTaskDetail(task.Id);
             return;
+        }
 
-        e.Handled = true;
-        OpenTaskDetail(task.Id);
+        // Single-click within a foldable parent's arrow column → toggle its fold (B).
+        if (e.Flags.HasFlag(MouseFlags.LeftButtonClicked) && _config.View.ShowSubtasks)
+        {
+            var index = RowHitTester.RowIndexAt(pos.Y, _list.Viewport.Y, _rows.Count);
+            if (index < 0 || index >= _folds.Count
+                || _folds[index] is not (FoldState.Collapsed or FoldState.Expanded))
+                return;
+            // _markerSpans is parallel to _folds/_display (grown together in AddTask/AddHeader/AddSpacer),
+            // so the _folds bound above covers it and _display[index] below.
+            var (markerStart, markerLength) = _markerSpans[index];
+            // Measure with the same grapheme/column-aware GetColumns the renderer uses, so wide/emoji
+            // badges ahead of the arrow don't shift the target column (mirrors HelpLine.HitTest).
+            if (!RowHitTester.IsWithinFoldMarker(pos.X, _display[index], markerStart, markerLength, static s => s.GetColumns()))
+                return;
+            e.Handled = true;
+            ToggleFoldAt(index);
+        }
     }
 
     /// <summary>F6 — cycles how Status/Priority badges render (icons → text → hidden → icons), persists
@@ -1452,9 +1479,8 @@ public sealed class TodoApp
 
         switch (_folds[i])
         {
-            case FoldState.Collapsed when _rows[i]?.Id is { } id:
-                _expanded.Add(id);
-                Render(keepTaskId: id);
+            case FoldState.Collapsed:
+                SetFold(i, expand: true);
                 break;
             case FoldState.Expanded:
                 // Move into the first child — the next row indented deeper than this one.
@@ -1475,10 +1501,9 @@ public sealed class TodoApp
         if (i < 0 || i >= _folds.Count)
             return;
 
-        if (_folds[i] == FoldState.Expanded && _rows[i]?.Id is { } id)
+        if (_folds[i] == FoldState.Expanded && _rows[i]?.Id is not null)
         {
-            _expanded.Remove(id);
-            Render(keepTaskId: id);
+            SetFold(i, expand: false);
             return;
         }
 
@@ -1492,13 +1517,48 @@ public sealed class TodoApp
             return;
         if (_folds[j] == FoldState.Expanded)
         {
-            _expanded.Remove(parentId!);
-            Render(keepTaskId: parentId);
+            SetFold(j, expand: false);
         }
         else
         {
             _list.SelectedItem = j; // context parent (not foldable) — just select it
         }
+    }
+
+    /// <summary>
+    /// The single fold mutation both the keyboard (→/←, #76) and a mouse arrow-click (#287) converge on:
+    /// expand or collapse the parent on row <paramref name="index"/> by toggling its id in the ephemeral
+    /// <see cref="_expanded"/> set and re-rendering with the cursor kept on it. A no-op on any row that
+    /// isn't a foldable parent (its <see cref="FoldState"/> isn't Collapsed/Expanded, or it carries no
+    /// task id), so callers may pass an arbitrary row index. Keeps <see cref="_expanded"/> + the arranger
+    /// the one source of truth for fold state.
+    /// </summary>
+    private void SetFold(int index, bool expand)
+    {
+        if (index < 0 || index >= _folds.Count || index >= _rows.Count)
+            return;
+        if (_folds[index] is not (FoldState.Collapsed or FoldState.Expanded))
+            return;
+        if (_rows[index]?.Id is not { } id)
+            return;
+
+        if (expand)
+            _expanded.Add(id);
+        else
+            _expanded.Remove(id);
+        Render(keepTaskId: id);
+    }
+
+    /// <summary>
+    /// Toggle the fold on row <paramref name="index"/> — collapse an expanded parent, expand a collapsed
+    /// one. The mouse arrow-click (#287) equivalent of →/←; a no-op on any non-foldable row (guarded by
+    /// <see cref="SetFold"/>).
+    /// </summary>
+    private void ToggleFoldAt(int index)
+    {
+        if (index < 0 || index >= _folds.Count)
+            return;
+        SetFold(index, expand: _folds[index] == FoldState.Collapsed);
     }
 
     /// <summary>
@@ -1727,7 +1787,7 @@ public sealed class TodoApp
                 // Load comments / wire the composer + editor by the RESOLVED id — identical to taskId for a
                 // real id, and correct when a fallback resolved a custom id to its real task id.
                 var resolvedId = detail.Id;
-                var comments = await _tasks.GetTaskCommentsAsync(resolvedId);
+                var comments = await _tasks.GetTaskCommentsWithRepliesAsync(resolvedId);
                 Application.Invoke(() =>
                 {
                     if (ActiveScreen != requester)
@@ -1813,7 +1873,7 @@ public sealed class TodoApp
             try
             {
                 var detail = await _tasks.GetTaskDetailAsync(taskId);
-                var comments = await _tasks.GetTaskCommentsAsync(taskId);
+                var comments = await _tasks.GetTaskCommentsWithRepliesAsync(taskId);
                 Application.Invoke(() =>
                 {
                     // Only apply if this screen is still mounted (it may sit beneath a stacked Help).
@@ -1828,6 +1888,166 @@ public sealed class TodoApp
             finally
             {
                 Application.Invoke(() => _refreshingDetail = false);
+            }
+        });
+    }
+
+    // ── Cross-process nudge channel — consumer (#295) ─────────────────────────
+
+    /// <summary>
+    /// Arms the nudge-channel consumer (#295): seeds the cursor to the current max marker seq so a fresh
+    /// tab never replays history (edge case 1), then starts a repeating marker poll on its own short
+    /// cadence (<see cref="MarkerPollInterval"/>), decoupled from the API refresh loop. A no-op store (the
+    /// file-backed state store's Null channel) has an empty InstanceId, so nothing is armed — the poll only
+    /// runs where a real cross-process channel exists. Runs on the UI thread during <see cref="Run"/>,
+    /// before the run loop pumps.
+    /// </summary>
+    private void ArmMarkerPoll()
+    {
+        if (string.IsNullOrEmpty(_changeMarkers.InstanceId))
+            return; // no cross-process channel (e.g. the JSON file store) — nothing to consume.
+
+        _markerConsumer.Initialize(_changeMarkers.ReadAll());
+        // The timeout callback fires on the UI thread; returning true keeps it repeating. It's torn down
+        // by Application.Shutdown at quit along with the run loop.
+        Application.AddTimeout(MarkerPollInterval, () =>
+        {
+            PollMarkers();
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// One marker-poll tick (#295): read the markers <b>off</b> the UI thread (a <c>changes</c> ReadAll
+    /// briefly takes LiteDB's shared-mode cross-process lock), then run the pure cursor scan and dispatch
+    /// <b>on</b> the UI thread (it reads <c>_all</c> / <c>_rows</c> / the open detail). A single in-flight
+    /// guard keeps two scans from overlapping (the per-task reconciles a scan dispatches are guarded
+    /// separately). Best-effort throughout — a read or reconcile failure is swallowed, since a nudge rides
+    /// on an edit that already succeeded elsewhere.
+    /// </summary>
+    private void PollMarkers()
+    {
+        if (_pollingMarkers)
+            return;
+        _pollingMarkers = true;
+
+        _ = Task.Run(() =>
+        {
+            IReadOnlyList<ChangeMarker> markers;
+            try { markers = _changeMarkers.ReadAll(); }
+            catch { markers = []; }
+
+            Application.Invoke(() =>
+            {
+                try
+                {
+                    foreach (var taskId in _markerConsumer.Advance(markers, IsNudgeTaskInView, HeldNudgeVersion))
+                        ReconcileNudgedTask(taskId);
+                }
+                finally
+                {
+                    _pollingMarkers = false;
+                }
+            });
+        });
+    }
+
+    /// <summary>A task is "in view" for the nudge scan (#295) when it's in the working set (<c>_all</c> or
+    /// a visible <c>_rows</c> entry) or shown in an open Task Detail. UI-thread read.</summary>
+    private bool IsNudgeTaskInView(string taskId) =>
+        _all.Any(t => t.Id == taskId)
+        || _rows.Any(r => r?.Id == taskId)
+        || _screens.OfType<TaskDetailScreen>().Any(s => s.Task.Id == taskId);
+
+    /// <summary>The <c>date_updated</c> (epoch ms) we currently hold for a task across <b>every</b> in-view
+    /// surface (working set + any open detail), so the scan can suppress a redundant fetch (#295). Returns
+    /// the <b>minimum</b> version so suppression fires only when every surface is already at or beyond the
+    /// marker — a fresh working-set copy must not mask a stale open detail (which would otherwise miss its
+    /// refresh until its own 30s tick). An unknown version on any surface returns null (can't prove current
+    /// → don't suppress). Null too when the task isn't in view. UI-thread read.</summary>
+    private long? HeldNudgeVersion(string taskId)
+    {
+        var versions = new List<long?>();
+        var item = _all.FirstOrDefault(t => t.Id == taskId) ?? _rows.FirstOrDefault(r => r?.Id == taskId);
+        if (item is not null)
+            versions.Add(item.UpdatedMs);
+        foreach (var screen in _screens.OfType<TaskDetailScreen>().Where(s => s.Task.Id == taskId))
+            versions.Add(screen.Task.UpdatedMs);
+
+        if (versions.Count == 0 || versions.Any(v => v is null))
+            return null;
+        return versions.Min();
+    }
+
+    /// <summary>
+    /// Reconciles a single task the nudge scan flagged (#295) — another instance changed it. Refreshes the
+    /// list row in place (a per-task fetch folded into <c>_all</c>, never a full resync) when the task is in
+    /// the working set, and re-fetches any open Task Detail for it via the existing detail-refresh path.
+    /// Runs on the UI thread; both reconciles are independent and best-effort.
+    /// </summary>
+    private void ReconcileNudgedTask(string taskId)
+    {
+        if (_all.Any(t => t.Id == taskId) || _rows.Any(r => r?.Id == taskId))
+            RefreshNudgedRow(taskId);
+
+        // ToList: the detail refresh doesn't mutate _screens, but snapshot it anyway for a stable iterate.
+        foreach (var screen in _screens.OfType<TaskDetailScreen>().Where(s => s.Task.Id == taskId).ToList())
+            RefreshDetail(screen, taskId);
+    }
+
+    /// <summary>
+    /// Off-thread single-task fetch for a nudged list row (#295): pull the task's detail and overlay its
+    /// status + priority onto the existing row in place — the same <see cref="UpdateTaskRow"/> reconcile
+    /// Quick Updates uses — on the UI thread. We overlay onto the live <c>_all</c> item (keeping its
+    /// ParentId / list / status-type and its <b>real</b> assignee ids) rather than the projected detail,
+    /// because a <see cref="TaskDetail"/> is lossy relative to a list item (assignees by name only, id 0;
+    /// no parent) — see <see cref="TaskItemProjection"/>. Status and priority are exactly what a cross-tab
+    /// Quick Update changes, so this reflects the common case without degrading the row; other cross-tab
+    /// field changes (assignee-by-id, name, due) continue to surface via the normal delta poll. Re-checks
+    /// membership on the way back in (a background resync may have dropped the task), and swallows a fetch
+    /// failure (the nudge rides on an already-succeeded edit).
+    /// </summary>
+    private void RefreshNudgedRow(string taskId)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var detail = await _tasks.GetTaskDetailAsync(taskId);
+                var fresh = TaskItemProjection.FromDetail(detail);
+                Application.Invoke(() =>
+                {
+                    var existing = _all.FirstOrDefault(t => t.Id == taskId)
+                                   ?? _rows.FirstOrDefault(r => r?.Id == taskId);
+                    if (existing is null)
+                        return; // dropped by a background resync meanwhile — nothing to update.
+                    // Drop a stale out-of-order fetch: nudged rows are fire-and-forget and can overlap
+                    // across ticks (or race the delta poll), so an older in-flight fetch resolving last must
+                    // not clobber a newer version already on the row. When either side has no version we
+                    // can't order them — apply (best-effort). This is the row-path analogue of the detail
+                    // path's _refreshingDetail / Quick Updates' commit-generation guards.
+                    if (fresh.UpdatedMs is long fu && existing.UpdatedMs is long eu && fu < eu)
+                        return;
+                    var updated = existing with
+                    {
+                        StatusName = fresh.StatusName,
+                        StatusColor = fresh.StatusColor,
+                        PriorityLevel = fresh.PriorityLevel,
+                        PriorityName = fresh.PriorityName,
+                        PriorityColor = fresh.PriorityColor,
+                        // Carry the fresh activity stamp so the row's version reflects this reconcile (and a
+                        // later stale fetch is ordered out above). StatusType / ParentId / assignee-ids stay
+                        // from `existing` — a TaskDetail can't carry them (full-fidelity reconcile is #376);
+                        // they self-heal on the next authoritative delta poll.
+                        UpdatedMs = fresh.UpdatedMs ?? existing.UpdatedMs,
+                    };
+                    UpdateTaskRow(updated, sending: false);
+                });
+            }
+            catch
+            {
+                // Best-effort: a nudge-driven fetch failure must not surface — the edit already succeeded
+                // in the other instance, and the next authoritative refresh reconciles regardless.
             }
         });
     }
@@ -1855,127 +2075,37 @@ public sealed class TodoApp
             return;
         }
         _dispatching = true;
-        var oneOff = request.SessionMode == AgentSessionMode.OneOff;
-        var postToComments = request.PostToComments;
 
-        // Resolve the dispatch settings on the UI thread before the background hand-off (#91).
-        // Capture _agent locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap
-        // the instance mid-dispatch.
+        // Resolve the dispatch on the UI thread before the background hand-off (#91). Capture _agent
+        // locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap the instance
+        // mid-dispatch. The resolution + working-dir cache reconciliation + launch flows are the shared
+        // DispatchCoordinator's (#345), so this dashboard host and the single-task host behave
+        // identically; only the Flash / ShowScreen / guard seams differ.
         var agent = _agent;
-        var prompt = request.Prompt;
-        var settings = _config.AgentDispatch;
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        // An explicit pane pick (#95) is the override that wins over the configured mode via the
-        // existing ResolveEffectiveWorkingDirectory "cached" slot (which #96 also seeds); a blank field
-        // ⇒ null ⇒ the configured default. A hand-typed leading ~ is expanded (same as the F2 base-dir
-        // field) so it reaches the launcher as an absolute path. The task-derived candidate is the
-        // saved base working directory (#92); ResolveWorkingDirectory only uses it in TaskDerived mode,
-        // so Home/Fixed are unaffected. In TaskDerived mode *without* an explicit pick we also seed a
-        // per-task ./{custom-id} output-subdir instruction so each task's work stays separated inside
-        // the shared base dir (#98) — an explicit pick means the user chose their exact dir, so we
-        // don't force a subdir there (AgentDispatchSettings.UsesTaskDerivedOutput). The prompt template
-        // (#100) is threaded in as the composer's template (blank ⇒ default); its {outputDirInstruction}
-        // placeholder consumes the subdir.
-        var expandedPick = SettingsForm.ExpandHomePath(request.WorkingDirectory, home);
-        var chosenDir = expandedPick.Length == 0 ? null : expandedPick;
-        var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
-        var workingDir = settings.ResolveEffectiveWorkingDirectory(chosenDir, taskDerivedDirectory: baseDir, homeDirectory: home);
-        var useTaskDerived = settings.UsesTaskDerivedOutput(chosenDir);
-        var outputSubdir = useTaskDerived ? AgentPromptComposer.OutputSubdirectoryToken(detail) : null;
-        var template = settings.PromptTemplate;
+        var plan = DispatchCoordinator.Plan(_config.AgentDispatch, request, detail, _config.DefaultWorkingDirectory, home);
 
-        // Remember an explicit non-default pick for this task (#96) so the next dispatch pre-fills it,
-        // across relaunches; reverting to the default (blank field / pick == the configured mode dir)
-        // clears the entry. Done on the UI thread before the hand-off, and only persisted when the
-        // cache actually changed. resolvedDefault is what the mode would pick with no explicit dir,
-        // ~-expanded (as chosenDir is) so a Fixed dir stored as "~/foo" still matches an explicit pick
-        // of the same resolved path and clears the entry rather than persisting a redundant one.
-        var resolvedDefaultRaw = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: home);
-        var resolvedDefault = resolvedDefaultRaw is null ? null : SettingsForm.ExpandHomePath(resolvedDefaultRaw, home);
-        if (DispatchWorkingDirectoryCache.Update(_config.TaskWorkingDirectories, detail.Id, chosenDir, resolvedDefault))
+        // Remember an explicit non-default pick for this task (#96) so the next dispatch pre-fills it;
+        // reverting to the default clears the entry. Persist only when the cache actually changed.
+        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, detail.Id, plan))
             _configStore.Save(_config);
 
         // One-off mode (#94) runs claude -p as a background child of the app — no terminal window — with
         // a "thinking" spinner and the captured output rendered in a screen (#99). Interactive mode keeps
         // opening a real terminal below (an interactive session needs a live TTY).
-        if (oneOff)
+        if (plan.OneOff)
         {
-            RunBackgroundDispatch(detail, comments, agent, prompt, workingDir, template, outputSubdir, useTaskDerived, postToComments);
+            DispatchCoordinator.RunBackground(
+                agent, detail, comments, plan,
+                mount: ShowScreen,
+                clearDispatching: () => _dispatching = false);
             return;
         }
 
         Flash($"Launching Claude for '{detail.Name}'…");
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                // A task-derived launch starts in the base dir; create it on first use (#98) so
-                // Process.Start doesn't fail on a not-yet-existing path. Home/Fixed dirs and an explicit
-                // pane pick are the user's own (Home always exists; a Fixed dir / explicit pick is their
-                // choice — a browser pick always exists, and a hand-typed missing path surfaces a launch
-                // error rather than being silently created).
-                if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
-                    Directory.CreateDirectory(workingDir);
-
-                // Thread the per-dispatch launch-location override (#275) into this one interactive
-                // launch; the one-off branch returned above never reaches here, so it's always honoured.
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff, postToComments, launchLocation: request.LaunchLocation);
-                Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
-            }
-            catch (Exception ex)
-            {
-                Application.Invoke(() => { _dispatching = false; Flash($"Could not launch Claude: {Short(ex)}"); });
-            }
-        });
-    }
-
-    /// <summary>
-    /// Runs a one-off <c>claude -p</c> dispatch (#99) as a background child process: mounts an
-    /// <see cref="AgentRunScreen"/> over the detail view (through the shared screen seam), runs the
-    /// dispatch off the UI thread with a cancellation token wired to the screen's Esc, and marshals the
-    /// captured output — or a cancellation / failure — back to the screen via <see cref="Application.Invoke"/>.
-    /// The working-dir/subdir/template/post-to-Comments inputs were already resolved by the caller so a
-    /// one-off run's prompt matches what the interactive path would compose. Must run on the UI thread.
-    /// </summary>
-    private void RunBackgroundDispatch(
-        TaskDetail detail, IReadOnlyList<CommentItem> comments, AgentDispatcher agent, string prompt,
-        string? workingDir, string? template, string? outputSubdir, bool useTaskDerived, bool postToComments)
-    {
-        var cts = new CancellationTokenSource();
-        var screen = new AgentRunScreen(detail.Name);
-        screen.CancelRequested += (_, _) => cts.Cancel();
-        // Closing the screen (Esc after it finished) cancels any straggler and releases the token source.
-        ShowScreen(screen, () =>
-        {
-            cts.Cancel();
-            cts.Dispose();
-        });
-
-        // Stream the parsed output into the run screen as it arrives (#187): the runner reports display
-        // chunks off the UI thread, marshalled here onto the UI thread before appending.
-        var progress = new DelegateProgress<string>(chunk => Application.Invoke(() => screen.AppendOutput(chunk)));
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                // A task-derived launch starts in the base dir; create it on first use (#98), same as the
-                // interactive path, so the child process doesn't fail on a not-yet-existing path.
-                if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
-                    Directory.CreateDirectory(workingDir);
-
-                var run = await agent.DispatchBackgroundAsync(detail, comments, prompt, workingDir, template, outputSubdir, postToComments, progress, cts.Token);
-                Application.Invoke(() => { _dispatching = false; screen.ShowResult(AgentRunModel.FormatOutput(run), run.Success); });
-            }
-            catch (OperationCanceledException)
-            {
-                Application.Invoke(() => { _dispatching = false; screen.ShowCancelled("Run cancelled — the Claude process was stopped."); });
-            }
-            catch (Exception ex)
-            {
-                Application.Invoke(() => { _dispatching = false; screen.ShowResult($"Could not run Claude: {Short(ex)}", success: false); });
-            }
-        });
+        DispatchCoordinator.RunInteractive(
+            agent, detail, comments, plan,
+            report: message => { _dispatching = false; Flash(message); });
     }
 
 
@@ -2459,11 +2589,13 @@ public sealed class TodoApp
         // render path (Render → AddTask → TaskRowRenderer.Render) sets them per row.
         var (isContextParent, isForeignSubtask, isUnassignedSubtask) =
             ClassifyRowMarker(updated, _contextParents, VisibleForeignSubtasks());
-        var (text, badges) = TaskRowRenderer.Render(
+        var (text, badges, markerStart, markerLength) = TaskRowRenderer.Render(
             updated, _config.BadgeDisplay, _tasks.UserId, index < _depths.Count ? _depths[index] : 0,
             isContextParent, groupedBy: groupedBy, marker: marker,
             isForeignSubtask: isForeignSubtask, isUnassignedSubtask: isUnassignedSubtask);
         _badges[index] = badges;
+        if (index < _markerSpans.Count)
+            _markerSpans[index] = (markerStart, markerLength);
         // Mutating _display fires CollectionChanged (via the wrapper the source composes), which
         // redraws just this row; the parallel _badges entry is read during that redraw.
         _display[index] = sending ? $"{text}  (sending…)" : text;
@@ -2682,6 +2814,7 @@ public sealed class TodoApp
         _headerAttrs = new List<Attribute?>();
         _depths = new List<int>();
         _folds = new List<FoldState>();
+        _markerSpans = new List<(int, int)>();
 
         // A background color per group header, by the grouped field (status/list/priority/date). Null
         // entries (and the non-field pinned/tasks headers) fall back to the neutral bar. (#61)
@@ -2760,6 +2893,7 @@ public sealed class TodoApp
         _headerAttrs.Add(StatusBadgeListSource.HeaderAttr(hexColor) ?? StatusBadgeListSource.NeutralHeaderAttr);
         _depths.Add(0);
         _folds.Add(FoldState.None);
+        _markerSpans.Add((-1, 0));
     }
 
     private void AddSpacer()
@@ -2771,11 +2905,12 @@ public sealed class TodoApp
         _headerAttrs.Add(null);
         _depths.Add(0);
         _folds.Add(FoldState.None);
+        _markerSpans.Add((-1, 0));
     }
 
     private void AddTask(TaskItem task, int depth = 0, bool isContextParent = false, TaskField? groupedBy = null, FoldState fold = FoldState.None, bool isForeignSubtask = false, bool isUnassignedSubtask = false)
     {
-        var (text, badges) = TaskRowRenderer.Render(task, _config.BadgeDisplay, _tasks.UserId, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask, isUnassignedSubtask);
+        var (text, badges, markerStart, markerLength) = TaskRowRenderer.Render(task, _config.BadgeDisplay, _tasks.UserId, depth, isContextParent, groupedBy, FoldMarker(fold, _config.View.ShowSubtasks), isForeignSubtask, isUnassignedSubtask);
         _rows.Add(task);
         _kinds.Add(RowKind.Task);
         _display.Add(text);
@@ -2783,6 +2918,7 @@ public sealed class TodoApp
         _headerAttrs.Add(null);
         _depths.Add(depth);
         _folds.Add(fold);
+        _markerSpans.Add((markerStart, markerLength));
     }
 
     /// <summary>

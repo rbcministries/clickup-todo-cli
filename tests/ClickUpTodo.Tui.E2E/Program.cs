@@ -90,7 +90,7 @@ if (!string.IsNullOrWhiteSpace(singleTaskId))
 {
     var launchTask = await tasks.GetTaskDetailAsync(singleTaskId);
     var launchComments = await tasks.GetTaskCommentsAsync(singleTaskId);
-    new SingleTaskApp(tasks, config, launchTask, launchComments, browser).Run("ansi");
+    new SingleTaskApp(tasks, config, configStore, launchTask, launchComments, browser).Run("ansi");
     return;
 }
 
@@ -182,8 +182,11 @@ sealed class FakeClickUp(int taskCount, bool foreign = false) : HttpMessageHandl
     // response — and later detail GETs — echo the edited text (open → edit → save → reflected round-trip).
     // Guarded by _gate like _assignees. Seeded with the default that DetailJson used to hard-code (wide/
     // multi-byte prose so per-cell rendering has something to bite).
+    // Ends with a ClickUp task link so the link-rendering check (#317) has a Task-kind link in the
+    // Description pane to assert (the Comments pane already carries a Web-kind github URL). description_edit
+    // only asserts the "Call Center training" substring, so the trailing URL is safe for it.
     private string _description =
-        "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed";
+        "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed\n\nParent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread";
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {

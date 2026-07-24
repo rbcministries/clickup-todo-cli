@@ -116,6 +116,16 @@ public sealed record StatusOption(string Name, string? Color);
 public sealed record TaskAssignee(long Id, string Name);
 
 /// <summary>
+/// One custom-field value to set at create time (#368), destined for ClickUp's create-task
+/// <c>custom_fields: [{ id, value }]</c> array. <see cref="Id"/> is the field's definition id (from
+/// <see cref="CustomFieldDefinition.Id"/>); <see cref="Value"/> is the loosely-typed value already shaped
+/// for the field's type (string / number / bool / epoch-ms / option-id / option-id array), carried as a
+/// neutral <see cref="JsonElement"/> so nothing Kiota-shaped escapes into the domain — the facade turns it
+/// into the wire node. Produced by the pure <c>CustomFieldValueSerializer</c>.
+/// </summary>
+public sealed record CustomFieldValue(string Id, JsonElement Value);
+
+/// <summary>
 /// The fields for creating a task via <see cref="IClickUpClient.CreateTaskAsync"/> (#209) — the stable,
 /// domain-facing input to the create-task facade, so callers (the New Task screen, #213/#215) never touch
 /// the generated request type. Only <see cref="Name"/> is required; the rest are omitted from the request
@@ -130,6 +140,11 @@ public sealed record NewTaskRequest
     public IReadOnlyList<long> Assignees { get; init; } = [];
     public int? PriorityLevel { get; init; }
     public long? DueDateMs { get; init; }
+
+    /// <summary>Custom-field values to set atomically at create time (#368), sent as ClickUp's
+    /// <c>custom_fields</c> array. Empty (the default) sends no key, leaving today's create behaviour
+    /// unchanged. Populated by the New Task screen from the pure <c>CustomFieldValueSerializer</c>.</summary>
+    public IReadOnlyList<CustomFieldValue> CustomFields { get; init; } = [];
 }
 
 /// <summary>A unified task as shown in the to-do list, merged from either source endpoint.</summary>
@@ -204,12 +219,19 @@ public sealed record CustomFieldOption(string? Id, string? Name, double? OrderIn
 /// identity; <see cref="Value"/> is the loosely-typed value (varies by field type) surfaced as a
 /// neutral <see cref="JsonElement"/>, and <see cref="Options"/> are the drop-down/label option
 /// definitions used to map a selected id/orderindex to its label. Interpreting the value per type is
-/// the (pure, testable) job of <c>TaskDetailFormatter.CustomFieldValue</c>.</summary>
+/// the (pure, testable) job of <c>TaskDetailFormatter.CustomFieldValue</c>.
+/// <para><see cref="Id"/> is the field's stable ClickUp id (present on the source <c>CustomField</c>);
+/// it lets a value be matched id-precisely against a list's field <b>definitions</b>
+/// (<see cref="CustomFieldDefinition"/>, #249) — used by
+/// <c>ListMembershipMigration</c> (#365) to tell whether removing a list would strand this value. It
+/// is a trailing optional so existing constructor call sites are unaffected; null when the source
+/// omitted it.</para></summary>
 public sealed record CustomFieldItem(
     string Name,
     string? Type,
     JsonElement? Value = null,
-    IReadOnlyList<CustomFieldOption>? Options = null)
+    IReadOnlyList<CustomFieldOption>? Options = null,
+    string? Id = null)
 {
     /// <summary>The field's options, never null (empty when the field has none).</summary>
     public IReadOnlyList<CustomFieldOption> Options { get; init; } = Options ?? [];
@@ -252,10 +274,15 @@ public sealed record CustomFieldDefinition(
 /// <see cref="ReplyCount"/> is the number of replies in the comment's thread (#327), letting a caller
 /// tell a comment has a thread worth fetching without a probe request; it defaults to 0 (no thread, or a
 /// reply/create item that doesn't carry the count).
+/// <see cref="ParentCommentId"/> and <see cref="Replies"/> carry the loaded thread (#328):
+/// <see cref="ParentCommentId"/> is set on a <b>reply</b> item to the id of the comment it answers (null
+/// on a top-level comment), and <see cref="Replies"/> is a parent's loaded replies (oldest-first, empty
+/// when the comment has no thread or replies weren't loaded).
 /// </summary>
 public sealed record CommentItem(
     string Id, string Author, long? DateMs, string Text, bool Resolved, string? TaskId = null,
-    bool MentionsMe = false, IReadOnlyList<long>? MentionedUserIds = null, int ReplyCount = 0)
+    bool MentionsMe = false, IReadOnlyList<long>? MentionedUserIds = null, int ReplyCount = 0,
+    string? ParentCommentId = null, IReadOnlyList<CommentItem>? Replies = null)
 {
     /// <summary>The numeric ids of members @-mentioned in the comment's structured <c>comment</c> blocks
     /// (#167); never null (empty when the comment mentions no one, or the blocks weren't mapped).
@@ -264,6 +291,12 @@ public sealed record CommentItem(
     /// consumer relies on <see cref="CommentItem"/> value equality (the feed de-dups by <see cref="Id"/>);
     /// give this member structural equality before using it as a <c>HashSet</c>/dictionary key.</summary>
     public IReadOnlyList<long> MentionedUserIds { get; init; } = MentionedUserIds ?? [];
+
+    /// <summary>The comment's loaded reply thread (#328), oldest-first; never null (empty when the comment
+    /// has no replies or they weren't loaded). Same by-reference-equality caveat as
+    /// <see cref="MentionedUserIds"/> — no consumer relies on <see cref="CommentItem"/> value equality (the
+    /// feed de-dups by <see cref="Id"/>).</summary>
+    public IReadOnlyList<CommentItem> Replies { get; init; } = Replies ?? [];
 }
 
 /// <summary>

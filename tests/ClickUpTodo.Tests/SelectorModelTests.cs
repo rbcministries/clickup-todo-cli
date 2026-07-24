@@ -218,6 +218,59 @@ public sealed class SelectorModelTests
         Assert.Equal(["1"], locked);
     }
 
+    // ── PruneMarkersToSelection (#370: de-selected seed stops being marked) ──────
+
+    [Fact]
+    public void Prune_RemovesIdsNoLongerSelected_KeepsStillSelected_MutatesInPlace()
+    {
+        var distinguished = Ids("home", "gone");
+        var locked = Ids("me", "gone");
+        var selected = Ids("home", "me"); // "gone" has been de-selected
+
+        SelectorModel.PruneMarkersToSelection(selected, distinguished, locked);
+
+        Assert.Equal(["home"], distinguished);
+        Assert.Equal(["me"], locked);
+    }
+
+    [Fact]
+    public void Prune_EmptySelection_ClearsEveryMarkerSet()
+    {
+        var distinguished = Ids("home");
+        var locked = Ids("me");
+
+        SelectorModel.PruneMarkersToSelection(Ids(), distinguished, locked);
+
+        Assert.Empty(distinguished);
+        Assert.Empty(locked);
+    }
+
+    [Fact]
+    public void Prune_NoMarkerSets_IsNoOp()
+        // The params overload with nothing to prune must not throw.
+        => SelectorModel.PruneMarkersToSelection(Ids("1"));
+
+    [Fact]
+    public void Prune_ThenEmptyState_DeselectedDistinguishedTopUpRowIsUnmarked()
+    {
+        // #370 end-to-end at the model seam the View wires together: on a collect-mode removal the View
+        // removes the seeded home from the selection and prunes the marker set; a later empty-state
+        // render must NOT re-mark the same list when it re-surfaces in the top-frequent pool. Contrast
+        // with EmptyState_MarksDistinguishedTopUp_WhenPrimaryIsUnselectedCandidate, which shows the
+        // *un*-pruned input still marks — proving the renderer is unchanged and the prune is the fix.
+        var distinguished = Ids("home");
+        var selectedIds = Ids(); // seeded home de-selected
+
+        SelectorModel.PruneMarkersToSelection(selectedIds, distinguished);
+
+        var rows = SelectorModel.EmptyStateRows(
+            selected: [], lockedIds: Ids(), distinguishedIds: distinguished,
+            topFrequent: [I("home", "Inbox"), I("2", "Other")], capacity: 10);
+
+        Assert.Equal(new SelectorRow("home", "Inbox", false, false, false), rows[0]); // no stray (home)
+        Assert.Equal(new SelectorRow("2", "Other", false, false, false), rows[1]);
+    }
+
     // ── ShouldRunSearch (debounce coalescing) ────────────────────────────────────
 
     [Fact]
