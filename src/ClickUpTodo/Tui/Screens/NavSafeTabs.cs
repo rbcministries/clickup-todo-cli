@@ -30,12 +30,19 @@ internal sealed class NavSafeTabs : Tabs
     public NavSafeTabs()
     {
         // Replace the base Tabs' NavCommandHandler for each navigation command with an inert no-op that
-        // reports "not handled" (false) — never the crashing SelectNextTab/SelectPreviousTab. Every route
-        // that reaches this control with a nav command dispatches through InvokeCommand, so this one
+        // reports the key as *handled* (true) — never the crashing SelectNextTab/SelectPreviousTab. Every
+        // route that reaches this control with a nav command dispatches through InvokeCommand, so this one
         // registration disables native arrow navigation regardless of where the key originated.
-        AddCommand(Command.Up, static () => false);
-        AddCommand(Command.Down, static () => false);
-        AddCommand(Command.Left, static () => false);
-        AddCommand(Command.Right, static () => false);
+        //
+        // It must return true, not false: a bare arrow only reaches the tab control after the focused pane
+        // declined it (a TextView at a scroll edge, or the Task Tree ListView with the selection already at
+        // the top/bottom row). Returning false leaves the key unhandled, so Terminal.Gui falls through to
+        // default focus traversal — which lands on a tab header and silently switches tabs. That was the
+        // reported asymmetry: ↓ moved the tree selection (the ListView consumed it) but ↑ from the top row
+        // jumped to the previous tab. Consuming it here makes an arrow at a pane boundary a genuine no-op.
+        AddCommand(Command.Up, static () => true);
+        AddCommand(Command.Down, static () => true);
+        AddCommand(Command.Left, static () => true);
+        AddCommand(Command.Right, static () => true);
     }
 }

@@ -91,14 +91,43 @@ try:
     assert alive(), "process CRASHED driving bare ← past the first tab:\n" + visible()
 
     # The screen must still be a live, rendering detail view (not a frozen last frame): the
-    # app's own Ctrl+→ tab cycle should still advance to the Comments tab.
+    # app's own Ctrl+→ tab cycle should still work and the tab bar keep rendering.
     os.write(master, b"\x1b[1;5C")    # Ctrl+→ → next tab
     pump(1.2)
     assert alive(), "process died after boundary presses"
     v = visible()
-    assert "Comments" in v, "detail view unresponsive after boundary presses:\n" + v
+    assert "Stream" in v, "detail view unresponsive after boundary presses:\n" + v
 
-    print("ok — survived bare arrow navigation past both tab boundaries")
+    # ── Task Tree tab: ↑ must not switch tabs (was the reported asymmetry) ──────────
+    # Cycle with the app's own Ctrl+→ until the Task Tree tab (last of 5) is front-most and
+    # its lazy load has landed — position-independent so it doesn't depend on the current tab.
+    tree = ""
+    for _ in range(8):
+        os.write(master, b"\x1b[1;5C")   # Ctrl+→
+        pump(1.2)
+        tree = visible()
+        if "ANCESTOR" in tree and "CHILDONE" in tree:
+            break
+    assert "ANCESTOR" in tree and "CHILDONE" in tree, \
+        "Task Tree tab did not render its rows:\n" + tree
+
+    # ↓ moves the selection down through the subtasks (a ListView gesture) — the tree tokens
+    # stay on screen. ↑ from the top row previously bubbled to the stock Tabs and switched to
+    # the previous tab; with NavSafeTabs it's inert, so the tree stays put. Press ↑ well past
+    # the top and assert we're still on the Task Tree tab (its distinctive rows still shown).
+    for _ in range(3):
+        os.write(master, b"\x1b[B")      # bare Down
+        pump(0.3)
+    for _ in range(6):
+        os.write(master, b"\x1b[A")      # bare Up (past the top row)
+        pump(0.3)
+    assert alive(), "process died driving ↑/↓ on the Task Tree tab"
+    after = visible()
+    assert "ANCESTOR" in after and "CHILDONE" in after, \
+        "↑ on the Task Tree tab switched away from it (native tab-nav not disabled):\n" + after
+
+    print("ok — survived bare arrow navigation past both tab boundaries; "
+          "↑ on the Task Tree tab stays on the tab")
 finally:
     try: os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception: pass
