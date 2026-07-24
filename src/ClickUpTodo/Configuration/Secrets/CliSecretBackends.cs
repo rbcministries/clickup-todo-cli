@@ -38,6 +38,9 @@ public sealed class KeychainSecretBackend : ISecretBackend
 
     public bool TrySave(string secret)
     {
+        // `security add-generic-password` has no non-interactive stdin path, so the secret must go on
+        // argv (`-w <secret>`) — a transient same-user/root exposure in the process list. It's the only
+        // option on macOS and doesn't affect the at-rest goal (the value lands encrypted in the Keychain).
         var result = _runner.Run(SecretStorePlanner.MacKeychainCli,
             ["add-generic-password", "-a", _account, "-s", _service, "-w", secret, "-U"]);
         return result is not null && result.ExitCode == 0;

@@ -69,6 +69,23 @@ public sealed class TokenStoreSecureStorageTests : IDisposable
     }
 
     [Fact]
+    public void Migration_WhenSecureStoreUnavailable_KeepsFile_AndDisclosesInsecure()
+    {
+        // The safety property: a legacy plaintext token must NOT be deleted if it can't be migrated
+        // (transient store failure) — we keep serving it, disclosed as insecure, rather than lose it.
+        WriteLegacyPlaintext(Token);
+        var cli = new FakeSecretCli { Unavailable = true };
+        var store = new TokenStore(_dir, OSPlatformKind.Linux, CliPresent, cli);
+
+        var loaded = store.Load();
+
+        Assert.Equal(Token, loaded);
+        Assert.True(File.Exists(TokenPath));            // cleartext file preserved, not clobbered
+        Assert.Equal(0, cli.StoredCount);               // nothing made it into the (broken) store
+        Assert.False(store.IsSecure);
+    }
+
+    [Fact]
     public void Save_PurgesAnyLingeringLegacyPlaintextFile()
     {
         WriteLegacyPlaintext("pk_old_leftover");

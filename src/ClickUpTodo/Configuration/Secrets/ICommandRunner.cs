@@ -10,10 +10,13 @@ public sealed record CommandResult(int ExitCode, string StdOut, string StdErr);
 
 /// <summary>
 /// A thin seam for running a secret-store CLI (<c>security</c> on macOS, <c>secret-tool</c> on Linux)
-/// with an explicit argument vector and an optional secret fed over <b>stdin</b> — never argv, so a
-/// token can't leak into the process list. Abstracted so the CLI backends' argv construction and
-/// exit-code parsing are unit-testable with a fake runner; the real <see cref="Process"/> path lives
-/// behind this seam and can't run headlessly (mirrors <c>SystemBrowserLauncher</c> / <c>TerminalLauncher</c>).
+/// with an explicit argument vector and, where the CLI supports it, a secret fed over <b>stdin</b> so
+/// it can't leak into the process list. (Linux <c>secret-tool</c> reads over stdin; macOS
+/// <c>security add-generic-password</c> has no non-interactive stdin path and takes the value on argv —
+/// a transient, same-user exposure accepted as the only option there.) Abstracted so the CLI backends'
+/// argv construction and exit-code parsing are unit-testable with a fake runner; the real
+/// <see cref="Process"/> path lives behind this seam and can't run headlessly (mirrors
+/// <c>SystemBrowserLauncher</c> / <c>TerminalLauncher</c>).
 /// </summary>
 public interface ICommandRunner
 {
@@ -59,14 +62,20 @@ public sealed class ProcessCommandRunner : ICommandRunner
                 process.StandardInput.Close();
             }
 
+            // Drain stderr concurrently so a child that fills its stderr pipe buffer can't deadlock a
+            // blocking stdout read (secret-store output is tiny today, but the seam is generic).
+            var stderrTask = process.StandardError.ReadToEndAsync();
             var stdout = process.StandardOutput.ReadToEnd();
-            var stderr = process.StandardError.ReadToEnd();
+            var stderr = stderrTask.GetAwaiter().GetResult();
             process.WaitForExit();
             return new CommandResult(process.ExitCode, stdout, stderr);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception
             or InvalidOperationException or PlatformNotSupportedException or ObjectDisposedException or IOException)
         {
+            // Includes a broken-pipe IOException if the CLI exits before reading stdin. The caller
+            // (TokenStore.Save) treats a null result as "store unavailable" and degrades to the
+            // disclosed plaintext fallback — a failed secure write never silently loses the token.
             return null;
         }
     }
