@@ -1353,17 +1353,16 @@ public sealed class TodoApp
 
     /// <summary>
     /// The single "quit from the list root" chokepoint — the exit-confirmation seam (#298, #299
-    /// sub-issue 7). The dashboard's root is the main list; every "back"/quit there (the
-    /// <see cref="KeyAction.Quit"/> binding, Esc, Ctrl+C) routes here instead of calling
-    /// <c>Application.RequestStop</c> directly, so when #299 lands its confirmation modal plugs in here.
-    /// Today it preserves the existing behavior — stop the app.
+    /// sub-issue 7). <c>Esc</c> is the canonical Back key; the dashboard's root is the main list, so
+    /// Back <em>at the root</em> is a quit, and every quit path there (the <see cref="KeyAction.Quit"/>
+    /// binding, <c>Esc</c>, <c>Ctrl+C</c>) routes here instead of calling <c>Application.RequestStop</c>
+    /// directly, so when #299 lands its confirmation modal plugs in here. Today it preserves the existing
+    /// behavior — stop the app.
     /// <para>
-    /// Browser-style back/forward <em>across the dashboard's screen stack</em> (between visited tasks)
-    /// lands with the detail→detail navigation in #291, which the issue says drives this history; this
-    /// PR establishes the shared <see cref="NavigationHistory{T}"/> mechanism and the root/exit seam so
-    /// #291 plugs into one back-stack. The back/forward <b>key chord</b> itself is still being chosen —
-    /// the originally-planned Alt+←/→ collides with terminal-emulator pane navigation (e.g. Windows
-    /// Terminal), tracked on #298.
+    /// Per #298 the planned Alt+←/→ chord was dropped (it collides with terminal-emulator split-pane
+    /// navigation, e.g. Windows Terminal); <c>Esc</c> = Back is canonical and there is no Forward key.
+    /// Browser-style forward/back <em>across visited tasks</em> — and the <see cref="NavigationHistory{T}"/>
+    /// this PR lands as its mechanism — is driven by the detail→detail navigation in #291.
     /// </para>
     /// </summary>
     private void RequestExit() => Application.RequestStop();

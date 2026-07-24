@@ -8,13 +8,15 @@ this builds on exists.
 
 ## Goal
 
-Replace the shallow, one-deep screen handling with a real **back/forward navigation
-history**: `Alt+←` / `Alt+→` move through visited screens/tasks, `Esc` = back except at the
-**root**, and the root differs by launch mode (the **main list** in the dashboard; the
-**launch task** in single-task mode). History never navigates above the root; at the root,
-back/quit hands off to an **exit seam** where the exit-confirmation modal
-([#299](https://github.com/rbcministries/clickup-todo-cli/issues/299), sub-issue 7) will
-later plug in.
+Establish real **back/forward navigation history** to replace the shallow, one-deep screen
+handling: `Esc` = Back (the canonical key — see the key-chord decision below), and the **root**
+differs by launch mode (the **main list** in the dashboard; the **launch task** in single-task
+mode). History never navigates above the root; at the root, Back/quit hands off to an **exit
+seam** where the exit-confirmation modal
+([#299](https://github.com/rbcministries/clickup-todo-cli/issues/299), sub-issue 7) will later
+plug in. The reusable history *mechanism* (`NavigationHistory<T>`) is this issue's core artifact;
+its multi-entry forward/back is driven by the detail→detail navigation in
+[#291](https://github.com/rbcministries/clickup-todo-cli/issues/291).
 
 ## Why this shape
 
@@ -68,13 +70,15 @@ Both hosts now funnel every "quit from a root view" through a single `RequestExi
 Today `RequestExit()` preserves the existing behavior (stop the app); #299's confirmation modal
 plugs in here.
 
-## Key-chord decision (pending)
+## Key-chord decision (resolved)
 
-The originally-planned back/forward chord — **Alt+←/→** — collides with terminal-emulator split-
-pane navigation (e.g. Windows Terminal binds Alt+arrows to move focus between panes). The chord
-is therefore **being re-chosen with the maintainer** (alternatives posted on #298) before the
-back/forward key binding + host adoption land. `Esc` = back-at-root → exit is unaffected and is
-wired now.
+The originally-planned back/forward chord — **Alt+←/→** — was dropped: it collides with
+terminal-emulator split-pane navigation (e.g. Windows Terminal binds Alt+arrows to move focus
+between panes). **Resolution (maintainer, #298): `Esc` is the canonical Back key, and there is no
+Forward key.** `Esc` walks back one screen and, at the per-launch-mode root (main list / launch
+task), Back = Quit via `RequestExit()`. Forward/back *across visited tasks* — the multi-entry use
+of `NavigationHistory` — is driven by the detail→detail navigation in
+[#291](https://github.com/rbcministries/clickup-todo-cli/issues/291) and lands there.
 
 ## Deferred (out of scope, tracked)
 

@@ -337,10 +337,11 @@ public sealed class SingleTaskApp
 
     /// <summary>
     /// The single "quit from the launch-task root" chokepoint — the exit-confirmation seam (#298, #299
-    /// sub-issue 7). Today it stops the app (quits the tab, since single-task mode has no list to return
-    /// to); when #299 lands, its confirmation modal plugs in here instead of quitting directly. The
-    /// browser-style back/forward <b>key chord</b> that also routes here is still being chosen — the
-    /// originally-planned Alt+←/→ collides with terminal-emulator pane navigation (tracked on #298).
+    /// sub-issue 7). <c>Esc</c> is the canonical Back key; the launch task is this mode's root, so Back
+    /// <em>at the root</em> is a quit. Today it stops the app (quits the tab, since single-task mode has
+    /// no list to return to); when #299 lands, its confirmation modal plugs in here instead of quitting
+    /// directly. Per #298 the planned Alt+←/→ chord was dropped (it collides with terminal-emulator
+    /// split-pane navigation) and there is no Forward key; forward/back across visited tasks rides #291.
     /// </summary>
     private void RequestExit() => Application.RequestStop();
 
