@@ -1763,7 +1763,7 @@ public sealed class TodoApp
             try
             {
                 var detail = await _tasks.GetTaskDetailAsync(taskId);
-                var comments = await _tasks.GetTaskCommentsAsync(taskId);
+                var comments = await _tasks.GetTaskCommentsWithRepliesAsync(taskId);
                 Application.Invoke(() =>
                 {
                     if (ActiveScreen != requester)
@@ -1846,7 +1846,7 @@ public sealed class TodoApp
             try
             {
                 var detail = await _tasks.GetTaskDetailAsync(taskId);
-                var comments = await _tasks.GetTaskCommentsAsync(taskId);
+                var comments = await _tasks.GetTaskCommentsWithRepliesAsync(taskId);
                 Application.Invoke(() =>
                 {
                     // Only apply if this screen is still mounted (it may sit beneath a stacked Help).
