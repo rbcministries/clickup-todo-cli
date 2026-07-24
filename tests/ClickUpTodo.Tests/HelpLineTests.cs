@@ -29,8 +29,8 @@ public sealed class HelpLineTests
     public void Format_MainList_RendersTheFullFooter()
     {
         const string expected =
-            "↑/↓ move · →| next section · Ctrl+U quick update · ↩ detail · Ctrl+O open by id · Ctrl+↩ new tab · Ctrl+N ➕ · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
-            + "F1 help · F2 ⚙ · F3 filter/sort/group · F4 subtasks · F5 ↻ · F6 badges · F12 👁✅ · "
+            "↑/↓ move · →| next section · Ctrl+U quick update · ↩ detail · Ctrl+O 🗁 by ID · Ctrl+↩ new tab · Ctrl+N ➕ · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E feed · "
+            + "F1 ℹ · F2 ⚙ · F3 ⧩ ▼▲ ⛚ · F4 subtasks · F5 ↻ · F6 badges · F12 👁✅ · "
             + "→/← expand/collapse · Ctrl+→/← all · Ctrl+Q quit · type to search";
 
         Assert.Equal(expected, HelpLine.Format(HelpItemSets.MainList));
@@ -38,12 +38,12 @@ public sealed class HelpLineTests
 
     [Fact]
     public void MainList_CarriesCtrlOQuickOpen()
-        => Assert.Contains(new HelpItem("Ctrl+O", "open by id"), HelpItemSets.MainList);
+        => Assert.Contains(new HelpItem("Ctrl+O", "🗁 by ID"), HelpItemSets.MainList);
 
     [Fact]
     public void Format_QuickOpen_RendersOpenHelpCancel()
         => Assert.Equal(
-            "Enter/Open open · F1 help · Esc cancel",
+            "Enter/Open open · F1 ℹ · Esc cancel",
             HelpLine.Format(HelpItemSets.QuickOpen));
 
     // The New Task action is on Ctrl+N; its label tightened to the ➕ glyph in #343 (key hint kept).
@@ -79,8 +79,8 @@ public sealed class HelpLineTests
     [Fact]
     public void QuickOpen_UsesCtrlO_OnBothListAndDetail()
     {
-        var listKey = HelpItemSets.MainList.Single(i => i.Label == "open by id").Key;
-        var detailKey = HelpItemSets.Detail.Single(i => i.Label == "open by id").Key;
+        var listKey = HelpItemSets.MainList.Single(i => i.Label == "🗁 by ID").Key;
+        var detailKey = HelpItemSets.Detail.Single(i => i.Label == "🗁 by ID").Key;
 
         Assert.Equal("Ctrl+O", listKey);
         Assert.Equal(listKey, detailKey);
@@ -103,13 +103,13 @@ public sealed class HelpLineTests
     [Fact]
     public void Format_NewTask_RendersMoveSaveCancelHelp()
         => Assert.Equal(
-            "Tab Name/Descr/Assignees/List · Enter/Save saves · Esc cancels · F1 help",
+            "Tab Name/Descr/Assignees/List · Enter/Save saves · Esc cancels · F1 ℹ",
             HelpLine.Format(HelpItemSets.NewTask));
 
     [Fact]
     public void Format_NotificationsFeed_RendersMoveMentionsHelpAndBack()
         => Assert.Equal(
-            "↑/↓ move · Enter open · F3 mentions only · F5 ↻ · F6 activity · F12 👁✅ · Ctrl+E list · F1 help · Esc back",
+            "↑/↓ move · Enter open · F3 mentions only · F5 ↻ · F6 activity · F12 👁✅ · Ctrl+E list · F1 ℹ · Esc back",
             HelpLine.Format(HelpItemSets.NotificationsFeed));
 
     [Fact]
@@ -168,7 +168,7 @@ public sealed class HelpLineTests
     [Theory]
     [MemberData(nameof(ScreenSets))]
     public void EveryScreenSet_OffersF1Help(IReadOnlyList<HelpItem> set)
-        => Assert.Contains(set, i => i.Key == "F1" && i.Label == "help");
+        => Assert.Contains(set, i => i.Key == "F1" && i.Label == "ℹ");
 
     [Theory]
     [MemberData(nameof(ScreenSets))]
@@ -203,15 +203,23 @@ public sealed class HelpLineTests
     [Fact]
     public void Fit_Truncates_KeepingLeadingPrefixThenFallbackLast()
     {
-        // At 70 columns the main-list footer fits its first three items plus the reserved fallback
-        // ("↑/↓ move · →| next section · Ctrl+U quick update · F1 Help + Shortcuts" = 70 cols). The
-        // wider "Ctrl+U quick update" item (19 cols, #290) leaves room for one fewer item than the old
-        // "␣ status" (8 cols) did, so the kept prefix is three items rather than four.
-        var result = HelpLine.Fit(HelpItemSets.MainList, width: 70, Cols);
+        // At a width too narrow for the full footer, Fit keeps the longest leading prefix of the set
+        // that still fits alongside the reserved F1 fallback, with the fallback appended last. The exact
+        // prefix length turns on the (glyph-dependent) column widths of the leading items — since #343
+        // the fallback is the short "F1 ℹ" glyph rather than "F1 Help + Shortcuts" — so this pins the
+        // truncation *invariants* rather than a hard count: fallback last, a genuine leading prefix,
+        // within width, and maximal (the next item would overflow).
+        const int width = 70;
+        var result = HelpLine.Fit(HelpItemSets.MainList, width, Cols);
+        var kept = result.Take(result.Count - 1).ToList();
 
         Assert.Equal(HelpLine.HelpFallback, result[^1]);
-        Assert.Equal(HelpItemSets.MainList.Take(3), result.Take(result.Count - 1));
-        Assert.True(Cols(HelpLine.Format(result)) <= 70);
+        Assert.True(Cols(HelpLine.Format(result)) <= width);
+        Assert.NotEmpty(kept);
+        Assert.Equal(HelpItemSets.MainList.Take(kept.Count), kept);
+        // Maximal: appending the next set item (with the fallback still reserved) would overflow.
+        List<HelpItem> oneMore = [.. kept, HelpItemSets.MainList[kept.Count], HelpLine.HelpFallback];
+        Assert.True(Cols(HelpLine.Format(oneMore)) > width);
     }
 
     [Fact]
@@ -230,7 +238,8 @@ public sealed class HelpLineTests
     [Fact]
     public void Fit_VeryNarrow_ShowsOnlyTheFallback()
     {
-        // Narrower than the 19-column fallback itself: it's still returned (and clipped by the host).
+        // Too narrow to fit even the first item beside the reserved F1 fallback, so only the fallback
+        // survives (the "only F1 fits" case).
         var result = HelpLine.Fit(HelpItemSets.MainList, width: 10, Cols);
 
         HelpItem[] onlyFallback = [HelpLine.HelpFallback];
