@@ -1,5 +1,8 @@
 using ClickUpTodo.Tui;
 using Terminal.Gui.Drawing;
+using Terminal.Gui.Input;
+using Point = System.Drawing.Point;
+using Rectangle = System.Drawing.Rectangle;
 
 namespace ClickUpTodo.Tests;
 
@@ -170,5 +173,245 @@ public sealed class DetailPaneViewTests
         }
 
         Assert.Equal(2, separatorLines);
+    }
+
+    // ── Mouse link activation (#318) ───────────────────────────────────────────────────────────────
+    // These drive a real, laid-out DetailPaneView through the public View.NewMouseEvent entry point —
+    // no Application / driver needed, since nothing is drawn. They therefore pin the actual Terminal.Gui
+    // behaviour the click design rests on: that the base view maps a click to a text position and reports
+    // it in unwrapped (source-line) coordinates, that it does *not* do so for a modified click, and the
+    // two ways it clamps a click outside the text onto a position that would otherwise read as a hit.
+
+    private const string TaskUrl = "https://app.clickup.com/t/abc123";
+    private const string WebUrl = "https://example.com/docs";
+
+    // A pane laid out at a fixed size (so wrapping is deterministic) with its activation requests captured.
+    private static (DetailPaneView Pane, List<LinkActivationRequest> Requests) ClickablePane(
+        string body, int width = 30, int height = 10)
+    {
+        var pane = new DetailPaneView { Frame = new Rectangle(0, 0, width, height) };
+        pane.SetBody(body, Sep);
+        // SetBody's TextView.Load leaves the model *unwrapped* until Terminal.Gui's own draw/viewport pass
+        // re-wraps it — which always happens before a user can click, but never here, because a unit test
+        // has no driver to draw with. Toggling WordWrap performs that wrap, so these clicks land on the
+        // wrapped layout a user actually sees.
+        pane.WordWrap = false;
+        pane.WordWrap = true;
+        var requests = new List<LinkActivationRequest>();
+        pane.LinkActivationRequested += (_, request) => requests.Add(request);
+        return (pane, requests);
+    }
+
+    private static void Click(DetailPaneView pane, Point at, bool ctrl = false)
+        => pane.NewMouseEvent(new Mouse
+        {
+            Position = at,
+            Flags = MouseFlags.LeftButtonClicked | (ctrl ? MouseFlags.Ctrl : MouseFlags.None),
+        });
+
+    // The viewport (column, row) of `needle` in the pane's wrapped display lines. Positions are derived
+    // from the real wrapped layout rather than hard-coded, and converted char index → cell index →
+    // column so a line carrying wide runes is still addressed by the column a terminal would report.
+    private static Point Locate(DetailPaneView pane, string needle)
+    {
+        var lines = pane.GetAllLines();
+        for (var row = 0; row < lines.Count; row++)
+        {
+            var cells = lines[row];
+            var charIndex = Cell.ToString(cells).IndexOf(needle, StringComparison.Ordinal);
+            if (charIndex < 0)
+                continue;
+
+            var chars = 0;
+            var cellIndex = 0;
+            while (cellIndex < cells.Count && chars < charIndex)
+                chars += cells[cellIndex++].Grapheme?.Length ?? 0;
+            return new Point(pane.GetColumnsWidth(cells.Take(cellIndex).ToList()), row);
+        }
+
+        throw new InvalidOperationException($"'{needle}' is not in the pane's wrapped lines.");
+    }
+
+    [Fact]
+    public void Click_OnATaskLink_RequestsTaskDetail()
+    {
+        var (pane, requests) = ClickablePane($"Related: {TaskUrl} ok", width: 60);
+
+        Click(pane, Locate(pane, TaskUrl));
+
+        var request = Assert.Single(requests);
+        Assert.Equal(LinkAction.OpenTaskDetail, request.Action);
+        Assert.Equal(TaskUrl, request.Url);
+        Assert.Equal(LinkKind.Task, request.Span.Kind);
+        Assert.Equal("abc123", request.Span.TaskId);
+    }
+
+    [Fact]
+    public void Click_OnAWebLink_RequestsTheBrowser()
+    {
+        var (pane, requests) = ClickablePane($"See {WebUrl} now", width: 60);
+
+        Click(pane, Locate(pane, WebUrl));
+
+        var request = Assert.Single(requests);
+        Assert.Equal(LinkAction.OpenInBrowser, request.Action);
+        Assert.Equal(WebUrl, request.Url);
+    }
+
+    [Fact]
+    public void CtrlClick_OnEitherKind_RequestsTheBrowser()
+    {
+        // Ctrl+click is the case a stale caret silently gets wrong: TextView only maps positions for an
+        // *unmodified* click, so clicking a web link first and then Ctrl+clicking the task link would
+        // report the web link's position if the pane didn't re-resolve the position itself.
+        var (pane, requests) = ClickablePane($"web {WebUrl}\ntask {TaskUrl}", width: 60);
+
+        Click(pane, Locate(pane, WebUrl));
+        Click(pane, Locate(pane, TaskUrl), ctrl: true);
+
+        Assert.Equal(2, requests.Count);
+        Assert.Equal(LinkAction.OpenInBrowser, requests[0].Action);
+        Assert.Equal(WebUrl, requests[0].Url);
+        // The Ctrl+click resolved the *task* link (not the previously clicked web link) and, being
+        // Ctrl-modified, asks for the browser rather than the in-app detail.
+        Assert.Equal(LinkAction.OpenInBrowser, requests[1].Action);
+        Assert.Equal(TaskUrl, requests[1].Url);
+        Assert.Equal(LinkKind.Task, requests[1].Span.Kind);
+    }
+
+    [Fact]
+    public void Click_OnOrdinaryText_ActivatesNothing()
+    {
+        var (pane, requests) = ClickablePane($"Related: {TaskUrl} tail", width: 60);
+
+        Click(pane, Locate(pane, "Related"));
+        Click(pane, Locate(pane, "tail"));
+
+        Assert.Empty(requests);
+    }
+
+    [Fact]
+    public void Click_JustPastALinksLastCharacter_ActivatesNothing()
+    {
+        // The exclusive end of a span — one column right of the URL's last character.
+        var (pane, requests) = ClickablePane($"See {WebUrl} now", width: 60);
+        var start = Locate(pane, WebUrl);
+
+        Click(pane, new Point(start.X + WebUrl.Length, start.Y));
+
+        Assert.Empty(requests);
+    }
+
+    [Fact]
+    public void Click_OnASeparatorRule_ActivatesNothing()
+    {
+        var (pane, requests) = ClickablePane($"See {WebUrl}\n{Sep}\nmore", width: 60);
+
+        Click(pane, new Point(2, 1));
+
+        Assert.Empty(requests);
+    }
+
+    [Fact]
+    public void Click_BelowTheLastLine_ActivatesNothing()
+    {
+        // A tall pane over a short body whose last line *ends* with a link: the base view clamps a click
+        // in the empty area onto the last line at the clicked column, which would land inside that URL.
+        var (pane, requests) = ClickablePane($"ends with {WebUrl}", width: 60, height: 12);
+        var link = Locate(pane, WebUrl);
+
+        Click(pane, new Point(link.X + 2, link.Y + 5));
+
+        Assert.Empty(requests);
+    }
+
+    [Fact]
+    public void Click_RightOfAWrappedRowsText_ActivatesNothing()
+    {
+        // 30 columns wide, so "short " occupies its own row and the URL wraps below it. A click in the
+        // blank space right of "short " clamps onto the row's end — the URL's first character.
+        var (pane, requests) = ClickablePane($"short {TaskUrl} tail", width: 30);
+        var row = Locate(pane, "short").Y;
+
+        Click(pane, new Point(25, row));
+
+        Assert.Empty(requests);
+    }
+
+    [Fact]
+    public void Click_OnTheContinuationOfAWrappedLink_ResolvesTheWholeLink()
+    {
+        // At 30 columns the URL doesn't fit on the row it starts on, so its tail spills onto the next one.
+        // Clicking that continuation must still resolve the whole span (this is the case a per-display-row
+        // re-scan would get wrong: the row on its own holds only a fragment of the URL).
+        var (pane, requests) = ClickablePane($"short {TaskUrl} tail", width: 30);
+        var urlRow = Locate(pane, "https://app.clickup.com").Y;
+        var continuation = Cell.ToString(pane.GetLine(urlRow + 1));
+        Assert.DoesNotContain("https://", continuation, StringComparison.Ordinal);
+
+        Click(pane, new Point(1, urlRow + 1));
+
+        var request = Assert.Single(requests);
+        Assert.Equal(TaskUrl, request.Url);
+        Assert.Equal(LinkAction.OpenTaskDetail, request.Action);
+    }
+
+    [Fact]
+    public void Click_AfterScrolling_ResolvesTheLinkUnderTheClick()
+    {
+        var body = string.Join(
+            '\n', "filler one", "filler two", "filler three", $"link {WebUrl}", "after", "and after that");
+        var (pane, requests) = ClickablePane(body, width: 60, height: 3);
+        var link = Locate(pane, WebUrl);
+
+        // Scroll down, then click the link where it now sits in the viewport. (Terminal.Gui clamps the
+        // scroll offset to the content, so the row it lands on is read back rather than assumed.)
+        pane.ScrollTo(new Point(0, link.Y));
+        Assert.True(pane.Viewport.Y > 0, "the pane should have scrolled");
+        Click(pane, new Point(link.X, link.Y - pane.Viewport.Y));
+
+        var request = Assert.Single(requests);
+        Assert.Equal(WebUrl, request.Url);
+    }
+
+    [Fact]
+    public void Click_OnALinkPrecededByWideRunes_ResolvesByGrapheme()
+    {
+        // Terminal.Gui reports a click position as a cell index, and each emoji is one cell but two
+        // UTF-16 chars — so a char-offset-for-cell-index mix-up would land two chars into the URL (or
+        // miss it). Locate() addresses the URL by its real column, as a terminal would.
+        var (pane, requests) = ClickablePane($"ab \U0001F600\U0001F600 {WebUrl} end", width: 60);
+
+        Click(pane, Locate(pane, WebUrl));
+
+        var request = Assert.Single(requests);
+        Assert.Equal(WebUrl, request.Url);
+    }
+
+    [Fact]
+    public void DoubleClick_DoesNotActivate()
+    {
+        // A double-click is the base view's select-word gesture; activation is a single click only.
+        var (pane, requests) = ClickablePane($"See {WebUrl} now", width: 60);
+        var at = Locate(pane, WebUrl);
+
+        pane.NewMouseEvent(new Mouse { Position = at, Flags = MouseFlags.LeftButtonDoubleClicked });
+
+        Assert.Empty(requests);
+    }
+
+    [Fact]
+    public void Click_AfterAReload_UsesTheNewBody()
+    {
+        // SetBody is called repeatedly (a refresh / an activity-order toggle re-renders in place), so the
+        // lines a click hit-tests against must be the ones currently loaded.
+        var (pane, requests) = ClickablePane($"first {WebUrl}", width: 60);
+        pane.SetBody($"second {TaskUrl}", Sep);
+
+        Click(pane, Locate(pane, TaskUrl));
+
+        var request = Assert.Single(requests);
+        Assert.Equal(TaskUrl, request.Url);
+        Assert.Equal(LinkAction.OpenTaskDetail, request.Action);
     }
 }
