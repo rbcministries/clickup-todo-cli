@@ -99,6 +99,11 @@ public sealed class TodoApp
     // The items currently rendered on _helpLabel (post-Fit), cached so a footer click (#289) can
     // hit-test the click column against exactly what's on screen at the present width.
     private IReadOnlyList<HelpItem> _helpFooter = HelpItemSets.MainList;
+    // The main list's command shortcuts, dispatched through the central (context, action) → key table
+    // (#355) so the key for each command and its footer label share one source of truth (Keybindings /
+    // HelpItemSets). Movement/arrow/Tab keys and undisplayed aliases (Ctrl+R, Ctrl+C, Esc quit) stay in
+    // OnListKey — they are intentionally not table-governed footer commands.
+    private KeybindingDispatcher _listKeys = null!;
     private RefreshService _refresh = null!;
     // The stack of full-window screens swapped in over the list (Settings / status picker / detail /
     // Help). The top is visible + focused; any beneath it are mounted-but-hidden so we can return to
@@ -456,6 +461,7 @@ public sealed class TodoApp
             Height = Dim.Fill(2),
         };
         _list = new ListView { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill() };
+        _listKeys = BuildListKeyDispatcher();
         _list.KeyDown += OnListKey;
         _list.MouseEvent += OnListMouse;
         _frame.Add(_list);
@@ -485,53 +491,54 @@ public sealed class TodoApp
 
     // ── Key handling ─────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// The main list's command shortcuts, wired through the central <see cref="Keybindings"/> table
+    /// (#355): each action's key is resolved from the table, so this method is the only place the
+    /// main-list bindings and their footer labels (<see cref="HelpItemSets.MainList"/>) are tied
+    /// together. Movement (arrows/Tab), the subtasks-guarded fold keys, and the undisplayed aliases
+    /// (Ctrl+R, Ctrl+C, Esc quit) are not footer commands and stay literal in <see cref="OnListKey"/>.
+    /// </summary>
+    private KeybindingDispatcher BuildListKeyDispatcher()
+        => new KeybindingDispatcher(ScreenContext.MainList)
+            .On(KeyAction.QuickUpdate, OpenQuickUpdates)   // #159/#290, standardized to Ctrl+U
+            .On(KeyAction.OpenDetail, OpenDetail)
+            .On(KeyAction.QuickOpen, OpenQuickOpen)         // #303
+            .On(KeyAction.NewTask, OpenNewTask)             // #213
+            .On(KeyAction.OpenInBrowser, OpenInBrowser)
+            .On(KeyAction.TogglePin, TogglePin)
+            .On(KeyAction.Feed, OpenNotificationsFeed)      // List ↔ Feed
+            .On(KeyAction.Help, ShowHelp)
+            .On(KeyAction.Settings, OpenSettings)
+            .On(KeyAction.FilterSortGroup, OpenViewSettings)
+            .On(KeyAction.CycleSubtasks, CycleSubtaskView)
+            .On(KeyAction.Refresh, RequestRefresh)          // F5 (Ctrl+R is the undisplayed alias below)
+            .On(KeyAction.CycleBadges, CycleBadgeDisplay)
+            .On(KeyAction.ToggleCompleted, CycleShowCompleted)
+            .On(KeyAction.Quit, () => Application.RequestStop());
+
     private void OnListKey(object? sender, Key key)
     {
-        // Command shortcuts use modifier chords / function keys. Bare letters are left unhandled so
-        // the ListView's type-ahead search (keyed on the task title) keeps working.
+        // Table-driven command shortcuts first (#355). Bare letters never match (the table only holds
+        // chords / function keys), so the ListView's type-ahead search (keyed on the task title) is
+        // untouched.
+        if (_listKeys.Dispatch(key))
+        {
+            key.Handled = true;
+            return;
+        }
+
+        // Undisplayed aliases and movement — intentionally not table-governed footer commands.
         if (key.IsCtrl)
         {
             switch (key.KeyCode & ~KeyCode.CtrlMask)
             {
-                case KeyCode.P:
-                    key.Handled = true;
-                    TogglePin();
-                    break;
                 case KeyCode.R:
                     // Ctrl+R is the (undisplayed) alias for the F5 refresh key.
                     key.Handled = true;
                     RequestRefresh();
                     break;
-                case KeyCode.N:
-                    // Ctrl+N opens the New Task compose screen (#213). A chord, since bare letters are
-                    // reserved for the ListView type-ahead (#12).
-                    key.Handled = true;
-                    OpenNewTask();
-                    break;
-                case KeyCode.O:
-                    // Ctrl+O opens the quick-open-by-id entry surface (#303). A chord (bare letters are
-                    // reserved for the ListView type-ahead, #12).
-                    key.Handled = true;
-                    OpenQuickOpen();
-                    break;
-                case KeyCode.U:
-                    // Ctrl+U opens Quick Updates (#159). Standardized to match Task Detail's Ctrl+U so
-                    // the same action uses the same key everywhere (#290); the old bare-Space launcher is
-                    // retired, freeing Space for the ListView type-ahead (#12).
-                    key.Handled = true;
-                    OpenQuickUpdates();
-                    break;
-                case KeyCode.E:
-                    // Ctrl+E toggles to the mentions & comments feed — List ↔ Feed navigation.
-                    key.Handled = true;
-                    OpenNotificationsFeed();
-                    break;
-                case KeyCode.B:
-                    key.Handled = true;
-                    OpenInBrowser();
-                    break;
-                case KeyCode.Q:
-                case KeyCode.C: // Ctrl+C as a quit alias (the OS/terminal may intercept it first).
+                case KeyCode.C:
+                    // Ctrl+C as a quit alias (the OS/terminal may intercept it first).
                     key.Handled = true;
                     Application.RequestStop();
                     break;
@@ -558,10 +565,6 @@ public sealed class TodoApp
 
         switch (key.KeyCode)
         {
-            case KeyCode.Enter:
-                key.Handled = true;
-                OpenDetail();
-                break;
             case KeyCode.Tab:
                 key.Handled = true;
                 JumpToNextSection();
@@ -583,37 +586,10 @@ public sealed class TodoApp
                 }
                 break;
             case KeyCode.Esc:
+                // Esc quits from the main list — an undisplayed alias for Ctrl+Q (the footer shows the
+                // Ctrl+Q command). The quit-vs-back drift is tracked separately (#298/#299).
                 key.Handled = true;
                 Application.RequestStop();
-                break;
-            case KeyCode.F1:
-                key.Handled = true;
-                ShowHelp();
-                break;
-            case KeyCode.F2:
-                key.Handled = true;
-                OpenSettings();
-                break;
-            case KeyCode.F3:
-                key.Handled = true;
-                OpenViewSettings();
-                break;
-            case KeyCode.F4:
-                key.Handled = true;
-                CycleSubtaskView();
-                break;
-            case KeyCode.F5:
-                // F5 is the refresh key (icon ↻); Ctrl+R is its undisplayed alias.
-                key.Handled = true;
-                RequestRefresh();
-                break;
-            case KeyCode.F6:
-                key.Handled = true;
-                CycleBadgeDisplay();
-                break;
-            case KeyCode.F12:
-                key.Handled = true;
-                CycleShowCompleted();
                 break;
         }
     }
