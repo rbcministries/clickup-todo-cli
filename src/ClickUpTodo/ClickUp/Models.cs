@@ -204,12 +204,19 @@ public sealed record CustomFieldOption(string? Id, string? Name, double? OrderIn
 /// identity; <see cref="Value"/> is the loosely-typed value (varies by field type) surfaced as a
 /// neutral <see cref="JsonElement"/>, and <see cref="Options"/> are the drop-down/label option
 /// definitions used to map a selected id/orderindex to its label. Interpreting the value per type is
-/// the (pure, testable) job of <c>TaskDetailFormatter.CustomFieldValue</c>.</summary>
+/// the (pure, testable) job of <c>TaskDetailFormatter.CustomFieldValue</c>.
+/// <para><see cref="Id"/> is the field's stable ClickUp id (present on the source <c>CustomField</c>);
+/// it lets a value be matched id-precisely against a list's field <b>definitions</b>
+/// (<see cref="CustomFieldDefinition"/>, #249) — used by
+/// <c>ListMembershipMigration</c> (#365) to tell whether removing a list would strand this value. It
+/// is a trailing optional so existing constructor call sites are unaffected; null when the source
+/// omitted it.</para></summary>
 public sealed record CustomFieldItem(
     string Name,
     string? Type,
     JsonElement? Value = null,
-    IReadOnlyList<CustomFieldOption>? Options = null)
+    IReadOnlyList<CustomFieldOption>? Options = null,
+    string? Id = null)
 {
     /// <summary>The field's options, never null (empty when the field has none).</summary>
     public IReadOnlyList<CustomFieldOption> Options { get; init; } = Options ?? [];
