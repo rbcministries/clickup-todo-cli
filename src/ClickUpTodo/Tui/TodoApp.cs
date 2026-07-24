@@ -2045,127 +2045,37 @@ public sealed class TodoApp
             return;
         }
         _dispatching = true;
-        var oneOff = request.SessionMode == AgentSessionMode.OneOff;
-        var postToComments = request.PostToComments;
 
-        // Resolve the dispatch settings on the UI thread before the background hand-off (#91).
-        // Capture _agent locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap
-        // the instance mid-dispatch.
+        // Resolve the dispatch on the UI thread before the background hand-off (#91). Capture _agent
+        // locally so a concurrent F2 settings-save (which rebuilds _agent) can't swap the instance
+        // mid-dispatch. The resolution + working-dir cache reconciliation + launch flows are the shared
+        // DispatchCoordinator's (#345), so this dashboard host and the single-task host behave
+        // identically; only the Flash / ShowScreen / guard seams differ.
         var agent = _agent;
-        var prompt = request.Prompt;
-        var settings = _config.AgentDispatch;
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        // An explicit pane pick (#95) is the override that wins over the configured mode via the
-        // existing ResolveEffectiveWorkingDirectory "cached" slot (which #96 also seeds); a blank field
-        // ⇒ null ⇒ the configured default. A hand-typed leading ~ is expanded (same as the F2 base-dir
-        // field) so it reaches the launcher as an absolute path. The task-derived candidate is the
-        // saved base working directory (#92); ResolveWorkingDirectory only uses it in TaskDerived mode,
-        // so Home/Fixed are unaffected. In TaskDerived mode *without* an explicit pick we also seed a
-        // per-task ./{custom-id} output-subdir instruction so each task's work stays separated inside
-        // the shared base dir (#98) — an explicit pick means the user chose their exact dir, so we
-        // don't force a subdir there (AgentDispatchSettings.UsesTaskDerivedOutput). The prompt template
-        // (#100) is threaded in as the composer's template (blank ⇒ default); its {outputDirInstruction}
-        // placeholder consumes the subdir.
-        var expandedPick = SettingsForm.ExpandHomePath(request.WorkingDirectory, home);
-        var chosenDir = expandedPick.Length == 0 ? null : expandedPick;
-        var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
-        var workingDir = settings.ResolveEffectiveWorkingDirectory(chosenDir, taskDerivedDirectory: baseDir, homeDirectory: home);
-        var useTaskDerived = settings.UsesTaskDerivedOutput(chosenDir);
-        var outputSubdir = useTaskDerived ? AgentPromptComposer.OutputSubdirectoryToken(detail) : null;
-        var template = settings.PromptTemplate;
+        var plan = DispatchCoordinator.Plan(_config.AgentDispatch, request, detail, _config.DefaultWorkingDirectory, home);
 
-        // Remember an explicit non-default pick for this task (#96) so the next dispatch pre-fills it,
-        // across relaunches; reverting to the default (blank field / pick == the configured mode dir)
-        // clears the entry. Done on the UI thread before the hand-off, and only persisted when the
-        // cache actually changed. resolvedDefault is what the mode would pick with no explicit dir,
-        // ~-expanded (as chosenDir is) so a Fixed dir stored as "~/foo" still matches an explicit pick
-        // of the same resolved path and clears the entry rather than persisting a redundant one.
-        var resolvedDefaultRaw = settings.ResolveWorkingDirectory(taskDerivedDirectory: baseDir, homeDirectory: home);
-        var resolvedDefault = resolvedDefaultRaw is null ? null : SettingsForm.ExpandHomePath(resolvedDefaultRaw, home);
-        if (DispatchWorkingDirectoryCache.Update(_config.TaskWorkingDirectories, detail.Id, chosenDir, resolvedDefault))
+        // Remember an explicit non-default pick for this task (#96) so the next dispatch pre-fills it;
+        // reverting to the default clears the entry. Persist only when the cache actually changed.
+        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, detail.Id, plan))
             _configStore.Save(_config);
 
         // One-off mode (#94) runs claude -p as a background child of the app — no terminal window — with
         // a "thinking" spinner and the captured output rendered in a screen (#99). Interactive mode keeps
         // opening a real terminal below (an interactive session needs a live TTY).
-        if (oneOff)
+        if (plan.OneOff)
         {
-            RunBackgroundDispatch(detail, comments, agent, prompt, workingDir, template, outputSubdir, useTaskDerived, postToComments);
+            DispatchCoordinator.RunBackground(
+                agent, detail, comments, plan,
+                mount: ShowScreen,
+                clearDispatching: () => _dispatching = false);
             return;
         }
 
         Flash($"Launching Claude for '{detail.Name}'…");
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                // A task-derived launch starts in the base dir; create it on first use (#98) so
-                // Process.Start doesn't fail on a not-yet-existing path. Home/Fixed dirs and an explicit
-                // pane pick are the user's own (Home always exists; a Fixed dir / explicit pick is their
-                // choice — a browser pick always exists, and a hand-typed missing path surfaces a launch
-                // error rather than being silently created).
-                if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
-                    Directory.CreateDirectory(workingDir);
-
-                // Thread the per-dispatch launch-location override (#275) into this one interactive
-                // launch; the one-off branch returned above never reaches here, so it's always honoured.
-                var result = await agent.DispatchAsync(detail, comments, prompt, workingDir, template, outputSubdir, oneOff, postToComments, launchLocation: request.LaunchLocation);
-                Application.Invoke(() => { _dispatching = false; Flash(result.StatusMessage); });
-            }
-            catch (Exception ex)
-            {
-                Application.Invoke(() => { _dispatching = false; Flash($"Could not launch Claude: {Short(ex)}"); });
-            }
-        });
-    }
-
-    /// <summary>
-    /// Runs a one-off <c>claude -p</c> dispatch (#99) as a background child process: mounts an
-    /// <see cref="AgentRunScreen"/> over the detail view (through the shared screen seam), runs the
-    /// dispatch off the UI thread with a cancellation token wired to the screen's Esc, and marshals the
-    /// captured output — or a cancellation / failure — back to the screen via <see cref="Application.Invoke"/>.
-    /// The working-dir/subdir/template/post-to-Comments inputs were already resolved by the caller so a
-    /// one-off run's prompt matches what the interactive path would compose. Must run on the UI thread.
-    /// </summary>
-    private void RunBackgroundDispatch(
-        TaskDetail detail, IReadOnlyList<CommentItem> comments, AgentDispatcher agent, string prompt,
-        string? workingDir, string? template, string? outputSubdir, bool useTaskDerived, bool postToComments)
-    {
-        var cts = new CancellationTokenSource();
-        var screen = new AgentRunScreen(detail.Name);
-        screen.CancelRequested += (_, _) => cts.Cancel();
-        // Closing the screen (Esc after it finished) cancels any straggler and releases the token source.
-        ShowScreen(screen, () =>
-        {
-            cts.Cancel();
-            cts.Dispose();
-        });
-
-        // Stream the parsed output into the run screen as it arrives (#187): the runner reports display
-        // chunks off the UI thread, marshalled here onto the UI thread before appending.
-        var progress = new DelegateProgress<string>(chunk => Application.Invoke(() => screen.AppendOutput(chunk)));
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                // A task-derived launch starts in the base dir; create it on first use (#98), same as the
-                // interactive path, so the child process doesn't fail on a not-yet-existing path.
-                if (useTaskDerived && !string.IsNullOrWhiteSpace(workingDir))
-                    Directory.CreateDirectory(workingDir);
-
-                var run = await agent.DispatchBackgroundAsync(detail, comments, prompt, workingDir, template, outputSubdir, postToComments, progress, cts.Token);
-                Application.Invoke(() => { _dispatching = false; screen.ShowResult(AgentRunModel.FormatOutput(run), run.Success); });
-            }
-            catch (OperationCanceledException)
-            {
-                Application.Invoke(() => { _dispatching = false; screen.ShowCancelled("Run cancelled — the Claude process was stopped."); });
-            }
-            catch (Exception ex)
-            {
-                Application.Invoke(() => { _dispatching = false; screen.ShowResult($"Could not run Claude: {Short(ex)}", success: false); });
-            }
-        });
+        DispatchCoordinator.RunInteractive(
+            agent, detail, comments, plan,
+            report: message => { _dispatching = false; Flash(message); });
     }
 
 
