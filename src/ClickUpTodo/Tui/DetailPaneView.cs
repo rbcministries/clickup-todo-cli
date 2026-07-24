@@ -241,6 +241,11 @@ public sealed class DetailPaneView : TextView
             || mouseEvent.Position is not { } position)
             return base.OnMouseEvent(mouseEvent);
 
+        // Forget the previous click's position before the base maps this one, so a click the base declines
+        // to map can only resolve to "no position" — never to where the *last* click landed, which would
+        // activate a link the user didn't click.
+        _unwrappedCaret = null;
+
         // An unmodified click is the one the base view maps itself, so let it handle the real event and
         // read the position back; only a modified click needs the synthesized stand-in (see above), which
         // keeps the common gesture a single pass through the base.
