@@ -96,7 +96,10 @@ public static class CustomFieldValueSerializer
                 // Preserve integers as integers (avoid "5" → 5.0); fall back to a double otherwise.
                 if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var l))
                     return Value(field.Id, JsonSerializer.SerializeToElement(l));
-                if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d))
+                // IsFinite rejects NaN/±Infinity (which double.TryParse accepts for "NaN"/"Infinity" and
+                // for an overflowing magnitude like "1e400") — JsonSerializer can't emit those, so they must
+                // fall through to a graceful validation error rather than throw at serialization.
+                if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) && double.IsFinite(d))
                     return Value(field.Id, JsonSerializer.SerializeToElement(d));
                 return CustomFieldWriteResult.Invalid($"{label} must be a number.");
 

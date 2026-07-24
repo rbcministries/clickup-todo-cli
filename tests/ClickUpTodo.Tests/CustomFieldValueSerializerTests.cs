@@ -62,6 +62,21 @@ public sealed class CustomFieldValueSerializerTests
         Assert.Contains("number", result.Error!, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    [InlineData("-Infinity")]
+    [InlineData("1e400")] // overflows a double to +Infinity
+    public void Number_NonFinite_IsAnError_NotAThrow(string text)
+    {
+        // double.TryParse accepts these, but JsonSerializer can't emit NaN/Infinity — they must degrade to
+        // a graceful validation error rather than throwing at the Save path.
+        var result = CustomFieldValueSerializer.Build(Field("number"), new CustomFieldEntry { Text = text });
+
+        Assert.Equal(CustomFieldWriteOutcome.Error, result.Outcome);
+        Assert.Contains("number", result.Error!, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void Checkbox_ExplicitChecked_Wins()
     {

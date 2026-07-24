@@ -155,6 +155,30 @@ public sealed class ClickUpClientCreateTaskTests
     }
 
     [Fact]
+    public async Task CreateTask_CustomFieldValues_PreserveDoubleAndNullKinds()
+    {
+        // Covers the ToUntyped double (non-integral number) and null branches end-to-end through the
+        // real serializer, alongside the string/int/bool/array kinds above.
+        var handler = new CapturingHandler("""{ "id": "t1", "name": "N" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await client.CreateTaskAsync("list1", new NewTaskRequest
+        {
+            Name = "N",
+            CustomFields =
+            [
+                new CustomFieldValue("cf_money", JsonSerializer.SerializeToElement(19.99)),
+                new CustomFieldValue("cf_null", JsonSerializer.SerializeToElement((string?)null)),
+            ],
+        });
+
+        var custom = handler.Body!.RootElement.GetProperty("custom_fields");
+        Assert.Equal(JsonValueKind.Number, custom[0].GetProperty("value").ValueKind);
+        Assert.Equal(19.99, custom[0].GetProperty("value").GetDouble(), 3);
+        Assert.Equal(JsonValueKind.Null, custom[1].GetProperty("value").ValueKind);
+    }
+
+    [Fact]
     public async Task CreateTask_EmptyCustomFields_SendsNoKey()
     {
         var handler = new CapturingHandler("""{ "id": "t1", "name": "N" }""");
