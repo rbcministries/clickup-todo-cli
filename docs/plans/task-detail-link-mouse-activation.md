@@ -119,8 +119,10 @@ Shared with **E**: the keyboard path resolves a focused span through the same
   regex per click, no per-render cache to invalidate.
 - Cache the unwrapped caret from an `OnUnwrappedCursorPositionChanged` override.
 - Override `OnMouseEvent`: on `LeftButtonClicked` (with or without `Ctrl`), apply
-  the two guards, resolve the position via a synthesized plain click, convert
-  cell index → char offset, hit-test the clicked line's spans, and raise
+  the two guards, resolve the position — an unmodified click goes to the base
+  first and its own mapping is read back; only a *modified* click needs the
+  synthesized stand-in, so the common gesture stays a single pass through the
+  base — convert cell index → char offset, hit-test the clicked line's spans, and raise
   `event EventHandler<LinkActivationRequest>? LinkActivationRequested`. Anything
   else (no hit, wheel, drag, double-click) falls through to `base`, so native
   caret/selection/scroll behaviour is untouched.
@@ -154,7 +156,7 @@ screen-level `LinkActivationRequested` for the host.
   `WantMousePositionReports = true`, which turns every mouse move into a
   hit-test + repaint on a UI whose input latency and output volume are pinned
   properties (#3). The hit-test seam this slice adds is the prerequisite; the
-  styling decision is tracked separately.
+  styling decision is tracked in **#408**.
 - **OSC-8 hyperlinks** — #380.
 - **Configurable Ctrl+Click destination / Shift inversion** — #320 (the
   `Resolve` arm is left as the extension point).
@@ -185,6 +187,10 @@ pin the actual Terminal.Gui behaviour the design rests on:
   resolves the right span;
 - a link containing/preceded by wide (emoji) runes resolves by grapheme, not by
   char offset.
+
+Each guard is pinned by a test that fails without it (verified by removing each
+guard in turn: `Click_RightOfAWrappedRowsText_ActivatesNothing` and
+`Click_BelowTheLastLine_ActivatesNothing` are the ones that catch it).
 
 ### E2E — `tests/ClickUpTodo.Tui.E2E/link_click_check.py` (new)
 
