@@ -141,7 +141,7 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `→` / `←`     |      | Expand / collapse the focused parent's subtasks              |
 | `Ctrl+→` / `Ctrl+←` | | Expand-all / collapse-all subtasks                        |
 | `type`        |      | Type-ahead search by task title                               |
-| `Ctrl+Q` / `Esc` |   | Quit                                                          |
+| `Ctrl+Q` / `Esc` |   | Quit — confirms first (`Y`/`Enter` exits, `N`/`Esc` stays)    |
 
 ### Task Detail
 
@@ -159,6 +159,11 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `F5`                  | ↻    | Refresh                                                |
 | `F1`                  | ℹ    | Help                                                   |
 | `Esc`                 |      | Back to the list                                       |
+
+**Quitting asks first.** `Esc` means "go back" on every screen, so the one place it would be
+destructive — leaving the app — is guarded: `Esc` (or `Ctrl+Q`) from the main list, or from the launch
+task in a single-task tab (`--task`), shows a confirmation. `Y`/`Enter` exits; `N`/`Esc` returns you to
+exactly where you were, with your cursor and tab unchanged. `Esc` anywhere else still just goes back.
 
 Quick Updates opens with `Ctrl+U` from both the main list and Task Detail. Pinned tasks persist
 across restarts. The list refreshes in the background on your configured interval, and your cursor

@@ -309,4 +309,13 @@ public static class HelpItemSets
     [
         new("Esc/Enter", "close", Chord: "Esc"),
     ];
+
+    /// <summary>The exit-confirmation modal (#299): a two-key yes/no, so no F1 (it would stack Help over
+    /// a question) and no movement hints. Both launch modes render this same set, which is what makes the
+    /// guard read identically on the dashboard's list root and single-task mode's launch-task root.</summary>
+    public static readonly IReadOnlyList<HelpItem> ExitConfirm =
+    [
+        new("Y/↩", "yes, exit", Chord: "Y"),
+        new("Esc/N", "no, stay", Chord: "Esc"),
+    ];
 }

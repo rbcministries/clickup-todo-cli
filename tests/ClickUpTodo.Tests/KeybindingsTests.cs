@@ -25,6 +25,7 @@ public sealed class KeybindingsTests
         ScreenContext.NotificationsFeed => HelpItemSets.NotificationsFeed,
         ScreenContext.AgentRun => HelpItemSets.AgentRun,
         ScreenContext.Help => HelpItemSets.Help,
+        ScreenContext.ExitConfirm => HelpItemSets.ExitConfirm,
         _ => throw new ArgumentOutOfRangeException(nameof(context)),
     };
 

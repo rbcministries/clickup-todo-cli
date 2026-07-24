@@ -146,6 +146,7 @@ public sealed class HelpLineTests
         HelpItemSets.QuickOpen,
         HelpItemSets.NotificationsFeed,
         HelpItemSets.Help,
+        HelpItemSets.ExitConfirm,
     };
 
     [Theory]
@@ -346,6 +347,7 @@ public sealed class HelpLineTests
             HelpItemSets.Settings, HelpItemSets.FilterSortGroup, HelpItemSets.QuickUpdates,
             HelpItemSets.QuickOpen, HelpItemSets.NewTask, HelpItemSets.PromptTemplateEditor,
             HelpItemSets.NotificationsFeed, HelpItemSets.AgentRun, HelpItemSets.Help,
+            HelpItemSets.ExitConfirm,
             [HelpLine.HelpFallback],
         ];
         foreach (var item in sets.SelectMany(s => s).Where(i => i.IsAction).DistinctBy(i => i.ActionKey))
