@@ -115,6 +115,57 @@ public sealed class ClickUpClientCreateTaskTests
         Assert.Null(handler.Method); // never reached the transport
     }
 
+    [Fact]
+    public async Task CreateTask_SendsCustomFields_AsIdValueArray_WithTypedValues()
+    {
+        // Values arrive pre-shaped from the pure CustomFieldValueSerializer as neutral JsonElements; the
+        // facade must render them as ClickUp's custom_fields: [{ id, value }] with the JSON kind preserved
+        // (string, number, bool, array) through the real generated client + Kiota serializer.
+        var handler = new CapturingHandler("""{ "id": "t1", "name": "N" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await client.CreateTaskAsync("list1", new NewTaskRequest
+        {
+            Name = "N",
+            CustomFields =
+            [
+                new CustomFieldValue("cf_text", JsonSerializer.SerializeToElement("hello")),
+                new CustomFieldValue("cf_num", JsonSerializer.SerializeToElement(42L)),
+                new CustomFieldValue("cf_bool", JsonSerializer.SerializeToElement(true)),
+                new CustomFieldValue("cf_labels", JsonSerializer.SerializeToElement(new[] { "l1", "l2" })),
+            ],
+        });
+
+        var custom = handler.Body!.RootElement.GetProperty("custom_fields");
+        Assert.Equal(JsonValueKind.Array, custom.ValueKind);
+        Assert.Equal(4, custom.GetArrayLength());
+
+        Assert.Equal("cf_text", custom[0].GetProperty("id").GetString());
+        Assert.Equal("hello", custom[0].GetProperty("value").GetString());
+
+        Assert.Equal("cf_num", custom[1].GetProperty("id").GetString());
+        Assert.Equal(JsonValueKind.Number, custom[1].GetProperty("value").ValueKind);
+        Assert.Equal(42L, custom[1].GetProperty("value").GetInt64());
+
+        Assert.Equal("cf_bool", custom[2].GetProperty("id").GetString());
+        Assert.Equal(JsonValueKind.True, custom[2].GetProperty("value").ValueKind);
+
+        Assert.Equal("cf_labels", custom[3].GetProperty("id").GetString());
+        Assert.Equal(["l1", "l2"], custom[3].GetProperty("value").EnumerateArray().Select(e => e.GetString()));
+    }
+
+    [Fact]
+    public async Task CreateTask_EmptyCustomFields_SendsNoKey()
+    {
+        var handler = new CapturingHandler("""{ "id": "t1", "name": "N" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await client.CreateTaskAsync("list1", new NewTaskRequest { Name = "N" });
+
+        Assert.False(handler.Body!.RootElement.TryGetProperty("custom_fields", out _),
+            "no custom fields must send no custom_fields key.");
+    }
+
     /// <summary>Records the outgoing request (method, URI, parsed JSON body) and returns a canned body.</summary>
     private sealed class CapturingHandler(string responseBody) : HttpMessageHandler
     {

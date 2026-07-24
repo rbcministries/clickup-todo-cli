@@ -116,6 +116,16 @@ public sealed record StatusOption(string Name, string? Color);
 public sealed record TaskAssignee(long Id, string Name);
 
 /// <summary>
+/// One custom-field value to set at create time (#368), destined for ClickUp's create-task
+/// <c>custom_fields: [{ id, value }]</c> array. <see cref="Id"/> is the field's definition id (from
+/// <see cref="CustomFieldDefinition.Id"/>); <see cref="Value"/> is the loosely-typed value already shaped
+/// for the field's type (string / number / bool / epoch-ms / option-id / option-id array), carried as a
+/// neutral <see cref="JsonElement"/> so nothing Kiota-shaped escapes into the domain — the facade turns it
+/// into the wire node. Produced by the pure <c>CustomFieldValueSerializer</c>.
+/// </summary>
+public sealed record CustomFieldValue(string Id, JsonElement Value);
+
+/// <summary>
 /// The fields for creating a task via <see cref="IClickUpClient.CreateTaskAsync"/> (#209) — the stable,
 /// domain-facing input to the create-task facade, so callers (the New Task screen, #213/#215) never touch
 /// the generated request type. Only <see cref="Name"/> is required; the rest are omitted from the request
@@ -130,6 +140,11 @@ public sealed record NewTaskRequest
     public IReadOnlyList<long> Assignees { get; init; } = [];
     public int? PriorityLevel { get; init; }
     public long? DueDateMs { get; init; }
+
+    /// <summary>Custom-field values to set atomically at create time (#368), sent as ClickUp's
+    /// <c>custom_fields</c> array. Empty (the default) sends no key, leaving today's create behaviour
+    /// unchanged. Populated by the New Task screen from the pure <c>CustomFieldValueSerializer</c>.</summary>
+    public IReadOnlyList<CustomFieldValue> CustomFields { get; init; } = [];
 }
 
 /// <summary>A unified task as shown in the to-do list, merged from either source endpoint.</summary>
