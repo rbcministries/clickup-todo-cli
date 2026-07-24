@@ -5,6 +5,12 @@
 > strand custom fields / statuses that don't exist on the target list, and ClickUp's PWA offers a
 > guided migration we didn't have. This plan designs that handling — **grounded in what ClickUp's API
 > actually supports** — and re-enables the List pane behind it, with no silent field/status loss.
+>
+> **Delivery status.** The first PR on this issue lands **Phase 1 (this design note)** and **Phase 2
+> (the id-precise, unit-tested `ListMembershipMigration` core + `CustomFieldItem.Id`)**. **Phase 3
+> (the actual pane re-enable + its confirmation UX + `tui-validate`) is deferred** and remains tracked
+> by #365 — see "Why Phase 3 is deferred" below. The design here is the reference the re-enable builds
+> on.
 
 ## The key distinction the issue conflates: **add-to-list** vs **move**
 
@@ -123,14 +129,47 @@ selector's existing revert-on-unchanged / reconcile-from-truth machinery does th
    `ListMembershipMigrationTests` (strand computation: space-level never flagged; unset never
    flagged; list-local with value flagged; multi-list remaining coverage; blank-id ignored; missing
    definitions ⇒ conservative). Build + test green, push.
-3. **Re-enable the pane.** Uncomment the #242 blocks across the 8 files (`QuickUpdatesScreen`,
-   `QuickUpdatesModel`, `HelpLine`, `TodoApp`, `ListSelectorModel`, `ListSelectorView`, `SelectorView`,
-   `TaskService`/`ClickUpClient` are already active); wire `ApplyListAsync` to the preflight +
-   confirmation + home-guard; restore the `qu_lists_check.py` `tui-validate` scenario from PR #339's
-   history and extend it for the confirm-on-strand and home-guard cases. Finalize, mark ready.
+3. **Re-enable the pane. — DEFERRED (see "Why Phase 3 is deferred").** Uncomment the #242 blocks
+   (`QuickUpdatesScreen`, `QuickUpdatesModel`, `HelpLine`, `TodoApp`; the `ListSelectorModel` /
+   `ListSelectorView` / `SelectorView` / `TaskService` / `ClickUpClient` pieces are already active);
+   wire `ApplyListAsync` to the preflight + confirmation + home-guard; restore the `qu_lists_check.py`
+   `tui-validate` scenario from PR #339's history and extend it for the confirm-on-strand and
+   home-guard cases. Finalize, mark ready.
 
 New Task multi-list create (#241) re-enable rides the same handling but is a **separate** screen and
 its own follow-up (tracked below) — this issue's AC is the **Quick Updates List pane**.
+
+### Why Phase 3 is deferred (and what it needs)
+
+Phase 3 is intentionally **not** in the first PR:
+
+- **It introduces the app's first confirmation UX.** The TUI today has **no** `MessageBox`/modal
+  anywhere — destructive/notable outcomes surface through the non-interactive `Flash` status line by
+  design (a deliberate single-screen, no-modal model, tied to the #3 single-focusable-pane constraint).
+  A "confirm before removing" step is therefore a genuinely new interaction pattern for this codebase.
+  Which shape it takes — a real modal (`MessageBox.Query`), a two-step "press remove again to confirm"
+  arm/confirm on the `Flash` line, or a non-blocking informational `Flash` after a reversible
+  hide — is a product decision worth landing in its own focused, reviewable PR rather than choosing
+  unilaterally in an unattended run. (The three candidates are recorded here so the follow-up can pick
+  one quickly.)
+- **It needs new fake-backend + `tui-validate` surface.** Restoring `qu_lists_check.py` from PR #339's
+  history and extending it for the confirm-on-strand and home-guard cases requires the fake ClickUp
+  backend to model **per-list Custom Field definitions** and **task field values** (it currently models
+  list `locations` only). That is a substantial, terminal-only chunk best validated on its own.
+- **The foundation it depends on is now in place and tested.** `ListMembershipMigration` +
+  `CustomFieldItem.Id` (Phase 2) give the re-enable an id-precise, unit-tested strand check to call, so
+  Phase 3 becomes wiring + UX + `tui-validate` — no new detection logic to design under a terminal.
+
+Re-enable checklist for the follow-up (all gated behind `ListMembershipMigration`):
+1. Uncomment the #242 blocks in `QuickUpdatesModel` (`Lists` value + `PaneCount` → 4), `QuickUpdatesScreen`
+   (field, ctor params, construction, `listsFrame`, `_panes`/`Add`, `SeedListMemberships`, frame geometry),
+   `HelpLine` ("Lists" in the Tab item), and `TodoApp.ShowQuickUpdates` (seed, ctor args, enrich).
+2. Add a `TaskService.GetListCustomFieldsAsync` passthrough (currently only on `ClickUpClient`).
+3. Wire `ApplyListAsync`: **add** → write directly; **remove of the home list** → block + `Flash`;
+   **remove of an additional list** → preflight (`GetTaskDetailAsync` for values + `GetListCustomFieldsAsync`
+   per list), call `ListMembershipMigration.StrandedFieldsOnRemove`, and apply the chosen confirmation UX
+   when it returns a non-empty set (proceed silently when empty).
+4. Restore + extend `qu_lists_check.py`; teach the fake backend per-list field defs + task field values.
 
 ## Invariants preserved
 
