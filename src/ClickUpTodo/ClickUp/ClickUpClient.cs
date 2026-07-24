@@ -414,6 +414,10 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         => Guard("AddTaskToList", async () =>
         {
             using var _ = await _client.V2.List[listId].Task[taskId].PostAsync(cancellationToken: ct);
+            // A membership change alters what another tab's list-membership views show, so nudge (#348).
+            // The endpoint returns an empty body (no date_updated), so the marker carries a null server
+            // date — the consumer simply always re-fetches on a lists nudge, same as the comment case.
+            _changeMarkers.Record(taskId, serverDateUpdatedMs: null, ListsFields);
         });
 
     /// <summary>
@@ -425,6 +429,9 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         => Guard("RemoveTaskFromList", async () =>
         {
             using var _ = await _client.V2.List[listId].Task[taskId].DeleteAsync(cancellationToken: ct);
+            // Inverse of AddTaskToListAsync — nudge on the confirmed removal too (#348). Empty body ⇒
+            // null server date (consumer always re-fetches on a lists nudge).
+            _changeMarkers.Record(taskId, serverDateUpdatedMs: null, ListsFields);
         });
 
     /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>
@@ -596,6 +603,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     private static readonly string[] DescriptionFields = ["description"];
     private static readonly string[] AssigneeFields = ["assignees"];
     private static readonly string[] CommentFields = ["comment"];
+    private static readonly string[] ListsFields = ["lists"];
 
     /// <summary>
     /// Records a change-marker nudge for a confirmed <c>PUT /task</c> write (#294), carrying the
