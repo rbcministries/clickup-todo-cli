@@ -132,7 +132,7 @@ list (each screen shows its own contextual shortcuts on the footer).
 | `F3`          | Filter / sort / group                                         |
 | `F4`          | Cycle the subtasks view                                       |
 | `F5`          | Refresh now (`Ctrl+R` is an alias)                           |
-| `F6`          | Cycle status/priority badges                                  |
+| `F6`          | Cycle status/priority badges (also in Task Detail's Task Tree tab, which opens in the list's badge state) |
 | `F12`         | Toggle completed tasks                                        |
 | `→` / `←`     | Expand / collapse the focused parent's subtasks              |
 | `Ctrl+→` / `Ctrl+←` | Expand-all / collapse-all subtasks                     |

@@ -196,6 +196,26 @@ public static class HelpItemSets
         new("Esc", "back"),
     ];
 
+    /// <summary>The task detail view when the Task Tree tab is present (#291): identical to
+    /// <see cref="Detail"/> plus the tab's F6 badge-display cycle (#415), which mirrors the main list's F6.
+    /// Single-task launch mode has no tree tab and keeps the F6-less <see cref="Detail"/> set.</summary>
+    public static readonly IReadOnlyList<HelpItem> DetailWithTaskTree =
+    [
+        new("Ctrl+←/→", "switch tab", IsAction: false),
+        new("↑/↓ PgUp/PgDn", "scroll", IsAction: false),
+        new("Ctrl+PgUp/PgDn", "order activity", IsAction: false),
+        new("Ctrl+A", "dispatch to Claude"),
+        new("Ctrl+N", "add comment"),
+        new("Ctrl+E", "edit description"),
+        new("Ctrl+B", "browser"),
+        new("Ctrl+U", "quick update"),
+        new("Ctrl+O", "open by id"),
+        new("F5", "↻"),
+        new("F6", "badges"),
+        new("F1", "help"),
+        new("Esc", "back"),
+    ];
+
     /// <summary>The Task Detail description editor overlay (Ctrl+E, #217): a multi-line editor with
     /// Save/Cancel; Ctrl+Enter (or Tab→Save) saves, Esc cancels (confirming if there are unsaved edits),
     /// F1 opens Help.</summary>
