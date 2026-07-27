@@ -137,6 +137,22 @@ Self-contained (sets `E2E_TREE=1` itself). Expected: `ok — survived bare arrow
 boundaries; ↑ on the Task Tree tab stays on the tab`. Reproduces the crash on the stock control (revert
 `NavSafeTabs`→`Tabs` to confirm) and passes on the fix.
 
+**8. Threaded comments render nested (#329)** — opens Task Detail, cycles to the Comments tab, and
+asserts on the pyte screen that a comment's reply thread renders **indented** under its parent, not
+flat. Two legs: with `E2E_THREADS=1` the fake backend marks comment `c2` with a two-reply thread and
+serves `GET /comment/c2/reply`, so the real `CommentThreadLoader` fetches the replies and the
+formatter indents them (asserts an indented reply-marker line `^\s+↳` — measured after stripping the
+pane's box-drawing border — plus both reply bodies, with the parent at the pane's left margin); the
+control leg (no `E2E_THREADS`) asserts the marker and reply bodies are absent, proving the nesting is
+driven by loaded thread data:
+
+```bash
+timeout 150 python3 -u tests/ClickUpTodo.Tui.E2E/thread_check.py $DLL
+```
+
+Self-contained (drives both legs, sets its own env). Expected: `ok — threaded leg nests N indented
+reply line(s) … control leg has no marker and no replies`.
+
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 
 - **Answer the terminal's queries or nothing ever renders.** Terminal.Gui's ANSI driver
