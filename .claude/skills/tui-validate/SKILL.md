@@ -121,7 +121,23 @@ Self-contained (fixed COLS=120 so the seeded URLs don't wrap). Expected: `ok —
 underlined+default-fg (Description), web link underlined+recoloured (Comments)`. The colour/underline
 change is invisible to the text-only `detail_check.py` A/B, which stays identical.
 
-**7. Link click activation (#318)** — drives real SGR mouse clicks at the same two seeded links and
+**7. Task Detail tab-boundary crash guard** — Terminal.Gui 2.4.10's stock `Tabs` control crashes
+(`InvalidOperationException: FocusChanging was not cancelled …` in `Tabs.SelectNextTab`/
+`SelectPreviousTab`) when a bare arrow drives tab navigation past the first/last tab; the app disables
+that native navigation with `NavSafeTabs`. This opens Task Detail, cycles to the Task Tree tab, and
+drives bare → past the last tab and bare ↑ past its top row (the ListView reliably bubbles the arrow to
+the tab control), asserting the app stays alive and never leaves the tab. Requires `E2E_TREE=1` so the
+Task Tree tab is present as the last tab:
+
+```bash
+E2E_TASKS=20 E2E_TREE=1 timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/tab_boundary_check.py $DLL
+```
+
+Self-contained (sets `E2E_TREE=1` itself). Expected: `ok — survived bare arrow navigation past both tab
+boundaries; ↑ on the Task Tree tab stays on the tab`. Reproduces the crash on the stock control (revert
+`NavSafeTabs`→`Tabs` to confirm) and passes on the fix.
+
+**8. Link click activation (#318)** — drives real SGR mouse clicks at the same two seeded links and
 checks where each gesture goes: `Ctrl`+click a **task** link → the browser; plain click a **web** link
 → the browser; plain click the **task** link → that task's Task Detail, stacked in-app (proven by the
 extra `Esc` it then takes to reach the list); a click while the comment composer is open → nothing.

@@ -86,6 +86,20 @@ public sealed class HelpLineTests
         Assert.Equal(listKey, detailKey);
     }
 
+    // #415 — the Task Tree tab's F6 badge cycle mirrors the main list's F6, so the detail set shown while
+    // that tab exists advertises the same key/label. The base Detail set (single-task mode, no tree tab)
+    // does not, since there is no badge list there.
+    [Fact]
+    public void Badges_UseF6_OnBothListAndTaskTreeDetail()
+    {
+        var listItem = HelpItemSets.MainList.Single(i => i.Label == "badges");
+        var treeItem = HelpItemSets.DetailWithTaskTree.Single(i => i.Label == "badges");
+
+        Assert.Equal("F6", listItem.Key);
+        Assert.Equal(listItem.Key, treeItem.Key);
+        Assert.DoesNotContain(HelpItemSets.Detail, i => i.Key == "F6");
+    }
+
     // #290 — refresh is standardized on F5 (icon ↻) across every screen that can refresh, so the footer
     // never drifts. (Ctrl+R remains an undisplayed alias in each handler.)
     [Theory]
@@ -140,6 +154,7 @@ public sealed class HelpLineTests
     {
         HelpItemSets.MainList,
         HelpItemSets.Detail,
+        HelpItemSets.DetailWithTaskTree,
         HelpItemSets.Settings,
         HelpItemSets.FilterSortGroup,
         HelpItemSets.QuickUpdates,
@@ -159,6 +174,7 @@ public sealed class HelpLineTests
     public static readonly TheoryData<IReadOnlyList<HelpItem>> ScreenSets = new()
     {
         HelpItemSets.Detail,
+        HelpItemSets.DetailWithTaskTree,
         HelpItemSets.Settings,
         HelpItemSets.FilterSortGroup,
         HelpItemSets.QuickUpdates,
@@ -343,7 +359,8 @@ public sealed class HelpLineTests
         var data = new TheoryData<HelpItem>();
         IReadOnlyList<HelpItem>[] sets =
         [
-            HelpItemSets.MainList, HelpItemSets.Detail, HelpItemSets.DetailDescriptionEditor,
+            HelpItemSets.MainList, HelpItemSets.Detail, HelpItemSets.DetailWithTaskTree,
+            HelpItemSets.DetailDescriptionEditor,
             HelpItemSets.Settings, HelpItemSets.FilterSortGroup, HelpItemSets.QuickUpdates,
             HelpItemSets.QuickOpen, HelpItemSets.NewTask, HelpItemSets.PromptTemplateEditor,
             HelpItemSets.NotificationsFeed, HelpItemSets.AgentRun, HelpItemSets.Help,

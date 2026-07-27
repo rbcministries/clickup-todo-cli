@@ -68,6 +68,8 @@ public sealed class HelpScreen : Screen
                 + "  Ctrl+U            Quick Updates for this task (Esc returns to the detail)\n"
                 + "  Ctrl+O        🗁   Open another task by id, custom id, or URL\n"
                 + "  F5            ↻   Refresh\n"
+                + "  F6                Cycle status/priority badges in the Task Tree tab (icons ○ ⚑,\n"
+                + "                    text, hidden); opens in the main list's badge state\n"
                 + "  F1            ℹ   This help\n"
                 + "  Esc               Back to the list\n"
                 + "\n"

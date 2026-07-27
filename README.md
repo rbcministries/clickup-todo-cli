@@ -158,6 +158,7 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `Ctrl+U`              |      | Quick Updates for this task                            |
 | `Ctrl+O`              | 🗁   | Open another task by id, custom id, or URL             |
 | `F5`                  | ↻    | Refresh                                                |
+| `F6`                  |      | Cycle status/priority badges in the Task Tree tab (opens in the list's badge state) |
 | `F1`                  | ℹ    | Help                                                   |
 | `Esc`                 |      | Back to the list                                       |
 
