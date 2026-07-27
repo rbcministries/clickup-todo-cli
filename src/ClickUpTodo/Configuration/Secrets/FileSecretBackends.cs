@@ -56,17 +56,24 @@ public abstract class FileSecretBackend : ISecretBackend
         }
 
         const UnixFileMode ownerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+        // Tighten a pre-existing file *before* writing the new secret into it: FileMode.Create truncates
+        // the existing inode without changing its mode, so a file left looser by an older build would
+        // otherwise hold the fresh token at that looser mode until the post-write chmod. UnixCreateMode
+        // only applies when the file is *created*, so it can't cover this case — do it explicitly first.
+        if (File.Exists(path))
+            File.SetUnixFileMode(path, ownerOnly);
+
         var options = new FileStreamOptions
         {
             Mode = FileMode.Create,
             Access = FileAccess.Write,
-            UnixCreateMode = ownerOnly,
+            UnixCreateMode = ownerOnly, // a freshly created file is 0600 from the start — no world-readable window
         };
         using (var stream = new FileStream(path, options))
             stream.Write(bytes);
 
-        // UnixCreateMode only takes effect when the file is created; normalize a pre-existing,
-        // looser-permissioned file (e.g. one an older build wrote at the default umask).
+        // Belt-and-braces (e.g. the file appeared between the Exists check and the open).
         File.SetUnixFileMode(path, ownerOnly);
     }
 
