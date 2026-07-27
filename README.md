@@ -59,11 +59,14 @@ wherever one is available:
 
 When no secret store is reachable — a headless/SSH box, or a minimal container without `secret-tool`
 or a session keyring — the token falls back to an **unencrypted file** (`token.bin`) in the config
-directory. The first-run setup states, in plain words, exactly where your token was stored and warns
-you when the plaintext fallback was used (with a hint for enabling the secure path). To get the secure
-path on Linux, install `libsecret` (which provides `secret-tool`) and run a Secret Service such as
-`gnome-keyring`. An older build that wrote a plaintext `token.bin` is migrated into the secret store
-automatically on the next launch, and the cleartext file is removed.
+directory. On macOS/Linux that file is written with **owner-only permissions (`0600`)** so other
+local users can't read it, but it is still **cleartext at rest** — anyone who can read your account's
+files (you, or `root`) can read the token, so it's no substitute for the OS store. The first-run setup
+states, in plain words, exactly where your token was stored and warns you when the plaintext fallback
+was used (with a hint for enabling the secure path). To get the secure path on Linux, install
+`libsecret` (which provides `secret-tool`) and run a Secret Service such as `gnome-keyring`. An older
+build that wrote a plaintext `token.bin` is migrated into the secret store automatically on the next
+launch, and the cleartext file is removed.
 
 Run `clickup-todo --reset` to forget the token and settings and start over.
 
