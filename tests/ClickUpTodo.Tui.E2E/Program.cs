@@ -231,7 +231,7 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
         // seeded thread parent (c2) returns replies, and only under E2E_THREADS — so every other scenario,
         // which sees reply_count=0 on all comments, never reaches this branch. Same CommentsResponse wire
         // shape as the flat comment list, which GetThreadedCommentsAsync reads.
-        else if (path.Contains("/comment/") && path.EndsWith("/reply"))
+        else if (request.Method == HttpMethod.Get && path.Contains("/comment/") && path.EndsWith("/reply"))
             body = RepliesJson(CommentIdOfReply(path));
         else if (path.Contains("/task/") && request.Method == HttpMethod.Put)
         {

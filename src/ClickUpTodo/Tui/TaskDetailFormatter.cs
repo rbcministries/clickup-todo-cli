@@ -204,7 +204,11 @@ public static class TaskDetailFormatter
         {
             if (i > 0)
                 sb.Append('\n');
-            sb.Append(i == 0 ? headerPrefix : bodyPrefix).Append(lines[i]);
+            // Don't prefix an empty body line — that would leave a whitespace-only line. (The header line
+            // is never empty; body lines are trimmed, so only an interior blank line hits this.)
+            if (lines[i].Length > 0)
+                sb.Append(i == 0 ? headerPrefix : bodyPrefix);
+            sb.Append(lines[i]);
         }
         return sb.ToString();
     }

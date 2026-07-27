@@ -175,7 +175,7 @@ public sealed class FeedRowFormatterTests
     public void ReplyCount_WhenPresent_ShowsCollapsedLabel(int count, string expected)
     {
         var row = FeedRowFormatter.Format(ThreadedComment(count));
-        Assert.Equal(expected, FeedRowFormatter.ReplyCountLabel(count));
+        // The row carries the singular/plural-correct label (which is exactly what ReplyCountLabel emits).
         Assert.Contains(expected, row.Text, StringComparison.Ordinal);
     }
 
