@@ -123,7 +123,12 @@ public sealed class SingleTaskApp
 
     private void Build()
     {
-        _window = new Window { Title = AppBranding.WindowTitle(_config.WorkspaceName) };
+        // Title the window with this task, not the product branding (#418). Terminal.Gui propagates the
+        // top-level window Title to the host terminal's window/tab title, so a `--task` tab identifies
+        // itself as "{id}: {name}" (custom id preferred, ≤40 chars) on the tab strip — where the
+        // identical "ClickUp Simple CLI — <workspace>" the dashboard uses would not distinguish tabs. The
+        // frame naming the task is also apt here: the whole tab *is* that one task.
+        _window = new Window { Title = TerminalTitle.ForTask(_task.Id, _task.CustomId, _task.Name) };
 
         // Build the agent dispatcher from the persisted settings (#91), same as the dashboard's
         // BuildAgentDispatcher — the preferred terminal / claude path / launch-location default apply.
