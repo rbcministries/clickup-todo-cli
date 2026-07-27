@@ -52,7 +52,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Comment.Item.Reply
             return await RequestAdapter.SendAsync<global::ClickUpTodo.ClickUp.Generated.Models.CommentsResponse>(requestInfo, global::ClickUpTodo.ClickUp.Generated.Models.CommentsResponse.CreateFromDiscriminatorValue, default, cancellationToken).ConfigureAwait(false);
         }
         /// <summary>
-        /// Post a plain-text reply into a comment&apos;s thread.
+        /// Post a reply into a comment&apos;s thread (plain text via comment_text, or structured blocks with @-mention tags via the comment array).
         /// </summary>
         /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentResponse"/></returns>
         /// <param name="body">Comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Send `comment_text` for a plain comment, OR the structured `comment` blocks array to carry @-mention tag blocks (#322) — do not send both. `comment_text` is therefore no longer strictly required (either the text or the blocks satisfy the body); the client guards &apos;at least one non-empty&apos; at the boundary.</param>
@@ -91,7 +91,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Comment.Item.Reply
             return requestInfo;
         }
         /// <summary>
-        /// Post a plain-text reply into a comment&apos;s thread.
+        /// Post a reply into a comment&apos;s thread (plain text via comment_text, or structured blocks with @-mention tags via the comment array).
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
         /// <param name="body">Comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Send `comment_text` for a plain comment, OR the structured `comment` blocks array to carry @-mention tag blocks (#322) — do not send both. `comment_text` is therefore no longer strictly required (either the text or the blocks satisfy the body); the client guards &apos;at least one non-empty&apos; at the boundary.</param>

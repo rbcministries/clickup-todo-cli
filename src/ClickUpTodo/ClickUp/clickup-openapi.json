@@ -289,7 +289,7 @@
       },
       "post": {
         "operationId": "CreateTaskComment",
-        "summary": "Post a plain-text comment to a task.",
+        "summary": "Post a comment to a task (plain text via comment_text, or structured blocks with @-mention tags via the comment array).",
         "parameters": [
           { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
         ],
@@ -321,7 +321,7 @@
       },
       "post": {
         "operationId": "CreateThreadedComment",
-        "summary": "Post a plain-text reply into a comment's thread.",
+        "summary": "Post a reply into a comment's thread (plain text via comment_text, or structured blocks with @-mention tags via the comment array).",
         "parameters": [
           { "name": "comment_id", "in": "path", "required": true, "schema": { "type": "string" } }
         ],

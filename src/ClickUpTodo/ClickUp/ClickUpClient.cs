@@ -638,7 +638,9 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             {
                 case CommentRun.Text t:
                     if (!string.IsNullOrWhiteSpace(t.Value)) hasText = true;
-                    blocks.Add(new CommentBlock { Text = t.Value });
+                    // Coalesce a null Value (the record's type is non-nullable but nothing enforces it at
+                    // runtime) so a stray `{}` block never reaches ClickUp; a blank text run stays "".
+                    blocks.Add(new CommentBlock { Text = t.Value ?? "" });
                     break;
                 case CommentRun.Mention m:
                     hasMention = true;
