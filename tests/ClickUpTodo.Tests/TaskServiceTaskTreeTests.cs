@@ -292,7 +292,14 @@ public sealed class TaskServiceTaskTreeTests
         private readonly object _lock = new();
         private int _inFlight;
 
-        public int MaxInFlight { get; private set; }
+        private int _maxInFlight;
+
+        /// <summary>The peak number of gated probes seen simultaneously in flight, read under the lock so
+        /// the assertion sees the fold from the fetch threads without relying on a happens-before.</summary>
+        public int MaxInFlight
+        {
+            get { lock (_lock) return _maxInFlight; }
+        }
 
         public void Release()
         {
@@ -327,8 +334,8 @@ public sealed class TaskServiceTaskTreeTests
             lock (_lock)
             {
                 _inFlight++;
-                if (_inFlight > MaxInFlight)
-                    MaxInFlight = _inFlight;
+                if (_inFlight > _maxInFlight)
+                    _maxInFlight = _inFlight;
             }
             try
             {

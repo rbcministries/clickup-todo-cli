@@ -531,10 +531,13 @@ public sealed class TaskService(
     internal const int MaxTreeSubtaskFetches = 25;
 
     /// <summary>How many <see cref="GetSubtasksAsync"/> round-trips the Task Tree descendant BFS runs
-    /// concurrently within one batch (#417) — bounds the fan-out so a wide tree doesn't open a fetch per
-    /// node all at once, while collapsing the previously-serial per-node latency (~30s for 13 subtasks).
-    /// Mirrors <see cref="CommentThreadLoader.DefaultMaxConcurrency"/>.</summary>
-    internal const int MaxTreeSubtaskConcurrency = 8;
+    /// concurrently within one frontier batch (#417) — bounds the fan-out so a wide tree doesn't open a
+    /// fetch per node all at once, while collapsing the previously-serial per-node latency (~30s for 13
+    /// subtasks). The bound value tracks <see cref="CommentThreadLoader.DefaultMaxConcurrency"/> (the
+    /// reply-thread fan-out's cap), though the model differs: this awaits a whole frontier batch before
+    /// starting the next, whereas the reply loader rolls a <see cref="SemaphoreSlim"/> window — the batch
+    /// form is what lets the BFS reproduce the serial walk's fetch order and de-dup exactly.</summary>
+    internal const int MaxTreeSubtaskConcurrency = CommentThreadLoader.DefaultMaxConcurrency;
 
     /// <summary>
     /// Assembles the Task Tree tab's rows (#291) for <paramref name="taskId"/>: the task's ancestry
@@ -598,7 +601,9 @@ public sealed class TaskService(
         {
             // Take the next batch from the front, never exceeding the remaining fetch budget. Counting the
             // whole batch up front (before the fetch) mirrors the serial code's fetches++-before-try: a
-            // branch that fails still spends its budget slot.
+            // branch that fails still spends its budget slot. The batch is awaited whole before the next
+            // starts (a straggler stalls its batch) — accepted so the fold-back below stays FIFO and the
+            // fetch order / de-dup match the serial walk exactly.
             var batchSize = Math.Min(Math.Min(MaxTreeSubtaskConcurrency, MaxTreeSubtaskFetches - fetches), queue.Count);
             var batch = new string[batchSize];
             for (var i = 0; i < batchSize; i++)

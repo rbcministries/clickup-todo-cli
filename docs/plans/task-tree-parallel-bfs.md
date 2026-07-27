@@ -19,9 +19,12 @@ around 30s.
 
 ## Scope of THIS slice (issue idea #1 — parallelize the BFS)
 
-Turn the descendant BFS from strictly serial into **level-batched, bounded-concurrency** fetches,
-mirroring the batched, best-effort fan-out already used by `CommentThreadLoader.LoadRepliesAsync`
-and `FeedService.GatherAsync`. This directly collapses the dominant cost: *N* serial calls become
+Turn the descendant BFS from strictly serial into **level-batched, bounded-concurrency** fetches. The
+concurrency *bound* tracks `CommentThreadLoader.DefaultMaxConcurrency` (the reply-thread fan-out's
+cap), but the *model* is deliberately different: those loaders roll a `SemaphoreSlim` window over a
+fixed input list, whereas this awaits a whole frontier batch before starting the next — the batch
+form is what lets a dynamically-growing BFS frontier reproduce the serial walk's fetch order and
+de-dup exactly (see the invariant below). This directly collapses the dominant cost: *N* serial calls become
 `ceil(N / concurrency)` sequential rounds (e.g. 13 subtasks → ~2 rounds at concurrency 8, instead
 of ~13 serial calls).
 
