@@ -8,13 +8,21 @@ using System;
 namespace ClickUpTodo.ClickUp.Generated.Models
 {
     /// <summary>
-    /// Plain-text comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.
+    /// Comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Send `comment_text` for a plain comment, OR the structured `comment` blocks array to carry @-mention tag blocks (#322) — do not send both. `comment_text` is therefore no longer strictly required (either the text or the blocks satisfy the body); the client guards &apos;at least one non-empty&apos; at the boundary.
     /// </summary>
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     public partial class CreateCommentRequest : IAdditionalDataHolder, IParsable
     {
         /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
         public IDictionary<string, object> AdditionalData { get; set; }
+        /// <summary>Structured rich-text runs. A plain run is { text }; an @-mention run is { type:&quot;tag&quot;, user:{ id } }. ClickUp renders the @Name text server-side and echoes it on read-back.</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock>? Comment { get; set; }
+#nullable restore
+#else
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock> Comment { get; set; }
+#endif
         /// <summary>The comment_text property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -50,6 +58,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         {
             return new Dictionary<string, Action<IParseNode>>
             {
+                { "comment", n => { Comment = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock>(global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock.CreateFromDiscriminatorValue)?.AsList(); } },
                 { "comment_text", n => { CommentText = n.GetStringValue(); } },
                 { "notify_all", n => { NotifyAll = n.GetBoolValue(); } },
             };
@@ -61,6 +70,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         public virtual void Serialize(ISerializationWriter writer)
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
+            writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.CommentBlock>("comment", Comment);
             writer.WriteStringValue("comment_text", CommentText);
             writer.WriteBoolValue("notify_all", NotifyAll);
             writer.WriteAdditionalData(AdditionalData);

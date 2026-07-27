@@ -55,7 +55,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment
         /// Post a plain-text comment to a task.
         /// </summary>
         /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.CreateCommentResponse"/></returns>
-        /// <param name="body">Plain-text comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.</param>
+        /// <param name="body">Comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Send `comment_text` for a plain comment, OR the structured `comment` blocks array to carry @-mention tag blocks (#322) — do not send both. `comment_text` is therefore no longer strictly required (either the text or the blocks satisfy the body); the client guards &apos;at least one non-empty&apos; at the boundary.</param>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
@@ -94,7 +94,7 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment
         /// Post a plain-text comment to a task.
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
-        /// <param name="body">Plain-text comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Plain text only; rich content (@-mentions, task links) is a later epic and deliberately not modelled here.</param>
+        /// <param name="body">Comment body, shared by the task-comment (POST /task/{task_id}/comment) and reply (POST /comment/{comment_id}/reply) endpoints. Send `comment_text` for a plain comment, OR the structured `comment` blocks array to carry @-mention tag blocks (#322) — do not send both. `comment_text` is therefore no longer strictly required (either the text or the blocks satisfy the body); the client guards &apos;at least one non-empty&apos; at the boundary.</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
