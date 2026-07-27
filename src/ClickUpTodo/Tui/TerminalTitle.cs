@@ -29,12 +29,24 @@ public static class TerminalTitle
     /// </summary>
     public static string ForTask(string id, string? customId, string name, int maxLength = MaxLength)
     {
-        var idPart = string.IsNullOrWhiteSpace(customId) ? id : customId;
-        var composed = string.IsNullOrWhiteSpace(name) ? idPart : $"{idPart}: {name}";
+        // Sanitize each part before composing so the blank-name decision sees post-sanitize text: a name
+        // that is only control characters collapses to whitespace and must take the id-only branch, not
+        // leave a dangling "{id}:".
+        var idPart = Sanitize(string.IsNullOrWhiteSpace(customId) ? id : customId);
+        var cleanName = Sanitize(name);
+        var composed = string.IsNullOrWhiteSpace(cleanName) ? idPart : $"{idPart}: {cleanName}";
 
-        composed = Sanitize(composed);
+        maxLength = Math.Max(0, maxLength);
         if (composed.Length > maxLength)
+        {
             composed = composed[..maxLength];
+            // Task names can end in an emoji (e.g. 📌), so the cut can land between a surrogate pair's
+            // high and low halves and leave a dangling high surrogate — an invalid string that renders
+            // as a replacement glyph. Drop that orphan so the title stays one char under the cap rather
+            // than corrupt.
+            if (composed.Length > 0 && char.IsHighSurrogate(composed[^1]))
+                composed = composed[..^1];
+        }
 
         return composed.TrimEnd();
     }
