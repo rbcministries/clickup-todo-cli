@@ -92,8 +92,14 @@ public sealed class SingleTaskNudgePolicyTests
         Assert.Empty(stale);
         Assert.Equal(1, consumer.Cursor);
 
+        // The equality boundary is load-bearing: the guard is held >= server, so a marker exactly at what
+        // we hold is still redundant — suppress it.
+        var equal = consumer.Advance([Marker(Launch, 2, Them, serverMs: 500L)], policy.IsInView, policy.HeldVersion);
+        Assert.Empty(equal);
+        Assert.Equal(2, consumer.Cursor);
+
         // A marker newer than what we hold still fetches.
-        var fresh = consumer.Advance([Marker(Launch, 2, Them, serverMs: 600L)], policy.IsInView, policy.HeldVersion);
+        var fresh = consumer.Advance([Marker(Launch, 3, Them, serverMs: 600L)], policy.IsInView, policy.HeldVersion);
         Assert.Equal([Launch], fresh);
     }
 
