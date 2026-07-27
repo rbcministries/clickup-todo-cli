@@ -156,6 +156,42 @@ public sealed class FeedRowFormatterTests
         Assert.Contains(FeedRowFormatter.EmptyComment, row.Text);
     }
 
+    // ── Threaded-comment reply count (#329) ──────────────────────────────────
+
+    private static CommentItem ThreadedComment(int replyCount)
+        => new("c1", "Ben Seymour", 1_751_476_320_000, "the body", Resolved: false, TaskId: "t1", ReplyCount: replyCount);
+
+    [Fact]
+    public void ReplyCount_WhenZero_IsOmitted()
+    {
+        var row = FeedRowFormatter.Format(ThreadedComment(0));
+        Assert.DoesNotContain("repl", row.Text, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1, "1 reply")]
+    [InlineData(2, "2 replies")]
+    [InlineData(9, "9 replies")]
+    public void ReplyCount_WhenPresent_ShowsCollapsedLabel(int count, string expected)
+    {
+        var row = FeedRowFormatter.Format(ThreadedComment(count));
+        Assert.Equal(expected, FeedRowFormatter.ReplyCountLabel(count));
+        Assert.Contains(expected, row.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReplyCount_IsShownBeforeThePreview_SoALongPreviewCannotClipIt()
+    {
+        var comment = new CommentItem(
+            "c1", "Ben Seymour", 1_751_476_320_000, new string('x', 500), Resolved: false, TaskId: "t1", ReplyCount: 3);
+
+        var row = FeedRowFormatter.Format(comment);
+
+        // The reply count sits ahead of the (truncatable) preview body.
+        Assert.True(row.Text.IndexOf("3 replies", StringComparison.Ordinal)
+            < row.Text.IndexOf("xxxxx", StringComparison.Ordinal));
+    }
+
     // ── Recent-activity rows (#117) ──────────────────────────────────────────
 
     private static ActivityItem Activity(

@@ -71,13 +71,16 @@ public static class TaskDetailFormatter
     /// </summary>
     public const string CommentSeparator = "────────────────────────────────────────";
 
-    /// <summary>The Comments tab body: one block per comment, separated by <see cref="CommentSeparator"/>
-    /// (only between comments — never leading/trailing). Ordered by <paramref name="sort"/> the same way
-    /// the Stream tab orders its comments (#106) — <see cref="StreamSort.Ascending"/> oldest-first,
-    /// <see cref="StreamSort.Descending"/> newest-first — so the single activity-order preference governs
-    /// both tabs. Undated comments cluster at the oldest end (see <see cref="OrderComments"/>).</summary>
+    /// <summary>The Comments tab body: one <b>thread</b> per top-level comment (a parent
+    /// <see cref="CommentBlock"/> followed by its nested, indented replies — see <see cref="Thread"/>),
+    /// separated by <see cref="CommentSeparator"/> (only between threads — never leading/trailing).
+    /// Top-level comments are ordered by <paramref name="sort"/> the same way the Stream tab orders its
+    /// comments (#106) — <see cref="StreamSort.Ascending"/> oldest-first, <see cref="StreamSort.Descending"/>
+    /// newest-first — so the single activity-order preference governs both tabs. Undated comments cluster at
+    /// the oldest end (see <see cref="InActivityOrder"/>). A comment with no replies renders exactly as its
+    /// <see cref="CommentBlock"/>, so the flat (thread-less) case is byte-for-byte unchanged (#329).</summary>
     public static string Comments(IReadOnlyList<CommentItem> comments, StreamSort sort = StreamSort.Ascending)
-        => comments.Count == 0 ? "(no comments)" : JoinBlocks(OrderComments(comments, sort).Select(CommentBlock));
+        => comments.Count == 0 ? "(no comments)" : JoinBlocks(OrderedThreads(comments, sort));
 
     /// <summary>
     /// The Stream tab body (#106): the Description and the comments as a single timeline of blocks,
@@ -103,18 +106,25 @@ public static class TaskDetailFormatter
     public static string Stream(TaskDetail task, IReadOnlyList<CommentItem> comments, StreamSort sort)
     {
         var description = DescriptionBlock(task);
-        var commentBlocks = OrderComments(comments, sort).Select(CommentBlock);
+        var commentThreads = OrderedThreads(comments, sort);
         var blocks = sort == StreamSort.Ascending
-            ? new[] { description }.Concat(commentBlocks)
-            : commentBlocks.Append(description);
+            ? new[] { description }.Concat(commentThreads)
+            : commentThreads.Append(description);
         return JoinBlocks(blocks);
     }
 
+    /// <summary>The top-level comments in activity order (<see cref="InActivityOrder"/>), each expanded to
+    /// its <see cref="Thread"/> (parent block + nested replies). The single thread projection both the
+    /// Comments and Stream (#106) tabs share, so their comment sequences stay byte-for-byte identical.</summary>
+    private static IEnumerable<string> OrderedThreads(IReadOnlyList<CommentItem> comments, StreamSort sort)
+        => InActivityOrder(comments, sort).Select(c => Thread(c, sort));
+
     /// <summary>Comments in activity order — oldest-first for <see cref="StreamSort.Ascending"/>, newest-
     /// first for <see cref="StreamSort.Descending"/> — the single ordering both the Stream (#106) and
-    /// Comments tabs share. Undated comments sort as the <em>oldest</em> (key <c>DateMs ?? long.MinValue</c>),
-    /// with an ordinal <c>Id</c> tiebreak for determinism; descending is the exact reverse of ascending.</summary>
-    private static IEnumerable<CommentItem> OrderComments(IReadOnlyList<CommentItem> comments, StreamSort sort)
+    /// Comments tabs share (and, within a thread, that a parent's replies follow — see <see cref="Thread"/>).
+    /// Undated items sort as the <em>oldest</em> (key <c>DateMs ?? long.MinValue</c>), with an ordinal
+    /// <c>Id</c> tiebreak for determinism; descending is the exact reverse of ascending.</summary>
+    private static IEnumerable<CommentItem> InActivityOrder(IReadOnlyList<CommentItem> comments, StreamSort sort)
     {
         var ascending = comments
             .OrderBy(c => c.DateMs ?? long.MinValue)
@@ -139,6 +149,66 @@ public static class TaskDetailFormatter
         return sb.ToString();
     }
 
+    /// <summary>The reply gutter: a down-right arrow glyph then a space (two display cells), prefixed to a
+    /// reply's header line so a nested comment reads as an answer to the one above it (#329). Exposed like
+    /// <see cref="CommentSeparator"/> so the view and tests can reference the marker without hard-coding the
+    /// glyph.</summary>
+    public const string ReplyMarker = "↳ ";
+
+    /// <summary>Indentation added per nesting level (below the first), so a reply-of-a-reply steps in again.
+    /// Two spaces — the width of <see cref="ReplyMarker"/> — so a reply body aligns under its header text.</summary>
+    private const string IndentUnit = "  ";
+
+    /// <summary>
+    /// One top-level comment rendered as a <b>thread</b> (#329): its <see cref="CommentBlock"/> followed by
+    /// its replies, each indented under it (depth-first, recursively). A parent's replies are ordered by the
+    /// same <paramref name="sort"/> as the top-level list (<see cref="InActivityOrder"/>) so the chosen
+    /// ascending/descending order is preserved within a thread; the parent always renders first, as the thread
+    /// root. Blocks within a thread are separated by a blank line — deliberately <em>not</em> the heavy
+    /// <see cref="CommentSeparator"/> rule, which is reserved for the boundary <em>between</em> threads
+    /// (see <see cref="JoinBlocks"/>) so a thread coheres visually. A comment with no replies yields exactly
+    /// its <see cref="CommentBlock"/> (no indent, no separator), keeping the flat case unchanged.
+    /// </summary>
+    private static string Thread(CommentItem comment, StreamSort sort)
+        => string.Join("\n\n", FlattenThread(comment, sort, depth: 0).Select(x => IndentBlock(x.Block, x.Depth)));
+
+    /// <summary>The comment and its whole reply subtree as <c>(depth, block)</c> pairs in top-down render
+    /// order: the comment first, then each reply (ordered by <paramref name="sort"/>) with its own subtree.
+    /// ClickUp threads are one level deep today, but the recursion handles any depth uniformly.</summary>
+    private static IEnumerable<(int Depth, string Block)> FlattenThread(CommentItem comment, StreamSort sort, int depth)
+    {
+        yield return (depth, CommentBlock(comment));
+        foreach (var reply in InActivityOrder(comment.Replies, sort))
+            foreach (var nested in FlattenThread(reply, sort, depth + 1))
+                yield return nested;
+    }
+
+    /// <summary>Indents every line of a comment <paramref name="block"/> by its <paramref name="depth"/>: one
+    /// <see cref="IndentUnit"/> of leading blank per level, then the header line carries <see cref="ReplyMarker"/>
+    /// and the body lines an equal-width blank — so a depth-1 reply is indented one step in with the marker,
+    /// its body lines up under its header text, and deeper replies step in further. <paramref name="depth"/> 0
+    /// (a top-level comment, or the Stream Description block) is returned unchanged. Note: the panes word-wrap,
+    /// so a wrapped continuation of an indented line falls back to column 0 — the leading indent + marker still
+    /// make the thread structure clear.</summary>
+    private static string IndentBlock(string block, int depth)
+    {
+        if (depth <= 0)
+            return block;
+
+        var pad = string.Concat(Enumerable.Repeat(IndentUnit, depth));
+        var headerPrefix = pad + ReplyMarker;
+        var bodyPrefix = pad + new string(' ', ReplyMarker.Length);
+        var lines = block.Split('\n');
+        var sb = new StringBuilder();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (i > 0)
+                sb.Append('\n');
+            sb.Append(i == 0 ? headerPrefix : bodyPrefix).Append(lines[i]);
+        }
+        return sb.ToString();
+    }
+
     /// <summary>The Description as a Stream block: a <c>Description</c> header line (with the task's
     /// created date when present, in the comment header's <c>·</c> shape) above the description body.</summary>
     private static string DescriptionBlock(TaskDetail task)
@@ -152,9 +222,11 @@ public static class TaskDetailFormatter
         return sb.ToString();
     }
 
-    /// <summary>Joins blocks with the standard divider — a blank line, the <see cref="CommentSeparator"/>
-    /// rule, then a blank line — so it sits clear of both the previous body and the next header, and is
-    /// never leading or trailing. Each block carries no trailing newline.</summary>
+    /// <summary>Joins top-level blocks (each a Description block or a whole comment <see cref="Thread"/>)
+    /// with the standard divider — a blank line, the <see cref="CommentSeparator"/> rule, then a blank line —
+    /// so it sits clear of both the previous body and the next header, and is never leading or trailing. This
+    /// heavy rule marks a <em>thread</em> boundary; replies within a thread are joined by a plain blank line
+    /// instead (see <see cref="Thread"/>). Each block carries no trailing newline.</summary>
     private static string JoinBlocks(IEnumerable<string> blocks)
         => string.Join("\n\n" + CommentSeparator + "\n\n", blocks);
 

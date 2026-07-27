@@ -378,6 +378,110 @@ public sealed class TaskDetailFormatterTests
         Assert.True(desc.IndexOf("BODYB", StringComparison.Ordinal) < desc.IndexOf("BODYA", StringComparison.Ordinal));
     }
 
+    // ---- Threaded comments (#329) -------------------------------------------
+
+    private static CommentItem Parent(string id, string author, long? date, string text, params CommentItem[] replies)
+        => new(id, author, DateMs: date, Text: text, Resolved: false, Replies: replies);
+
+    private static CommentItem Reply(string id, string author, long? date, string text)
+        => new(id, author, DateMs: date, Text: text, Resolved: false);
+
+    [Fact]
+    public void Comments_Reply_RendersNestedUnderParent()
+    {
+        CommentItem[] comments = [Parent("1", "ben", 1000, "PARENT", Reply("1r1", "sam", 1100, "CHILD"))];
+
+        var text = TaskDetailFormatter.Comments(comments);
+
+        // Parent first, then its reply — indented one step in, led by the reply marker.
+        Assert.True(text.IndexOf("PARENT", StringComparison.Ordinal) < text.IndexOf("CHILD", StringComparison.Ordinal));
+        Assert.Contains("  " + TaskDetailFormatter.ReplyMarker + "sam", text);
+        // A single top-level comment → no heavy thread rule; the reply is joined intra-thread by a blank line.
+        Assert.DoesNotContain(TaskDetailFormatter.CommentSeparator, text);
+    }
+
+    [Fact]
+    public void Comments_ReplyBody_IsIndentedUnderTheReplyHeader()
+    {
+        CommentItem[] comments = [Parent("1", "ben", 1000, "PARENT", Reply("1r1", "sam", 1100, "line one\nline two"))];
+
+        var text = TaskDetailFormatter.Comments(comments);
+
+        // Every body line of a depth-1 reply is indented to 4 columns (one indent unit + the marker width),
+        // so the reply body lines up under its header text.
+        Assert.Contains("\n    line one", text);
+        Assert.Contains("\n    line two", text);
+    }
+
+    [Fact]
+    public void Comments_NoReplies_RenderFlatWithNoMarker()
+    {
+        // A comment whose Replies collection is empty renders exactly as before threading: no marker, and the
+        // heavy rule still sits once between the two top-level comments.
+        CommentItem[] comments =
+        [
+            new("1", "ben", DateMs: 1000, Text: "AAA", Resolved: false),
+            new("2", "sam", DateMs: 2000, Text: "BBB", Resolved: true),
+        ];
+
+        var text = TaskDetailFormatter.Comments(comments);
+
+        Assert.DoesNotContain(TaskDetailFormatter.ReplyMarker, text);
+        Assert.Equal(1, text.Split(TaskDetailFormatter.CommentSeparator).Length - 1);
+    }
+
+    [Fact]
+    public void Comments_HeavyRule_SeparatesThreadsNotReplies()
+    {
+        CommentItem[] comments =
+        [
+            Parent("1", "ben", 1000, "T1PARENT", Reply("1r1", "sam", 1100, "T1CHILD")),
+            new("2", "kim", DateMs: 2000, Text: "T2STANDALONE", Resolved: false),
+        ];
+
+        var text = TaskDetailFormatter.Comments(comments);
+
+        // Exactly one heavy rule — the boundary between the two top-level threads, never between a parent
+        // and its reply.
+        Assert.Equal(1, text.Split(TaskDetailFormatter.CommentSeparator).Length - 1);
+        var rule = text.IndexOf(TaskDetailFormatter.CommentSeparator, StringComparison.Ordinal);
+        Assert.True(text.IndexOf("T1CHILD", StringComparison.Ordinal) < rule, "reply must sit inside its thread, above the boundary");
+        Assert.True(rule < text.IndexOf("T2STANDALONE", StringComparison.Ordinal), "the standalone comment is the next thread, below the boundary");
+    }
+
+    [Fact]
+    public void Comments_RepliesFollowSortWithinThread_ParentAlwaysFirst()
+    {
+        CommentItem[] comments =
+        [
+            Parent("1", "ben", 1000, "PARENT",
+                Reply("1r1", "a", 1100, "REPLYOLD"),
+                Reply("1r2", "b", 1200, "REPLYNEW")),
+        ];
+
+        var asc = TaskDetailFormatter.Comments(comments, StreamSort.Ascending);
+        Assert.True(asc.IndexOf("PARENT", StringComparison.Ordinal) < asc.IndexOf("REPLYOLD", StringComparison.Ordinal));
+        Assert.True(asc.IndexOf("REPLYOLD", StringComparison.Ordinal) < asc.IndexOf("REPLYNEW", StringComparison.Ordinal));
+
+        var desc = TaskDetailFormatter.Comments(comments, StreamSort.Descending);
+        // The parent stays first as the thread root; only the replies flip to newest-first.
+        Assert.True(desc.IndexOf("PARENT", StringComparison.Ordinal) < desc.IndexOf("REPLYNEW", StringComparison.Ordinal));
+        Assert.True(desc.IndexOf("REPLYNEW", StringComparison.Ordinal) < desc.IndexOf("REPLYOLD", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Stream_Reply_RendersNestedUnderParent()
+    {
+        CommentItem[] comments = [Parent("1", "ben", 1000, "PARENT", Reply("1r1", "sam", 1100, "CHILD"))];
+
+        var text = TaskDetailFormatter.Stream(Sample(description: "DESCBODY"), comments, StreamSort.Ascending);
+
+        Assert.Contains("  " + TaskDetailFormatter.ReplyMarker + "sam", text);
+        Assert.True(text.IndexOf("PARENT", StringComparison.Ordinal) < text.IndexOf("CHILD", StringComparison.Ordinal));
+        // Description block + one comment thread → exactly one heavy rule; the reply is intra-thread.
+        Assert.Equal(1, text.Split(TaskDetailFormatter.CommentSeparator).Length - 1);
+    }
+
     [Fact]
     public void OtherAttributes_IncludesListAndDateLabels()
     {
