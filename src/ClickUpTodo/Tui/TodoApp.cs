@@ -1261,7 +1261,8 @@ public sealed class TodoApp
             listTopFrequent: (n, exclude) => _lists.TopMostFrequent(n, exclude),
             primaryList: primaryList,
             createAsync: (targetListId, request, ct) => _tasks.CreateTaskAsync(targetListId, request, ct),
-            addToListAsync: (taskId, targetListId, ct) => _tasks.AddTaskToListAsync(taskId, targetListId, ct));
+            addToListAsync: (taskId, targetListId, ct) => _tasks.AddTaskToListAsync(taskId, targetListId, ct),
+            fetchListFieldsAsync: (targetListId, ct) => _tasks.GetListCustomFieldsAsync(targetListId, ct));
         screen.Created += (_, result) =>
         {
             // Land the next refresh on the new task, then kick that refresh directly (RequestRefresh's
