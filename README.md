@@ -212,12 +212,49 @@ A tab launched this way (or any `clickup-todo --task <id>`) **titles its termina
 the task — `{id}: {title}`, using the custom id when the task has one, truncated to 40 characters — so
 several single-task tabs stay distinguishable at a glance from the tab strip alone.
 
+#### Which terminals are detected, and a custom launch command
+
+Auto-detection (used by both the task-tab launch and agent dispatch) probes these, in order, and
+uses the first one present:
+
+- **Windows** — Windows Terminal → `pwsh` → `powershell` → `cmd` (choose a specific one with the
+  **Preferred terminal** setting in F2, or `AgentDispatch.PreferredTerminal` in `config.json`).
+- **macOS** — iTerm2 (for a new tab, when you're inside it) then Terminal.app.
+- **Linux** — `$TERMINAL`, then `x-terminal-emulator`, `gnome-terminal`, `konsole`,
+  `xfce4-terminal`, `alacritty`, `kitty`, `wezterm`, `foot`, `xterm`, `terminator`; a `tmux` window
+  when you're inside tmux.
+
+If your emulator isn't in that list, or you want to **prefer a specific one on macOS/Linux** (where
+`PreferredTerminal` doesn't apply), set a **custom terminal launch command** — the
+"Custom terminal cmd" field in F2, or `"customTerminalCommand"` under `agentDispatch` in
+`config.json`. When set and its executable is on your `PATH`, it's tried **first**, ahead of
+auto-detection; leave it blank for auto-detection only. It's a shell-style command line where a `{}`
+placeholder marks where the launched command is inserted (appended if you omit it):
+
+```jsonc
+// ~/.config/clickup-todo/config.json  (under "agentDispatch")
+"customTerminalCommand": "ghostty -e {}"     // or: "kitty {}", "wezterm start -- {}",
+                                             // "alacritty -e {}", "gnome-terminal --tab -- {}"
+```
+
+You control window-vs-tab through your own template (e.g. `gnome-terminal --tab -- {}`). The command
+runs the task tab / `claude` session the same way the built-in emulators do, so a wrapper script works
+too. If the executable isn't found, it's skipped and auto-detection runs as usual. Only the **first**
+`{}` is the splice point (extra `{}` are literal). On **Windows** the payload is a PowerShell command,
+so a custom command also needs `pwsh` or `powershell` present (effectively always true — Windows
+PowerShell ships in-box); otherwise it's skipped and auto-detection runs.
+
 ## Mentions & Comments feed
 
 Press `Ctrl+E` to open a feed of recent comments and `@`-mentions across the tasks assigned to you
 (`F3` toggles a mentions-only view). ClickUp has no inbox/mentions API, so the feed is synthesised
 from the comments on your **assigned** tasks — which means a mention on a task you aren't assigned to
 won't appear unless a small **per-Space ClickUp Automation** turns mentions into assignments.
+
+A comment that has a reply thread shows a `N replies` count on its feed row; the reply bodies
+themselves aren't fetched for the feed (that would fan out across every assigned task), but they're
+rendered nested under the comment in the Task Detail **Comments** / **Stream** tabs when you open the
+task.
 
 `F6` toggles a **recent-activity** source: your recently-updated assigned tasks (by ClickUp
 `date_updated`), merged into the feed newest-first so "what changed on my tasks" sits alongside the

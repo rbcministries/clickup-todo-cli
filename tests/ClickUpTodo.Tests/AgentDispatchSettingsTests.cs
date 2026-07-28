@@ -22,6 +22,7 @@ public sealed class AgentDispatchSettingsTests
         Assert.Equal(AgentSessionMode.Interactive, s.DefaultSessionMode);
         Assert.False(s.DefaultPostResultsToComments);
         Assert.Equal(LaunchLocation.NewWindow, s.LaunchLocation);
+        Assert.Equal("", s.CustomTerminalCommand);
     }
 
     [Theory]
@@ -43,7 +44,14 @@ public sealed class AgentDispatchSettingsTests
         Assert.False(new AgentDispatchSettings { DefaultPostResultsToComments = true }.IsDefault);
         Assert.False(new AgentDispatchSettings { PromptTemplate = "Custom {userPrompt}" }.IsDefault);
         Assert.False(new AgentDispatchSettings { LaunchLocation = LaunchLocation.NewTab }.IsDefault);
+        Assert.False(new AgentDispatchSettings { CustomTerminalCommand = "alacritty -e {}" }.IsDefault);
     }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void IsDefault_TreatsBlankCustomTerminalCommandAsDefault(string cmd)
+        => Assert.True(new AgentDispatchSettings { CustomTerminalCommand = cmd }.IsDefault);
 
     // ── ToLauncherOptions ──────────────────────────────────────────────────────────
 
@@ -67,6 +75,19 @@ public sealed class AgentDispatchSettingsTests
     [Fact]
     public void ToLauncherOptions_DefaultsLaunchLocationToNewWindow()
         => Assert.Equal(LaunchLocation.NewWindow, new AgentDispatchSettings().ToLauncherOptions().LaunchLocation);
+
+    [Fact]
+    public void ToLauncherOptions_ParsesCustomTerminalCommandIntoTokens()
+    {
+        var opts = new AgentDispatchSettings { CustomTerminalCommand = "'my term' -e {}" }.ToLauncherOptions();
+        Assert.Equal(["my term", "-e", "{}"], opts.CustomTerminalCommand);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ToLauncherOptions_BlankCustomTerminalCommand_IsEmpty(string cmd)
+        => Assert.Empty(new AgentDispatchSettings { CustomTerminalCommand = cmd }.ToLauncherOptions().CustomTerminalCommand);
 
     [Theory]
     [InlineData("")]

@@ -223,6 +223,112 @@ public sealed class DetailPaneViewTests
         Assert.Equal("https://example.com", RowStyledText(row, DetailPaneView.DetailCellStyle.WebLink));
     }
 
+    // ── OSC-8 hyperlink target (#380) ────────────────────────────────────────────────────────────────
+    // LinkUrlForCell reconstructs a bare link's URL from its tagged cells so the draw override can feed it
+    // to IDriver.CurrentUrl. Pure — exercised through the real Cell.ToCellList model, no driver.
+
+    // The single loaded line for `line`, as a cell list.
+    private static IReadOnlyList<Cell> Line(string line) => DetailPaneView.BuildCells(line, Sep).Single();
+
+    [Fact]
+    public void LinkUrlForCell_ReturnsUrl_ForEveryCellOfABareWebLink()
+    {
+        const string url = "https://example.com/docs";
+        const string line = "See " + url + " for details.";
+        var cells = Line(line);
+        var first = line.IndexOf(url, StringComparison.Ordinal);
+
+        // First, a middle, and the last cell of the URL run all resolve to the whole URL.
+        Assert.Equal(url, DetailPaneView.LinkUrlForCell(cells, first));
+        Assert.Equal(url, DetailPaneView.LinkUrlForCell(cells, first + url.Length / 2));
+        Assert.Equal(url, DetailPaneView.LinkUrlForCell(cells, first + url.Length - 1));
+    }
+
+    [Fact]
+    public void LinkUrlForCell_ReturnsUrl_ForABareTaskLink()
+    {
+        const string url = "https://app.clickup.com/t/abc123";
+        const string line = "Related: " + url + " (context)";
+        var cells = Line(line);
+        var at = line.IndexOf(url, StringComparison.Ordinal);
+        Assert.Equal(url, DetailPaneView.LinkUrlForCell(cells, at));
+    }
+
+    [Fact]
+    public void LinkUrlForCell_IsNull_ForNonLinkCells()
+    {
+        const string line = "See https://example.com now";
+        var cells = Line(line);
+        // Column 0 ('S') is prose, and the trailing " now" is prose too — neither is a link cell.
+        Assert.Null(DetailPaneView.LinkUrlForCell(cells, 0));
+        Assert.Null(DetailPaneView.LinkUrlForCell(cells, line.Length - 1));
+    }
+
+    [Fact]
+    public void LinkUrlForCell_ResolvesEachLink_WhenTwoShareALine()
+    {
+        const string task = "https://app.clickup.com/t/t1";
+        const string web = "https://example.com";
+        const string line = "task " + task + " and web " + web + " end";
+        var cells = Line(line);
+        Assert.Equal(task, DetailPaneView.LinkUrlForCell(cells, line.IndexOf(task, StringComparison.Ordinal)));
+        Assert.Equal(web, DetailPaneView.LinkUrlForCell(cells, line.IndexOf(web, StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void LinkUrlForCell_IsNull_OutOfRange()
+    {
+        var cells = Line("See https://example.com now");
+        Assert.Null(DetailPaneView.LinkUrlForCell(cells, -1));
+        Assert.Null(DetailPaneView.LinkUrlForCell(cells, cells.Count));
+        Assert.Null(DetailPaneView.LinkUrlForCell(cells, 999));
+    }
+
+    [Fact]
+    public void LinkUrlForCell_IsNull_ForAMarkdownLinksVisibleProse()
+    {
+        // A markdown link renders only its visible text ("click here"); the real target lives in the markup
+        // the reader never sees. Reconstructing from the displayed cells therefore must NOT invent a target —
+        // the prose isn't a URL, so no OSC-8 is emitted (deferred: full markdown-link OSC-8).
+        const string line = "See [click here](https://example.com/deep) now";
+        var cells = Line(line);
+        var visible = "click here";
+        var at = line.IndexOf(visible, StringComparison.Ordinal);
+        // The visible text is tagged as a (web) link by #317's rendering…
+        Assert.Equal(DetailPaneView.DetailCellStyle.WebLink, DetailPaneView.ClassifyCell(cells[at]));
+        // …but its reconstructed text is prose, not a URL, so LinkUrlForCell declines it.
+        Assert.Null(DetailPaneView.LinkUrlForCell(cells, at));
+    }
+
+    [Fact]
+    public void LinkUrlForCell_ReturnsTheVisibleUrl_NotTheTarget_ForAMarkdownLinkWhoseTextIsAUrl()
+    {
+        // Bounded, documented deviation: when a markdown link's VISIBLE text is itself a URL, the OSC-8 target
+        // reconstructed from the drawn cells is that displayed URL, not the markdown's true target. This is the
+        // safe direction (the target equals what the reader sees, never a hidden destination); correct
+        // markdown-target OSC-8 is deferred (#430). Pinned so the behaviour can't change silently.
+        const string visibleUrl = "https://example.com/a";
+        const string line = "See [" + visibleUrl + "](https://example.com/b) now";
+        var cells = Line(line);
+        var at = line.IndexOf(visibleUrl, StringComparison.Ordinal);
+        Assert.Equal(visibleUrl, DetailPaneView.LinkUrlForCell(cells, at));
+    }
+
+    [Fact]
+    public void LinkUrlForCell_StillResolvesTheUrl_WhenTheLinkIsKeyboardFocused()
+    {
+        // A keyboard-focused link (#319) carries FocusedLinkMarker instead of its kind marker, so its cells
+        // classify as FocusedLink — LinkUrlForCell must still recognise the run and emit its OSC-8 target,
+        // else focusing a link with Tab would drop its native hyperlink (#380 × #319 interaction).
+        const string url = "https://app.clickup.com/t/abc123";
+        const string line = "Related: " + url + " (context)";
+        var focused = DetailPaneView.ExtractPaneLinks(line, Sep)[0];
+        var cells = DetailPaneView.BuildCells(line, Sep, focused).Single();
+        var at = line.IndexOf(url, StringComparison.Ordinal);
+        Assert.Equal(DetailPaneView.DetailCellStyle.FocusedLink, DetailPaneView.ClassifyCell(cells[at]));
+        Assert.Equal(url, DetailPaneView.LinkUrlForCell(cells, at));
+    }
+
     // Exercises the real SetBody → TextView.Load path (no driver needed to load the model) and inspects
     // the loaded cells. This is the reviewer's concern (PR #184): the terminal-default (Color.None)
     // background must stay on the separator line only, and must not carry forward to the comment/

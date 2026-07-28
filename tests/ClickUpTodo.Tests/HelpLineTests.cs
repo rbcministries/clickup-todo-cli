@@ -62,6 +62,28 @@ public sealed class HelpLineTests
         Assert.True(item.IsAction);
     }
 
+    // #384 — the detail view's Ctrl+Enter opens the current task in its own terminal tab, the detail
+    // counterpart of the main list's #301 gesture. It rides the same glyph key `Ctrl+↩` re-raising the
+    // parseable `Ctrl+Enter` chord when the footer item is clicked (#289), and — like the list — uses the
+    // same key as the list so the two surfaces stay consistent.
+    [Fact]
+    public void DetailWithTaskTree_CarriesCtrlEnterNewTab_ReRaisingCtrlEnter()
+    {
+        var item = HelpItemSets.DetailWithTaskTree.Single(i => i.Label == "new tab");
+        Assert.Equal("Ctrl+↩", item.Key);
+        Assert.Equal("Ctrl+Enter", item.ActionKey);
+        Assert.True(item.IsAction);
+        // Same key as the list's new-tab gesture, so the shortcut doesn't drift across surfaces.
+        Assert.Equal(HelpItemSets.MainList.Single(i => i.Label == "new tab").ActionKey, item.ActionKey);
+    }
+
+    // The gesture is scoped to the dashboard-hosted detail (the one with the Task Tree tab). Single-task
+    // launch mode uses the leaner Detail set and neither advertises nor fires it — so a single-task tab
+    // never offers "open another tab of myself".
+    [Fact]
+    public void Detail_SingleTaskMode_DoesNotCarryNewTab()
+        => Assert.DoesNotContain(HelpItemSets.Detail, i => i.Label == "new tab");
+
     // #290 — the "quick update" action must use one shortcut everywhere. It launches Quick Updates from
     // both the main list and Task Detail, so both help sets must advertise the same key (Ctrl+U).
     [Fact]
