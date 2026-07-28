@@ -40,8 +40,9 @@ away from it. No C# changes.
   operator env.
 - **`double_click_check.py`:** set `E2E_TASKS="20"` in the check's own `env` dict, pinning the short
   list its `EMPTY_ROW=20` assumes instead of inheriting the default — the one-line fix the issue
-  suggests, matching how the other checks fix their own env (`link_check.py` its `COLS`,
-  `tab_boundary_check.py` its `E2E_TREE`).
+  suggests, matching how the sibling checks pin their own task count rather than inherit it
+  (`tree_tab_check.py` `E2E_TASKS=6`, `fold_click_check.py` `E2E_TASKS=8`, `exit_confirm_check.py`
+  `E2E_TASKS=20`; `tab_boundary_check.py` sets its own `E2E_TREE=1`).
 
 ## Not changed
 
