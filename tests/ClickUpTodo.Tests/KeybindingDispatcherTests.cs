@@ -94,4 +94,30 @@ public sealed class KeybindingDispatcherTests
             Assert.Equal(action, lastFired);
         }
     }
+
+    // Same closure for the QuickOpen context (#398 slice): every QuickOpen command's table key
+    // (Open/Help/Back) dispatches to its own handler and to no other. With the footer-agreement
+    // guard in KeybindingsTests, this proves dispatch == table == footer for QuickOpen too.
+    [Fact]
+    public void EveryQuickOpenAction_DispatchesToItsOwnHandler()
+    {
+        var actions = Keybindings.ActionsFor(ScreenContext.QuickOpen).ToList();
+        KeyAction? lastFired = null;
+
+        var dispatcher = new KeybindingDispatcher(ScreenContext.QuickOpen);
+        foreach (var action in actions)
+        {
+            var captured = action;
+            dispatcher.On(captured, () => lastFired = captured);
+        }
+
+        foreach (var action in actions)
+        {
+            lastFired = null;
+            var handled = dispatcher.Dispatch(Parse(Keybindings.Token(ScreenContext.QuickOpen, action)));
+
+            Assert.True(handled, $"{action} key should dispatch");
+            Assert.Equal(action, lastFired);
+        }
+    }
 }
