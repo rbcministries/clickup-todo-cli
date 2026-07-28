@@ -88,11 +88,28 @@ tests.
 
 ## Tests
 
-- New unit tests for the retry policy: a work action that throws _k_ times then
-  succeeds runs exactly _k+1_ times and does **not** hit the give-up path; an
-  always-throwing action gives up exactly once after `maxAttempts` (swallowed).
+- **Retry policy** (`WriteRetryPolicyTests`): a work action that throws _k_ times
+  then succeeds runs exactly _k+1_ times and does **not** hit the give-up path; an
+  always-throwing action gives up exactly once after `maxAttempts` (swallowed);
+  delays fire between attempts but not after the final one; `maxAttempts < 1` is
+  clamped to one; and — since `Record` relies on `Run` never propagating — a
+  throwing `onGiveUp` or `delay` hook is itself swallowed.
+- **Store-level, deterministic** (`Record_WriteFailsThenSucceeds_ReusesAllocatedSeq_NoBurnNoLoss`):
+  an injectable retry policy plus a clock that throws once (right after seq
+  allocation) proves the retried write re-runs with the *same* seq — the marker
+  keeps seq 1 and a follow-up write is contiguous (1..2) — so no seq is burned and
+  no marker is lost. This pins the crux of the fix that the full-suite-only
+  concurrency test cannot exercise in isolation.
 - Keep the existing concurrency integration test's correctness assertions
   (count/no-collision/monotonic) intact — never weakened.
+
+## Validation
+
+- Full suite: 2716 passed / 21 skipped, 0 warnings.
+- The pre-fix flake reproduced ~1 in ~23 full-suite runs; post-fix, the suite was
+  looped 27× with zero failures (plus the `LiteDbChangeMarkerStore` class alone
+  looped 10×). Fully re-proving a ~4% flake is statistically expensive; the
+  deterministic store/policy tests are the primary guarantee, this is supporting.
 
 ## Tests
 
