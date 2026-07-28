@@ -20,6 +20,7 @@ namespace ClickUpTodo.Tui.Screens;
 public sealed class QuickOpenScreen : Screen
 {
     private readonly TextField _input;
+    private readonly KeybindingDispatcher _keys;
 
     /// <summary>The submitted (trimmed) text, or null when the screen was cancelled.</summary>
     public string? Result { get; private set; }
@@ -27,6 +28,14 @@ public sealed class QuickOpenScreen : Screen
     public QuickOpenScreen()
     {
         Title = "Open a task";
+
+        // #355/#398: dispatch the command shortcuts through the central table rather than a
+        // hand-rolled key switch, so the keys and their footer labels (HelpItemSets.QuickOpen)
+        // cannot drift. Open/Help/Back are the only three ScreenContext.QuickOpen entries.
+        _keys = new KeybindingDispatcher(ScreenContext.QuickOpen)
+            .On(KeyAction.Open, Submit)
+            .On(KeyAction.Help, RequestHelp)
+            .On(KeyAction.Back, Close);
 
         var prompt = new Label
         {
@@ -71,21 +80,10 @@ public sealed class QuickOpenScreen : Screen
 
     private void OnKey(object? sender, Key key)
     {
-        switch (key.KeyCode)
-        {
-            case KeyCode.Enter:
-                key.Handled = true;
-                Submit();
-                break;
-            case KeyCode.F1:
-                key.Handled = true;
-                RequestHelp();
-                break;
-            case KeyCode.Esc:
-                key.Handled = true;
-                Close();
-                break;
-        }
+        // Enter → Submit, F1 → Help, Esc → Cancel, all resolved from the central table (#355/#398).
+        // A non-matching key falls through unhandled, exactly as the old switch's default did.
+        if (_keys.Dispatch(key))
+            key.Handled = true;
     }
 
     /// <summary>
