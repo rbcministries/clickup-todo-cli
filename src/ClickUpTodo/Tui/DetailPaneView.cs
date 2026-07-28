@@ -1,4 +1,6 @@
+using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
+using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using Attribute = Terminal.Gui.Drawing.Attribute;
 
@@ -28,6 +30,13 @@ namespace ClickUpTodo.Tui;
 /// pane's right edge) keeps the normal read-only fill, exactly as the fixed-width rule already did.
 /// The <see cref="BuildCells"/> line classification is pure, so it is unit-tested; the draw override is
 /// the (CI-untestable) Terminal.Gui glue.
+/// </para>
+/// <para>
+/// The same draw override also emits **OSC-8 terminal hyperlinks** (#380): for each bare link cell it sets
+/// <see cref="IDriver.CurrentUrl"/> to the link's URL (via the pure <see cref="LinkUrlForCell"/>) so the ANSI
+/// output wraps the run in an <c>ESC ] 8 ; ; URL ST … ESC ] 8 ; ; ST</c> escape, letting a supporting terminal
+/// open the link natively. This is purely additive to the #317 styling — the visible colours/underline are
+/// unchanged — and degrades to nothing where the driver/terminal doesn't support it.
 /// </para>
 /// </summary>
 public sealed class DetailPaneView : TextView
@@ -92,6 +101,53 @@ public sealed class DetailPaneView : TextView
         if (a.Equals(WebLinkMarker))
             return DetailCellStyle.WebLink;
         return DetailCellStyle.Normal;
+    }
+
+    /// <summary>
+    /// The OSC-8 hyperlink target (#380) for the link run covering cell <paramref name="idxCol"/> of the
+    /// laid-out (display) <paramref name="line"/>, or <see langword="null"/> when that cell is not part of a
+    /// link whose on-screen text is itself a navigable <c>http(s)</c> URL. Pure — no Terminal.Gui draw surface —
+    /// so it is unit-tested; the draw override (<see cref="OnDrawReadOnlyColor"/>) feeds the result to
+    /// <see cref="IDriver.CurrentUrl"/> so the ANSI output wraps the run in an OSC-8 escape.
+    /// <para>
+    /// Because a <b>bare</b> link's displayed text <em>is</em> its URL (the case #317 renders and #380
+    /// validates), the target is reconstructed from the run's graphemes and returned only when it re-parses as
+    /// an absolute <c>http(s)</c> URL with a real host. A <b>markdown</b> <c>[text](url)</c> link, whose visible
+    /// text differs from its target, therefore yields <see langword="null"/> here rather than a wrong target —
+    /// full markdown-link OSC-8 needs the resolved span threaded into the draw path and is deferred (see the
+    /// plan doc). A word-wrapped link's tail fragment likewise fails the URL check; wrapped-link rendering is
+    /// tracked separately (#413).
+    /// </para>
+    /// </summary>
+    public static string? LinkUrlForCell(IReadOnlyList<Cell> line, int idxCol)
+    {
+        if (idxCol < 0 || idxCol >= line.Count)
+            return null;
+
+        var kind = ClassifyCell(line[idxCol]);
+        if (kind is not (DetailCellStyle.TaskLink or DetailCellStyle.WebLink))
+            return null;
+
+        // Expand over the maximal contiguous run of same-kind link cells around idxCol. Runs are naturally
+        // separated by the untagged cells BuildCells leaves between links (a link is bounded by whitespace),
+        // so a run is exactly one link.
+        var start = idxCol;
+        while (start > 0 && ClassifyCell(line[start - 1]) == kind)
+            start--;
+        var end = idxCol;
+        while (end + 1 < line.Count && ClassifyCell(line[end + 1]) == kind)
+            end++;
+
+        var text = string.Concat(Enumerable.Range(start, end - start + 1).Select(i => line[i].Grapheme ?? ""));
+
+        // Only emit for a run whose text is itself a navigable absolute http(s) URL. A bare link passes (its
+        // text is the URL); a markdown link's visible prose, or a wrapped link's non-URL tail fragment, does
+        // not — so a wrong OSC-8 target is never emitted.
+        return Uri.TryCreate(text, UriKind.Absolute, out var uri)
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+            && !string.IsNullOrEmpty(uri.Host)
+                ? text
+                : null;
     }
 
     public DetailPaneView()
@@ -176,6 +232,11 @@ public sealed class DetailPaneView : TextView
     /// <inheritdoc/>
     protected override void OnDrawReadOnlyColor(List<Cell> line, int idxCol, int idxRow)
     {
+        // OSC-8 hyperlink (#380): tag the cell about to be drawn with its link's URL (or clear it for a
+        // non-link cell) so the subsequent AddRune associates it and the ANSI output wraps the run in an
+        // OSC-8 escape. Additive to #317's styling below; parallel to how SetAttribute drives CurrentAttribute.
+        SetCurrentUrl(LinkUrlForCell(line, idxCol));
+
         if (idxCol >= 0 && idxCol < line.Count && line[idxCol].Attribute is { } attr)
         {
             if (attr.Background == Color.None)
@@ -202,5 +263,22 @@ public sealed class DetailPaneView : TextView
         }
 
         base.OnDrawReadOnlyColor(line, idxCol, idxRow);
+    }
+
+    /// <inheritdoc/>
+    protected override void OnDrawComplete(DrawContext? context)
+    {
+        // Clear any URL left active by the pane's last drawn cell (#380) so a link that ends the pane can't
+        // leak its OSC-8 target onto a sibling view drawn later in the same frame.
+        SetCurrentUrl(null);
+        base.OnDrawComplete(context);
+    }
+
+    /// <summary>Sets the driver's active OSC-8 URL (or clears it with <see langword="null"/>). No-op when
+    /// there is no driver (e.g. a headless unit test loading the model without a running application).</summary>
+    private static void SetCurrentUrl(string? url)
+    {
+        if (Application.Driver is { } driver)
+            driver.CurrentUrl = url;
     }
 }

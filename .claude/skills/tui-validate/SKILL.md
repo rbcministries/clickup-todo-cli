@@ -137,16 +137,34 @@ Self-contained (sets `E2E_TREE=1` itself). Expected: `ok — survived bare arrow
 boundaries; ↑ on the Task Tree tab stays on the tab`. Reproduces the crash on the stock control (revert
 `NavSafeTabs`→`Tabs` to confirm) and passes on the fix.
 
+**8. OSC-8 terminal hyperlinks (#380)** — opens Task Detail and asserts that the two links #317 seeds
+(the task link on the Description, the web link on the Comments tab) are each wrapped in an OSC-8
+hyperlink escape (`ESC ] 8 ; ; <url> ST … ESC ] 8 ; ; ST`) targeting their own URL. This is the **one
+check that asserts on raw bytes** (see the pitfall below): OSC-8 is a hyperlink escape a VT emulator
+consumes, so it never appears on the pyte screen — pyte is driven only to boot/navigate:
+
+```bash
+timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/osc8_link_check.py $DLL
+```
+
+Self-contained (fixed COLS=120 so the seeded URLs don't wrap — a wrapped link is out of #380's scope,
+tracked with the wrapped-line rendering work, #413). Expected: `ok — task link (Description) and web link
+(Comments) each wrapped in an OSC-8 hyperlink`. Invisible to the text-only `detail_check.py` A/B and to
+`link_check.py`'s pyte styling assertions, which both stay green.
+
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 
 - **Answer the terminal's queries or nothing ever renders.** Terminal.Gui's ANSI driver
   asks the terminal for size (`ESC[18t`) and cursor position (`ESC[6n`); the scripts'
   `answer_queries()` replies on every read. A dumb pipe that never answers = permanently
   blank app.
-- **Assert on the pyte screen, never on raw output bytes.** With diffed flushing, text
-  reaches the terminal as fragments interleaved with cursor moves — `b"Task 1"` may never
-  appear contiguously in the byte stream even though the screen is perfect. Raw bytes are
-  only valid for *volume* metrics.
+- **Assert on the pyte screen, never on raw output bytes — with two exceptions.** With
+  diffed flushing, text reaches the terminal as fragments interleaved with cursor moves —
+  `b"Task 1"` may never appear contiguously in the byte stream even though the screen is
+  perfect. Raw bytes are valid only for (a) *volume* metrics and (b) *escape*-sequence
+  checks for things a VT emulator consumes rather than renders, so they never reach the
+  pyte screen at all — e.g. OSC-8 hyperlinks (check 8). Even then, accumulate the whole
+  stream and search it; an escape wrapping one repainted run is contiguous within that run.
 - **"First output byte" is not latency.** The app emits idle chatter every 40 ms
   iteration (cursor hide/home, periodic size query). Measure to a chunk containing row
   content; subtract the idle-window byte count from volume numbers.
