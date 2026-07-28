@@ -578,6 +578,121 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     }
 
     /// <summary>
+    /// Post a comment carrying <b>structured runs</b> — literal text and/or @-mention tag blocks (#322) —
+    /// to a task (<c>POST /task/{id}/comment</c>); the write substrate for the #325 @-mention composer.
+    /// The plain-text <see cref="CreateTaskCommentAsync(string, string, CancellationToken)"/> overload is
+    /// unchanged and stays the path for mention-free comments; this one is used when a comment tags members.
+    /// <para>
+    /// The <paramref name="runs"/> are mapped to ClickUp's structured <c>comment</c> blocks array
+    /// (<see cref="CommentRun.Text"/> → <c>{ text }</c>, <see cref="CommentRun.Mention"/> →
+    /// <c>{ type:"tag", user:{ id } }</c>) and posted <b>without</b> <c>comment_text</c> — ClickUp fills the
+    /// rendered <c>@Name</c> text server-side (G spike, #321). <c>notify_all</c> is sent as <c>false</c>.
+    /// </para>
+    /// <para>
+    /// Same minimal-response contract as the plain path: ClickUp's create response echoes only the new
+    /// comment's <c>id</c>/<c>date</c> (not the text/author/blocks), so the returned <see cref="CommentItem"/>
+    /// is built from those plus a flattened text preview of the runs — a <see cref="CommentRun.Mention"/>
+    /// renders as <c>@{id}</c> until the next fetch reconciles the real name — with the tagged ids surfaced on
+    /// <see cref="CommentItem.MentionedUserIds"/> and <see cref="CommentItem.Author"/> left empty for the
+    /// caller's optimistic row to stamp. The same id-stringify quirk applies (create returns the id as a JSON
+    /// number, the GET read path as a string).
+    /// </para>
+    /// </summary>
+    public Task<CommentItem> CreateTaskCommentAsync(string taskId, IReadOnlyList<CommentRun> runs, CancellationToken ct = default)
+    {
+        // Build + guard synchronously (before Guard's async body) so an empty body throws at the boundary
+        // without a network call — mirrors the plain path's ThrowIfNullOrWhiteSpace.
+        var blocks = BuildCommentBlocks(runs);
+        return Guard("CreateTaskComment", async () =>
+        {
+            var request = new CreateCommentRequest { Comment = blocks, NotifyAll = false };
+            var created = await _client.V2.Task[taskId].Comment.PostAsync(request, cancellationToken: ct);
+            // Same nudge as the plain path: a comment bumps the task's date_updated, but the create response
+            // returns only the comment's own id/date, so the marker carries no serverDateUpdated (#294).
+            _changeMarkers.Record(taskId, serverDateUpdatedMs: null, CommentFields);
+            return BuildStructuredCommentItem(created, runs, taskId);
+        });
+    }
+
+    /// <summary>
+    /// Maps domain <see cref="CommentRun"/>s to generated <see cref="CommentBlock"/>s, guarding an empty
+    /// body at the boundary. Since the spec dropped <c>comment_text</c> from <c>required</c> once blocks
+    /// exist (#322), ClickUp would otherwise accept and 400 an empty comment — so reject a null/empty run
+    /// list and a list carrying no mention whose text runs are all blank (mirrors the plain path's
+    /// <c>ThrowIfNullOrWhiteSpace</c>). Text runs are preserved verbatim (leading/trailing spacing between
+    /// mentions is meaningful); a mention run serializes to exactly <c>{ type:"tag", user:{ id } }</c>
+    /// because Kiota omits the unset <c>text</c>/<c>username</c>/<c>email</c> members.
+    /// </summary>
+    private static List<CommentBlock> BuildCommentBlocks(IReadOnlyList<CommentRun> runs)
+    {
+        ArgumentNullException.ThrowIfNull(runs);
+        if (runs.Count == 0)
+            throw new ArgumentException("A comment must have at least one run.", nameof(runs));
+
+        var hasText = false;
+        var hasMention = false;
+        var blocks = new List<CommentBlock>(runs.Count);
+        foreach (var run in runs)
+        {
+            switch (run)
+            {
+                case CommentRun.Text t:
+                    if (!string.IsNullOrWhiteSpace(t.Value)) hasText = true;
+                    // Coalesce a null Value (the record's type is non-nullable but nothing enforces it at
+                    // runtime) so a stray `{}` block never reaches ClickUp; a blank text run stays "".
+                    blocks.Add(new CommentBlock { Text = t.Value ?? "" });
+                    break;
+                case CommentRun.Mention m:
+                    hasMention = true;
+                    blocks.Add(new CommentBlock { Type = "tag", User = new User { Id = m.UserId } });
+                    break;
+                default:
+                    throw new ArgumentException($"Unsupported comment run '{run.GetType().Name}'.", nameof(runs));
+            }
+        }
+
+        if (!hasText && !hasMention)
+            throw new ArgumentException("A comment must carry at least one non-empty text run or a mention.", nameof(runs));
+        return blocks;
+    }
+
+    /// <summary>
+    /// Builds the optimistic <see cref="CommentItem"/> for a structured post from the minimal create
+    /// response plus the posted runs: a flattened text preview (mentions rendered as <c>@{id}</c>) and the
+    /// tagged ids on <see cref="CommentItem.MentionedUserIds"/>. Shares the create-response id-stringify /
+    /// empty-author contract with the plain path.
+    /// </summary>
+    private static CommentItem BuildStructuredCommentItem(CreateCommentResponse? created, IReadOnlyList<CommentRun> runs, string taskId)
+    {
+        var preview = new System.Text.StringBuilder();
+        var mentionedIds = new List<long>();
+        foreach (var run in runs)
+        {
+            switch (run)
+            {
+                case CommentRun.Text t:
+                    preview.Append(t.Value);
+                    break;
+                case CommentRun.Mention m:
+                    preview.Append('@').Append(m.UserId.ToString(CultureInfo.InvariantCulture));
+                    mentionedIds.Add(m.UserId);
+                    break;
+            }
+        }
+
+        return new CommentItem(
+            Id: created?.Id?.ToString(CultureInfo.InvariantCulture) ?? "",
+            Author: "",
+            DateMs: created?.Date,
+            Text: preview.ToString(),
+            Resolved: false,
+            TaskId: taskId)
+        {
+            MentionedUserIds = mentionedIds,
+        };
+    }
+
+    /// <summary>
     /// The replies in a comment's thread (<c>GET /comment/{comment_id}/reply</c>, #327), mapped to the
     /// stable <see cref="CommentItem"/> shape. Unlike the flat task-comment endpoint this one is
     /// <b>not cursor-paginated</b> — ClickUp returns a thread's replies in a single response (a thread is
