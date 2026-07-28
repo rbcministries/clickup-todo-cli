@@ -1,3 +1,4 @@
+using System.Text;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
@@ -431,6 +432,80 @@ public sealed class DetailPaneView : TextView
     }
 
     /// <summary>
+    /// Recomputes, for a single rendered (possibly word-wrapped) row, which cells belong to a task/web
+    /// link — from the row's <em>own</em> graphemes rather than the per-cell tags <see cref="BuildCells"/>
+    /// applied to the source line. Terminal.Gui 2.4.10's word wrap rebuilds a wrapped row's graphemes from
+    /// the wrap offset but its per-cell attributes from index 0 of the source line, so the link tags land
+    /// on the wrong cells of every row after the first and the underline is drawn in the wrong columns
+    /// (#413). Re-extracting from the row text is offset-free: a URL contains no whitespace and word wrap
+    /// breaks on whitespace, so a URL that fits the pane width sits wholly on one wrapped row and yields
+    /// row-local offsets with no wrap-offset arithmetic. Returns one <see cref="DetailCellStyle"/> per cell
+    /// (only <see cref="DetailCellStyle.TaskLink"/> / <see cref="DetailCellStyle.WebLink"/> /
+    /// <see cref="DetailCellStyle.Normal"/> — separators are handled from the tag, which the wrap bug
+    /// leaves correct because a separator row is tagged uniformly). Pure and Terminal.Gui-draw-free so it
+    /// is unit-tested.
+    /// </summary>
+    public static DetailCellStyle[] ClassifyRowLinkCells(IReadOnlyList<Cell> row)
+    {
+        var styles = new DetailCellStyle[row.Count];
+        if (row.Count == 0)
+            return styles;
+
+        // Reconstruct the row's text and each cell's start char offset. A cell is one grapheme, which can
+        // be more than one UTF-16 char (e.g. an emoji), so map by accumulated grapheme length — not cell
+        // index — to stay aligned with the char offsets TaskLinkExtractor returns.
+        var text = new StringBuilder(row.Count);
+        var offsets = new int[row.Count];
+        for (var i = 0; i < row.Count; i++)
+        {
+            offsets[i] = text.Length;
+            text.Append(row[i].Grapheme ?? string.Empty);
+        }
+
+        var rendered = text.ToString();
+        // Cheap bail-out: every link (bare or markdown) carries an http(s) scheme, so a row without one
+        // has no links and skips the regex entirely — the common case for body text.
+        if (rendered.IndexOf("http", StringComparison.OrdinalIgnoreCase) < 0)
+            return styles;
+
+        var links = TaskLinkExtractor.Extract(rendered);
+        if (links.Count == 0)
+            return styles;
+
+        // Links are in document order and non-overlapping; walk cells and links together in one pass.
+        var li = 0;
+        for (var i = 0; i < row.Count; i++)
+        {
+            var off = offsets[i];
+            while (li < links.Count && off >= links[li].End)
+                li++;
+            if (li >= links.Count)
+                break;
+            if (off >= links[li].Start && off < links[li].End)
+                styles[i] = links[li].Kind == LinkKind.Task ? DetailCellStyle.TaskLink : DetailCellStyle.WebLink;
+        }
+
+        return styles;
+    }
+
+    // Per-row cache for the draw path: OnDrawReadOnlyColor is invoked once per cell, but the row's link
+    // classification only needs computing once per row. Keyed on the row list reference (Terminal.Gui's
+    // wrap model holds a distinct list per rendered row), so a new row triggers a recompute.
+    private List<Cell>? _linkRow;
+    private DetailCellStyle[]? _linkRowStyles;
+
+    private DetailCellStyle LinkStyleAt(List<Cell> line, int idxCol)
+    {
+        if (!ReferenceEquals(_linkRow, line) || _linkRowStyles is null || _linkRowStyles.Length != line.Count)
+        {
+            _linkRowStyles = ClassifyRowLinkCells(line);
+            _linkRow = line;
+        }
+
+        return idxCol < _linkRowStyles.Length ? _linkRowStyles[idxCol] : DetailCellStyle.Normal;
+    }
+
+    /// <summary>
     /// Left-click activation of an in-pane link (#318). A click resolves to a <see cref="LinkSpan"/> and,
     /// when it lands on one, raises <see cref="LinkActivationRequested"/> with the action
     /// <see cref="LinkActivator.Resolve"/> chose for the gesture's modifiers; anything else — a click on
@@ -568,39 +643,52 @@ public sealed class DetailPaneView : TextView
         // OSC-8 hyperlink (#380): tag the cell about to be drawn with its link's URL (or clear it for a
         // non-link cell) so the subsequent AddRune associates it and the ANSI output wraps the run in an
         // OSC-8 escape. Additive to #317's styling below; parallel to how SetAttribute drives CurrentAttribute.
+        // (Like the tag-driven cues below, LinkUrlForCell reads the per-cell tag, so on a wrapped
+        // continuation row its target degrades exactly as it does on main — #413 corrects the underline
+        // only; wrapped OSC-8/link-token handling is tracked in #443/#430.)
         SetCurrentUrl(LinkUrlForCell(line, idxCol));
 
-        if (idxCol >= 0 && idxCol < line.Count && line[idxCol].Attribute is { } attr)
+        if (idxCol >= 0 && idxCol < line.Count)
         {
-            if (attr.Background == Color.None)
+            // The separator and focused-link cues are tag-driven. A separator row is tagged uniformly, so
+            // word wrap leaves its tag correct; the focused-link tag (#319) is only reliable on a source
+            // (non-wrapped-continuation) row — the same wrap/attribute misalignment #413 works around for
+            // link kind can move it on a continuation row, a residual limit tracked in #443.
+            if (line[idxCol].Attribute is { } attr)
             {
                 // A separator cell: keep the pane's read-only foreground for the rule glyph, but drop the
                 // background to Color.None so the driver emits CSI 49m and the terminal's own default /
                 // transparent background shows through instead of the grey read-only fill.
-                var readOnly = GetAttributeForRole(VisualRole.ReadOnly);
-                SetAttribute(new Attribute(readOnly.Foreground, Color.None, readOnly.Style));
-                return;
-            }
+                if (attr.Background == Color.None)
+                {
+                    var readOnly = GetAttributeForRole(VisualRole.ReadOnly);
+                    SetAttribute(new Attribute(readOnly.Foreground, Color.None, readOnly.Style));
+                    return;
+                }
 
-            // The keyboard-focused link (#319): draw it in the theme's Focus role (a reverse-video-style
-            // emphasis) plus an underline, so it stands out from the always-on link underline (#317
-            // underlines every link, so the focus cue must be additional emphasis, not the underline).
-            // Re-resolved from the live role each draw, so it stays theme-aware like the kind markers.
-            if (attr.Equals(FocusedLinkMarker))
-            {
-                var focus = GetAttributeForRole(VisualRole.Focus);
-                SetAttribute(new Attribute(focus.Foreground, focus.Background, focus.Style | TextStyle.Underline));
-                return;
+                // The keyboard-focused link (#319): draw it in the theme's Focus role (a reverse-video-style
+                // emphasis) plus an underline, so it stands out from the always-on link underline (#317
+                // underlines every link, so the focus cue must be additional emphasis, not the underline).
+                // Re-resolved from the live role each draw, so it stays theme-aware like the kind markers.
+                if (attr.Equals(FocusedLinkMarker))
+                {
+                    var focus = GetAttributeForRole(VisualRole.Focus);
+                    SetAttribute(new Attribute(focus.Foreground, focus.Background, focus.Style | TextStyle.Underline));
+                    return;
+                }
             }
 
             // A link cell (#317): keep the pane's live read-only background so the link sits in the pane
             // like surrounding text, but recolour the foreground (blue for a web link, the read-only
-            // foreground for a task link) and add an underline. Re-resolving from the live role keeps the
-            // link theme-aware; the tag itself only carries which kind it is.
-            if (attr.Equals(TaskLinkMarker) || attr.Equals(WebLinkMarker))
+            // foreground for a task link) and add an underline. The kind is recomputed from the row's own
+            // graphemes (#413) rather than the per-cell tag, which word wrap misaligns on continuation rows
+            // — so this is deliberately NOT gated on the cell's own (possibly misaligned or null) attribute.
+            // Re-resolving from the live role keeps the link theme-aware.
+            var style = LinkStyleAt(line, idxCol);
+            if (style is DetailCellStyle.TaskLink or DetailCellStyle.WebLink)
             {
                 var readOnly = GetAttributeForRole(VisualRole.ReadOnly);
-                var foreground = attr.Equals(WebLinkMarker) ? WebLinkForeground : readOnly.Foreground;
+                var foreground = style == DetailCellStyle.WebLink ? WebLinkForeground : readOnly.Foreground;
                 SetAttribute(new Attribute(foreground, readOnly.Background, readOnly.Style | TextStyle.Underline));
                 return;
             }

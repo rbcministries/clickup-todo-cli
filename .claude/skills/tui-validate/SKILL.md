@@ -121,6 +121,23 @@ Self-contained (fixed COLS=120 so the seeded URLs don't wrap). Expected: `ok —
 underlined+default-fg (Description), web link underlined+recoloured (Comments)`. The colour/underline
 change is invisible to the text-only `detail_check.py` A/B, which stays identical.
 
+**6b. In-text link styling on WRAPPED lines (#413)** — the wrapped-line case check 6 deliberately
+avoids (it fixes `COLS=120` so URLs don't wrap). Runs at a narrow `COLS=50` where the seeded Description
+line (`Parent ticket: https://app.clickup.com/t/86a1b2c3d …`) word-wraps so the task URL lands on a
+continuation row, then asserts the underline covers **exactly** the URL cells and never the trailing
+prose. Terminal.Gui 2.4.10's word wrap keeps a wrapped row's graphemes but rebuilds its attributes from
+source index 0, so the pre-#413 underline was painted `len("Parent ticket: ")` columns too far right;
+the app now recomputes link cells per rendered row from the row's own graphemes. This is the **only**
+check that exercises the true wrapped-render draw path (the unit tests cover the pure helper on
+unwrapped lines), so run it whenever the detail-pane link styling or wrapping changes:
+
+```bash
+E2E_TASKS=20 timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/link_wrap_check.py $DLL
+```
+
+Self-contained (fixed `COLS=50`). Expected: `ok — wrapped task URL underlined exactly (no shift into
+trailing prose), COLS=50`. Fails on the pre-#413 code (underline shifted right off the URL).
+
 **7. Task Detail tab-boundary crash guard** — Terminal.Gui 2.4.10's stock `Tabs` control crashes
 (`InvalidOperationException: FocusChanging was not cancelled …` in `Tabs.SelectNextTab`/
 `SelectPreviousTab`) when a bare arrow drives tab navigation past the first/last tab; the app disables
