@@ -42,7 +42,8 @@ if (args.Any(a => a is "--help" or "-h" or "-?"))
     Console.WriteLine();
     Console.WriteLine("Usage: clickup-todo [--task <id>] [--reset] [--driver <name>]");
     Console.WriteLine("  (no args)        Launch the task UI (runs first-time setup if needed).");
-    Console.WriteLine("  --task <id>      Open straight into that task's detail view (a single-task tab).");
+    Console.WriteLine("  --task <id>      Open straight into that task's detail view (a single-task tab;");
+    Console.WriteLine("                   titles the terminal window/tab with the task's id + name).");
     Console.WriteLine("  --reset          Forget the saved token and settings.");
     Console.WriteLine("  --driver <name>  Force a Terminal.Gui console driver. One of:");
     Console.WriteLine("                     windows  native Win32 input (try this if input feels laggy)");
@@ -146,7 +147,10 @@ if (launch.HasId)
         return 1;
     }
 
-    new SingleTaskApp(taskService, config, configStore, launchTask, launchComments).Run(driverName);
+    // Hand the single-task tab the same cross-process nudge channel the dashboard gets (#377), so an
+    // edit to the launched task in another tab surfaces here promptly rather than only on the 30s tick.
+    new SingleTaskApp(taskService, config, configStore, launchTask, launchComments,
+        changeMarkers: changeMarkers).Run(driverName);
     return 0;
 }
 

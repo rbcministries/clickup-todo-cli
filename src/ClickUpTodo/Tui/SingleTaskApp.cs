@@ -41,10 +41,18 @@ namespace ClickUpTodo.Tui;
 /// </summary>
 public sealed class SingleTaskApp
 {
+    // The nudge-channel consumer (#377): `_changeMarkers` is the shared cross-process channel (the Null
+    // store has no channel), `_markerConsumer` the pure cursor scan over it, `_nudgePolicy` the
+    // single-task view predicates. UI-thread-only, mirroring TodoApp.
+    private static readonly TimeSpan MarkerPollInterval = TimeSpan.FromSeconds(4);
+
     private readonly TaskService _tasks;
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IBrowserLauncher _browser;
+    private readonly IChangeMarkerStore _changeMarkers;
+    private readonly ChangeMarkerConsumer _markerConsumer;
+    private readonly SingleTaskNudgePolicy _nudgePolicy;
     private readonly string _taskId;
 
     // The task/comments last shown. _task is read on the UI thread when launching the browser (Ctrl+B),
@@ -74,10 +82,14 @@ public sealed class SingleTaskApp
     // UI-thread-only (set in DispatchAgent, cleared via Application.Invoke) — mirrors TodoApp.
     private bool _dispatching;
 
+    // One-in-flight guard for the marker poll so two scans can't overlap (#377). UI-thread-only.
+    private bool _pollingMarkers;
+
     private string _status;
 
     public SingleTaskApp(TaskService tasks, AppConfig config, ConfigStore configStore, TaskDetail task,
-        IReadOnlyList<CommentItem> comments, IBrowserLauncher? browserLauncher = null)
+        IReadOnlyList<CommentItem> comments, IBrowserLauncher? browserLauncher = null,
+        IChangeMarkerStore? changeMarkers = null)
     {
         _tasks = tasks;
         _config = config;
@@ -87,6 +99,14 @@ public sealed class SingleTaskApp
         _comments = comments;
         _taskId = task.Id;
         _status = $"Loaded: {task.Name}";
+
+        // The nudge channel (#377). A no-op store (the file-backed state store's Null channel, or an app
+        // built without a channel) has an empty InstanceId, which disarms the poll (see ArmMarkerPoll) —
+        // so cross-tab freshness only kicks in where a real cross-process channel exists. The policy
+        // reads the *current* held version through a closure over _task so a refresh since launch counts.
+        _changeMarkers = changeMarkers ?? NullChangeMarkerStore.Instance;
+        _markerConsumer = new ChangeMarkerConsumer(_changeMarkers.InstanceId);
+        _nudgePolicy = new SingleTaskNudgePolicy(_taskId, () => _task.UpdatedMs);
     }
 
     private Screen ActiveScreen => _stack.Count > 0 ? _stack[^1] : _detail;
@@ -104,6 +124,7 @@ public sealed class SingleTaskApp
         {
             _status = $"{_status} (driver: {driverName ?? "default (ansi)"}{(diffing ? ", diffed output" : "")})";
             Build();
+            ArmMarkerPoll();
             Application.Run(_window);
         }
         finally
@@ -123,7 +144,12 @@ public sealed class SingleTaskApp
 
     private void Build()
     {
-        _window = new Window { Title = AppBranding.WindowTitle(_config.WorkspaceName) };
+        // Title the window with this task, not the product branding (#418). Terminal.Gui propagates the
+        // top-level window Title to the host terminal's window/tab title, so a `--task` tab identifies
+        // itself as "{id}: {name}" (custom id preferred, ≤40 chars) on the tab strip — where the
+        // identical "ClickUp Simple CLI — <workspace>" the dashboard uses would not distinguish tabs. The
+        // frame naming the task is also apt here: the whole tab *is* that one task.
+        _window = new Window { Title = TerminalTitle.ForTask(_task.Id, _task.CustomId, _task.Name) };
 
         // Build the agent dispatcher from the persisted settings (#91), same as the dashboard's
         // BuildAgentDispatcher — the preferred terminal / claude path / launch-location default apply.
@@ -175,6 +201,11 @@ public sealed class SingleTaskApp
         // single-task tab composes + launches a session with the dashboard's exact working-dir /
         // post-to-Comments / launch-location semantics.
         _detail.AgentDispatchRequested += (_, request) => DispatchAgent(request);
+        // Clicking a link in a text pane (#318). Both actions open the browser here: single-task mode has
+        // no in-app task→task destination yet — the Task Tree tab is absent and OpenTaskRequested is
+        // unwired until #374 — so a task link degrades to the browser rather than silently doing nothing.
+        // Unlike Ctrl+B this leaves the tab open, so the outcome is flashed on the live footer.
+        _detail.LinkActivationRequested += (_, request) => OpenLink(request.Url);
         _detail.FlashRequested += (_, message) => Flash(message);
         _detail.HelpRequested += (_, _) => OpenHelp();
 
@@ -221,6 +252,69 @@ public sealed class SingleTaskApp
             {
                 Application.Invoke(() => _refreshing = false);
             }
+        });
+    }
+
+    // ── Cross-process nudge channel — consumer (#377) ─────────────────────────
+
+    /// <summary>
+    /// Arms the nudge-channel consumer for the single-task tab (#377), mirroring
+    /// <c>TodoApp.ArmMarkerPoll</c>: seed the cursor to the current max marker seq so a fresh tab never
+    /// replays history (#295 edge case 1), then start a repeating marker poll on
+    /// <see cref="MarkerPollInterval"/> — its own short cadence, decoupled from the detail's 30s
+    /// auto-refresh. A no-op store (the file-backed state store's Null channel) has an empty InstanceId, so
+    /// nothing is armed and the tab keeps only its 30s freshness. Runs on the UI thread during
+    /// <see cref="Run"/>, before the run loop pumps.
+    /// </summary>
+    private void ArmMarkerPoll()
+    {
+        if (string.IsNullOrEmpty(_changeMarkers.InstanceId))
+            return; // no cross-process channel (e.g. the JSON file store) — nothing to consume.
+
+        _markerConsumer.Initialize(_changeMarkers.ReadAll());
+        // The timeout callback fires on the UI thread; returning true keeps it repeating. It's torn down
+        // by Application.Shutdown at quit along with the run loop.
+        Application.AddTimeout(MarkerPollInterval, () =>
+        {
+            PollMarkers();
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// One marker-poll tick (#377): read the markers <b>off</b> the UI thread (a <c>changes</c> ReadAll
+    /// briefly takes LiteDB's shared-mode cross-process lock), then run the pure cursor scan and reconcile
+    /// <b>on</b> the UI thread (the policy reads <c>_task</c>). The single-task tab holds exactly one task,
+    /// so the scan can only ever surface that one id — reconcile reuses <see cref="RefreshTask"/> (its own
+    /// in-flight / front-most guards apply), which is the per-task re-fetch, never a full resync and never
+    /// a self-echo (own-instance markers are filtered by the consumer). A single in-flight guard keeps two
+    /// scans from overlapping; best-effort throughout — a read failure is swallowed, since a nudge rides on
+    /// an edit that already succeeded elsewhere.
+    /// </summary>
+    private void PollMarkers()
+    {
+        if (_pollingMarkers)
+            return;
+        _pollingMarkers = true;
+
+        _ = Task.Run(() =>
+        {
+            IReadOnlyList<ChangeMarker> markers;
+            try { markers = _changeMarkers.ReadAll(); }
+            catch { markers = []; }
+
+            Application.Invoke(() =>
+            {
+                try
+                {
+                    foreach (var _ in _markerConsumer.Advance(markers, _nudgePolicy.IsInView, _nudgePolicy.HeldVersion))
+                        RefreshTask();
+                }
+                finally
+                {
+                    _pollingMarkers = false;
+                }
+            });
         });
     }
 
@@ -352,6 +446,14 @@ public sealed class SingleTaskApp
         if (ActiveScreen is ExitConfirmScreen)
             return;
 
+        // #407: same opt-out as the dashboard host — when confirmation is off, Esc/close quits the tab
+        // directly. Read live from the shared config; the re-entrancy guard above still runs first.
+        if (!_config.ConfirmOnExit)
+        {
+            Application.RequestStop();
+            return;
+        }
+
         var confirm = new ExitConfirmScreen();
         ShowScreen(confirm, () =>
         {
@@ -370,6 +472,31 @@ public sealed class SingleTaskApp
     // OpenBrowserRequested then Close()s), so — unlike TodoApp's LaunchBrowser — there is no live view
     // left to flash success/failure onto; a launch failure is only debug-logged. Shares the
     // IBrowserLauncher seam + app.clickup.com → workspace-subdomain rewrite the dashboard uses (#304/#346).
+    /// <summary>
+    /// Opens a link clicked in a detail pane (#318) in the browser. Unlike <see cref="LaunchBrowser"/>'s
+    /// Ctrl+B path this doesn't close the tab, so there <em>is</em> a live footer to report onto — the
+    /// dashboard flashes the same three outcomes. Shares the rewrite/parse/launch core (#304/#346).
+    /// </summary>
+    private void OpenLink(string url)
+    {
+        var (result, target) = ClickUpTaskBrowser.Open(_browser, url, _config.WorkspaceSubdomain);
+        switch (result)
+        {
+            case ClickUpTaskBrowser.Result.Opened:
+                Flash($"Opened: {target}");
+                break;
+            case ClickUpTaskBrowser.Result.LaunchFailed:
+                var hint = BrowserLaunchPlanner.OpenerHint(BrowserLaunchPlanner.CurrentOS());
+                Flash(hint is null
+                    ? $"Couldn't open a browser — copy the URL: {target}"
+                    : $"Couldn't open a browser ({hint}) — copy the URL: {target}");
+                break;
+            default:
+                Flash($"Not a valid URL: {target}");
+                break;
+        }
+    }
+
     private void LaunchBrowser(string? url)
     {
         var (result, target) = ClickUpTaskBrowser.Open(_browser, url, _config.WorkspaceSubdomain);

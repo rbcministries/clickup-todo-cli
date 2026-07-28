@@ -101,6 +101,18 @@ public sealed class AppConfig
     public BadgeDisplay BadgeDisplay { get; set; } = BadgeDisplay.Icons;
 
     /// <summary>
+    /// Whether quitting from a root view shows the exit-confirmation modal (#299) or exits immediately
+    /// (#407). On by default — it guards the one destructive <c>Esc</c> (#290) — and both hosts'
+    /// <c>RequestExit()</c> read it live, so a change in the F2 Settings dialog takes effect on the next
+    /// quit. <b>Default <c>true</c> is load-bearing:</b> a new bool would default to <c>false</c> and
+    /// silently disable the guard for existing users, so this relies on the same absent-key contract as
+    /// <see cref="RefreshSeconds"/>/<see cref="FeedRefreshSeconds"/> — System.Text.Json keeps this
+    /// initializer value when the <c>confirmOnExit</c> key is absent, so older configs load with the
+    /// confirmation still on and need no migration. Turning it off restores the pre-#299 one-key exit.
+    /// </summary>
+    public bool ConfirmOnExit { get; set; } = true;
+
+    /// <summary>
     /// Legacy status-exclusion setting, retained only as a <b>deserialize-only migration shim</b>
     /// (#69). Status exclusion is now expressed as ordinary F3 <c>Status IS NOT</c> filter rules;
     /// <see cref="ConfigMigrations"/> reads any saved <c>excludedStatuses</c> array on load, converts

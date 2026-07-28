@@ -486,9 +486,30 @@ public sealed class TaskService(
     public Task<TaskItem> CreateTaskAsync(string listId, NewTaskRequest task, CancellationToken ct = default)
         => client.CreateTaskAsync(listId, task, ct);
 
+    /// <summary>
+    /// The Custom Field <b>definitions</b> for a list — id, name, type, required flag, and
+    /// drop-down/label options (#249) — used by the New Task screen to render an input widget per
+    /// fillable field and enforce required fields (#368/#395). A thin passthrough to the facade
+    /// (<see cref="IClickUpClient.GetListCustomFieldsAsync"/>), mirroring
+    /// <see cref="CreateTaskAsync"/>/<see cref="AddTaskToListAsync"/> so the screen depends only on this
+    /// service.
+    /// </summary>
+    public Task<IReadOnlyList<CustomFieldDefinition>> GetListCustomFieldsAsync(string listId, CancellationToken ct = default)
+        => client.GetListCustomFieldsAsync(listId, ct);
+
     /// <summary>Full detail for a single task, fetched on demand for the detail view (#17).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskDetailAsync(taskId, ct);
+
+    /// <summary>
+    /// A single task mapped to the full list-row <see cref="TaskItem"/> shape (real structured
+    /// assignees with ids, <c>ParentId</c>, <c>StatusType</c>, colours) — the passthrough the
+    /// cross-tab nudge reconcile (#376) fetches through so a nudged row can be replaced wholesale,
+    /// unlike the lossy <see cref="GetTaskDetailAsync"/> projection. Sibling of the internal use in the
+    /// Task Tree ancestry walk (#291).
+    /// </summary>
+    public Task<TaskItem> GetTaskItemAsync(string taskId, CancellationToken ct = default)
+        => client.GetTaskItemAsync(taskId, ct);
 
     /// <summary>Full detail for a task addressed by its workspace custom id (#303, Ctrl+O quick-open);
     /// the mapped <see cref="TaskDetail.Id"/> is the task's plain id.</summary>
@@ -530,6 +551,15 @@ public sealed class TaskService(
     /// (mirrors the foreign-subtask budget's discipline, #87).</summary>
     internal const int MaxTreeSubtaskFetches = 25;
 
+    /// <summary>How many <see cref="GetSubtasksAsync"/> round-trips the Task Tree descendant BFS runs
+    /// concurrently within one frontier batch (#417) — bounds the fan-out so a wide tree doesn't open a
+    /// fetch per node all at once, while collapsing the previously-serial per-node latency (~30s for 13
+    /// subtasks). The bound value tracks <see cref="CommentThreadLoader.DefaultMaxConcurrency"/> (the
+    /// reply-thread fan-out's cap), though the model differs: this awaits a whole frontier batch before
+    /// starting the next, whereas the reply loader rolls a <see cref="SemaphoreSlim"/> window — the batch
+    /// form is what lets the BFS reproduce the serial walk's fetch order and de-dup exactly.</summary>
+    internal const int MaxTreeSubtaskConcurrency = CommentThreadLoader.DefaultMaxConcurrency;
+
     /// <summary>
     /// Assembles the Task Tree tab's rows (#291) for <paramref name="taskId"/>: the task's ancestry
     /// (parent chain, walked up one fetch at a time via <see cref="IClickUpClient.GetTaskItemAsync"/>),
@@ -539,6 +569,15 @@ public sealed class TaskService(
     /// both are capped (<see cref="MaxAncestorFetches"/> / <see cref="MaxTreeSubtaskFetches"/>) and
     /// cycle-safe. Only the initial fetch of the task itself propagates its error, so a genuinely
     /// unreachable task surfaces as a load failure rather than an empty tree.
+    /// <para>
+    /// The descendant BFS fetches each frontier batch concurrently (bounded by
+    /// <see cref="MaxTreeSubtaskConcurrency"/>, #417) to collapse the previously-serial per-node latency,
+    /// while reproducing the serial walk's results exactly: the batch is dequeued from the front of the
+    /// FIFO queue and its results are folded back <b>in that FIFO order</b>, so the fetched-parent set
+    /// under the budget, the breadth-first descendant order, and the first-occurrence de-dup are all
+    /// unchanged. The ancestry walk stays serial — each parent id is only known once the level below it
+    /// resolves, so it is an inherent linked-list traversal with nothing to parallelize.
+    /// </para>
     /// </summary>
     public async Task<IReadOnlyList<TaskTreeRow>> GetTaskTreeAsync(string taskId, CancellationToken ct = default)
     {
@@ -569,7 +608,11 @@ public sealed class TaskService(
 
         // Descendants: bounded BFS over GetSubtasksAsync, deduped against the ancestry + each other and
         // best-effort per branch. The seen-set carries the ancestry ids so a subtask that echoes an
-        // ancestor can't loop the tree back on itself.
+        // ancestor can't loop the tree back on itself. Each frontier batch is fetched concurrently
+        // (bounded by MaxTreeSubtaskConcurrency, #417) to collapse the per-node latency, but the batch is
+        // dequeued from the front of the FIFO queue and its results are folded back in that same FIFO
+        // order — so the fetched-parent set under the budget, the breadth-first descendant order, and the
+        // first-occurrence de-dup are identical to a strictly serial walk.
         var descendants = new List<TaskItem>();
         var descSeen = new HashSet<string>(seen, StringComparer.Ordinal);
         var queue = new Queue<string>();
@@ -577,27 +620,52 @@ public sealed class TaskService(
         var fetches = 0;
         while (queue.Count > 0 && fetches < MaxTreeSubtaskFetches)
         {
-            var parent = queue.Dequeue();
-            fetches++;
-            IReadOnlyList<TaskItem> children;
-            try
+            // Take the next batch from the front, never exceeding the remaining fetch budget. Counting the
+            // whole batch up front (before the fetch) mirrors the serial code's fetches++-before-try: a
+            // branch that fails still spends its budget slot. The batch is awaited whole before the next
+            // starts (a straggler stalls its batch) — accepted so the fold-back below stays FIFO and the
+            // fetch order / de-dup match the serial walk exactly.
+            var batchSize = Math.Min(Math.Min(MaxTreeSubtaskConcurrency, MaxTreeSubtaskFetches - fetches), queue.Count);
+            var batch = new string[batchSize];
+            for (var i = 0; i < batchSize; i++)
+                batch[i] = queue.Dequeue();
+            fetches += batchSize;
+
+            var childLists = await Task.WhenAll(batch.Select(parent => FetchSubtreeChildrenAsync(parent, ct)));
+
+            // Fold results back in the batch's FIFO order so de-dup (first-occurrence-wins) and sibling
+            // order match a strictly serial BFS regardless of which fetch completed first.
+            foreach (var children in childLists)
             {
-                children = await client.GetSubtasksAsync(parent, ct);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                continue;
-            }
-            foreach (var child in children)
-            {
-                if (string.IsNullOrEmpty(child.Id) || !descSeen.Add(child.Id))
-                    continue;
-                descendants.Add(child);
-                queue.Enqueue(child.Id);
+                if (children is null)
+                    continue; // best-effort: this branch's fetch failed
+                foreach (var child in children)
+                {
+                    if (string.IsNullOrEmpty(child.Id) || !descSeen.Add(child.Id))
+                        continue;
+                    descendants.Add(child);
+                    queue.Enqueue(child.Id);
+                }
             }
         }
 
         return TaskTreeArranger.Build(taskId, ancestors, current, descendants);
+    }
+
+    /// <summary>Fetches one node's subtasks for the descendant BFS (#417), returning <c>null</c> when the
+    /// fetch fails so the caller can skip that branch (best-effort per branch). A genuine
+    /// <see cref="OperationCanceledException"/> propagates — matching the serial walk's
+    /// <c>when (ex is not OperationCanceledException)</c> guard — so a caller cancellation still aborts.</summary>
+    private async Task<IReadOnlyList<TaskItem>?> FetchSubtreeChildrenAsync(string parentId, CancellationToken ct)
+    {
+        try
+        {
+            return await client.GetSubtasksAsync(parentId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Default cap on how many reply threads
@@ -699,6 +767,20 @@ public sealed class TaskService(
             tasks, updated.Id, updated.PriorityLevel, updated.PriorityName, updated.PriorityColor);
         return ApplyAssigneesChange(tasks, updated.Id, updated.Assignees);
     }
+
+    /// <summary>
+    /// Returns a new snapshot with the task identified by <paramref name="fresh"/>'s id replaced
+    /// <b>wholesale</b> by <paramref name="fresh"/>, leaving every other task and the overall order
+    /// untouched. Pure (the input list is not mutated); a no-op-equivalent snapshot when the id is
+    /// absent (a nudged row can live only in the visible context rows, not the canonical snapshot).
+    /// The full-fidelity sibling of <see cref="ApplyFieldChanges"/>: the cross-tab nudge reconcile
+    /// (#376) fetches an authoritative full <see cref="TaskItem"/> (via <see cref="GetTaskItemAsync"/>)
+    /// and replaces the row outright — carrying real assignee ids / <c>ParentId</c> / due date that a
+    /// <see cref="TaskDetail"/> overlay would drop — whereas <see cref="ApplyFieldChanges"/> folds only
+    /// the status/priority/assignee fields a Quick Update actually changed.
+    /// </summary>
+    public static IReadOnlyList<TaskItem> ReplaceTaskItem(IReadOnlyList<TaskItem> tasks, TaskItem fresh)
+        => tasks.Select(t => t.Id == fresh.Id ? fresh : t).ToList();
 
     /// <summary>
     /// The distinct parent ids referenced by a subtask in <paramref name="snapshot"/> that aren't

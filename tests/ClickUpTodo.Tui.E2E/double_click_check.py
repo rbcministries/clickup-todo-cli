@@ -17,7 +17,10 @@ screen = pyte.Screen(COLS, ROWS)
 stream = pyte.ByteStream(screen)
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-env = dict(os.environ, TERM="xterm-256color")
+# EMPTY_ROW below assumes the "short list" of 20 tasks its comment describes, so pin E2E_TASKS
+# here rather than inheriting the harness default (200), at which screen row 20 is a real task
+# row and the empty-space leg wrongly opens a detail (#409).
+env = dict(os.environ, TERM="xterm-256color", E2E_TASKS="20")
 proc = subprocess.Popen(["dotnet", DLL], stdin=slave, stdout=slave, stderr=slave,
                         env=env, close_fds=True, preexec_fn=os.setsid)
 os.close(slave)

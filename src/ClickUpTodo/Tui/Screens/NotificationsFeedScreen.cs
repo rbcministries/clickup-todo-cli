@@ -75,6 +75,11 @@ public sealed class NotificationsFeedScreen : Screen
     private readonly Label _emptyLabel;
     private bool _mentionsOnly;
 
+    // Table-driven command dispatch (#355/#398): the feed's footer-shown shortcuts resolve their keys
+    // from the central Keybindings table, so dispatch and the footer read one source of truth. Built once
+    // in the constructor. The undisplayed Ctrl+R refresh alias stays literal in OnKey (not a footer command).
+    private readonly KeybindingDispatcher _feedKeys;
+
     /// <summary>Whether the feed currently includes activity from completed (closed-type) tasks — the
     /// F12 toggle. Display-only here: the persisted flag and the re-fetch it needs are owned by the
     /// host (see <see cref="ToggleCompletedRequested"/>); this drives the title indicator.</summary>
@@ -158,20 +163,42 @@ public sealed class NotificationsFeedScreen : Screen
         Add(_list);
         Add(_emptyLabel);
 
+        _feedKeys = BuildKeyDispatcher();
+
         RenderFeed();
     }
 
+    /// <summary>Builds the feed's command dispatcher (#355/#398): each footer-shown action resolves its
+    /// key from the central <see cref="Keybindings"/> table, so dispatch and the footer can't drift.
+    /// <c>Feed</c> (Ctrl+E) and <c>Back</c> (Esc) both close — distinct keys, so no dispatcher collision.
+    /// The undisplayed Ctrl+R refresh alias is not a footer command and stays literal in <see cref="OnKey"/>.</summary>
+    private KeybindingDispatcher BuildKeyDispatcher()
+        => new KeybindingDispatcher(ScreenContext.NotificationsFeed)
+            // Enter (#115): open the selected comment's task.
+            .On(KeyAction.Open, OpenSelectedTask)
+            // F3 (#113): toggle the mentions-only filter in place.
+            .On(KeyAction.MentionsOnly, ToggleMentionsOnly)
+            // F5: re-fetch the feed (Ctrl+R is the undisplayed alias, handled literally in OnKey).
+            .On(KeyAction.Refresh, RequestRefresh)
+            // F6 (#117): the recent-activity source is already loaded alongside the comments, so this is a
+            // pure local re-filter. Ask the host to flip/persist the flag; it calls back into
+            // SetShowActivity, which re-renders — no re-fetch.
+            .On(KeyAction.ActivitySource, () => ToggleActivityRequested?.Invoke(this, EventArgs.Empty))
+            // F12: unlike F3 (a local re-filter), completed activity is never in the loaded feed when the
+            // toggle is off — the closed tasks were never fetched — so the host must re-fetch. Ask it to;
+            // it flips/persists the flag, calls back into SetShowCompleted, and refreshes.
+            .On(KeyAction.ToggleCompleted, () => ToggleCompletedRequested?.Invoke(this, EventArgs.Empty))
+            // Ctrl+E: the key that opened the feed — closes it (List ↔ Feed nav).
+            .On(KeyAction.Feed, Close)
+            // F1: help.
+            .On(KeyAction.Help, RequestHelp)
+            // Esc: back to the list.
+            .On(KeyAction.Back, Close);
+
     private void OnKey(object? sender, Key key)
     {
-        // Ctrl+E toggles back to the task list — the same key that opened the feed (List ↔ Feed nav).
-        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.E)
-        {
-            key.Handled = true;
-            Close();
-            return;
-        }
-
-        // Ctrl+R is the (undisplayed) alias for the F5 refresh key. The bare F5 case is in the switch.
+        // Ctrl+R is the (undisplayed) alias for the F5 refresh key — not a footer command, so it stays
+        // out of the table (mirrors the main-list migration keeping its Ctrl+R/Ctrl+C aliases literal).
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.R)
         {
             key.Handled = true;
@@ -179,45 +206,18 @@ public sealed class NotificationsFeedScreen : Screen
             return;
         }
 
-        switch (key.KeyCode)
-        {
-            case KeyCode.Enter:
-                key.Handled = true;
-                OpenSelectedTask();
-                break;
-            case KeyCode.F5:
-                key.Handled = true;
-                RequestRefresh();
-                break;
-            case KeyCode.F3:
-                key.Handled = true;
-                _mentionsOnly = !_mentionsOnly;
-                RenderFeed();
-                RequestFlash(_mentionsOnly ? "Mentions only" : "All comments");
-                break;
-            case KeyCode.F6:
-                key.Handled = true;
-                // The recent-activity source (#117) is already loaded alongside the comments, so unlike
-                // F12 this is a pure local re-filter. Ask the host to flip/persist the flag; it calls
-                // back into SetShowActivity, which re-renders — no re-fetch.
-                ToggleActivityRequested?.Invoke(this, EventArgs.Empty);
-                break;
-            case KeyCode.F12:
-                key.Handled = true;
-                // Unlike F3 (a local re-filter), completed activity is never in the loaded feed when the
-                // toggle is off — the closed tasks were never fetched — so the host must re-fetch. Ask it
-                // to; it flips/persists the flag, calls back into SetShowCompleted, and refreshes.
-                ToggleCompletedRequested?.Invoke(this, EventArgs.Empty);
-                break;
-            case KeyCode.F1:
-                key.Handled = true;
-                RequestHelp();
-                break;
-            case KeyCode.Esc:
-                key.Handled = true;
-                Close();
-                break;
-        }
+        // Table-driven command shortcuts (#355/#398). Bare letters never match (the table holds only
+        // chords / function keys), so the ListView's type-ahead search and ↑/↓ movement are untouched.
+        if (_feedKeys.Dispatch(key))
+            key.Handled = true;
+    }
+
+    /// <summary>F3 — toggles the mentions-only filter (#113) in place and flashes the new state.</summary>
+    private void ToggleMentionsOnly()
+    {
+        _mentionsOnly = !_mentionsOnly;
+        RenderFeed();
+        RequestFlash(_mentionsOnly ? "Mentions only" : "All comments");
     }
 
     /// <summary>F5 / Ctrl+R — flashes and asks the host to re-fetch the feed.</summary>
