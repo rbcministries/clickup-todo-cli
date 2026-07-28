@@ -1878,6 +1878,28 @@ public sealed class TodoApp
         LaunchBrowser(task?.Url, task?.Name);
     }
 
+    /// <summary>
+    /// Acts on a link the user clicked in a Task Detail pane (#318). A browser target goes through the
+    /// same <see cref="LaunchBrowser"/> path as Ctrl+B (so it gets the workspace-subdomain rewrite and the
+    /// launch-failure fallback), naming the URL itself in the status flash since a link has no task name.
+    /// An in-app target is handed to <see cref="ResolveAndOpen"/> — the quick-open resolver already opens a
+    /// <em>ClickUp task URL</em> cache-first and covers plain ids, custom ids and the URL's own team id
+    /// (#303/#353), so a custom-id link (<c>/t/{teamId}/{customId}</c>) needs no separate path here, and
+    /// its "couldn't resolve" flashes are the ones the user already knows.
+    /// </summary>
+    private void ActivateLink(LinkActivationRequest request)
+    {
+        switch (request.Action)
+        {
+            case LinkAction.OpenTaskDetail:
+                ResolveAndOpen(request.Url);
+                break;
+            default:
+                LaunchBrowser(request.Url, Ellipsize(request.Url));
+                break;
+        }
+    }
+
     /// <summary>Opens a task URL in the system browser, or flashes why it couldn't.</summary>
     private void LaunchBrowser(string? url, string? name)
     {
@@ -1997,6 +2019,9 @@ public sealed class TodoApp
                     // Ctrl+O quick-opens another task from within the detail (#353), stacked over it; the
                     // resolved Task Detail opens over this one, so Esc walks back through them.
                     screen.QuickOpenRequested += (_, _) => OpenQuickOpenFromScreen();
+                    // Clicking a link in a text pane (#318): a task link opens in-app, anything else (and
+                    // any Ctrl+click) in the browser.
+                    screen.LinkActivationRequested += (_, request) => ActivateLink(request);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly

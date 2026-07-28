@@ -1,6 +1,9 @@
 using Terminal.Gui.Drawing;
+using Terminal.Gui.Input;
 using Terminal.Gui.Views;
 using Attribute = Terminal.Gui.Drawing.Attribute;
+using Point = System.Drawing.Point;
+using Rectangle = System.Drawing.Rectangle;
 
 // TextView is marked obsolete in Terminal.Gui 2.4 in favour of a not-yet-shipped EditorView; it
 // remains the supported v2 read-only text pane the detail view uses (see TaskDetailScreen).
@@ -94,6 +97,28 @@ public sealed class DetailPaneView : TextView
         return DetailCellStyle.Normal;
     }
 
+    /// <summary>
+    /// Raised when the user activates a link in this pane with the mouse (#318): a plain left click on a
+    /// ClickUp task link asks for that task's Task Detail, any other click on a link (or any
+    /// <c>Ctrl</c>+click) asks for the browser — see <see cref="LinkActivator.Resolve"/>. The host owns
+    /// the destinations; the pane only reports what was clicked and what it means.
+    /// </summary>
+    public event EventHandler<LinkActivationRequest>? LinkActivationRequested;
+
+    // The body exactly as SetBody loaded it, split on '\n' — one entry per *source* line, which is the
+    // coordinate space Terminal.Gui reports a click in (see OnMouseEvent) and the one TaskLinkExtractor
+    // offsets index into. Kept instead of a pre-extracted span table: a click re-extracts one short line,
+    // so there is no per-render cache that could go stale against the loaded cells.
+    private string[] _lines = [];
+
+    // The separator passed to the last SetBody, so a click skips a rule line exactly as BuildCells does.
+    private string _separator = "";
+
+    // The caret in unwrapped model coordinates (X = cell index within the source line, Y = source line
+    // index), as reported by Terminal.Gui while it handles a click. This is the wrapped→source mapping —
+    // WordWrapManager, which owns it, is internal, and reproducing its wrap here would be drift.
+    private Point? _unwrappedCaret;
+
     public DetailPaneView()
     {
         ReadOnly = true;
@@ -105,6 +130,10 @@ public sealed class DetailPaneView : TextView
     /// repeatedly (e.g. an activity-order toggle re-renders in place).</summary>
     public void SetBody(string body, string separator)
     {
+        // Remember the body in source-line form for the click hit test (#318); BuildCells splits it the
+        // same way, so the two can't disagree about what line N is.
+        _lines = body.Split('\n');
+        _separator = separator;
         // Home the caret before re-loading. Terminal.Gui 2.4.10's TextView.Load raises OnContentsChanged
         // (via its history-clear) with InheritsPreviousAttribute already turned on but *before* it resets
         // the caret, so it runs ProcessInheritsPreviousScheme against the stale CurrentRow/CurrentColumn
@@ -171,6 +200,138 @@ public sealed class DetailPaneView : TextView
         if (pos < line.Length)
             result.AddRange(Cell.ToCellList(line[pos..], null));
         return result;
+    }
+
+    /// <summary>
+    /// Left-click activation of an in-pane link (#318). A click resolves to a <see cref="LinkSpan"/> and,
+    /// when it lands on one, raises <see cref="LinkActivationRequested"/> with the action
+    /// <see cref="LinkActivator.Resolve"/> chose for the gesture's modifiers; anything else — a click on
+    /// ordinary text, a wheel, a drag, a double-click — falls through to the base
+    /// <see cref="TextView"/> so its native caret / selection / scroll behaviour is untouched.
+    /// <para>
+    /// The position comes from Terminal.Gui itself rather than from a re-implementation of its word wrap:
+    /// the base view maps a click to a text position, and <see cref="OnUnwrappedCursorPositionChanged"/>
+    /// reports that position in <em>unwrapped</em> (source-line) coordinates, which already accounts for
+    /// wrapping and for the pane's scroll offset. Two details of that base behaviour shape the code:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>
+    /// <b>It only maps unmodified clicks</b>, and reports the <em>stale</em> caret for the rest.
+    /// <see cref="TextView"/>'s handler tests the flags for a bare
+    /// <see cref="MouseFlags.LeftButtonClicked"/>, so a modified click leaves the caret where it was — and
+    /// still re-raises <see cref="OnUnwrappedCursorPositionChanged"/> with that old position, so there is
+    /// no "it declined to map this" signal to detect. A <c>Ctrl</c>+click therefore resolves its position
+    /// by handing the base a synthesized plain click at the same point (the panes are read-only, so the
+    /// caret move that entails is invisible, and it is what an unmodified click would have done anyway),
+    /// an unmodified click is passed to the base and its own mapping read back, and <b>every other
+    /// modifier is refused outright</b> — a <c>Shift</c>/<c>Alt</c>+click isn't an activation gesture, and
+    /// admitting one would activate whatever link the caret last sat on. When #320 adds
+    /// <c>Ctrl+Shift</c>+click it joins the resolved-by-synthesized-click arm, since it carries
+    /// <c>Ctrl</c>.
+    /// </description></item>
+    /// <item><description>
+    /// <b>It clamps a click outside the text onto the nearest position.</b> That turns two ordinary
+    /// clicks on empty space into false hits — below a short body it clamps onto the last line at the
+    /// clicked column, and right of a wrapped row's text it clamps onto the row's end, which for a line
+    /// that continues past the wrap is the *next* character (probed: clicking right of a row showing
+    /// <c>"short "</c> resolved onto the URL that follows it). Hence the two guards below; a click on the
+    /// exclusive end of a span is separately not a hit (<see cref="LinkActivator.SpanAt"/>).
+    /// </description></item>
+    /// <item><description>
+    /// <b>Handling a click can shift the viewport.</b> Keeping the caret visible sets <c>Viewport.X</c> to 1
+    /// when the caret lands on the last column of a full-width wrapped row, and it stays there for
+    /// subsequent clicks. The width guard therefore ignores <c>Viewport.X</c> altogether (the pane is
+    /// word-wrapped, so content never scrolls horizontally), and the vertical guard reads the viewport
+    /// <em>as it was when the user clicked</em>, captured before the base sees the event. Letting either
+    /// leak in made the last cell of a full-width row the one cell of a link that a click ignored.
+    /// </description></item>
+    /// </list>
+    /// </summary>
+    protected override bool OnMouseEvent(Mouse mouseEvent)
+    {
+        // Only a plain or Ctrl-modified left click activates. Every other flag combination — a wheel, a
+        // press/release (drag), a double- or triple-click (each its own distinct flag), and any
+        // Shift/Alt-modified click — falls through to the base view untouched. Refusing the other
+        // modifiers is what keeps a gesture the base won't map from resolving to the stale caret (see
+        // above); it is not merely a taste call about which gestures mean "activate".
+        if (!mouseEvent.Flags.HasFlag(MouseFlags.LeftButtonClicked)
+            || mouseEvent.Flags.HasFlag(MouseFlags.Shift)
+            || mouseEvent.Flags.HasFlag(MouseFlags.Alt)
+            || mouseEvent.Position is not { } position)
+            return base.OnMouseEvent(mouseEvent);
+
+        // The viewport as the user saw it — the base may scroll it while handling the click (see above).
+        var viewport = Viewport;
+
+        // An unmodified click is the one the base view maps itself, so let it handle the real event and
+        // read the position back; only a modified click needs the synthesized stand-in (see above), which
+        // keeps the common gesture a single pass through the base.
+        var ctrl = mouseEvent.Flags.HasFlag(MouseFlags.Ctrl);
+        var handledByBase = !ctrl && base.OnMouseEvent(mouseEvent);
+        if (LinkAt(position, viewport, resolvePosition: ctrl) is not { } span)
+            return handledByBase;
+
+        LinkActivationRequested?.Invoke(this, new LinkActivationRequest(span, LinkActivator.Resolve(span, ctrl)));
+        mouseEvent.Handled = true;
+        return true;
+    }
+
+    /// <summary>
+    /// The link under a viewport-relative click <paramref name="position"/>, or <c>null</c> when the click
+    /// isn't on one. Guards first against the two ways the base view clamps a click outside the text onto
+    /// a position that would read as a hit (see <see cref="OnMouseEvent"/>), then resolves the source
+    /// (line, cell) the click landed on and hit-tests that line's links.
+    /// <paramref name="viewport"/> is the pane's viewport as it was when the user clicked (the base view
+    /// may scroll it while handling the click). <paramref name="resolvePosition"/> asks the base view to
+    /// map the position first — needed for a modified click, which it would otherwise not map at all.
+    /// </summary>
+    private LinkSpan? LinkAt(Point position, Rectangle viewport, bool resolvePosition)
+    {
+        // Guard 1 — a click below the last wrapped row (the empty area under a short body). Lines is the
+        // wrapped line count while WordWrap is on, and viewport.Y is the topmost displayed wrapped row.
+        // (GetLine clamps an out-of-range row to the last line, so without this the next guard would pass
+        // and the click would resolve into whatever the body's last line ends with.)
+        var displayRow = viewport.Y + position.Y;
+        if (displayRow < 0 || displayRow >= Lines)
+            return null;
+
+        // Guard 2 — a click right of that row's rendered text. Measured in columns (GetColumnsWidth), so a
+        // row carrying wide runes isn't cut short of its real width. Deliberately ignores viewport.X: the
+        // pane is word-wrapped, so its content never scrolls horizontally and a click's column *is* its
+        // column in the row. The only thing that moves viewport.X is the base view nudging it to keep the
+        // caret visible when the caret lands on a full-width row's last column — and letting that leak in
+        // here made the last cell of such a row the one cell of a link that a click ignored.
+        if (position.X < 0 || position.X >= GetColumnsWidth(GetLine(displayRow)))
+            return null;
+
+        // The click's source (line, cell), from the base view's own mapping.
+        if (resolvePosition)
+            base.OnMouseEvent(new Mouse { Position = position, Flags = MouseFlags.LeftButtonClicked });
+        if (_unwrappedCaret is not { } caret || caret.X < 0 || caret.Y < 0 || caret.Y >= _lines.Length)
+            return null;
+
+        // A separator rule is skipped exactly as BuildCells skips it, so a click can never activate a link
+        // on a line the renderer never tagged as one. (For the actual rule — a run of '─' — this is a
+        // no-op, since it holds no URL either way; it earns its keep only if a caller ever passes a
+        // separator with text in it, which the test pins.)
+        var line = _lines[caret.Y];
+        if (line == _separator)
+            return null;
+
+        // Terminal.Gui reports the position as a *cell* index and a cell holds a whole grapheme cluster,
+        // so convert to the UTF-16 char offset LinkSpan uses — via the same Cell.ToCellList segmentation
+        // BuildCells tags with, which is byte-for-byte the segmentation TextView's own model uses.
+        var graphemes = Cell.ToCellList(line, null).Select(c => c.Grapheme).ToArray();
+        var offset = LinkActivator.CharOffsetAtCell(graphemes, caret.X);
+        return LinkActivator.SpanAt(TaskLinkExtractor.Extract(line), offset);
+    }
+
+    /// <inheritdoc/>
+    protected override void OnUnwrappedCursorPositionChanged(Point newUnwrappedCursorPosition)
+    {
+        // (column, row) in the unwrapped model = (cell index within the source line, source line index).
+        _unwrappedCaret = newUnwrappedCursorPosition;
+        base.OnUnwrappedCursorPositionChanged(newUnwrappedCursorPosition);
     }
 
     /// <inheritdoc/>

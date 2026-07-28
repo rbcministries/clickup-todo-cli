@@ -175,6 +175,11 @@ public sealed class SingleTaskApp
         // single-task tab composes + launches a session with the dashboard's exact working-dir /
         // post-to-Comments / launch-location semantics.
         _detail.AgentDispatchRequested += (_, request) => DispatchAgent(request);
+        // Clicking a link in a text pane (#318). Both actions open the browser here: single-task mode has
+        // no in-app task→task destination yet — the Task Tree tab is absent and OpenTaskRequested is
+        // unwired until #374 — so a task link degrades to the browser rather than silently doing nothing.
+        // Unlike Ctrl+B this leaves the tab open, so the outcome is flashed on the live footer.
+        _detail.LinkActivationRequested += (_, request) => OpenLink(request.Url);
         _detail.FlashRequested += (_, message) => Flash(message);
         _detail.HelpRequested += (_, _) => OpenHelp();
 
@@ -370,6 +375,31 @@ public sealed class SingleTaskApp
     // OpenBrowserRequested then Close()s), so — unlike TodoApp's LaunchBrowser — there is no live view
     // left to flash success/failure onto; a launch failure is only debug-logged. Shares the
     // IBrowserLauncher seam + app.clickup.com → workspace-subdomain rewrite the dashboard uses (#304/#346).
+    /// <summary>
+    /// Opens a link clicked in a detail pane (#318) in the browser. Unlike <see cref="LaunchBrowser"/>'s
+    /// Ctrl+B path this doesn't close the tab, so there <em>is</em> a live footer to report onto — the
+    /// dashboard flashes the same three outcomes. Shares the rewrite/parse/launch core (#304/#346).
+    /// </summary>
+    private void OpenLink(string url)
+    {
+        var (result, target) = ClickUpTaskBrowser.Open(_browser, url, _config.WorkspaceSubdomain);
+        switch (result)
+        {
+            case ClickUpTaskBrowser.Result.Opened:
+                Flash($"Opened: {target}");
+                break;
+            case ClickUpTaskBrowser.Result.LaunchFailed:
+                var hint = BrowserLaunchPlanner.OpenerHint(BrowserLaunchPlanner.CurrentOS());
+                Flash(hint is null
+                    ? $"Couldn't open a browser — copy the URL: {target}"
+                    : $"Couldn't open a browser ({hint}) — copy the URL: {target}");
+                break;
+            default:
+                Flash($"Not a valid URL: {target}");
+                break;
+        }
+    }
+
     private void LaunchBrowser(string? url)
     {
         var (result, target) = ClickUpTaskBrowser.Open(_browser, url, _config.WorkspaceSubdomain);

@@ -154,6 +154,7 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `Ctrl+N`              | ➕   | Add a comment                                          |
 | `Ctrl+E`              | ✏    | Edit the description                                   |
 | `Ctrl+B`              | 🌐   | Open the task in your browser                          |
+| Left-click a link     |      | Follow it — see [Follow links in a task's text](#follow-links-in-a-tasks-text) |
 | `Ctrl+U`              |      | Quick Updates for this task                            |
 | `Ctrl+O`              | 🗁   | Open another task by id, custom id, or URL             |
 | `F5`                  | ↻    | Refresh                                                |
@@ -169,6 +170,20 @@ exactly where you were, with your cursor and tab unchanged. `Esc` anywhere else 
 Quick Updates opens with `Ctrl+U` from both the main list and Task Detail. Pinned tasks persist
 across restarts. The list refreshes in the background on your configured interval, and your cursor
 stays on the same task across refreshes so the screen stays steady.
+
+### Follow links in a task's text
+
+Links in a task's **Description**, **Comments** and **Stream** panes are underlined and clickable:
+
+| Gesture | Task link (`app.clickup.com/t/…`) | Any other link |
+| --- | --- | --- |
+| Left-click | Opens that task's **Task Detail** here — `Esc` walks back to the one you came from | Opens in your **browser** |
+| `Ctrl+`Left-Click | Opens in your **browser** | Opens in your **browser** |
+
+`Ctrl+`Left-Click is Windows Terminal's own "open this link" gesture, so it always means *browser*
+whatever the link is. A task link works with either a plain ClickUp id or a **custom id**
+(`/t/{teamId}/{customId}`). In single-task mode (`--task`) every link opens in the browser, since that
+mode has no list to stack another task on top of.
 
 ### Open a task in a new terminal tab
 
