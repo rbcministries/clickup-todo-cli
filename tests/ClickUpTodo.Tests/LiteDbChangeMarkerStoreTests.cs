@@ -25,6 +25,28 @@ public sealed class LiteDbChangeMarkerStoreTests : IDisposable
         public void Advance(TimeSpan by) => _now += by;
     }
 
+    /// <summary>A clock that throws on its first <paramref name="throwFirst"/> reads — a stand-in for a
+    /// transient write-path failure (#410) that clears on retry — then returns a fixed time.</summary>
+    private sealed class TransientlyThrowingClock(int throwFirst) : TimeProvider
+    {
+        private int _remaining = throwFirst;
+
+        /// <summary>Total <see cref="GetUtcNow"/> calls seen, including the ones that threw.</summary>
+        public int Reads { get; private set; }
+
+        public override DateTimeOffset GetUtcNow()
+        {
+            Reads++;
+            if (_remaining > 0)
+            {
+                _remaining--;
+                throw new IOException("transient reopen failure");
+            }
+
+            return DateTimeOffset.UnixEpoch;
+        }
+    }
+
     private static readonly string[] StatusFields = ["status"];
 
     [Fact]
@@ -197,12 +219,43 @@ public sealed class LiteDbChangeMarkerStoreTests : IDisposable
         // here by disposing the underlying database out from under the store (a memory-backed, non-shared
         // db so Dispose really closes it — a Shared file connection reopens per op and wouldn't fault).
         var db = new LiteDatabase(new MemoryStream());
-        var store = new LiteDbChangeMarkerStore(db, "inst-1");
+        // Inject an instant, few-attempt retry policy so this always-failing write doesn't grind through
+        // the default back-off sleeps (#410) — the behaviour under test is only that it's swallowed.
+        var store = new LiteDbChangeMarkerStore(
+            db, "inst-1", options: null, timeProvider: null,
+            retryPolicy: new WriteRetryPolicy(maxAttempts: 2, delay: _ => { }));
         db.Dispose();
 
         var ex = Record.Exception(() => store.Record("t1", 1, StatusFields));
         Assert.Null(ex);
         Assert.Empty(store.ReadAll()); // a read failure degrades to empty, too
+    }
+
+    [Fact]
+    public void Record_WriteFailsThenSucceeds_ReusesAllocatedSeq_NoBurnNoLoss()
+    {
+        // The crux of #410: when the write throws *after* the seq is allocated (a transient Shared-mode
+        // reopen under load) and the retry then succeeds, it must re-run with the SAME seq — not allocate
+        // a fresh one. Otherwise the first seq is burned (a gap) and, if every attempt failed, the marker
+        // is lost. Induce exactly one transient failure via a clock that throws on its first read (the
+        // read that stamps RecordedUtcMs, right after allocation), with an instant retry policy.
+        using var db = new LiteDatabase(new MemoryStream());
+        var clock = new TransientlyThrowingClock(throwFirst: 1);
+        var store = new LiteDbChangeMarkerStore(
+            db, "inst-1", options: null, timeProvider: clock,
+            retryPolicy: new WriteRetryPolicy(maxAttempts: 5, delay: _ => { }));
+
+        store.Record("t1", serverDateUpdatedMs: 100, changedFields: StatusFields);
+
+        Assert.Equal(2, clock.Reads);                       // one throwing read + one that succeeded = a single retry
+        var first = Assert.Single(store.ReadAll());
+        Assert.Equal("t1", first.TaskId);
+        Assert.Equal(1, first.Seq);                          // reused seq 1 — a re-allocation would show seq 2
+
+        store.Record("t2", serverDateUpdatedMs: 200, changedFields: StatusFields); // a normal follow-up write
+
+        // Contiguous 1..2: the retried first write neither burned seq 1 nor lost its marker.
+        Assert.Equal([1L, 2L], store.ReadAll().OrderBy(m => m.Seq).Select(m => m.Seq));
     }
 
     [Fact]
