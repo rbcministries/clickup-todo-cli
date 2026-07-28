@@ -1167,7 +1167,7 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.WorkspaceSubdomain, _config.AgentDispatch, _config.DetailView);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.WorkspaceSubdomain, _config.AgentDispatch, _config.DetailView, _config.ConfirmOnExit);
 
         // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
         // save it folds the edited template back into the settings screen via the request's callback, so
@@ -1201,6 +1201,8 @@ public sealed class TodoApp
             _config.WorkspaceSubdomain = result.WorkspaceSubdomain;
             _config.AgentDispatch = result.AgentDispatch;
             _config.DetailView = result.DetailView;
+            // Read live by RequestExit (#407) on the next quit, so a saved change takes effect immediately.
+            _config.ConfirmOnExit = result.ConfirmOnExit;
             _configStore.Save(_config);
 
             // Rebuild the dispatcher so edited terminal / claude path / extra args apply without a
@@ -1527,6 +1529,15 @@ public sealed class TodoApp
     {
         if (ActiveScreen is ExitConfirmScreen)
             return;
+
+        // #407: the confirmation is opt-out. When the user has turned it off in F2 Settings, quit is the
+        // pre-#299 one-key exit — read live so a saved change applies on the next quit with no rewiring.
+        // The re-entrancy guard stays above this so the branch can never fire while a modal is already up.
+        if (!_config.ConfirmOnExit)
+        {
+            Application.RequestStop();
+            return;
+        }
 
         var confirm = new ExitConfirmScreen();
         ShowScreen(confirm, () =>
