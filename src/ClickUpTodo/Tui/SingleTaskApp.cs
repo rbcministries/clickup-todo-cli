@@ -171,10 +171,25 @@ public sealed class SingleTaskApp
         _window.Add(_root.Screen);
         _footer.AddTo(_window);
         // Re-fit the contextual footer whenever the window re-lays out (terminal resize); the text is
-        // only reassigned when it changes, so this can't loop (mirrors TodoApp).
-        _window.SubViewsLaidOut += (_, _) => UpdateHelpLine();
+        // only reassigned when it changes, so this can't loop (mirrors TodoApp). The first laid-out frame
+        // also drives the root detail's OnShown (see below).
+        var shown = false;
+        _window.SubViewsLaidOut += (_, _) =>
+        {
+            UpdateHelpLine();
+            // Run the root detail's OnShown on the first laid-out frame — the way a dashboard detail is
+            // shown (mid-run by ShowScreen, after layout) — rather than in Build() before the window has
+            // laid out. OnShown selects the default tab and focuses its pane (FocusCurrentPane); running it
+            // pre-layout targets un-laid-out views, so the front-most pane never becomes the focused view
+            // and the Task Tree tab's ListView can't take ↑/↓ selection (#374). Deferring one frame makes
+            // single-task mode's focus path identical to the dashboard's. One-shot.
+            if (!shown)
+            {
+                shown = true;
+                _root.Screen.OnShown();
+            }
+        };
         UpdateHelpLine();
-        _root.Screen.OnShown();
     }
 
     /// <summary>Constructs a fully-wired <see cref="TaskDetailScreen"/> for one task — the launch task
