@@ -211,7 +211,10 @@ placeholder marks where the launched command is inserted (appended if you omit i
 
 You control window-vs-tab through your own template (e.g. `gnome-terminal --tab -- {}`). The command
 runs the task tab / `claude` session the same way the built-in emulators do, so a wrapper script works
-too. If the executable isn't found, it's skipped and auto-detection runs as usual.
+too. If the executable isn't found, it's skipped and auto-detection runs as usual. Only the **first**
+`{}` is the splice point (extra `{}` are literal). On **Windows** the payload is a PowerShell command,
+so a custom command also needs `pwsh` or `powershell` present (effectively always true — Windows
+PowerShell ships in-box); otherwise it's skipped and auto-detection runs.
 
 ## Mentions & Comments feed
 

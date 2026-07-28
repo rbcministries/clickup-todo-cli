@@ -94,8 +94,9 @@ public static class TerminalCommandPlanner
     /// The custom launch candidate (#385) from <see cref="TerminalLauncherOptions.CustomTerminalCommand"/>,
     /// or null when none is set or its executable isn't on PATH. <paramref name="hostArgs"/> is the OS
     /// host invocation of the command to run (POSIX: <c>bash -lc &lt;inner&gt;</c>; Windows:
-    /// <c>&lt;host&gt; -NoExit -Command &lt;command&gt;</c>), spliced in at the <c>{}</c> placeholder token
-    /// or appended when the template has none.
+    /// <c>&lt;host&gt; -NoExit -Command &lt;command&gt;</c>), spliced in at the <b>first</b> <c>{}</c>
+    /// placeholder token (any further <c>{}</c> are passed through literally), or appended when the
+    /// template has none.
     /// </summary>
     private static LaunchSpec? CustomLaunchSpec(
         Func<string, bool> exists, TerminalLauncherOptions options, IReadOnlyList<string> hostArgs, string? cwd)
@@ -112,7 +113,9 @@ public static class TerminalCommandPlanner
         var placed = false;
         foreach (var token in template.Skip(1))
         {
-            if (token == TerminalCommandParser.Placeholder)
+            // Splice at the first placeholder only; a stray second `{}` (a malformed template) is a
+            // literal token rather than a second, argv-breaking splice.
+            if (token == TerminalCommandParser.Placeholder && !placed)
             {
                 args.AddRange(hostArgs);
                 placed = true;

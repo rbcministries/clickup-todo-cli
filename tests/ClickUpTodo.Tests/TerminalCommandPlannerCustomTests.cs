@@ -147,6 +147,25 @@ public sealed class TerminalCommandPlannerCustomTests
     }
 
     [Fact]
+    public void SecondPlaceholder_IsLiteral_NotASecondSplice()
+    {
+        // A malformed `... {} {}` splices the host invocation only once; the stray `{}` stays literal.
+        var first = PlanApp(OSPlatformKind.Linux, Present("myterm"), Custom("myterm", "-e", "{}", "{}"))[0];
+
+        Assert.Equal(["-e", "bash", "-lc", "'clickup-todo' '--task' '86abc'", "{}"], first.Arguments);
+    }
+
+    [Fact]
+    public void PlaceholderAttachedToToken_IsNotAPlaceholder()
+    {
+        // Only a token exactly equal to `{}` is the splice point; `{}foo` is a literal, so the host
+        // invocation is appended (the no-placeholder path).
+        var first = PlanApp(OSPlatformKind.Linux, Present("myterm"), Custom("myterm", "{}foo"))[0];
+
+        Assert.Equal(["{}foo", "bash", "-lc", "'clickup-todo' '--task' '86abc'"], first.Arguments);
+    }
+
+    [Fact]
     public void PlaceholderAsExecutable_IsSkipped()
     {
         // A malformed template whose first token is the placeholder has no real executable.

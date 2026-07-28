@@ -51,8 +51,8 @@ public sealed record TerminalLauncherOptions
 
     /// <summary>
     /// A user-configured terminal launch command as a tokenised argv (#385): the emulator executable
-    /// followed by its flags, with a <see cref="TerminalCommandParser.Placeholder"/> token marking
-    /// where the OS host invocation of the command is spliced in (appended if the token is absent).
+    /// followed by its flags, with the first <see cref="TerminalCommandParser.Placeholder"/> token
+    /// marking where the OS host invocation of the command is spliced in (appended if absent).
     /// Empty ⇒ no custom command (auto-detection only). When set and its executable is on PATH, the
     /// planner emits it as the first launch candidate on every platform, ahead of the built-in chain;
     /// otherwise it is skipped, so an unset or unavailable command is a strict no-op.
