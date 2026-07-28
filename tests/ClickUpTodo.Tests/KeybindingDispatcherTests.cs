@@ -65,16 +65,20 @@ public sealed class KeybindingDispatcherTests
         Assert.Throws<InvalidOperationException>(() => dispatcher.On(KeyAction.QuickUpdate, () => { }));
     }
 
-    // Closes the loop for the migrated context: every main-list command's table key dispatches to its
-    // own handler and to no other. Together with the footer-agreement guard in KeybindingsTests, this
-    // proves dispatch == table == footer for the main list.
-    [Fact]
-    public void EveryMainListAction_DispatchesToItsOwnHandler()
+    // Closes the loop for a migrated context: every command's table key dispatches to its own handler and
+    // to no other. Together with the footer-agreement guard in KeybindingsTests, this proves
+    // dispatch == table == footer for that context. Runs over each screen whose OnKey has been migrated
+    // through the dispatcher (#398 adds NotificationsFeed to the main list).
+    [Theory]
+    [InlineData(ScreenContext.MainList)]
+    [InlineData(ScreenContext.NotificationsFeed)]
+    public void EveryActionOfAMigratedContext_DispatchesToItsOwnHandler(ScreenContext context)
     {
-        var actions = Keybindings.ActionsFor(ScreenContext.MainList).ToList();
+        var actions = Keybindings.ActionsFor(context).ToList();
+        Assert.NotEmpty(actions);
         KeyAction? lastFired = null;
 
-        var dispatcher = new KeybindingDispatcher(ScreenContext.MainList);
+        var dispatcher = new KeybindingDispatcher(context);
         foreach (var action in actions)
         {
             var captured = action;
@@ -84,9 +88,9 @@ public sealed class KeybindingDispatcherTests
         foreach (var action in actions)
         {
             lastFired = null;
-            var handled = dispatcher.Dispatch(Parse(Keybindings.Token(ScreenContext.MainList, action)));
+            var handled = dispatcher.Dispatch(Parse(Keybindings.Token(context, action)));
 
-            Assert.True(handled, $"{action} key should dispatch");
+            Assert.True(handled, $"{context}/{action} key should dispatch");
             Assert.Equal(action, lastFired);
         }
     }
