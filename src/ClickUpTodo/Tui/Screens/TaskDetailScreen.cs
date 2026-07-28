@@ -820,10 +820,12 @@ public sealed class TaskDetailScreen : Screen
         // DetailPaneView): the Task Tree tab's Enter is handled above and the Other tab has no links. Each
         // call is inert (returns false → key falls through) when there's nothing to do — no links for Tab,
         // no focused link for Enter — so an empty pane's Tab and an unfocused Enter behave as they did.
-        if (ActiveTextPane() is { } linkPane)
+        if (!_promptBox.Visible && ActiveTextPane() is { } linkPane)
         {
             // Mask ShiftMask so Shift+Tab (which the ansi driver folds into KeyCode.Tab | ShiftMask) is
             // matched too; IsShift then picks the direction — the same shape the comment composer uses.
+            // Guarded on !_promptBox.Visible like the sibling command blocks below: the Dispatch pane's
+            // own handlers already consume Tab/Enter while it's open, but this removes the hidden reliance.
             if ((key.KeyCode & ~KeyCode.ShiftMask) == KeyCode.Tab && linkPane.StepLinkFocus(forward: !key.IsShift))
             {
                 key.Handled = true;

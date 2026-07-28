@@ -149,8 +149,9 @@ reaches it then anyway.
 ## Non-goals / deferred
 
 - The full task-link modifier matrix (`Ctrl`/`Ctrl+Shift` → browser vs. new
-  terminal tab, "Shift inverts") is **#320 (F)**; this issue ships only `Enter`
-  (plain) + `Shift+Enter` (force browser).
+  terminal tab, "Shift inverts") is **#320 (F)**; this issue ships only plain
+  `Enter` (see §5 — a browser-force keyboard modifier is left to #320, and
+  `Shift+Enter` is unreliable across terminals).
 - Hover feedback on links is **#408**; OSC-8 hyperlinks are **#380/#430** — all
   independent of focus traversal.
 - `Ctrl+Enter` (open current task in a new terminal tab) is **#384**.
