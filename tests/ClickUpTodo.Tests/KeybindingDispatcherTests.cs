@@ -120,4 +120,30 @@ public sealed class KeybindingDispatcherTests
             Assert.Equal(action, lastFired);
         }
     }
+
+    // Same closed loop for the F3 Filter · Sort · Group screen (#398 slice): every one of its table
+    // commands dispatches to its own handler and to no other, so dispatch == table == footer for the
+    // FilterSortGroup context too (the footer half is guarded in KeybindingsTests).
+    [Fact]
+    public void EveryFilterSortGroupAction_DispatchesToItsOwnHandler()
+    {
+        var actions = Keybindings.ActionsFor(ScreenContext.FilterSortGroup).ToList();
+        KeyAction? lastFired = null;
+
+        var dispatcher = new KeybindingDispatcher(ScreenContext.FilterSortGroup);
+        foreach (var action in actions)
+        {
+            var captured = action;
+            dispatcher.On(captured, () => lastFired = captured);
+        }
+
+        foreach (var action in actions)
+        {
+            lastFired = null;
+            var handled = dispatcher.Dispatch(Parse(Keybindings.Token(ScreenContext.FilterSortGroup, action)));
+
+            Assert.True(handled, $"{action} key should dispatch");
+            Assert.Equal(action, lastFired);
+        }
+    }
 }
