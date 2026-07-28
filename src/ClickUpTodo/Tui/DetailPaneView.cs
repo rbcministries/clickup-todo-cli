@@ -61,6 +61,18 @@ public sealed class DetailPaneView : TextView
     public static readonly Attribute WebLinkMarker =
         new(WebLinkForeground, new Color(ColorName16.Black), TextStyle.Underline);
 
+    /// <summary>
+    /// Tag applied to the cells of the <b>keyboard-focused</b> link (#319) — the one <c>Tab</c>/<c>Shift+Tab</c>
+    /// last stepped to. A pure sentinel like the kind markers: <see cref="OnDrawReadOnlyColor"/> re-resolves
+    /// the real attribute (the theme's <see cref="VisualRole.Focus"/> + an underline) at draw time. Its
+    /// colours differ from both link kind markers (so the draw path can tell "focused" from "task"/"web")
+    /// and its background is opaque (so it never trips the separator branch). Because #317 underlines
+    /// <em>every</em> link, the focus indicator has to be additional emphasis (a focus/reverse fill), not the
+    /// underline itself.
+    /// </summary>
+    public static readonly Attribute FocusedLinkMarker =
+        new(new Color(ColorName16.Black), new Color(ColorName16.Gray), TextStyle.Underline);
+
     /// <summary>The foreground a web link is drawn in (blue), applied by <see cref="OnDrawReadOnlyColor"/>
     /// over the pane's live read-only background so the link sits in the pane like surrounding text.</summary>
     private static readonly Color WebLinkForeground = new(ColorName16.BrightBlue);
@@ -80,6 +92,9 @@ public sealed class DetailPaneView : TextView
 
         /// <summary>Part of an other-web link (<see cref="WebLinkMarker"/>).</summary>
         WebLink,
+
+        /// <summary>Part of the keyboard-focused link (<see cref="FocusedLinkMarker"/>, #319).</summary>
+        FocusedLink,
     }
 
     /// <summary>Classifies a loaded <paramref name="cell"/> by the tag <see cref="BuildCells"/> applied —
@@ -90,6 +105,8 @@ public sealed class DetailPaneView : TextView
             return DetailCellStyle.Normal;
         if (a.Background == Color.None)
             return DetailCellStyle.Separator;
+        if (a.Equals(FocusedLinkMarker))
+            return DetailCellStyle.FocusedLink;
         if (a.Equals(TaskLinkMarker))
             return DetailCellStyle.TaskLink;
         if (a.Equals(WebLinkMarker))
@@ -119,11 +136,31 @@ public sealed class DetailPaneView : TextView
     // WordWrapManager, which owns it, is internal, and reproducing its wrap here would be drift.
     private Point? _unwrappedCaret;
 
+    // The body exactly as SetBody loaded it, retained so a focus change (#319) can re-tag one link and
+    // reload without the caller re-supplying it.
+    private string _body = "";
+
+    // Every clickable link in the current body, in document order — the ordered set Tab/Shift+Tab step
+    // through (#319). Rebuilt on each SetBody; the mouse path (#318) still re-extracts per clicked line,
+    // so this table is only the keyboard traversal order, never the click hit test.
+    private IReadOnlyList<PaneLink> _paneLinks = [];
+
+    // The index into _paneLinks of the keyboard-focused link, or LinkFocus.None when nothing is focused
+    // (the state on entry and after any re-render). Drives which link BuildCells tags with FocusedLinkMarker.
+    private int _focusedLinkIndex = LinkFocus.None;
+
     public DetailPaneView()
     {
         ReadOnly = true;
         WordWrap = true;
     }
+
+    /// <summary>The number of clickable links in the current body (the count Tab/Shift+Tab cycle through).</summary>
+    public int LinkCount => _paneLinks.Count;
+
+    /// <summary>The index of the keyboard-focused link, or <see cref="LinkFocus.None"/> when none is focused.
+    /// Surfaced for the (driver-free) focus-traversal tests.</summary>
+    public int FocusedLinkIndex => _focusedLinkIndex;
 
     /// <summary>Loads <paramref name="body"/> into the pane, tagging every line equal to
     /// <paramref name="separator"/> so it is drawn on the terminal-default background. Safe to call
@@ -134,6 +171,11 @@ public sealed class DetailPaneView : TextView
         // same way, so the two can't disagree about what line N is.
         _lines = body.Split('\n');
         _separator = separator;
+        // A re-render (refresh / activity-order toggle) invalidates any keyboard link focus (#319): the
+        // links may have moved, so drop the focus and rebuild the ordered link table for the new body.
+        _body = body;
+        _paneLinks = ExtractPaneLinks(body, separator);
+        _focusedLinkIndex = LinkFocus.None;
         // Home the caret before re-loading. Terminal.Gui 2.4.10's TextView.Load raises OnContentsChanged
         // (via its history-clear) with InheritsPreviousAttribute already turned on but *before* it resets
         // the caret, so it runs ProcessInheritsPreviousScheme against the stale CurrentRow/CurrentColumn
@@ -149,6 +191,102 @@ public sealed class DetailPaneView : TextView
         InheritsPreviousAttribute = false;
     }
 
+    // ── Keyboard link focus traversal (#319, E) ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Advances (<paramref name="forward"/>) or retreats the keyboard link focus to the next/previous
+    /// clickable link, wrapping at the ends (<see cref="LinkFocus.Step"/>), re-drawing the focus highlight
+    /// and scrolling the pane so the focused link stays visible. Returns <c>true</c> when it moved focus —
+    /// i.e. the pane has at least one link, so the caller consumes the <c>Tab</c> — and <c>false</c> when
+    /// the pane has no links, so <c>Tab</c> falls through to its default behaviour (#319 acceptance).
+    /// </summary>
+    public bool StepLinkFocus(bool forward)
+    {
+        if (_paneLinks.Count == 0)
+            return false;
+        _focusedLinkIndex = LinkFocus.Step(_focusedLinkIndex, _paneLinks.Count, forward);
+        RenderFocusedLink();
+        return true;
+    }
+
+    /// <summary>
+    /// Activates the keyboard-focused link (<c>Enter</c>), raising <see cref="LinkActivationRequested"/>
+    /// with the action <see cref="LinkActivator.Resolve"/> chooses for an unmodified activation — a task
+    /// link opens in-app, any other link in the browser — identical to a plain left click (#318), so the
+    /// two gestures can't drift. Returns <c>true</c> when a link was focused and the request was raised, and
+    /// <c>false</c> when none is focused, so the caller lets <c>Enter</c> fall through undisturbed.
+    /// </summary>
+    public bool ActivateFocusedLink()
+    {
+        if (_focusedLinkIndex < 0 || _focusedLinkIndex >= _paneLinks.Count)
+            return false;
+        var span = _paneLinks[_focusedLinkIndex].Span;
+        LinkActivationRequested?.Invoke(this, new LinkActivationRequest(span, LinkActivator.Resolve(span, ctrl: false)));
+        return true;
+    }
+
+    /// <summary>
+    /// Re-tags the cells so the currently focused link carries <see cref="FocusedLinkMarker"/> and reloads
+    /// them, then scrolls the focused link into view. Reloading homes the viewport (as <see cref="SetBody"/>
+    /// does), so the explicit re-wrap + <see cref="EnsureFocusedLinkVisible"/> below restore a scroll that
+    /// shows the focused link — reusing the base view's own wrapped layout rather than re-implementing word
+    /// wrap (the same principle the click hit test follows). A <c>Tab</c> is an infrequent, discrete keypress
+    /// over a short body, so the re-wrap is cheap and keeps the scroll deterministic (no post-layout defer).
+    /// </summary>
+    private void RenderFocusedLink()
+    {
+        var focused = _focusedLinkIndex >= 0 && _focusedLinkIndex < _paneLinks.Count
+            ? _paneLinks[_focusedLinkIndex]
+            : (PaneLink?)null;
+        MoveHome();
+        Load(BuildCells(_body, _separator, focused));
+        InheritsPreviousAttribute = false;
+        // TextView.Load leaves the model unwrapped until a draw pass re-wraps it; force that pass now so the
+        // display-row lookup in EnsureFocusedLinkVisible matches what will be drawn (mirrors the test harness).
+        if (WordWrap)
+        {
+            WordWrap = false;
+            WordWrap = true;
+        }
+        EnsureFocusedLinkVisible();
+    }
+
+    /// <summary>
+    /// Scrolls the pane, if needed, so the focused link's wrapped display rows sit within the viewport. The
+    /// focused rows are found by their <see cref="DetailCellStyle.FocusedLink"/> tag in the wrapped lines (no
+    /// word-wrap maths of our own), and the viewport is nudged the minimum needed — up to the link's first
+    /// row when it's above the viewport, down to its last row when it's below. A no-op when nothing is
+    /// focused or the link is already visible.
+    /// </summary>
+    private void EnsureFocusedLinkVisible()
+    {
+        if (_focusedLinkIndex < 0)
+            return;
+
+        var lines = GetAllLines();
+        int firstRow = -1, lastRow = -1;
+        for (var row = 0; row < lines.Count; row++)
+        {
+            if (!lines[row].Any(c => ClassifyCell(c) == DetailCellStyle.FocusedLink))
+                continue;
+            if (firstRow < 0)
+                firstRow = row;
+            lastRow = row;
+        }
+        if (firstRow < 0)
+            return;
+
+        var viewport = Viewport;
+        // The visible height is the viewport's once the pane is laid out; before the first layout pass
+        // (only reachable from a driver-free unit test) it reads 0, so fall back to the frame height — for
+        // this borderless read-only pane the two are equal, so the runtime path is unchanged.
+        var height = viewport.Height > 0 ? viewport.Height : Frame.Height;
+        if (firstRow < viewport.Y)
+            ScrollTo(new Point(0, firstRow));
+        else if (height > 0 && lastRow >= viewport.Y + height)
+            ScrollTo(new Point(0, lastRow - height + 1));
+    }
+
     /// <summary>
     /// Splits <paramref name="body"/> into one <see cref="Cell"/> list per line, tagging the cells of
     /// any line that exactly equals <paramref name="separator"/> with <see cref="SeparatorMarker"/>,
@@ -157,12 +295,13 @@ public sealed class DetailPaneView : TextView
     /// cell's attribute null (so it draws in the pane's normal read-only colour). Pure — no Terminal.Gui
     /// draw surface — so the separator and link classification are unit-tested.
     /// </summary>
-    public static List<List<Cell>> BuildCells(string body, string separator)
+    public static List<List<Cell>> BuildCells(string body, string separator, PaneLink? focused = null)
     {
         var lines = body.Split('\n');
         var cells = new List<List<Cell>>(lines.Length);
-        foreach (var line in lines)
+        for (var i = 0; i < lines.Length; i++)
         {
+            var line = lines[i];
             if (line == separator)
             {
                 cells.Add(Cell.ToCellList(line, SeparatorMarker));
@@ -172,9 +311,34 @@ public sealed class DetailPaneView : TextView
             // Links never span a newline (the URL regex stops at whitespace), so extracting per line
             // yields offsets that are char indices into this exact line — no global→(line,col) mapping.
             var links = TaskLinkExtractor.Extract(line);
-            cells.Add(links.Count == 0 ? Cell.ToCellList(line, null) : BuildLineWithLinks(line, links));
+            // The keyboard-focused link (#319), if it sits on this line, is tagged with FocusedLinkMarker
+            // instead of its kind marker so the draw override can emphasise it.
+            var focusedSpan = focused is { } f && f.LineIndex == i ? f.Span : (LinkSpan?)null;
+            cells.Add(links.Count == 0 ? Cell.ToCellList(line, null) : BuildLineWithLinks(line, links, focusedSpan));
         }
         return cells;
+    }
+
+    /// <summary>
+    /// Every clickable link in <paramref name="body"/>, in document order (source line ascending, then span
+    /// order within a line), as <see cref="PaneLink"/>s whose <see cref="PaneLink.LineIndex"/> indexes the
+    /// body split on <c>'\n'</c> — the same source-line coordinate space <see cref="BuildCells"/> and the
+    /// mouse hit test use. Separator lines are skipped exactly as <see cref="BuildCells"/> skips them, so
+    /// keyboard focus (#319) can never land on a link the renderer never drew. Pure — no draw surface — so
+    /// the ordering is unit-tested.
+    /// </summary>
+    public static IReadOnlyList<PaneLink> ExtractPaneLinks(string body, string separator)
+    {
+        var lines = body.Split('\n');
+        var result = new List<PaneLink>();
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (lines[i] == separator)
+                continue;
+            foreach (var span in TaskLinkExtractor.Extract(lines[i]))
+                result.Add(new PaneLink(i, span));
+        }
+        return result;
     }
 
     /// <summary>
@@ -185,7 +349,8 @@ public sealed class DetailPaneView : TextView
     /// so slicing by UTF-16 char index is safe. <paramref name="links"/> is in document order and
     /// non-overlapping (as <see cref="TaskLinkExtractor.Extract"/> guarantees).
     /// </summary>
-    private static List<Cell> BuildLineWithLinks(string line, IReadOnlyList<LinkSpan> links)
+    private static List<Cell> BuildLineWithLinks(
+        string line, IReadOnlyList<LinkSpan> links, LinkSpan? focusedSpan = null)
     {
         var result = new List<Cell>(line.Length);
         var pos = 0;
@@ -193,7 +358,8 @@ public sealed class DetailPaneView : TextView
         {
             if (span.Start > pos)
                 result.AddRange(Cell.ToCellList(line[pos..span.Start], null));
-            var marker = span.Kind == LinkKind.Task ? TaskLinkMarker : WebLinkMarker;
+            var marker = span.Equals(focusedSpan) ? FocusedLinkMarker
+                : span.Kind == LinkKind.Task ? TaskLinkMarker : WebLinkMarker;
             result.AddRange(Cell.ToCellList(line[span.Start..span.End], marker));
             pos = span.End;
         }
@@ -346,6 +512,17 @@ public sealed class DetailPaneView : TextView
                 // transparent background shows through instead of the grey read-only fill.
                 var readOnly = GetAttributeForRole(VisualRole.ReadOnly);
                 SetAttribute(new Attribute(readOnly.Foreground, Color.None, readOnly.Style));
+                return;
+            }
+
+            // The keyboard-focused link (#319): draw it in the theme's Focus role (a reverse-video-style
+            // emphasis) plus an underline, so it stands out from the always-on link underline (#317
+            // underlines every link, so the focus cue must be additional emphasis, not the underline).
+            // Re-resolved from the live role each draw, so it stays theme-aware like the kind markers.
+            if (attr.Equals(FocusedLinkMarker))
+            {
+                var focus = GetAttributeForRole(VisualRole.Focus);
+                SetAttribute(new Attribute(focus.Foreground, focus.Background, focus.Style | TextStyle.Underline));
                 return;
             }
 

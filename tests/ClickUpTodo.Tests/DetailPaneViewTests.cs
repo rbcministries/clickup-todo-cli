@@ -499,4 +499,192 @@ public sealed class DetailPaneViewTests
         Assert.Equal(TaskUrl, request.Url);
         Assert.Equal(LinkAction.OpenTaskDetail, request.Action);
     }
+
+    // ── Keyboard link focus traversal (#319) ─────────────────────────────────────────────────────────
+    // The ordered per-pane link table and the focus-highlight tagging are pure (unit-tested directly); the
+    // focus movement / scroll / activation drive a real, laid-out DetailPaneView through its public methods
+    // — no Application / driver needed, exactly like the mouse suite above.
+
+    [Fact]
+    public void ExtractPaneLinks_ReturnsLinksInDocumentOrderAcrossLines()
+    {
+        var body = string.Join('\n', $"first {WebUrl} line", "no links here", $"then {TaskUrl} and {WebUrl}");
+        var links = DetailPaneView.ExtractPaneLinks(body, Sep);
+
+        Assert.Collection(links,
+            l => { Assert.Equal(0, l.LineIndex); Assert.Equal(WebUrl, l.Span.Url); },
+            l => { Assert.Equal(2, l.LineIndex); Assert.Equal(TaskUrl, l.Span.Url); Assert.Equal(LinkKind.Task, l.Span.Kind); },
+            l => { Assert.Equal(2, l.LineIndex); Assert.Equal(WebUrl, l.Span.Url); });
+    }
+
+    [Fact]
+    public void ExtractPaneLinks_SkipsSeparatorLinesEvenWhenTheyLookLikeLinks()
+    {
+        var separator = $"-- {WebUrl} --";
+        var body = string.Join('\n', $"body {TaskUrl}", separator, "more");
+        var links = DetailPaneView.ExtractPaneLinks(body, separator);
+
+        var link = Assert.Single(links);
+        Assert.Equal(TaskUrl, link.Span.Url);
+    }
+
+    [Fact]
+    public void ExtractPaneLinks_EmptyWhenThereAreNoLinks()
+        => Assert.Empty(DetailPaneView.ExtractPaneLinks("just some plain text\nover two lines", Sep));
+
+    [Fact]
+    public void BuildCells_TagsOnlyTheFocusedLinkAsFocused_LeavingOthersByKind()
+    {
+        const string line = $"task {TaskUrl} and web {WebUrl} end";
+        var focused = new PaneLink(0, TaskLinkExtractor.Extract(line).Single(s => s.Url == WebUrl));
+
+        // The focused (web) link's cells become FocusedLink; the task link keeps its kind; nothing else moves.
+        Assert.Equal(WebUrl, FocusedText(DetailPaneView.BuildCells(line, Sep, focused)));
+        Assert.Equal(TaskUrl, TaggedTextIn(DetailPaneView.BuildCells(line, Sep, focused), DetailPaneView.DetailCellStyle.TaskLink));
+        // Without a focused link nothing is tagged FocusedLink (guards the default overload).
+        Assert.Equal("", FocusedText(DetailPaneView.BuildCells(line, Sep)));
+    }
+
+    [Fact]
+    public void StepLinkFocus_NoLinks_ReturnsFalseAndFocusesNothing()
+    {
+        var (pane, _) = ClickablePane("no links on this pane at all", width: 60);
+
+        Assert.False(pane.StepLinkFocus(forward: true));
+        Assert.Equal(LinkFocus.None, pane.FocusedLinkIndex);
+        Assert.Equal(0, pane.LinkCount);
+    }
+
+    [Fact]
+    public void StepLinkFocus_ForwardCyclesThroughEveryLinkAndWraps()
+    {
+        var (pane, _) = ClickablePane($"a {WebUrl} b {TaskUrl} c {WebUrl} d", width: 200);
+        Assert.Equal(3, pane.LinkCount);
+
+        Assert.True(pane.StepLinkFocus(forward: true));
+        Assert.Equal(0, pane.FocusedLinkIndex);
+        pane.StepLinkFocus(forward: true);
+        Assert.Equal(1, pane.FocusedLinkIndex);
+        pane.StepLinkFocus(forward: true);
+        Assert.Equal(2, pane.FocusedLinkIndex);
+        pane.StepLinkFocus(forward: true);
+        Assert.Equal(0, pane.FocusedLinkIndex); // wrapped
+    }
+
+    [Fact]
+    public void StepLinkFocus_BackwardFromNoneWrapsToTheLastLink()
+    {
+        var (pane, _) = ClickablePane($"a {WebUrl} b {TaskUrl} c", width: 200);
+
+        Assert.True(pane.StepLinkFocus(forward: false));
+        Assert.Equal(1, pane.FocusedLinkIndex); // last of two
+    }
+
+    [Fact]
+    public void StepLinkFocus_HighlightsTheFocusedLinkAndOnlyIt()
+    {
+        var (pane, _) = ClickablePane($"a {WebUrl} b {TaskUrl} c", width: 200);
+
+        pane.StepLinkFocus(forward: true);        // focus WebUrl (index 0)
+        Assert.Equal(WebUrl, FocusedTextOf(pane));
+
+        pane.StepLinkFocus(forward: true);        // focus TaskUrl (index 1) — the web link reverts to its kind
+        Assert.Equal(TaskUrl, FocusedTextOf(pane));
+    }
+
+    [Fact]
+    public void SetBody_ClearsAnyPriorLinkFocus()
+    {
+        var (pane, _) = ClickablePane($"first {WebUrl}", width: 60);
+        pane.StepLinkFocus(forward: true);
+        Assert.Equal(0, pane.FocusedLinkIndex);
+
+        pane.SetBody($"second body {TaskUrl} and {WebUrl}", Sep);
+
+        Assert.Equal(LinkFocus.None, pane.FocusedLinkIndex);
+        Assert.Equal(2, pane.LinkCount);
+        Assert.Equal("", FocusedTextOf(pane)); // no highlight until Tab is pressed again
+    }
+
+    [Fact]
+    public void ActivateFocusedLink_WithNoFocus_ReturnsFalseAndRaisesNothing()
+    {
+        var (pane, requests) = ClickablePane($"has a {WebUrl}", width: 60);
+
+        Assert.False(pane.ActivateFocusedLink());
+        Assert.Empty(requests);
+    }
+
+    [Fact]
+    public void ActivateFocusedLink_RaisesTheSameRequestAPlainClickWould()
+    {
+        var (pane, requests) = ClickablePane($"web {WebUrl} then task {TaskUrl}", width: 200);
+
+        pane.StepLinkFocus(forward: true);        // WebUrl
+        Assert.True(pane.ActivateFocusedLink());
+        pane.StepLinkFocus(forward: true);        // TaskUrl
+        Assert.True(pane.ActivateFocusedLink());
+
+        Assert.Collection(requests,
+            r => { Assert.Equal(WebUrl, r.Url); Assert.Equal(LinkAction.OpenInBrowser, r.Action); },
+            r => { Assert.Equal(TaskUrl, r.Url); Assert.Equal(LinkAction.OpenTaskDetail, r.Action); Assert.Equal("abc123", r.Span.TaskId); });
+    }
+
+    [Fact]
+    public void StepLinkFocus_ScrollsTowardAFocusedLinkBelowTheFold()
+    {
+        // A link far below a 3-row viewport. Focusing it scrolls the pane down toward it. (In CI the undrawn
+        // model clamps the scroll extent conservatively, so this asserts the down-scroll fired rather than
+        // pixel-exact end visibility — that's what tui-validate covers; the runtime clamp reveals the row.)
+        var body = string.Join('\n', "one", "two", "three", "four", "five", "six", $"deep {WebUrl} here");
+        var (pane, _) = ClickablePane(body, width: 60, height: 3);
+        Assert.Equal(0, pane.Viewport.Y); // starts at the top
+
+        pane.StepLinkFocus(forward: false);   // focus the last (only) link, far below the viewport
+
+        Assert.Equal(6, FocusedRow(pane));    // the link is highlighted on its (far-down) row…
+        Assert.True(pane.Viewport.Y > 0, "the pane should have scrolled down toward the focused link");
+    }
+
+    [Fact]
+    public void StepLinkFocus_ScrollsBackUpToAFocusedLinkAboveTheViewport()
+    {
+        var body = string.Join('\n', $"top {WebUrl} here", "two", "three", "four", "five", "six", $"deep {TaskUrl} here");
+        var (pane, _) = ClickablePane(body, width: 60, height: 3);
+
+        pane.StepLinkFocus(forward: false);   // focus the bottom link → scrolls down
+        Assert.True(pane.Viewport.Y > 0);
+
+        pane.StepLinkFocus(forward: true);    // wraps to the top link → scrolls back up to it
+        Assert.Equal(0, pane.FocusedLinkIndex);
+        Assert.Equal(0, pane.Viewport.Y);
+    }
+
+    // The concatenated graphemes of every FocusedLink-tagged cell across a built body's lines.
+    private static string FocusedText(List<List<Cell>> cells)
+        => string.Concat(cells.SelectMany(line => line)
+            .Where(c => DetailPaneView.ClassifyCell(c) == DetailPaneView.DetailCellStyle.FocusedLink)
+            .Select(c => c.Grapheme ?? ""));
+
+    // As above, but read from a laid-out pane's currently loaded (wrapped) lines.
+    private static string FocusedTextOf(DetailPaneView pane)
+        => string.Concat(pane.GetAllLines().SelectMany(line => line)
+            .Where(c => DetailPaneView.ClassifyCell(c) == DetailPaneView.DetailCellStyle.FocusedLink)
+            .Select(c => c.Grapheme ?? ""));
+
+    // The first wrapped display row carrying a FocusedLink cell.
+    private static int FocusedRow(DetailPaneView pane)
+    {
+        var lines = pane.GetAllLines();
+        for (var row = 0; row < lines.Count; row++)
+            if (lines[row].Any(c => DetailPaneView.ClassifyCell(c) == DetailPaneView.DetailCellStyle.FocusedLink))
+                return row;
+        throw new InvalidOperationException("no focused link is highlighted");
+    }
+
+    // The concatenated graphemes tagged with `style` across a built body's lines (multi-line TaggedText).
+    private static string TaggedTextIn(List<List<Cell>> cells, DetailPaneView.DetailCellStyle style)
+        => string.Concat(cells.SelectMany(line => line)
+            .Where(c => DetailPaneView.ClassifyCell(c) == style)
+            .Select(c => c.Grapheme ?? ""));
 }
