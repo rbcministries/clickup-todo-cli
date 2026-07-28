@@ -94,6 +94,13 @@ public static class FeedRowFormatter
         if (comment.DateMs is { } ms)
             text += Separator + FormatDate(ms);
 
+        // Threaded comments (#329): the feed collapses a thread to a reply count rather than nesting the
+        // replies — the feed never loads reply bodies (a feed-wide fan-out would be an unbounded storm, so
+        // #328 deliberately skips it), but every comment carries an accurate ReplyCount from MapComment. Placed
+        // before the (truncatable) preview so a long preview can't clip it off the end of the row.
+        if (comment.ReplyCount > 0)
+            text += Separator + ReplyCountLabel(comment.ReplyCount);
+
         text += Separator + Preview(comment.Text);
 
         return new Row(text, mentionStart, mentionLength, author);
@@ -142,6 +149,12 @@ public static class FeedRowFormatter
             cut--;
         return flattened[..cut] + "…";
     }
+
+    /// <summary>The reply-count field for a feed row with a thread (#329): <c>"1 reply"</c> for a single
+    /// reply, <c>"N replies"</c> otherwise. Callers guard on <c>ReplyCount &gt; 0</c>, so this never renders
+    /// a zero count.</summary>
+    public static string ReplyCountLabel(int count)
+        => count == 1 ? "1 reply" : $"{count} replies";
 
     private static string FormatDate(long ms)
         => DateTimeOffset.FromUnixTimeMilliseconds(ms).LocalDateTime.ToString("MMM d, HH:mm");

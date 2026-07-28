@@ -251,6 +251,11 @@ Press `Ctrl+E` to open a feed of recent comments and `@`-mentions across the tas
 from the comments on your **assigned** tasks — which means a mention on a task you aren't assigned to
 won't appear unless a small **per-Space ClickUp Automation** turns mentions into assignments.
 
+A comment that has a reply thread shows a `N replies` count on its feed row; the reply bodies
+themselves aren't fetched for the feed (that would fan out across every assigned task), but they're
+rendered nested under the comment in the Task Detail **Comments** / **Stream** tabs when you open the
+task.
+
 `F6` toggles a **recent-activity** source: your recently-updated assigned tasks (by ClickUp
 `date_updated`), merged into the feed newest-first so "what changed on my tasks" sits alongside the
 comments. It's off by default and, because ClickUp has no task-activity-history API, approximates
