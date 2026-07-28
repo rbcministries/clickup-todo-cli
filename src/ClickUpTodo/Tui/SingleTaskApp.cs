@@ -352,6 +352,14 @@ public sealed class SingleTaskApp
         if (ActiveScreen is ExitConfirmScreen)
             return;
 
+        // #407: same opt-out as the dashboard host — when confirmation is off, Esc/close quits the tab
+        // directly. Read live from the shared config; the re-entrancy guard above still runs first.
+        if (!_config.ConfirmOnExit)
+        {
+            Application.RequestStop();
+            return;
+        }
+
         var confirm = new ExitConfirmScreen();
         ShowScreen(confirm, () =>
         {
