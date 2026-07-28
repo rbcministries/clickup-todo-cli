@@ -54,6 +54,16 @@ public sealed class LiteDbChangeMarkerStore : IChangeMarkerStore
     /// <param name="timeProvider">Clock for TTL aging. Defaults to <see cref="TimeProvider.System"/>.</param>
     public LiteDbChangeMarkerStore(
         LiteDatabase db, string instanceId, ChangeMarkerOptions? options = null, TimeProvider? timeProvider = null)
+        : this(db, instanceId, options, timeProvider, retryPolicy: null)
+    {
+    }
+
+    /// <summary>Test seam (#410): lets a unit test inject an instant/short-circuit retry policy so the
+    /// write's retry-and-reuse-seq behaviour is verifiable deterministically and without real back-off
+    /// sleeps.</summary>
+    internal LiteDbChangeMarkerStore(
+        LiteDatabase db, string instanceId, ChangeMarkerOptions? options, TimeProvider? timeProvider,
+        WriteRetryPolicy? retryPolicy)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         if (string.IsNullOrEmpty(instanceId))
@@ -61,7 +71,7 @@ public sealed class LiteDbChangeMarkerStore : IChangeMarkerStore
         InstanceId = instanceId;
         _options = options ?? ChangeMarkerOptions.Default;
         _timeProvider = timeProvider ?? TimeProvider.System;
-        _retry = new WriteRetryPolicy();
+        _retry = retryPolicy ?? new WriteRetryPolicy();
 
         _changes = _db.GetCollection<MarkerDocument>(ChangesCollection);
         _seq = _db.GetCollection<SeqDocument>(SeqCollection);
@@ -81,6 +91,10 @@ public sealed class LiteDbChangeMarkerStore : IChangeMarkerStore
             // (taskId, seq), so a retried write re-runs with the *same* seq and never burns a number
             // (which would leave a gap). A seq is allocated only once the allocation itself succeeds
             // (see AllocateSeq), so a failed-then-retried allocation doesn't skip either.
+            // The retry (incl. its short backoff) runs under _gate: the whole write must be serialised
+            // so the seq allocation, marker upsert, and trims stay ordered. The backoff only ever runs
+            // on a failing write and is bounded (tens of ms worst case), so briefly holding the gate is
+            // acceptable for a background nudge.
             long? seq = null;
             _retry.Run(() =>
             {

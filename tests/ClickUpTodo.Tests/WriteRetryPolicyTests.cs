@@ -88,4 +88,30 @@ public sealed class WriteRetryPolicyTests
 
         Assert.False(ok);
     }
+
+    [Fact]
+    public void Run_WhenGiveUpHookItselfThrows_StillDoesNotPropagate()
+    {
+        // A throwing give-up hook must not resurrect the failure Run just swallowed — reaching the
+        // assertion at all proves nothing propagated out of Run.
+        var ok = Policy(1).Run(
+            () => throw new IOException("write"),
+            _ => throw new InvalidOperationException("hook blew up"));
+
+        Assert.False(ok);
+    }
+
+    [Fact]
+    public void Run_WhenDelayHookThrows_KeepsRetrying_AndDoesNotPropagate()
+    {
+        var calls = 0;
+
+        // The back-off hook throwing must not abort the retry loop or propagate: the write still gets
+        // its later attempt and eventually succeeds.
+        var ok = new WriteRetryPolicy(maxAttempts: 3, delay: _ => throw new InvalidOperationException("delay"))
+            .Run(() => { calls++; if (calls < 2) throw new IOException("transient"); });
+
+        Assert.True(ok);
+        Assert.Equal(2, calls);
+    }
 }

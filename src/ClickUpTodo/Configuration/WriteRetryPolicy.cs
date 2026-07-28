@@ -46,12 +46,18 @@ internal sealed class WriteRetryPolicy
             {
                 if (attempt >= _maxAttempts)
                 {
-                    onGiveUp?.Invoke(ex);
+                    // Guarded so a throwing give-up hook can't resurrect the failure we just swallowed —
+                    // Run's whole contract is that it never propagates.
+                    try { onGiveUp?.Invoke(ex); }
+                    catch { /* the give-up hook must not turn a dropped nudge into a thrown one */ }
                     return false;
                 }
-
-                _delay(attempt);
             }
+
+            // Back off before the next attempt (never after the final one). Guarded too, so a delay
+            // interruption (e.g. ThreadInterruptedException) is not mistaken for a write failure.
+            try { _delay(attempt); }
+            catch { /* a backoff interruption is not a write failure to propagate */ }
         }
     }
 
