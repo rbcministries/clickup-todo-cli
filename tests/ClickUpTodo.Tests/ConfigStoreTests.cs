@@ -70,6 +70,7 @@ public sealed class ConfigStoreTests : IDisposable
             AgentDispatch = new AgentDispatchSettings
             {
                 PreferredTerminal = PreferredTerminal.Pwsh,
+                CustomTerminalCommand = "ghostty -e {}",
                 LaunchLocation = LaunchLocation.NewTab,
                 ClaudeExecutable = "/opt/claude",
                 ExtraArgs = ["--model", "opus"],
@@ -86,6 +87,7 @@ public sealed class ConfigStoreTests : IDisposable
 
         var d = loaded.AgentDispatch;
         Assert.Equal(PreferredTerminal.Pwsh, d.PreferredTerminal);
+        Assert.Equal("ghostty -e {}", d.CustomTerminalCommand);
         Assert.Equal(LaunchLocation.NewTab, d.LaunchLocation);
         Assert.Equal("/opt/claude", d.ClaudeExecutable);
         Assert.Equal(["--model", "opus"], d.ExtraArgs);
