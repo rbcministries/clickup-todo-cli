@@ -486,6 +486,17 @@ public sealed class TaskService(
     public Task<TaskItem> CreateTaskAsync(string listId, NewTaskRequest task, CancellationToken ct = default)
         => client.CreateTaskAsync(listId, task, ct);
 
+    /// <summary>
+    /// The Custom Field <b>definitions</b> for a list — id, name, type, required flag, and
+    /// drop-down/label options (#249) — used by the New Task screen to render an input widget per
+    /// fillable field and enforce required fields (#368/#395). A thin passthrough to the facade
+    /// (<see cref="IClickUpClient.GetListCustomFieldsAsync"/>), mirroring
+    /// <see cref="CreateTaskAsync"/>/<see cref="AddTaskToListAsync"/> so the screen depends only on this
+    /// service.
+    /// </summary>
+    public Task<IReadOnlyList<CustomFieldDefinition>> GetListCustomFieldsAsync(string listId, CancellationToken ct = default)
+        => client.GetListCustomFieldsAsync(listId, ct);
+
     /// <summary>Full detail for a single task, fetched on demand for the detail view (#17).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskDetailAsync(taskId, ct);
