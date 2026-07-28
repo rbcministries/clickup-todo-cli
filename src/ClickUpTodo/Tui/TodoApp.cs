@@ -2171,6 +2171,13 @@ public sealed class TodoApp
     /// poll. The stale-fetch ordering is decided by the pure <see cref="NudgedRowReconciler"/>. Re-checks
     /// membership on the way back in (a background resync may have dropped the task), and swallows a fetch
     /// failure (the nudge rides on an already-succeeded edit).
+    /// <para>
+    /// For a task linked into multiple lists (#237), <c>GET /task/{id}</c> reports its <b>home</b> list, so
+    /// the wholesale replace adopts the home <c>ListId</c>/<c>ListName</c> rather than the queried-list
+    /// values the row was fetched under. In the rare case of viewing a non-home list, a group-by-list
+    /// placement could momentarily shift until the next authoritative delta poll (which re-maps from the
+    /// queried-list endpoint) self-heals it — an accepted, transient cost of the full-fidelity replace.
+    /// </para>
     /// </summary>
     private void RefreshNudgedRow(string taskId)
     {

@@ -119,5 +119,3 @@ follow-up issue (linked from the PR) rather than shipped half-done.
   sibling helpers this plan extends) and the internal `GetTaskItemAsync` use in the Task Tree walk.
 - `src/ClickUpTodo/ClickUp/ClickUpClient.cs` — `GetTaskItemAsync` → `Map` (full `TaskItem`).
 - `tests/ClickUpTodo.Tui.E2E/Program.cs` — the single-instance PTY harness Phase B extends.
-</content>
-</invoke>
