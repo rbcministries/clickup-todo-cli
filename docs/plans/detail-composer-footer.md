@@ -10,7 +10,7 @@ dedicated footer set, so the screen keeps rendering the full `Detail` /
 `Ctrl+N ➕Comment`, `Ctrl+E ✏Description`, `Ctrl+O 🗁 by ID`, `Ctrl+U`, etc.
 
 Those chords are inert to a **keypress** while composing (`OnKey` returns early at
-`TaskDetailScreen.cs:778` when `_commentBox.Visible || _descriptionBox.Visible`),
+`TaskDetailScreen.cs:779` when `_commentBox.Visible || _descriptionBox.Visible`),
 so the keyboard behaviour is already correct. The gap is the **mouse**: footer
 action hints are clickable and re-raise their chord via
 `Application.RaiseKeyDownEvent` (#289). With the composer focused, clicking e.g.
