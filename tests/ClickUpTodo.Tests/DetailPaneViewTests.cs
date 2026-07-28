@@ -209,6 +209,20 @@ public sealed class DetailPaneViewTests
         Assert.Null(DetailPaneView.LinkUrlForCell(cells, at));
     }
 
+    [Fact]
+    public void LinkUrlForCell_ReturnsTheVisibleUrl_NotTheTarget_ForAMarkdownLinkWhoseTextIsAUrl()
+    {
+        // Bounded, documented deviation: when a markdown link's VISIBLE text is itself a URL, the OSC-8 target
+        // reconstructed from the drawn cells is that displayed URL, not the markdown's true target. This is the
+        // safe direction (the target equals what the reader sees, never a hidden destination); correct
+        // markdown-target OSC-8 is deferred (#430). Pinned so the behaviour can't change silently.
+        const string visibleUrl = "https://example.com/a";
+        const string line = "See [" + visibleUrl + "](https://example.com/b) now";
+        var cells = Line(line);
+        var at = line.IndexOf(visibleUrl, StringComparison.Ordinal);
+        Assert.Equal(visibleUrl, DetailPaneView.LinkUrlForCell(cells, at));
+    }
+
     // Exercises the real SetBody → TextView.Load path (no driver needed to load the model) and inspects
     // the loaded cells. This is the reviewer's concern (PR #184): the terminal-default (Color.None)
     // background must stay on the separator line only, and must not carry forward to the comment/

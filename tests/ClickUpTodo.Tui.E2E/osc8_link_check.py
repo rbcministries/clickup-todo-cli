@@ -76,6 +76,18 @@ def visible():
         "".join(screen.buffer[y][x].data for x in range(COLS)).rstrip() for y in range(ROWS))
 
 
+def assert_wrapped(url, where):
+    """The URL's OSC-8 open sequence is present AND a close (OSC-8 end) follows it — so the hyperlink is
+    scoped to the URL run rather than leaking onto the rest of the pane."""
+    start = osc8_start(url)
+    idx = raw.find(start)
+    assert idx >= 0, f"no OSC-8 open sequence for the {where}"
+    # A close must follow the open (after the wrapped visible text), bounding the run. Search from just
+    # past the open sequence so we can't accidentally match a close that preceded it.
+    assert raw.find(OSC8_END, idx + len(start)) >= 0, \
+        f"OSC-8 open for the {where} is not followed by a close — the hyperlink run is unbounded"
+
+
 try:
     pump(8.0)
     assert "Task" in visible(), "list boot failed"
@@ -84,11 +96,10 @@ try:
     pump(3.0)
     assert "Description" in visible(), "detail screen did not open:\n" + visible()
 
-    # ── Task link on the Description tab carries an OSC-8 hyperlink to its own URL ────────────────────
-    assert osc8_start(TASK_URL) in raw, \
-        "no OSC-8 open sequence for the task link on the Description tab"
+    # ── Task link on the Description tab carries a bounded OSC-8 hyperlink to its own URL ─────────────
+    assert_wrapped(TASK_URL, "task link on the Description tab")
 
-    # ── Web link on the Comments tab: cycle tabs until its OSC-8 sequence appears ────────────────────
+    # ── Web link on the Comments tab: cycle tabs until its OSC-8 open sequence appears ───────────────
     found_web = osc8_start(WEB_URL) in raw
     for _ in range(4):
         if found_web:
@@ -96,13 +107,9 @@ try:
         os.write(master, b"\x1b[1;5C")   # Ctrl+→ → next tab
         pump(1.2)
         found_web = osc8_start(WEB_URL) in raw
-    assert found_web, "no OSC-8 open sequence for the web link after cycling tabs"
+    assert_wrapped(WEB_URL, "web link on the Comments tab")
 
-    # The hyperlink runs are closed (OSC-8 end), so a supporting terminal scopes the link to the URL
-    # cells rather than leaving the rest of the pane hyperlinked.
-    assert OSC8_END in raw, "no OSC-8 close sequence emitted"
-
-    print("ok — task link (Description) and web link (Comments) each wrapped in an OSC-8 hyperlink")
+    print("ok — task link (Description) and web link (Comments) each wrapped in a bounded OSC-8 hyperlink")
 finally:
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)

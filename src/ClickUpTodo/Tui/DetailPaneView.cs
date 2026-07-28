@@ -110,13 +110,16 @@ public sealed class DetailPaneView : TextView
     /// so it is unit-tested; the draw override (<see cref="OnDrawReadOnlyColor"/>) feeds the result to
     /// <see cref="IDriver.CurrentUrl"/> so the ANSI output wraps the run in an OSC-8 escape.
     /// <para>
-    /// Because a <b>bare</b> link's displayed text <em>is</em> its URL (the case #317 renders and #380
-    /// validates), the target is reconstructed from the run's graphemes and returned only when it re-parses as
-    /// an absolute <c>http(s)</c> URL with a real host. A <b>markdown</b> <c>[text](url)</c> link, whose visible
-    /// text differs from its target, therefore yields <see langword="null"/> here rather than a wrong target —
-    /// full markdown-link OSC-8 needs the resolved span threaded into the draw path and is deferred (see the
-    /// plan doc). A word-wrapped link's tail fragment likewise fails the URL check; wrapped-link rendering is
-    /// tracked separately (#413).
+    /// The emitted target is <b>always exactly the run's on-screen text</b>, returned only when that text
+    /// re-parses as an absolute <c>http(s)</c> URL with a real host. For a <b>bare</b> link that text <em>is</em>
+    /// the URL (the case #317 renders and #380 validates), so the target is exact. For a <b>markdown</b>
+    /// <c>[text](url)</c> link — whose true target (<see cref="LinkSpan.Url"/>) can differ from the visible
+    /// text — this returns <see langword="null"/> when the visible text is prose, and returns the <em>visible</em>
+    /// URL (not the markdown target) in the rare case the visible text is itself an <c>http(s)</c> URL. That
+    /// deviation is deliberate and bounded: the target then equals what the reader sees on screen (never a
+    /// hidden destination), and correct markdown-target OSC-8 — which needs the resolved span threaded into the
+    /// draw path — is deferred (#430; see the plan doc). A word-wrapped link's non-URL tail fragment likewise
+    /// fails the URL check; wrapped-link rendering is tracked separately (#413).
     /// </para>
     /// </summary>
     public static string? LinkUrlForCell(IReadOnlyList<Cell> line, int idxCol)
@@ -140,9 +143,11 @@ public sealed class DetailPaneView : TextView
 
         var text = string.Concat(Enumerable.Range(start, end - start + 1).Select(i => line[i].Grapheme ?? ""));
 
-        // Only emit for a run whose text is itself a navigable absolute http(s) URL. A bare link passes (its
-        // text is the URL); a markdown link's visible prose, or a wrapped link's non-URL tail fragment, does
-        // not — so a wrong OSC-8 target is never emitted.
+        // Emit only when the run's on-screen text is itself a navigable absolute http(s) URL, and use that
+        // text as the target. A bare link passes (its text is the URL). A markdown link's visible prose, or a
+        // wrapped link's non-URL tail fragment, does not — so no wrong target is invented. (A markdown link
+        // whose *visible text* is itself a URL yields that displayed URL, not its true target — the bounded,
+        // never-hidden-destination deviation documented above; correct markdown targets are deferred to #430.)
         return Uri.TryCreate(text, UriKind.Absolute, out var uri)
             && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
             && !string.IsNullOrEmpty(uri.Host)
