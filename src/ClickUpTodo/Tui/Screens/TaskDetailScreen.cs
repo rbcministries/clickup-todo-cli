@@ -225,6 +225,16 @@ public sealed class TaskDetailScreen : Screen
     /// detail→detail path (#387). Inert on the current-task row (a no-op, flashed).</summary>
     public event EventHandler<string>? OpenTaskRequested;
 
+    /// <summary>
+    /// Raised when the user clicks a link in one of the text panes (D, #318): a plain click on a ClickUp
+    /// task link asks for that task in-app, and a Ctrl+click — or a click on any other web link — asks for
+    /// the browser (<see cref="LinkActivator.Resolve"/>). The host owns both destinations, since they
+    /// differ per host: the dashboard opens the task stacked over this detail, while single-task launch
+    /// mode has no in-app task→task destination yet (#374). Inert while an overlay is up (see
+    /// <see cref="OnPaneLinkActivation"/>).
+    /// </summary>
+    public event EventHandler<LinkActivationRequest>? LinkActivationRequested;
+
     /// <summary>Raised when the user presses F6 on the Task Tree tab (#415) to cycle how that list renders
     /// its Status/Priority badges (Icons → Text → Hidden), mirroring the main list's F6. The host owns the
     /// single source of truth: it cycles + persists <c>AppConfig.BadgeDisplay</c> and reflects the new mode
@@ -369,6 +379,11 @@ public sealed class TaskDetailScreen : Screen
         _descriptionPane = NewPane("Description", _descriptionText);
         _commentsText = TaskDetailFormatter.Comments(comments, _streamSort);
         _commentsPane = NewPane($"Comments ({comments.Count})", _commentsText);
+
+        // Click a link in any pane → act on it (D, #318). Each pane hit-tests its own body and resolves
+        // the action; the screen only gates it on no overlay owning input and forwards it to the host.
+        foreach (var pane in new[] { _streamPane, _descriptionPane, _commentsPane })
+            pane.LinkActivationRequested += OnPaneLinkActivation;
 
         // The Other tab colours its Priority/Status values (#66), which a plain TextView can't do. Its
         // content is a container (a coloured, fixed-height header view on top of the scrollable,
@@ -602,12 +617,13 @@ public sealed class TaskDetailScreen : Screen
         Add([_headerView, _tabs, _promptBox, _commentBox, _descriptionBox]);
     }
 
+    // While the comment composer (Ctrl+N) or description editor (Ctrl+E) overlay is open, the footer
+    // shows only that overlay's keys — the command chords are inert to a keypress (OnKey returns early)
+    // but their clickable footer hints would otherwise re-raise the chord into the composer (#436). The
+    // Task Tree tab's F6 badge cycle (#415) is only offered when that tab exists (a loader was supplied);
+    // single-task launch mode has no tree tab, so it keeps the F6-less Detail set.
     public override IReadOnlyList<HelpItem> HelpItems =>
-        _descriptionBox.Visible ? HelpItemSets.DetailDescriptionEditor
-        // The Task Tree tab's F6 badge cycle (#415) is only offered when that tab exists (a loader was
-        // supplied). Single-task launch mode has no tree tab, so it keeps the F6-less Detail set.
-        : _treeList is not null ? HelpItemSets.DetailWithTaskTree
-        : HelpItemSets.Detail;
+        HelpItemSets.DetailFooter(_commentBox.Visible, _descriptionBox.Visible, _treeList is not null);
 
     public override void OnShown()
     {
@@ -796,6 +812,31 @@ public sealed class TaskDetailScreen : Screen
             key.Handled = true;
             CycleBadgeDisplayRequested?.Invoke(this, EventArgs.Empty);
             return;
+        }
+
+        // #319 (E): on a text pane, bare Tab/Shift+Tab step keyboard focus across the in-pane links and
+        // Enter activates the focused one — the keyboard equivalent of the #318 click. Routed here (not in
+        // the pane) because OnKey already owns the screen's key vocabulary and fires before Terminal.Gui's
+        // focus traversal, so it can consume bare Tab. Guarded to the text panes (their scroll target is a
+        // DetailPaneView): the Task Tree tab's Enter is handled above and the Other tab has no links. Each
+        // call is inert (returns false → key falls through) when there's nothing to do — no links for Tab,
+        // no focused link for Enter — so an empty pane's Tab and an unfocused Enter behave as they did.
+        if (!_promptBox.Visible && ActiveTextPane() is { } linkPane)
+        {
+            // Mask ShiftMask so Shift+Tab (which the ansi driver folds into KeyCode.Tab | ShiftMask) is
+            // matched too; IsShift then picks the direction — the same shape the comment composer uses.
+            // Guarded on !_promptBox.Visible like the sibling command blocks below: the Dispatch pane's
+            // own handlers already consume Tab/Enter while it's open, but this removes the hidden reliance.
+            if ((key.KeyCode & ~KeyCode.ShiftMask) == KeyCode.Tab && linkPane.StepLinkFocus(forward: !key.IsShift))
+            {
+                key.Handled = true;
+                return;
+            }
+            if (key.KeyCode == KeyCode.Enter && linkPane.ActivateFocusedLink())
+            {
+                key.Handled = true;
+                return;
+            }
         }
 
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
@@ -1190,6 +1231,15 @@ public sealed class TaskDetailScreen : Screen
         if (current < 0)
             current = 0;
         _scrollTargets[current].SetFocus();
+    }
+
+    /// <summary>The front-most tab's scroll target when it is a read-only text pane (Stream / Description /
+    /// Comments), or <c>null</c> for the Task Tree / Other tabs. The seam for the #319 link focus keys, so
+    /// bare Tab/Enter act only where there are links to traverse.</summary>
+    private DetailPaneView? ActiveTextPane()
+    {
+        var current = Array.IndexOf(_tabContents, _tabs.Value);
+        return current < 0 ? null : _scrollTargets[current] as DetailPaneView;
     }
 
     // ── Comment composer (#216) ───────────────────────────────────────────────
@@ -1728,6 +1778,20 @@ public sealed class TaskDetailScreen : Screen
             return;
         e.Handled = true;
         NavigateToTreeTask(task);
+    }
+
+    /// <summary>
+    /// A link click in one of the text panes (D, #318) — forwarded to the host as
+    /// <see cref="LinkActivationRequested"/>, except while an overlay is up. The Dispatch pane, the comment
+    /// composer and the description editor each own input while open (the same rule <see cref="OnKey"/>
+    /// applies to the screen's chords), and they only partially cover the panes — so without this guard a
+    /// click on the still-visible part of a pane could navigate away from an open draft.
+    /// </summary>
+    private void OnPaneLinkActivation(object? sender, LinkActivationRequest request)
+    {
+        if (_promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible)
+            return;
+        LinkActivationRequested?.Invoke(this, request);
     }
 
     /// <summary>Raises <see cref="OpenTaskRequested"/> for a non-current task; the current-task row is a

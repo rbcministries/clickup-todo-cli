@@ -137,7 +137,37 @@ Self-contained (sets `E2E_TREE=1` itself). Expected: `ok — survived bare arrow
 boundaries; ↑ on the Task Tree tab stays on the tab`. Reproduces the crash on the stock control (revert
 `NavSafeTabs`→`Tabs` to confirm) and passes on the fix.
 
-**8. OSC-8 terminal hyperlinks (#380)** — opens Task Detail and asserts that the two links #317 seeds
+**8. Link click activation (#318)** — drives real SGR mouse clicks at the same two seeded links and
+checks where each gesture goes: `Ctrl`+click a **task** link → the browser; plain click a **web** link
+→ the browser; plain click the **task** link → that task's Task Detail, stacked in-app (proven by the
+extra `Esc` it then takes to reach the list); a click while the comment composer is open → nothing.
+Ordinary clicks (prose, empty space right of a line, below the body) stay inert:
+
+```bash
+timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/link_click_check.py $DLL
+```
+
+Self-contained (sets its own `E2E_BROWSER_LOG`, so browser launches are asserted from the recorder
+file rather than guessed from the screen). Expected: `ok — Ctrl+click → browser, web click → browser,
+task click → stacked detail, click under an open composer → inert`. Ctrl is the `+16` modifier bit on
+the SGR button code (`ESC[<16;x;yM`).
+
+**9. Link keyboard focus traversal + activation (#319)** — the keyboard counterpart of check 8. Drives
+`Tab`/`Shift+Tab` (Tab = `0x09`, Shift+Tab = `ESC[Z`) to move a focus highlight across the same two
+seeded links and `Enter` to activate the focused one, asserting `Enter` reaches the same destinations a
+click does: an unfocused `Enter` is inert; `Tab` highlights the Description **task** link (a pyte
+cell-attribute change) and `Enter` opens its Task Detail stacked in-app (proven by the extra `Esc` to
+reach the list); `Shift+Tab` highlights the Comments **web** link and `Enter` opens the browser:
+
+```bash
+timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/link_tab_check.py $DLL
+```
+
+Self-contained (sets its own `E2E_BROWSER_LOG`). Expected: `ok — unfocused Enter inert; Tab highlights +
+Enter opens the task link's detail (stacked); Shift+Tab highlights + Enter opens the web link in the
+browser`.
+
+**10. OSC-8 terminal hyperlinks (#380)** — opens Task Detail and asserts that the two links #317 seeds
 (the task link on the Description, the web link on the Comments tab) are each wrapped in an OSC-8
 hyperlink escape (`ESC ] 8 ; ; <url> ST … ESC ] 8 ; ; ST`) targeting their own URL. This is the **one
 check that asserts on raw bytes** (see the pitfall below): OSC-8 is a hyperlink escape a VT emulator
@@ -149,8 +179,8 @@ timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/osc8_link_check.py $DLL
 
 Self-contained (fixed COLS=120 so the seeded URLs don't wrap — a wrapped link is out of #380's scope,
 tracked with the wrapped-line rendering work, #413). Expected: `ok — task link (Description) and web link
-(Comments) each wrapped in an OSC-8 hyperlink`. Invisible to the text-only `detail_check.py` A/B and to
-`link_check.py`'s pyte styling assertions, which both stay green.
+(Comments) each wrapped in a bounded OSC-8 hyperlink`. Invisible to the text-only `detail_check.py` A/B
+and to `link_check.py`'s pyte styling assertions, which both stay green.
 
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 
@@ -163,7 +193,7 @@ tracked with the wrapped-line rendering work, #413). Expected: `ok — task link
   `b"Task 1"` may never appear contiguously in the byte stream even though the screen is
   perfect. Raw bytes are valid only for (a) *volume* metrics and (b) *escape*-sequence
   checks for things a VT emulator consumes rather than renders, so they never reach the
-  pyte screen at all — e.g. OSC-8 hyperlinks (check 8). Even then, accumulate the whole
+  pyte screen at all — e.g. OSC-8 hyperlinks (check 10). Even then, accumulate the whole
   stream and search it; an escape wrapping one repainted run is contiguous within that run.
 - **"First output byte" is not latency.** The app emits idle chatter every 40 ms
   iteration (cursor hide/home, periodic size query). Measure to a chunk containing row
