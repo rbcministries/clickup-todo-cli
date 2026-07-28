@@ -194,10 +194,10 @@ public sealed class DetailPaneViewTests
     }
 
     [Fact]
-    public void ClassifyRowLinkCells_ReturnsAllNormalForASeparatorFragment()
+    public void ClassifyRowLinkCells_ReturnsAllNormalForASeparatorLine()
     {
-        // A wrapped separator fragment carries no URL, so the link classifier leaves it Normal — the draw
-        // path styles the separator from its (uniform, wrap-safe) tag, not from this classifier.
+        // A separator line carries no URL, so the link classifier leaves it Normal — the draw path styles
+        // the separator from its (uniform, wrap-safe) tag, not from this classifier.
         var cells = DetailPaneView.BuildCells(Sep, Sep).Single();
         var styles = DetailPaneView.ClassifyRowLinkCells(cells);
         Assert.All(styles, s => Assert.Equal(DetailPaneView.DetailCellStyle.Normal, s));

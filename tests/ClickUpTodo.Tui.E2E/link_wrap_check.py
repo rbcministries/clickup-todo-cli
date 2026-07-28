@@ -22,6 +22,10 @@ nonzero / prints a traceback on failure."""
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte
 
+# COLS is hand-tuned to the detail pane's current inner width (after borders): wide enough that the
+# 35-char task URL fits whole on one continuation row, narrow enough that "Parent ticket: " + URL
+# overflows and the URL wraps. A layout/padding change to the pane may need this retuned — every failure
+# mode below raises a specific assertion rather than passing spuriously, so a retune need is obvious.
 ROWS, COLS = 40, 50
 DLL = sys.argv[1]
 
@@ -82,7 +86,7 @@ try:
     assert "Task" in visible(), "list boot failed"
 
     os.write(master, b"\r")          # Enter → open detail
-    pump(2.5)
+    pump(3.0)
     assert "Description" in visible(), "detail screen did not open:\n" + visible()
 
     # Land on the Description tab (Ctrl+← cycles tabs); stop as soon as the seeded prose is visible.
