@@ -206,9 +206,11 @@ public static class HelpItemSets
         new("Esc", "back"),
     ];
 
-    /// <summary>The task detail view when the Task Tree tab is present (#291): identical to
-    /// <see cref="Detail"/> plus the tab's F6 badge-display cycle (#415), which mirrors the main list's F6.
-    /// Single-task launch mode has no tree tab and keeps the F6-less <see cref="Detail"/> set.</summary>
+    /// <summary>The task detail view when the Task Tree tab is present (#291) — i.e. the dashboard-hosted
+    /// detail: <see cref="Detail"/> plus the tab's F6 badge-display cycle (#415, mirroring the main list's
+    /// F6) and the Ctrl+Enter "open this task in a new terminal tab" gesture (#384, the detail counterpart
+    /// of the list's #301 gesture). Single-task launch mode has no tree tab and keeps the leaner
+    /// <see cref="Detail"/> set, which carries neither.</summary>
     public static readonly IReadOnlyList<HelpItem> DetailWithTaskTree =
     [
         new("Ctrl+←/→", "switch tab", IsAction: false),
@@ -220,6 +222,7 @@ public static class HelpItemSets
         new("Ctrl+B", "🌐"),
         new("Ctrl+U", "quick update"),
         new("Ctrl+O", "🗁 by ID"),
+        new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
         new("F5", "↻"),
         new("F6", "badges"),
         new("F1", "ℹ"),

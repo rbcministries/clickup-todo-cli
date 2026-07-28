@@ -682,18 +682,32 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// Ctrl+Enter / Ctrl+Left-Click — open <paramref name="task"/> in its own terminal tab (#301):
-    /// resolves how to relaunch this app (<see cref="AppLaunchCommand.ForTask(string)"/>) and hands it to
-    /// the shared cross-platform launcher off the UI thread, preferring a new tab of the current terminal
-    /// (falling back to a new window per emulator support). On success the status line names the terminal;
-    /// when no emulator can be launched, it flashes the exact command and copies it to the clipboard so
-    /// the user can run it themselves (the issue's documented fallback). A null task (header/spacer row)
-    /// no-ops. Re-entrancy-guarded so a rapid second gesture can't spawn duplicate tabs.
+    /// The main list's Ctrl+Enter / Ctrl+Left-Click — open <paramref name="task"/> in its own terminal
+    /// tab (#301). A null task (header/spacer row) no-ops, and it only fires from the list itself (no
+    /// screen stacked over it); the actual launch is <see cref="LaunchAppTabForTask"/>, shared with Task
+    /// Detail's Ctrl+Enter (#384).
     /// </summary>
     private void LaunchTaskInNewTab(TaskItem? task)
     {
         if (task is null || ActiveScreen is not null)
             return;
+        LaunchAppTabForTask(task.Id, task.Name);
+    }
+
+    /// <summary>
+    /// The core new-terminal-tab launch shared by the main list's Ctrl+Enter / Ctrl+Left-Click gesture
+    /// (#301, via <see cref="LaunchTaskInNewTab"/>) and Task Detail's Ctrl+Enter (#384): resolves how to
+    /// relaunch this app (<see cref="AppLaunchCommand.ForTask(string)"/>) and hands it to the shared
+    /// cross-platform launcher off the UI thread, preferring a new tab of the current terminal (falling
+    /// back to a new window per emulator support). On success the status line names the terminal; when no
+    /// emulator can be launched it flashes the exact command and copies it to the clipboard so the user
+    /// can run it themselves (the documented fallback). Re-entrancy-guarded so a rapid second gesture
+    /// can't spawn duplicate tabs. Unlike the list wrapper it does <b>not</b> guard on
+    /// <see cref="ActiveScreen"/>: the detail path launches while the detail screen is front-most, exactly
+    /// as Quick Updates (Ctrl+U) stacks over the detail.
+    /// </summary>
+    private void LaunchAppTabForTask(string taskId, string name)
+    {
         if (_launchingTab)
         {
             Flash("A task tab is already opening…");
@@ -702,7 +716,7 @@ public sealed class TodoApp
 
         // Resolve the command before arming the re-entrancy guard: ForTask is pure and could in principle
         // throw (a blank id), and doing it first means such a throw can't leave _launchingTab stuck true.
-        var command = AppLaunchCommand.ForTask(task.Id);
+        var command = AppLaunchCommand.ForTask(taskId);
         // A new tab of the current terminal where the host supports it (#255's LaunchLocation), honouring
         // the user's preferred-terminal setting on Windows. ClaudeExecutable/ExtraArgs don't apply to an
         // app launch, so a purpose-built options value (not AgentDispatch.ToLauncherOptions) is used.
@@ -712,7 +726,6 @@ public sealed class TodoApp
             Preferred = _config.AgentDispatch.PreferredTerminal,
         };
         _launchingTab = true;
-        var name = task.Name;
         Flash($"Opening '{name}' in a new terminal tab…");
         _ = Task.Run(async () =>
         {
@@ -1997,6 +2010,10 @@ public sealed class TodoApp
                     // Ctrl+O quick-opens another task from within the detail (#353), stacked over it; the
                     // resolved Task Detail opens over this one, so Esc walks back through them.
                     screen.QuickOpenRequested += (_, _) => OpenQuickOpenFromScreen();
+                    // Ctrl+Enter opens this task in its own terminal tab (#384) — the detail counterpart
+                    // of the main list's #301 gesture, reusing the exact launcher + copy-command fallback.
+                    // The launch needs only the (fixed) resolved id; detail.Name is the status-flash label.
+                    screen.OpenInNewTabRequested += (_, _) => LaunchAppTabForTask(resolvedId, detail.Name);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
