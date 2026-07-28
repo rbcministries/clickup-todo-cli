@@ -490,6 +490,16 @@ public sealed class TaskService(
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskDetailAsync(taskId, ct);
 
+    /// <summary>
+    /// A single task mapped to the full list-row <see cref="TaskItem"/> shape (real structured
+    /// assignees with ids, <c>ParentId</c>, <c>StatusType</c>, colours) — the passthrough the
+    /// cross-tab nudge reconcile (#376) fetches through so a nudged row can be replaced wholesale,
+    /// unlike the lossy <see cref="GetTaskDetailAsync"/> projection. Sibling of the internal use in the
+    /// Task Tree ancestry walk (#291).
+    /// </summary>
+    public Task<TaskItem> GetTaskItemAsync(string taskId, CancellationToken ct = default)
+        => client.GetTaskItemAsync(taskId, ct);
+
     /// <summary>Full detail for a task addressed by its workspace custom id (#303, Ctrl+O quick-open);
     /// the mapped <see cref="TaskDetail.Id"/> is the task's plain id.</summary>
     public Task<TaskDetail> GetTaskDetailByCustomIdAsync(string customId, string teamId, CancellationToken ct = default)
@@ -746,6 +756,20 @@ public sealed class TaskService(
             tasks, updated.Id, updated.PriorityLevel, updated.PriorityName, updated.PriorityColor);
         return ApplyAssigneesChange(tasks, updated.Id, updated.Assignees);
     }
+
+    /// <summary>
+    /// Returns a new snapshot with the task identified by <paramref name="fresh"/>'s id replaced
+    /// <b>wholesale</b> by <paramref name="fresh"/>, leaving every other task and the overall order
+    /// untouched. Pure (the input list is not mutated); a no-op-equivalent snapshot when the id is
+    /// absent (a nudged row can live only in the visible context rows, not the canonical snapshot).
+    /// The full-fidelity sibling of <see cref="ApplyFieldChanges"/>: the cross-tab nudge reconcile
+    /// (#376) fetches an authoritative full <see cref="TaskItem"/> (via <see cref="GetTaskItemAsync"/>)
+    /// and replaces the row outright — carrying real assignee ids / <c>ParentId</c> / due date that a
+    /// <see cref="TaskDetail"/> overlay would drop — whereas <see cref="ApplyFieldChanges"/> folds only
+    /// the status/priority/assignee fields a Quick Update actually changed.
+    /// </summary>
+    public static IReadOnlyList<TaskItem> ReplaceTaskItem(IReadOnlyList<TaskItem> tasks, TaskItem fresh)
+        => tasks.Select(t => t.Id == fresh.Id ? fresh : t).ToList();
 
     /// <summary>
     /// The distinct parent ids referenced by a subtask in <paramref name="snapshot"/> that aren't

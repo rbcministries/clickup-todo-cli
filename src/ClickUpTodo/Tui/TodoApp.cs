@@ -2198,16 +2198,22 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// Off-thread single-task fetch for a nudged list row (#295): pull the task's detail and overlay its
-    /// status + priority onto the existing row in place — the same <see cref="UpdateTaskRow"/> reconcile
-    /// Quick Updates uses — on the UI thread. We overlay onto the live <c>_all</c> item (keeping its
-    /// ParentId / list / status-type and its <b>real</b> assignee ids) rather than the projected detail,
-    /// because a <see cref="TaskDetail"/> is lossy relative to a list item (assignees by name only, id 0;
-    /// no parent) — see <see cref="TaskItemProjection"/>. Status and priority are exactly what a cross-tab
-    /// Quick Update changes, so this reflects the common case without degrading the row; other cross-tab
-    /// field changes (assignee-by-id, name, due) continue to surface via the normal delta poll. Re-checks
+    /// Off-thread single-task fetch for a nudged list row (#295/#376): pull the task's <b>full</b>
+    /// <see cref="TaskItem"/> (<see cref="TaskService.GetTaskItemAsync"/>) and replace the existing row
+    /// <b>wholesale</b> — the full-fidelity reconcile (#376). Unlike the earlier lossy
+    /// <see cref="TaskDetail"/> overlay (status + priority only), a full item carries real assignee ids,
+    /// <c>ParentId</c>, <c>StatusType</c> and due date, so a cross-tab assignee / name / due-date change
+    /// (not just status/priority) reflects on the row immediately rather than waiting for the next delta
+    /// poll. The stale-fetch ordering is decided by the pure <see cref="NudgedRowReconciler"/>. Re-checks
     /// membership on the way back in (a background resync may have dropped the task), and swallows a fetch
     /// failure (the nudge rides on an already-succeeded edit).
+    /// <para>
+    /// For a task linked into multiple lists (#237), <c>GET /task/{id}</c> reports its <b>home</b> list, so
+    /// the wholesale replace adopts the home <c>ListId</c>/<c>ListName</c> rather than the queried-list
+    /// values the row was fetched under. In the rare case of viewing a non-home list, a group-by-list
+    /// placement could momentarily shift until the next authoritative delta poll (which re-maps from the
+    /// queried-list endpoint) self-heals it — an accepted, transient cost of the full-fidelity replace.
+    /// </para>
     /// </summary>
     private void RefreshNudgedRow(string taskId)
     {
@@ -2215,35 +2221,18 @@ public sealed class TodoApp
         {
             try
             {
-                var detail = await _tasks.GetTaskDetailAsync(taskId);
-                var fresh = TaskItemProjection.FromDetail(detail);
+                var fresh = await _tasks.GetTaskItemAsync(taskId);
                 Application.Invoke(() =>
                 {
                     var existing = _all.FirstOrDefault(t => t.Id == taskId)
                                    ?? _rows.FirstOrDefault(r => r?.Id == taskId);
                     if (existing is null)
                         return; // dropped by a background resync meanwhile — nothing to update.
-                    // Drop a stale out-of-order fetch: nudged rows are fire-and-forget and can overlap
-                    // across ticks (or race the delta poll), so an older in-flight fetch resolving last must
-                    // not clobber a newer version already on the row. When either side has no version we
-                    // can't order them — apply (best-effort). This is the row-path analogue of the detail
-                    // path's _refreshingDetail / Quick Updates' commit-generation guards.
-                    if (fresh.UpdatedMs is long fu && existing.UpdatedMs is long eu && fu < eu)
-                        return;
-                    var updated = existing with
-                    {
-                        StatusName = fresh.StatusName,
-                        StatusColor = fresh.StatusColor,
-                        PriorityLevel = fresh.PriorityLevel,
-                        PriorityName = fresh.PriorityName,
-                        PriorityColor = fresh.PriorityColor,
-                        // Carry the fresh activity stamp so the row's version reflects this reconcile (and a
-                        // later stale fetch is ordered out above). StatusType / ParentId / assignee-ids stay
-                        // from `existing` — a TaskDetail can't carry them (full-fidelity reconcile is #376);
-                        // they self-heal on the next authoritative delta poll.
-                        UpdatedMs = fresh.UpdatedMs ?? existing.UpdatedMs,
-                    };
-                    UpdateTaskRow(updated, sending: false);
+                    // The pure reconciler drops a stale out-of-order fetch (nudged rows are
+                    // fire-and-forget and can overlap across ticks or race the delta poll) and guards the
+                    // row's activity stamp from regressing to null. Non-null ⇒ apply wholesale.
+                    if (NudgedRowReconciler.Reconcile(existing, fresh) is { } updated)
+                        UpdateTaskRow(updated, sending: false, wholesale: true);
                 });
             }
             catch
@@ -2764,13 +2753,20 @@ public sealed class TodoApp
     /// scroll position stay put). Keeping <see cref="_all"/> and <see cref="_signature"/> in sync
     /// means the next periodic background refresh reconciles silently when the server agrees.
     /// </summary>
-    private void UpdateTaskRow(TaskItem updated, bool sending)
+    private void UpdateTaskRow(TaskItem updated, bool sending, bool wholesale = false)
     {
-        // Per-field sync (#158): the `updated` record always carries the current value for the fields a
-        // given caller didn't touch, so folding all three never clobbers — a status/priority commit
-        // re-applies the task's existing assignees (a no-op) and an assignee change re-applies its
-        // existing status/priority. This is the same pure reconcile the single-task target uses (#297).
-        _all = TaskService.ApplyFieldChanges(_all, updated);
+        // Two fold modes into the canonical snapshot:
+        //  • Per-field sync (#158, the default) — the `updated` record always carries the current value
+        //    for the fields a given caller didn't touch, so folding status/priority/assignees never
+        //    clobbers (a status/priority commit re-applies the task's existing assignees, a no-op, and an
+        //    assignee change re-applies its status/priority). The same pure reconcile the single-task
+        //    target uses (#297).
+        //  • Wholesale (#376, the cross-tab nudge path) — `updated` is an authoritative full TaskItem
+        //    freshly fetched for the task, so it replaces the snapshot row outright, carrying real
+        //    assignee ids / ParentId / due date a per-field fold would leave stale.
+        _all = wholesale
+            ? TaskService.ReplaceTaskItem(_all, updated)
+            : TaskService.ApplyFieldChanges(_all, updated);
         _signature = CurrentSignature(_all);
 
         var index = _rows.FindIndex(r => r?.Id == updated.Id);
