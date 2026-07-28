@@ -165,6 +165,9 @@ public sealed class SingleTaskApp
 
             RequestExit();
         };
+        // The root detail is added straight to the window (not through ShowScreen), so — unlike a stacked
+        // child, whose flashes ShowScreen routes — it wires its own flash relay to the shared footer.
+        _root.Screen.FlashRequested += (_, message) => Flash(message);
 
         _footer = new ContextualFooter(_status);
 
@@ -195,8 +198,10 @@ public sealed class SingleTaskApp
     /// <summary>Constructs a fully-wired <see cref="TaskDetailScreen"/> for one task — the launch task
     /// (root) or a task opened from the Task Tree tab (#374) — and bundles it with its live per-task state
     /// in a <see cref="DetailTab"/>. Wires the events common to every detail (refresh, agent dispatch,
-    /// Quick Updates, flash, help, tree-row open, and the F6 badge cycle); the caller adds the Closed
-    /// behaviour, which differs between the root (exit the tab) and a stacked child (pop back).</summary>
+    /// Quick Updates, help, tree-row open, and the F6 badge cycle); the caller adds the Closed behaviour,
+    /// which differs between the root (exit the tab) and a stacked child (pop back), and the
+    /// <see cref="Screen.FlashRequested"/> wiring (children get it from <see cref="ShowScreen"/>; the root,
+    /// which is not shown through <see cref="ShowScreen"/>, has it wired in <see cref="Build"/>).</summary>
     private DetailTab BuildDetailTab(TaskDetail task, IReadOnlyList<CommentItem> comments)
     {
         // Root the Dispatch pane's working-dir browser at the saved base dir (#92), falling back to home
@@ -238,7 +243,6 @@ public sealed class SingleTaskApp
         // composes + launches a session with the dashboard's exact working-dir / post-to-Comments /
         // launch-location semantics — against this tab's task.
         screen.AgentDispatchRequested += (_, request) => DispatchAgent(tab, request);
-        screen.FlashRequested += (_, message) => Flash(message);
         screen.HelpRequested += (_, _) => OpenHelp();
         // Task Tree tab (#374): Enter/double-click a tree row opens that task's detail stacked over this
         // one, so a single Esc walks back one task at a time — uniform with the canonical "Esc = Back"

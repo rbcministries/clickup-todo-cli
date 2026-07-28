@@ -104,7 +104,10 @@ def rows_with(substr):
 
 def badge_mode():
     """Which mode the tree tab is rendering: the "(IP)" abbreviation chip marks icons, a >1
-    "in progress" count marks text badges on the rows, neither marks hidden."""
+    "in progress" count marks text badges on the rows, neither marks hidden. Coupled to the E2E_TREE
+    fixture, whose nodes are all "in progress" (abbreviated "(IP)") — see Program.cs TreeTaskJson; if that
+    fixture's statuses change, update these tokens. The §2 assertion still fails loudly (not false-green)
+    if F6 is inert, since it requires all three modes to be observed across the cycle."""
     v = visible()
     if "(IP)" in v:
         return "icons"
