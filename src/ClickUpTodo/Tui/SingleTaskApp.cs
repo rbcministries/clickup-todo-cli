@@ -45,26 +45,24 @@ public sealed class SingleTaskApp
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
     private readonly IBrowserLauncher _browser;
-    private readonly string _taskId;
 
-    // The task/comments last shown. _task is read on the UI thread when launching the browser (Ctrl+B),
-    // so it reflects any refresh since launch; both are seeded from the initial fetch and replaced by
-    // UpdateData on each refresh.
-    private TaskDetail _task;
-    private IReadOnlyList<CommentItem> _comments;
+    // The launch task's initially-fetched detail/comments, used once in Build() to construct the root
+    // detail tab. After boot the live per-tab state lives on DetailTab (_root and any stacked child).
+    private readonly TaskDetail _seedTask;
+    private readonly IReadOnlyList<CommentItem> _seedComments;
 
     private Window _window = null!;
     // The shared status + contextual help footer (#346). Built in Build.
     private ContextualFooter _footer = null!;
-    private TaskDetailScreen _detail = null!;
 
-    // Screens stacked over the root detail: Help (F1), a one-off agent run (#345), and the exit
-    // confirmation (#299). Empty ⇒ the detail is front-most.
+    // The launch task's detail tab — the stack root. Tasks opened by walking the Task Tree tab (#374) are
+    // stacked over it on _stack, so a single Esc walks back one task at a time (uniform with the dashboard
+    // #291/#401), and Esc at this root falls through to the exit-confirmation seam (#298/#299).
+    private DetailTab _root = null!;
+
+    // Screens stacked over the root detail: child task details from the tree tab (#374), Help (F1), a
+    // one-off agent run (#345), and the exit confirmation (#299). Empty ⇒ the root detail is front-most.
     private readonly List<Screen> _stack = [];
-
-    // Coalesces overlapping refreshes (F5/Ctrl+R racing the 30s tick): skip a tick while one is in flight
-    // so an earlier fetch can't land after a later one with stale data. UI-thread-only, like TodoApp's.
-    private bool _refreshing;
 
     // Composes the seed prompt + launches a `claude` session for the detail view's Ctrl+A dispatch
     // (#345). Built once in Build() from the persisted AgentDispatch settings (#91) — single-task mode
@@ -83,13 +81,30 @@ public sealed class SingleTaskApp
         _config = config;
         _configStore = configStore;
         _browser = browserLauncher ?? new SystemBrowserLauncher();
-        _task = task;
-        _comments = comments;
-        _taskId = task.Id;
+        _seedTask = task;
+        _seedComments = comments;
         _status = $"Loaded: {task.Name}";
     }
 
-    private Screen ActiveScreen => _stack.Count > 0 ? _stack[^1] : _detail;
+    /// <summary>A single Task Detail screen plus the live per-task state that follows it — its task id, the
+    /// last-shown <see cref="TaskDetail"/>/comments (replaced by <c>UpdateData</c> on each refresh), and an
+    /// in-flight-refresh guard. The launch task is the root tab; walking the Task Tree tab (#374) stacks a
+    /// child tab per visited task over it, so agent dispatch / refresh / browser follow the front-most tab
+    /// rather than a single root field.</summary>
+    private sealed class DetailTab(TaskDetailScreen screen, string taskId, TaskDetail task,
+        IReadOnlyList<CommentItem> comments)
+    {
+        public TaskDetailScreen Screen { get; } = screen;
+        public string TaskId { get; } = taskId;
+        public TaskDetail Task { get; set; } = task;
+        public IReadOnlyList<CommentItem> Comments { get; set; } = comments;
+
+        // Coalesces overlapping refreshes (F5/Ctrl+R racing the 30s tick): skip a tick while one is in
+        // flight so an earlier fetch can't land after a later one with stale data. UI-thread-only.
+        public bool Refreshing { get; set; }
+    }
+
+    private Screen ActiveScreen => _stack.Count > 0 ? _stack[^1] : _root.Screen;
 
     public void Run(string? driverName = null)
     {
@@ -129,88 +144,120 @@ public sealed class SingleTaskApp
         // BuildAgentDispatcher — the preferred terminal / claude path / launch-location default apply.
         _agent = new AgentDispatcher(new TerminalLauncher(), _config.AgentDispatch.ToLauncherOptions());
 
-        // Root the Dispatch pane's working-dir browser at the saved base dir (#92), falling back to home
-        // if it doesn't exist yet — same resolution the dashboard uses when opening Task Detail.
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
-        var browserRoot = Directory.Exists(baseDir) ? baseDir : home;
-
-        _detail = new TaskDetailScreen(
-            _task, _comments, browserRoot,
-            settings: _config.DetailView,
-            defaultSessionMode: _config.AgentDispatch.DefaultSessionMode,
-            defaultPostToComments: _config.AgentDispatch.DefaultPostResultsToComments,
-            defaultLaunchLocation: _config.AgentDispatch.LaunchLocation,
-            workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, _taskId),
-            // Ctrl+N posts a plain-text comment; Ctrl+E edits the description — same injected-async seam
-            // the dashboard wires, so both work identically in a single-task tab.
-            postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(_taskId, text, ct),
-            setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(_taskId, text, ct));
-
-        // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data — refetch just this one task.
-        _detail.RefreshRequested += (_, _) => RefreshTask();
-        // Ctrl+B sets OpenBrowserRequested then closes; Esc closes directly. The detail is the launch-task
-        // root (#298), so its close is back-at-root: a plain Esc hands off to the exit seam (RequestExit),
-        // which asks for confirmation (#299) before quitting the tab. Ctrl+B is deliberately *not*
-        // confirmed: "open this task in the browser and close the tab" is an explicit, unambiguous
-        // request, not the ambiguous Esc that #290 flagged and #299 guards. Only fires while the detail is
-        // front-most; with an overlay up (incl. that confirmation), Esc goes to the overlay.
-        _detail.Closed += (_, _) =>
+        // Build the launch task's detail tab (the stack root) with the shared wiring, then add its
+        // root-only Closed behaviour. Ctrl+B sets OpenBrowserRequested then closes; Esc closes directly.
+        // The root detail is the launch-task root (#298), so its close is back-at-root: a plain Esc hands
+        // off to the exit seam (RequestExit), which asks for confirmation (#299) before quitting the tab.
+        // Ctrl+B is deliberately *not* confirmed: "open this task in the browser and close the tab" is an
+        // explicit, unambiguous request, not the ambiguous Esc that #290 flagged and #299 guards. Only
+        // fires while the root detail is front-most; with an overlay up (incl. that confirmation, or a
+        // stacked child detail from the tree tab), Esc goes to the top layer instead. Child tabs opened
+        // from the Task Tree tab (#374) pop back on close rather than quit — wired in OpenTaskDetail.
+        _root = BuildDetailTab(_seedTask, _seedComments);
+        _root.Screen.Closed += (_, _) =>
         {
-            if (_detail.OpenBrowserRequested)
+            if (_root.Screen.OpenBrowserRequested)
             {
-                LaunchBrowser(_task.Url);
+                LaunchBrowser(_root.Task.Url);
                 Application.RequestStop();
                 return;
             }
 
             RequestExit();
         };
-        // Quick Updates stays deferred in single-task mode: it needs sub-issue (5) #297 to decouple its
-        // write path from the dashboard's working-set snapshot. Flash rather than silently no-op so the
-        // gap is legible.
-        _detail.QuickUpdatesRequested += (_, _) =>
-            Flash("Quick Updates isn't available in single-task mode yet (tracked on #297).");
-        // Agent dispatch (Ctrl+A) now runs through the shared DispatchCoordinator (#345), so a
-        // single-task tab composes + launches a session with the dashboard's exact working-dir /
-        // post-to-Comments / launch-location semantics.
-        _detail.AgentDispatchRequested += (_, request) => DispatchAgent(request);
-        _detail.FlashRequested += (_, message) => Flash(message);
-        _detail.HelpRequested += (_, _) => OpenHelp();
 
         _footer = new ContextualFooter(_status);
 
-        _window.Add(_detail);
+        _window.Add(_root.Screen);
         _footer.AddTo(_window);
         // Re-fit the contextual footer whenever the window re-lays out (terminal resize); the text is
         // only reassigned when it changes, so this can't loop (mirrors TodoApp).
         _window.SubViewsLaidOut += (_, _) => UpdateHelpLine();
         UpdateHelpLine();
-        _detail.OnShown();
+        _root.Screen.OnShown();
     }
 
-    /// <summary>Re-fetches this task's detail + comments off the UI thread and feeds them back in.</summary>
-    private void RefreshTask()
+    /// <summary>Constructs a fully-wired <see cref="TaskDetailScreen"/> for one task — the launch task
+    /// (root) or a task opened from the Task Tree tab (#374) — and bundles it with its live per-task state
+    /// in a <see cref="DetailTab"/>. Wires the events common to every detail (refresh, agent dispatch,
+    /// Quick Updates, flash, help, tree-row open, and the F6 badge cycle); the caller adds the Closed
+    /// behaviour, which differs between the root (exit the tab) and a stacked child (pop back).</summary>
+    private DetailTab BuildDetailTab(TaskDetail task, IReadOnlyList<CommentItem> comments)
     {
-        // Only refresh while the detail is front-most (e.g. not while Help is stacked over it): no point
-        // spending a round-trip on a hidden view. The next tick refreshes once it's back on top.
-        if (!ReferenceEquals(ActiveScreen, _detail))
+        // Root the Dispatch pane's working-dir browser at the saved base dir (#92), falling back to home
+        // if it doesn't exist yet — same resolution the dashboard uses when opening Task Detail.
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
+        var browserRoot = Directory.Exists(baseDir) ? baseDir : home;
+        var id = task.Id;
+
+        var screen = new TaskDetailScreen(
+            task, comments, browserRoot,
+            settings: _config.DetailView,
+            defaultSessionMode: _config.AgentDispatch.DefaultSessionMode,
+            defaultPostToComments: _config.AgentDispatch.DefaultPostResultsToComments,
+            defaultLaunchLocation: _config.AgentDispatch.LaunchLocation,
+            workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, id),
+            // Ctrl+N posts a plain-text comment; Ctrl+E edits the description — same injected-async seam
+            // the dashboard wires, keyed to *this* tab's task so a stacked child writes to its own task.
+            postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(id, text, ct),
+            setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(id, text, ct),
+            // The Task Tree tab (#374): identical wiring to the dashboard (#291/#415). The tree needs the
+            // signed-in user's id for the trailing Assignees badge (#161), seeds its badge mode from the
+            // persisted BadgeDisplay so it opens in the same state as the main list, and lazy-loads off the
+            // UI thread on first cycle to the tab, keyed to this tab's task id.
+            currentUserId: _tasks.UserId,
+            treeBadgeDisplay: _config.BadgeDisplay,
+            loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(id, ct));
+
+        var tab = new DetailTab(screen, id, task, comments);
+
+        // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data — refetch just this tab's task.
+        screen.RefreshRequested += (_, _) => RefreshTab(tab);
+        // Quick Updates stays deferred in single-task mode: it needs sub-issue (5) #297 to decouple its
+        // write path from the dashboard's working-set snapshot. Flash rather than silently no-op so the
+        // gap is legible.
+        screen.QuickUpdatesRequested += (_, _) =>
+            Flash("Quick Updates isn't available in single-task mode yet (tracked on #297).");
+        // Agent dispatch (Ctrl+A) runs through the shared DispatchCoordinator (#345), so a single-task tab
+        // composes + launches a session with the dashboard's exact working-dir / post-to-Comments /
+        // launch-location semantics — against this tab's task.
+        screen.AgentDispatchRequested += (_, request) => DispatchAgent(tab, request);
+        screen.FlashRequested += (_, message) => Flash(message);
+        screen.HelpRequested += (_, _) => OpenHelp();
+        // Task Tree tab (#374): Enter/double-click a tree row opens that task's detail stacked over this
+        // one, so a single Esc walks back one task at a time — uniform with the canonical "Esc = Back"
+        // model (#401/#298) and the dashboard's tree navigation (#291).
+        screen.OpenTaskRequested += (_, targetId) => OpenTaskDetail(targetId);
+        // F6 on the Task Tree tab (#415) cycles the tree's badge display; the host owns the flip/persist
+        // and reflects it across the root and every stacked child so the visited-task chain stays in step.
+        screen.CycleBadgeDisplayRequested += (_, _) => CycleTreeBadgeDisplay(tab.Screen);
+
+        return tab;
+    }
+
+    /// <summary>Re-fetches a tab's task detail + comments off the UI thread and feeds them back in.</summary>
+    private void RefreshTab(DetailTab tab)
+    {
+        // Only refresh while this tab is front-most (e.g. not while Help or a stacked child detail is over
+        // it): no point spending a round-trip on a hidden view. The next tick refreshes once it's on top.
+        if (!ReferenceEquals(ActiveScreen, tab.Screen))
             return;
-        if (_refreshing)
+        if (tab.Refreshing)
             return;
-        _refreshing = true;
+        tab.Refreshing = true;
 
         _ = Task.Run(async () =>
         {
             try
             {
-                var detail = await _tasks.GetTaskDetailAsync(_taskId);
-                var comments = await _tasks.GetTaskCommentsWithRepliesAsync(_taskId);
+                var detail = await _tasks.GetTaskDetailAsync(tab.TaskId);
+                var comments = await _tasks.GetTaskCommentsWithRepliesAsync(tab.TaskId);
                 Application.Invoke(() =>
                 {
-                    _task = detail;
-                    _comments = comments;
-                    _detail.UpdateData(detail, comments);
+                    tab.Task = detail;
+                    tab.Comments = comments;
+                    tab.Screen.UpdateData(detail, comments);
                 });
             }
             catch (Exception ex)
@@ -219,7 +266,49 @@ public sealed class SingleTaskApp
             }
             finally
             {
-                Application.Invoke(() => _refreshing = false);
+                Application.Invoke(() => tab.Refreshing = false);
+            }
+        });
+    }
+
+    /// <summary>
+    /// The Task Tree tab (#374): Enter/double-click a tree row raises <see cref="TaskDetailScreen.OpenTaskRequested"/>,
+    /// which lands here. Loads the target task's detail + comments off the UI thread and stacks a fresh
+    /// detail tab over the current one via <see cref="ShowScreen"/>, so a single Esc walks back to the task
+    /// we came from (and Esc at the launch-task root still hands off to the exit confirmation) — the
+    /// walkable-back model (#401/#298) the dashboard uses for the same gesture (#291).
+    /// <para>
+    /// Ctrl+B on a stacked child opens the browser and pops back to the previous task, rather than quitting
+    /// the whole tab as it does at the root: browsing a task reached by walking the tree shouldn't tear
+    /// down the launch session. The open is dropped if the requesting layer is no longer front-most when
+    /// the fetch lands (e.g. the user Esc'd away first), mirroring TodoApp.OpenTaskDetail.
+    /// </para>
+    /// </summary>
+    private void OpenTaskDetail(string taskId)
+    {
+        var requester = ActiveScreen;
+        Flash("Loading details…");
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var detail = await _tasks.GetTaskDetailAsync(taskId);
+                var comments = await _tasks.GetTaskCommentsWithRepliesAsync(taskId);
+                Application.Invoke(() =>
+                {
+                    if (!ReferenceEquals(ActiveScreen, requester))
+                        return;
+                    var tab = BuildDetailTab(detail, comments);
+                    ShowScreen(tab.Screen, () =>
+                    {
+                        if (tab.Screen.OpenBrowserRequested)
+                            LaunchBrowser(tab.Task.Url);
+                    });
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not load task detail: {ErrorText.Short(ex)}"));
             }
         });
     }
@@ -233,7 +322,7 @@ public sealed class SingleTaskApp
     /// the same working-dir (#91/#95/#96/#98), post-to-Comments (#97), and launch-location (#275)
     /// semantics as the dashboard. Runs on the UI thread (invoked from the detail screen's key handler).
     /// </summary>
-    private void DispatchAgent(DispatchRequest request)
+    private void DispatchAgent(DetailTab tab, DispatchRequest request)
     {
         // Re-entrancy guard: a second submit before the first launch finishes would spawn a duplicate
         // session. UI-thread-only, cleared back on the UI thread — no locking needed (mirrors TodoApp).
@@ -245,11 +334,11 @@ public sealed class SingleTaskApp
         _dispatching = true;
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var plan = DispatchCoordinator.Plan(_config.AgentDispatch, request, _task, _config.DefaultWorkingDirectory, home);
+        var plan = DispatchCoordinator.Plan(_config.AgentDispatch, request, tab.Task, _config.DefaultWorkingDirectory, home);
 
         // Persist an explicit non-default working-dir pick for this task (#96) so the next dispatch
         // pre-fills it; reverting to the default clears the entry. Save only when the cache changed.
-        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, _taskId, plan))
+        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, tab.TaskId, plan))
             _configStore.Save(_config);
 
         // One-off mode runs as a background child with output in a screen (#99); interactive opens a
@@ -258,16 +347,36 @@ public sealed class SingleTaskApp
         if (plan.OneOff)
         {
             DispatchCoordinator.RunBackground(
-                _agent, _task, _comments, plan,
+                _agent, tab.Task, tab.Comments, plan,
                 mount: (screen, onClosed) => ShowScreen(screen, onClosed),
                 clearDispatching: () => _dispatching = false);
             return;
         }
 
-        Flash($"Launching Claude for '{_task.Name}'…");
+        Flash($"Launching Claude for '{tab.Task.Name}'…");
         DispatchCoordinator.RunInteractive(
-            _agent, _task, _comments, plan,
+            _agent, tab.Task, tab.Comments, plan,
             report: message => { _dispatching = false; Flash(message); });
+    }
+
+    /// <summary>F6 on a Task Tree tab (#415): cycles + persists the shared <see cref="AppConfig.BadgeDisplay"/>
+    /// (Icons → Text → Hidden) and reflects the new mode into the root and every stacked child detail's
+    /// tree — a pure in-place re-render, no re-fetch — so Esc-ing back through the visited-task chain (#374)
+    /// shows the same badge mode everywhere. Runs on the UI thread from the screen's key handler; a no-op
+    /// if the raising screen isn't front-most, and a no-op per detail whose tree hasn't loaded yet.</summary>
+    private void CycleTreeBadgeDisplay(TaskDetailScreen screen)
+    {
+        if (!ReferenceEquals(ActiveScreen, screen))
+            return;
+
+        var mode = _config.BadgeDisplay.Next();
+        _config.BadgeDisplay = mode;
+        _configStore.Save(_config);
+        _root.Screen.SetTreeBadgeDisplay(mode);
+        foreach (var stacked in _stack)
+            if (stacked is TaskDetailScreen detail)
+                detail.SetTreeBadgeDisplay(mode);
+        Flash(mode.Describe());
     }
 
     // ── Help overlay (F1) ────────────────────────────────────────────────────
