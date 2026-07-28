@@ -300,6 +300,27 @@ public sealed record CommentItem(
 }
 
 /// <summary>
+/// One run of a <b>structured</b> comment body (#322): the closed union the caller (the #325 @-mention
+/// composer) builds — e.g. <c>[new CommentRun.Text("hi "), new CommentRun.Mention(183)]</c> — and hands
+/// to <see cref="IClickUpClient.CreateTaskCommentAsync(string, IReadOnlyList{CommentRun}, CancellationToken)"/>.
+/// The facade maps each run to ClickUp's generated <c>CommentBlock</c> so the rest of the app never sees a
+/// generated type (README rule). A <see cref="Text"/> run is literal text; a <see cref="Mention"/> run
+/// @-tags a workspace member by numeric ClickUp user id, which ClickUp renders as a real mention (per the
+/// G spike, #321). The private constructor makes this a closed union — only the nested cases derive.
+/// </summary>
+public abstract record CommentRun
+{
+    private CommentRun() { }
+
+    /// <summary>A literal (non-mention) text run.</summary>
+    public sealed record Text(string Value) : CommentRun;
+
+    /// <summary>An @-mention of a workspace member by numeric ClickUp user id (from
+    /// <see cref="WorkspaceMember.Id"/> / the #324 picker).</summary>
+    public sealed record Mention(long UserId) : CommentRun;
+}
+
+/// <summary>
 /// A "recent activity" feed entry (#117): a recently-updated assigned task, surfaced alongside the
 /// comment feed (#109) when the feed's <c>F6</c> "show activity" display state is on. Approximates
 /// per-task activity via ClickUp <c>date_updated</c> (<see cref="UpdatedMs"/>) — ClickUp has no

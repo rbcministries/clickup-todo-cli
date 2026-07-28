@@ -59,11 +59,14 @@ wherever one is available:
 
 When no secret store is reachable — a headless/SSH box, or a minimal container without `secret-tool`
 or a session keyring — the token falls back to an **unencrypted file** (`token.bin`) in the config
-directory. The first-run setup states, in plain words, exactly where your token was stored and warns
-you when the plaintext fallback was used (with a hint for enabling the secure path). To get the secure
-path on Linux, install `libsecret` (which provides `secret-tool`) and run a Secret Service such as
-`gnome-keyring`. An older build that wrote a plaintext `token.bin` is migrated into the secret store
-automatically on the next launch, and the cleartext file is removed.
+directory. On macOS/Linux that file is written with **owner-only permissions (`0600`)** so other
+local users can't read it, but it is still **cleartext at rest** — anyone who can read your account's
+files (you, or `root`) can read the token, so it's no substitute for the OS store. The first-run setup
+states, in plain words, exactly where your token was stored and warns you when the plaintext fallback
+was used (with a hint for enabling the secure path). To get the secure path on Linux, install
+`libsecret` (which provides `secret-tool`) and run a Secret Service such as `gnome-keyring`. An older
+build that wrote a plaintext `token.bin` is migrated into the secret store automatically on the next
+launch, and the cleartext file is removed.
 
 Run `clickup-todo --reset` to forget the token and settings and start over.
 
@@ -141,7 +144,7 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `→` / `←`     |      | Expand / collapse the focused parent's subtasks              |
 | `Ctrl+→` / `Ctrl+←` | | Expand-all / collapse-all subtasks                        |
 | `type`        |      | Type-ahead search by task title                               |
-| `Ctrl+Q` / `Esc` |   | Quit — confirms first (`Y`/`Enter` exits, `N`/`Esc` stays)    |
+| `Ctrl+Q` / `Esc` |   | Quit — confirms first (`Y`/`Enter` exits, `N`/`Esc` stays; F2 to turn off) |
 
 ### Task Detail
 
@@ -154,6 +157,9 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `Ctrl+N`              | ➕   | Add a comment                                          |
 | `Ctrl+E`              | ✏    | Edit the description                                   |
 | `Ctrl+B`              | 🌐   | Open the task in your browser                          |
+| `Tab` / `Shift+Tab`   |      | Move the focus highlight to the next / previous link in the pane |
+| `Enter`               |      | Follow the focused link (task link → Task Detail, other → browser) |
+| Left-click a link     |      | Follow it — see [Follow links in a task's text](#follow-links-in-a-tasks-text) |
 | `Ctrl+U`              |      | Quick Updates for this task                            |
 | `Ctrl+O`              | 🗁   | Open another task by id, custom id, or URL             |
 | `F5`                  | ↻    | Refresh                                                |
@@ -165,10 +171,28 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 destructive — leaving the app — is guarded: `Esc` (or `Ctrl+Q`) from the main list, or from the launch
 task in a single-task tab (`--task`), shows a confirmation. `Y`/`Enter` exits; `N`/`Esc` returns you to
 exactly where you were, with your cursor and tab unchanged. `Esc` anywhere else still just goes back.
+The guard is on by default; turn it off in Settings (`F2` → *Confirm on exit*) to restore a one-key quit.
 
 Quick Updates opens with `Ctrl+U` from both the main list and Task Detail. Pinned tasks persist
 across restarts. The list refreshes in the background on your configured interval, and your cursor
 stays on the same task across refreshes so the screen stays steady.
+
+### Follow links in a task's text
+
+Links in a task's **Description**, **Comments** and **Stream** panes are underlined and clickable:
+
+| Gesture | Task link (`app.clickup.com/t/…`) | Any other link |
+| --- | --- | --- |
+| Left-click | Opens that task's **Task Detail** here — `Esc` walks back to the one you came from | Opens in your **browser** |
+| `Ctrl+`Left-Click | Opens in your **browser** | Opens in your **browser** |
+| `Tab` / `Shift+Tab` then `Enter` | Same as left-click — steps a focus highlight across the pane's links and follows the focused one | Opens in your **browser** |
+
+`Tab`/`Shift+Tab` step a focus highlight over the links in the current pane (wrapping at the ends) and
+`Enter` follows the focused one — the keyboard equivalent of a left-click, for when you'd rather not reach
+for the mouse. `Ctrl+`Left-Click is Windows Terminal's own "open this link" gesture, so it always means *browser*
+whatever the link is. A task link works with either a plain ClickUp id or a **custom id**
+(`/t/{teamId}/{customId}`). In single-task mode (`--task`) every link opens in the browser, since that
+mode has no list to stack another task on top of.
 
 ### Open a task in a new terminal tab
 
@@ -183,6 +207,10 @@ Where a tab can't be targeted it opens a new **window**; and where no terminal c
 on the status line so you can run it yourself. Requires `clickup-todo` to be installed on your `PATH`
 (the global tool) — a `dotnet run` dev launch can't relaunch itself, so it shows the copy-command
 fallback.
+
+A tab launched this way (or any `clickup-todo --task <id>`) **titles its terminal window/tab** with
+the task — `{id}: {title}`, using the custom id when the task has one, truncated to 40 characters — so
+several single-task tabs stay distinguishable at a glance from the tab strip alone.
 
 #### Which terminals are detected, and a custom launch command
 

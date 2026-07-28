@@ -168,6 +168,39 @@ public sealed class SecretBackendTests : IDisposable
     public void Plaintext_Load_WhenNoFile_ReturnsNull()
         => Assert.Null(new PlaintextFileSecretBackend(TokenPath).Load());
 
+    // The two tests below assert POSIX file modes and self-skip on Windows via SkippableFact; the
+    // platform analyzer (CA1416) can't see through Skip.If, so the Unix-mode calls are pragma-scoped.
+#pragma warning disable CA1416
+    [SkippableFact]
+    public void Plaintext_Save_WritesOwnerOnlyPermissions_OnPosix()
+    {
+        Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "Unix file modes don't apply on Windows.");
+        var backend = new PlaintextFileSecretBackend(TokenPath);
+
+        backend.TrySave(Token);
+
+        // #382: the disclosed cleartext fallback must at least be unreadable by other local users.
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(TokenPath));
+    }
+
+    [SkippableFact]
+    public void Plaintext_Save_TightensPreexistingLooseFile_OnPosix()
+    {
+        Skip.If(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "Unix file modes don't apply on Windows.");
+        Directory.CreateDirectory(_dir);
+        // Simulate a token.bin left by an older build that wrote at the default (world-readable) umask.
+        File.WriteAllText(TokenPath, "stale");
+        File.SetUnixFileMode(
+            TokenPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+
+        new PlaintextFileSecretBackend(TokenPath).TrySave(Token);
+
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(TokenPath));
+        Assert.Equal(Token, File.ReadAllText(TokenPath));
+    }
+#pragma warning restore CA1416
+
     // ── DPAPI (Windows only) ──────────────────────────────────────────────────
 
     [SkippableFact]

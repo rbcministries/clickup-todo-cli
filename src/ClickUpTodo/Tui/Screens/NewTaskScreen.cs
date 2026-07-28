@@ -26,6 +26,17 @@ namespace ClickUpTodo.Tui.Screens;
 /// injected <paramref name="createAsync"/> callback (the create facade #209) against the List selector's
 /// primary list (#240) — a new task must have at least one list, so Save is blocked when none is selected.
 /// <para>
+/// <b>Custom fields (#395/§2 of #368).</b> When Save is pressed and the chosen primary list has
+/// <em>fillable</em> Custom Fields (fetched via the injected <paramref name="fetchListFieldsAsync"/>), the
+/// screen swaps to a second <b>Custom fields</b> page — a top-down stack of one input widget per fillable
+/// field — before creating: its Save collects the entered values through the pure
+/// <see cref="NewTaskCustomFieldForm"/>, enforces required fields client-side, and attaches the values to
+/// the create request; Cancel steps back to the base fields. A list with no fillable fields creates
+/// directly, exactly as before. The base fields stay a single sectioned page and the second page owns the
+/// full area, so no second focusable pane is introduced on the main list (#3/#38); the two pages share one
+/// Save/Cancel button and one create path.
+/// </para>
+/// <para>
 /// The create runs <b>while the screen is still mounted</b> so a server failure can keep the form open
 /// (re-enable Save, flash the error) — hence the injected-async pattern (the same shape #212's
 /// <c>applyAsync</c> uses) rather than the Result-then-close pattern of <see cref="FilterSortGroupScreen"/>.
@@ -43,10 +54,29 @@ public sealed class NewTaskScreen : Screen
     private readonly ListView _priority;
     private readonly TextField _due;
     private readonly Button _save;
+    private readonly Button _cancel;
     private readonly Func<string, NewTaskRequest, CancellationToken, Task<TaskItem>> _createAsync;
     private readonly Func<string, string, CancellationToken, Task> _addToListAsync;
+    private readonly Func<string, CancellationToken, Task<IReadOnlyList<CustomFieldDefinition>>> _fetchListFieldsAsync;
     private readonly CancellationTokenSource _cts = new();
     private bool _busy;
+
+    // The base-fields (page 1) controls hidden while the Custom fields page (page 2) is shown — the labels
+    // and inputs only; the shared Save/Cancel buttons stay visible on both pages. Populated at construction.
+    private readonly List<View> _baseMiddleControls = [];
+
+    // The Custom fields page (page 2): a region filling the area above the shared button row, populated on
+    // demand from the primary list's fillable field definitions. Hidden until Save advances to it.
+    private readonly View _fieldsPage;
+    private readonly Label _fieldsTitle;
+
+    // One collector per rendered widget: the field definition plus a reader that snapshots the widget's
+    // current input into a widget-agnostic CustomFieldEntry for the pure NewTaskCustomFieldForm.
+    private readonly List<(CustomFieldDefinition Def, Func<CustomFieldEntry> Read)> _fieldReaders = [];
+
+    private bool _onFieldsPage;
+    private NewTaskRequest? _pendingRequest;
+    private NamedEntity? _pendingPrimary;
 
     /// <summary>Raised on a successful create with the create outcome (#241) — the server-mapped task plus
     /// any additional lists that couldn't be added — so the host can refresh the list, select the new task,
@@ -80,6 +110,9 @@ public sealed class NewTaskScreen : Screen
     /// <param name="addToListAsync">Adds the created task to an additional selected list (#237/#241); run
     /// off the UI thread. The host wires this to the membership-write facade. When only the primary list is
     /// selected it is never called (single-list path).</param>
+    /// <param name="fetchListFieldsAsync">Fetches a list's Custom Field definitions (#249/#395); run off the
+    /// UI thread. On Save the screen fetches the primary list's fields and, when any are fillable, collects
+    /// their values on a second page before creating. Wired to <c>TaskService.GetListCustomFieldsAsync</c>.</param>
     public NewTaskScreen(
         Func<string, ISet<long>, IReadOnlyList<TaskAssignee>> match,
         Func<int, ISet<long>, IReadOnlyList<TaskAssignee>> topFrequent,
@@ -88,10 +121,12 @@ public sealed class NewTaskScreen : Screen
         Func<int, ISet<string>, IReadOnlyList<NamedEntity>> listTopFrequent,
         NamedEntity primaryList,
         Func<string, NewTaskRequest, CancellationToken, Task<TaskItem>> createAsync,
-        Func<string, string, CancellationToken, Task> addToListAsync)
+        Func<string, string, CancellationToken, Task> addToListAsync,
+        Func<string, CancellationToken, Task<IReadOnlyList<CustomFieldDefinition>>> fetchListFieldsAsync)
     {
         _createAsync = createAsync;
         _addToListAsync = addToListAsync;
+        _fetchListFieldsAsync = fetchListFieldsAsync;
         Title = "New task";
 
         var nameLabel = new Label { X = 1, Y = 0, Text = "Name (required):" };
@@ -128,9 +163,9 @@ public sealed class NewTaskScreen : Screen
         _assignees.Flash += (_, message) => RequestFlash(message);
 
         _save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
-        var cancel = new Button { X = Pos.Right(_save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
-        _save.Accepting += (_, _) => TrySave();
-        cancel.Accepting += (_, _) => Close();
+        _cancel = new Button { X = Pos.Right(_save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
+        _save.Accepting += (_, _) => OnSave();
+        _cancel.Accepting += (_, _) => OnCancel();
 
         // List selector (#239/#240) in collect-selection mode, seeded with the primary/home create target.
         // No apply callback — collect mode only mutates the in-memory selection; Save reads Primary.
@@ -155,7 +190,7 @@ public sealed class NewTaskScreen : Screen
         // (#242/#339). While disabled, Save files the task into its single home list only; flag that on the
         // status line the moment the List selector takes focus so a user who adds a second list understands
         // it won't be applied. HasFocus reflects the post-change state, so this fires once on focus-in and
-        // not on internal search↔list moves. Remove this when re-enabling multi-list (see TrySave).
+        // not on internal search↔list moves. Remove this when re-enabling multi-list (see OnSave).
         _lists.HasFocusChanged += (_, _) =>
         {
             if (_lists.HasFocus)
@@ -174,19 +209,29 @@ public sealed class NewTaskScreen : Screen
         var dueLabel = new Label { X = Pos.Right(_priority) + 4, Y = Pos.Top(_save) - 7, Text = "Due date (yyyy-MM-dd):" };
         _due = new TextField { X = Pos.Right(_priority) + 4, Y = Pos.Top(_save) - 6, Width = 24, Height = 1 };
 
-        // Esc cancels, F1 opens Help (#103). Wire the handler to the screen and the text/list editors so
-        // they're intercepted before the TextField/TextView/ListView consume them; the selectors already
-        // let Esc/F1 fall through to the host.
+        // The Custom fields page (#395): a region filling everything above the shared button row, hidden
+        // until Save advances to it. Its widgets are built on demand from the primary list's fields.
+        _fieldsTitle = new Label { X = 1, Y = 0, Text = "Custom fields" };
+        _fieldsPage = new View { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(2), Visible = false, CanFocus = true };
+        _fieldsPage.Add(_fieldsTitle);
+
+        // Esc cancels (or, on the Custom fields page, steps back), F1 opens Help (#103). Wire the handler to
+        // the screen and the text/list editors so they're intercepted before the TextField/TextView/ListView
+        // consume them; the selectors already let Esc/F1 fall through to the host.
         KeyDown += OnKey;
         _name.KeyDown += OnKey;
         _description.KeyDown += OnKey;
         _priority.KeyDown += OnKey;
         _due.KeyDown += OnKey;
+        _fieldsPage.KeyDown += OnKey;
 
         // Add in Tab order: Name → Description → Assignees → List → Priority → Due date → Save/Cancel.
         // Labels are not focusable, so their position here doesn't affect the tab cycle.
+        _baseMiddleControls.AddRange([
+            nameLabel, _name, descriptionLabel, _description, assigneesLabel, _assignees,
+            listsLabel, _lists, priorityLabel, _priority, dueLabel, _due]);
         Add(nameLabel, _name, descriptionLabel, _description, assigneesLabel, _assignees,
-            listsLabel, _lists, priorityLabel, _priority, dueLabel, _due, _save, cancel);
+            listsLabel, _lists, priorityLabel, _priority, dueLabel, _due, _fieldsPage, _save, _cancel);
     }
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.NewTask;
@@ -199,7 +244,7 @@ public sealed class NewTaskScreen : Screen
         {
             case KeyCode.Esc:
                 key.Handled = true;
-                Close();
+                OnCancel();
                 break;
             case KeyCode.F1:
                 key.Handled = true;
@@ -208,9 +253,32 @@ public sealed class NewTaskScreen : Screen
         }
     }
 
-    // Validate, then create off the UI thread. On success raise Created + close; on failure keep the
-    // form open, re-enable Save, and flash the error (so the user can retry without re-typing).
-    private void TrySave()
+    // Shared Save button: on the base page validate + advance/create; on the Custom fields page collect +
+    // create. Shared Cancel button: on the base page close; on the Custom fields page step back.
+    private void OnSave()
+    {
+        if (_onFieldsPage)
+            SaveWithCustomFields();
+        else
+            SaveBaseFields();
+    }
+
+    private void OnCancel()
+    {
+        // Ignore Cancel/Esc while a fetch or create is in flight: on the Custom fields page it would
+        // otherwise flip to the base page mid-create, so a create failure would land on the base page and
+        // abandon the entered custom-field values instead of keeping page 2 open for retry.
+        if (_busy)
+            return;
+        if (_onFieldsPage)
+            ShowBasePage();
+        else
+            Close();
+    }
+
+    // Validate the base fields; then fetch the primary list's Custom Fields and either advance to the
+    // Custom fields page (when any are fillable) or create straight away.
+    private void SaveBaseFields()
     {
         if (_busy)
             return;
@@ -236,10 +304,86 @@ public sealed class NewTaskScreen : Screen
             return;
         }
 
+        _pendingRequest = request;
+        _pendingPrimary = primary;
+
+        // Fetch the primary list's Custom Fields; re-fetched on every Save so changing the list re-fetches
+        // for the new target (#395: "re-fetch when the selected list changes").
+        _busy = true;
+        _save.Enabled = false;
+        RequestFlash("Loading custom fields…");
+        var token = _cts.Token;
+        var listId = primary!.Id;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var fields = await _fetchListFieldsAsync(listId, token).ConfigureAwait(false);
+                var fillable = fields
+                    .Where(f => !string.IsNullOrWhiteSpace(f.Id) && CustomFieldTypes.IsFillable(f.Type))
+                    .ToList();
+                Application.Invoke(() =>
+                {
+                    if (token.IsCancellationRequested)
+                        return;
+                    _busy = false;
+                    _save.Enabled = true;
+                    if (fillable.Count == 0)
+                        StartCreate(request!);                 // no fillable fields → create as before
+                    else
+                        ShowFieldsPage(fillable, primary);     // collect their values first
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    if (token.IsCancellationRequested)
+                        return;
+                    _busy = false;
+                    _save.Enabled = true;
+                    RequestFlash($"Couldn't load custom fields: {FirstLine(ex.Message)}");
+                });
+            }
+        });
+    }
+
+    // Collect the Custom fields page's widgets through the pure form; block on required/parse problems,
+    // otherwise attach the values to the pending request and create.
+    private void SaveWithCustomFields()
+    {
+        if (_busy || _pendingRequest is null)
+            return;
+
+        var entries = new Dictionary<string, CustomFieldEntry>(StringComparer.Ordinal);
+        foreach (var (def, read) in _fieldReaders)
+            entries[def.Id] = read();
+
+        var result = NewTaskCustomFieldForm.Collect(_fieldReaders.Select(r => r.Def).ToList(), entries);
+        if (!result.IsValid)
+        {
+            // Surface the more specific parse error first; else name the required fields still empty.
+            RequestFlash(result.Errors.Count > 0
+                ? result.Errors[0]
+                : $"Fill required custom field(s): {string.Join(", ", result.MissingRequired)}");
+            return;
+        }
+
+        StartCreate(_pendingRequest with { CustomFields = result.Values });
+    }
+
+    // Create off the UI thread from a fully-built request. On success raise Created + close; on failure keep
+    // the current page open, re-enable Save, and flash the error (so the user can retry without re-typing).
+    private void StartCreate(NewTaskRequest request)
+    {
+        if (_busy)
+            return;
+
         _busy = true;
         _save.Enabled = false;
         RequestFlash("Creating task…");
 
+        var primary = _pendingPrimary;
         var token = _cts.Token;
         _ = Task.Run(async () =>
         {
@@ -252,7 +396,7 @@ public sealed class NewTaskScreen : Screen
                 // `[primary!]` (and drop the MultiListDisabledNote focus flash above). A primary-create
                 // failure still throws out (task not created), keeping the form open to retry.
                 var result = await NewTaskCreator.CreateAsync(
-                    primary!, [primary!], request!, _createAsync, _addToListAsync, token).ConfigureAwait(false);
+                    primary!, [primary!], request, _createAsync, _addToListAsync, token).ConfigureAwait(false);
                 Application.Invoke(() =>
                 {
                     if (token.IsCancellationRequested)
@@ -273,6 +417,138 @@ public sealed class NewTaskScreen : Screen
                 });
             }
         });
+    }
+
+    // ── Custom fields page (#395/§2) ────────────────────────────────────────────
+
+    // Build one input widget per fillable field, top-down, then reveal the page (hiding the base fields).
+    private void ShowFieldsPage(IReadOnlyList<CustomFieldDefinition> fields, NamedEntity list)
+    {
+        BuildFieldWidgets(fields);
+        _fieldsTitle.Text = string.IsNullOrWhiteSpace(list.Name)
+            ? "Custom fields — * required"
+            : $"Custom fields for “{list.Name}” — * required";
+        _cancel.Text = "Back";
+        _onFieldsPage = true;
+        foreach (var c in _baseMiddleControls)
+            c.Visible = false;
+        _fieldsPage.Visible = true;
+        FocusFirstFieldWidget();
+    }
+
+    // Restore the base fields page (Cancel/Back or Esc from the Custom fields page). The built widgets are
+    // left in place; the next Save rebuilds them for the then-current list.
+    private void ShowBasePage()
+    {
+        _onFieldsPage = false;
+        _fieldsPage.Visible = false;
+        _cancel.Text = "Cancel";
+        foreach (var c in _baseMiddleControls)
+            c.Visible = true;
+        _name.SetFocus();
+    }
+
+    private void BuildFieldWidgets(IReadOnlyList<CustomFieldDefinition> fields)
+    {
+        _fieldReaders.Clear();
+        _fieldsPage.RemoveAll();
+        _fieldsPage.Add(_fieldsTitle);
+
+        var y = 2;
+        foreach (var field in fields)
+        {
+            var label = field.Name + (field.Required ? " *" : "");
+            switch (field.Type!.Trim().ToLowerInvariant())
+            {
+                case "checkbox":
+                    var check = new CheckBox { X = 1, Y = y, Text = label };
+                    check.KeyDown += OnKey;
+                    _fieldsPage.Add(check);
+                    _fieldReaders.Add((field, () => new CustomFieldEntry
+                    {
+                        Checked = check.Value == CheckState.Checked,
+                    }));
+                    y += 2;
+                    break;
+
+                case "drop_down":
+                    _fieldsPage.Add(new Label { X = 1, Y = y, Text = label + ":" });
+                    var options = field.Options
+                        .Where(o => !string.IsNullOrWhiteSpace(o.Id))
+                        .ToList();
+                    var rows = new ObservableCollection<string>(
+                        new[] { "(none)" }.Concat(options.Select(o => o.Name ?? o.Id!)));
+                    var height = Math.Min(rows.Count, 6);
+                    var dd = new ListView { X = 3, Y = y + 1, Width = Dim.Fill(2), Height = height };
+                    dd.SetSource(rows);
+                    dd.SelectedItem = 0;
+                    dd.KeyDown += OnKey;
+                    _fieldsPage.Add(dd);
+                    _fieldReaders.Add((field, () =>
+                    {
+                        var idx = dd.SelectedItem ?? 0;
+                        return new CustomFieldEntry
+                        {
+                            SelectedOptionIds = idx >= 1 && idx <= options.Count ? [options[idx - 1].Id!] : [],
+                        };
+                    }
+                    ));
+                    y += 1 + height + 1;
+                    break;
+
+                case "labels":
+                    _fieldsPage.Add(new Label { X = 1, Y = y, Text = label + ":" });
+                    var labelOptions = field.Options.Where(o => !string.IsNullOrWhiteSpace(o.Id)).ToList();
+                    var boxes = new List<(string Id, CheckBox Box)>();
+                    var oy = y + 1;
+                    foreach (var opt in labelOptions)
+                    {
+                        var box = new CheckBox { X = 3, Y = oy, Text = opt.Name ?? opt.Id! };
+                        box.KeyDown += OnKey;
+                        _fieldsPage.Add(box);
+                        boxes.Add((opt.Id!, box));
+                        oy++;
+                    }
+                    _fieldReaders.Add((field, () => new CustomFieldEntry
+                    {
+                        SelectedOptionIds = boxes
+                            .Where(b => b.Box.Value == CheckState.Checked)
+                            .Select(b => b.Id)
+                            .ToList(),
+                    }));
+                    y = oy + 1;
+                    break;
+
+                default:
+                    // Every remaining fillable type (text/short_text/url/email/phone/number/currency/date)
+                    // takes a single-line text field; the pure serializer parses/validates per type.
+                    _fieldsPage.Add(new Label { X = 1, Y = y, Text = FieldPromptLabel(field, label) });
+                    var tf = new TextField { X = 1, Y = y + 1, Width = Dim.Fill(2), Height = 1 };
+                    tf.KeyDown += OnKey;
+                    _fieldsPage.Add(tf);
+                    _fieldReaders.Add((field, () => new CustomFieldEntry { Text = tf.Text?.ToString() }));
+                    y += 3;
+                    break;
+            }
+        }
+    }
+
+    private static string FieldPromptLabel(CustomFieldDefinition field, string label)
+        => field.Type!.Trim().ToLowerInvariant() == "date" ? label + " (yyyy-MM-dd):" : label + ":";
+
+    private void FocusFirstFieldWidget()
+    {
+        // The title Label is first in the child list but not focusable; focus the first real widget so Tab
+        // starts inside the field stack.
+        foreach (var child in _fieldsPage.SubViews)
+        {
+            if (child.CanFocus && child.Visible)
+            {
+                child.SetFocus();
+                return;
+            }
+        }
+        _fieldsPage.SetFocus();
     }
 
     private static string FirstLine(string message)

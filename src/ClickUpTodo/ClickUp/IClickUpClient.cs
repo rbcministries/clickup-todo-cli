@@ -107,6 +107,14 @@ public interface IClickUpClient
     /// <see cref="ClickUpClient.CreateTaskCommentAsync"/> for the minimal-response mapping contract.</summary>
     Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default);
 
+    /// <summary>Post a comment carrying structured runs — literal text and/or @-mention tags (#322) — to a
+    /// task, the write substrate for the #325 @-mention composer. Default throwing implementation so
+    /// read-only fakes need not implement it; <see cref="ClickUpClient"/> overrides it. See
+    /// <see cref="ClickUpClient.CreateTaskCommentAsync(string, IReadOnlyList{CommentRun}, CancellationToken)"/>
+    /// for the block mapping and minimal-response contract.</summary>
+    Task<CommentItem> CreateTaskCommentAsync(string taskId, IReadOnlyList<CommentRun> runs, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement structured-comment writes.");
+
     /// <summary>Fetch the replies in a comment's thread (#327). Default throwing implementation so
     /// existing fakes need not implement it; <see cref="ClickUpClient"/> overrides it. See
     /// <see cref="ClickUpClient.GetThreadedCommentsAsync"/>.</summary>
