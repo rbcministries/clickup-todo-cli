@@ -216,6 +216,12 @@ public sealed class SettingsScreen : Screen
         templateButton.Accepting += (_, _) =>
             EditPromptTemplateRequested?.Invoke(this, new PromptTemplateEditRequest(_promptTemplate, t => _promptTemplate = t));
 
+        // Custom terminal launch command (#385): a user-specified emulator/wrapper tried ahead of the
+        // auto-detected chain (covers an emulator not in the probe list, or a macOS/Linux preference).
+        // `{}` marks where the launched command is spliced in (appended if omitted). Blank = auto-detect.
+        var customTermLabel = new Label { X = rightX, Y = 13, Text = "Custom terminal cmd ({} = command):" };
+        var customTermField = new TextField { X = rightX, Y = 14, Width = Dim.Fill(2), Text = dispatch.CustomTerminalCommand };
+
         // Dispatch-pane defaults (#101): the per-dispatch toggles #94/#97 add to the pane initialize
         // from these. Cycle buttons mirror the terminal/working-dir buttons above.
         var sessionMode = dispatch.DefaultSessionMode;
@@ -257,6 +263,7 @@ public sealed class SettingsScreen : Screen
                 new AgentDispatchSettings
                 {
                     PreferredTerminal = terminal,
+                    CustomTerminalCommand = customTermField.Text?.Trim() ?? "",
                     ClaudeExecutable = string.IsNullOrWhiteSpace(exeField.Text) ? "claude" : exeField.Text!.Trim(),
                     ExtraArgs = SettingsForm.ParseExtraArgs(argsField.Text),
                     WorkingDirectory = workingDir,
@@ -301,7 +308,7 @@ public sealed class SettingsScreen : Screen
             detailHeader, defaultTabButton, activityOrderButton, autoScrollButton,
             generalHeader, confirmOnExitButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
-            fixedDirLabel, fixedDirField, templateButton,
+            fixedDirLabel, fixedDirField, templateButton, customTermLabel, customTermField,
             sessionModeButton, postToCommentsButton, launchLocationButton,
             save, cancel,
         ]);
