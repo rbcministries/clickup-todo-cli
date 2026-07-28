@@ -50,6 +50,16 @@ public sealed record TerminalLauncherOptions
     public PreferredTerminal Preferred { get; init; } = PreferredTerminal.Auto;
 
     /// <summary>
+    /// A user-configured terminal launch command as a tokenised argv (#385): the emulator executable
+    /// followed by its flags, with a <see cref="TerminalCommandParser.Placeholder"/> token marking
+    /// where the OS host invocation of the command is spliced in (appended if the token is absent).
+    /// Empty ⇒ no custom command (auto-detection only). When set and its executable is on PATH, the
+    /// planner emits it as the first launch candidate on every platform, ahead of the built-in chain;
+    /// otherwise it is skipped, so an unset or unavailable command is a strict no-op.
+    /// </summary>
+    public IReadOnlyList<string> CustomTerminalCommand { get; init; } = [];
+
+    /// <summary>
     /// Where an interactive session opens (#255): a new window (default) or a new tab of the current
     /// terminal where the host supports it. Ignored for one-off runs (which have no terminal).
     /// </summary>

@@ -710,6 +710,7 @@ public sealed class TodoApp
         {
             LaunchLocation = LaunchLocation.NewTab,
             Preferred = _config.AgentDispatch.PreferredTerminal,
+            CustomTerminalCommand = TerminalCommandParser.Parse(_config.AgentDispatch.CustomTerminalCommand),
         };
         _launchingTab = true;
         var name = task.Name;
