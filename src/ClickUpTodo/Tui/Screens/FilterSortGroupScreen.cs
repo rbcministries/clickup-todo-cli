@@ -22,6 +22,7 @@ namespace ClickUpTodo.Tui.Screens;
 public sealed class FilterSortGroupScreen : Screen
 {
     private readonly ListView _fieldList;
+    private readonly KeybindingDispatcher _keys;
 
     /// <summary>The saved view, or null if the screen was cancelled.</summary>
     public ViewSettings? Result { get; private set; }
@@ -164,20 +165,19 @@ public sealed class FilterSortGroupScreen : Screen
             dirButton.Text = DirectionText(direction);
         };
 
-        // Esc cancels from anywhere on the screen (Result stays null); F1 opens Help (#103).
+        // Command keys dispatch through the central (context, action) → key table (#355/#398), so the
+        // bindings here and their footer labels (HelpItemSets.FilterSortGroup) share one source of
+        // truth and cannot drift. Esc cancels from anywhere on the screen (Result stays null); F1
+        // opens Help (#103). Form-focus keys — the value field's Enter (add) and the filters list's
+        // Delete/Backspace (remove) — are per-form, not table commands, and stay on their own views.
+        _keys = new KeybindingDispatcher(ScreenContext.FilterSortGroup)
+            .On(KeyAction.Help, RequestHelp)
+            .On(KeyAction.Back, Close);
+
         KeyDown += (_, key) =>
         {
-            switch (key.KeyCode)
-            {
-                case KeyCode.Esc:
-                    key.Handled = true;
-                    Close();
-                    break;
-                case KeyCode.F1:
-                    key.Handled = true;
-                    RequestHelp();
-                    break;
-            }
+            if (_keys.Dispatch(key))
+                key.Handled = true;
         };
 
         Add([
