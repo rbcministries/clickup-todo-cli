@@ -132,6 +132,94 @@ public sealed class DetailPaneViewTests
         Assert.All(cells, c => Assert.Equal(DetailPaneView.DetailCellStyle.Separator, DetailPaneView.ClassifyCell(c)));
     }
 
+    // ── Wrapped-row link classification (#413) ───────────────────────────────────────────────────────
+    // The draw override recomputes a rendered row's link cells from the row's OWN graphemes — not the
+    // per-cell tags BuildCells applied — because Terminal.Gui 2.4.10's word wrap keeps a wrapped row's
+    // graphemes (from the wrap offset) but rebuilds its attributes from index 0 of the source line, so a
+    // continuation row's tags land on the wrong cells and the underline is drawn in the wrong columns.
+    // ClassifyRowLinkCells is offset-free (re-extracts per row), so a URL that does NOT start at column 0
+    // is still styled on exactly its own cells. These build a row's cells the same way the pane loads them
+    // (BuildCells → one line) and read only the graphemes back, which is all the helper consumes.
+
+    // The substring of `row` whose cells ClassifyRowLinkCells classifies as `style`.
+    private static string RowStyledText(string row, DetailPaneView.DetailCellStyle style)
+    {
+        var cells = DetailPaneView.BuildCells(row, Sep).Single();
+        var styles = DetailPaneView.ClassifyRowLinkCells(cells);
+        var chars = new List<string>();
+        for (var i = 0; i < cells.Count; i++)
+            if (styles[i] == style)
+                chars.Add(cells[i].Grapheme ?? "");
+        return string.Concat(chars);
+    }
+
+    [Fact]
+    public void ClassifyRowLinkCells_StylesATaskUrlThatDoesNotStartAtColumnZero()
+    {
+        // The exact shape from the bug report: a wrapped continuation row where prose precedes the URL.
+        const string row = "Parent ticket: https://app.clickup.com/t/86a1b2c3d for the full";
+        Assert.Equal("https://app.clickup.com/t/86a1b2c3d",
+            RowStyledText(row, DetailPaneView.DetailCellStyle.TaskLink));
+        Assert.Equal("", RowStyledText(row, DetailPaneView.DetailCellStyle.WebLink));
+    }
+
+    [Fact]
+    public void ClassifyRowLinkCells_StylesAWebUrlThatDoesNotStartAtColumnZero()
+    {
+        const string row = "PR: https://github.com/rbcministries/ODBM.Secure/pull/64 — Ready";
+        Assert.Equal("https://github.com/rbcministries/ODBM.Secure/pull/64",
+            RowStyledText(row, DetailPaneView.DetailCellStyle.WebLink));
+        Assert.Equal("", RowStyledText(row, DetailPaneView.DetailCellStyle.TaskLink));
+    }
+
+    [Fact]
+    public void ClassifyRowLinkCells_LeavesSurroundingProseNormal()
+    {
+        const string row = "See https://example.com/docs now";
+        var cells = DetailPaneView.BuildCells(row, Sep).Single();
+        var styles = DetailPaneView.ClassifyRowLinkCells(cells);
+        var normal = new List<string>();
+        for (var i = 0; i < cells.Count; i++)
+            if (styles[i] == DetailPaneView.DetailCellStyle.Normal)
+                normal.Add(cells[i].Grapheme ?? "");
+        Assert.Equal("See  now", string.Concat(normal));
+    }
+
+    [Fact]
+    public void ClassifyRowLinkCells_ReturnsAllNormalForALinkFreeRow()
+    {
+        var cells = DetailPaneView.BuildCells("A continuation row with no link at all", Sep).Single();
+        var styles = DetailPaneView.ClassifyRowLinkCells(cells);
+        Assert.All(styles, s => Assert.Equal(DetailPaneView.DetailCellStyle.Normal, s));
+    }
+
+    [Fact]
+    public void ClassifyRowLinkCells_ReturnsAllNormalForASeparatorFragment()
+    {
+        // A wrapped separator fragment carries no URL, so the link classifier leaves it Normal — the draw
+        // path styles the separator from its (uniform, wrap-safe) tag, not from this classifier.
+        var cells = DetailPaneView.BuildCells(Sep, Sep).Single();
+        var styles = DetailPaneView.ClassifyRowLinkCells(cells);
+        Assert.All(styles, s => Assert.Equal(DetailPaneView.DetailCellStyle.Normal, s));
+    }
+
+    [Fact]
+    public void ClassifyRowLinkCells_MapsOffsetsAcrossAWideGraphemeBeforeTheUrl()
+    {
+        // A surrogate-pair grapheme precedes the URL, so the URL's char offset exceeds its cell index —
+        // the classifier must map by accumulated grapheme length, not cell index, to stay aligned.
+        const string row = "𝕏 https://example.com end";
+        Assert.Equal("https://example.com", RowStyledText(row, DetailPaneView.DetailCellStyle.WebLink));
+    }
+
+    [Fact]
+    public void ClassifyRowLinkCells_StylesTwoLinksOnOneRow()
+    {
+        const string row = "task https://app.clickup.com/t/t1 and web https://example.com end";
+        Assert.Equal("https://app.clickup.com/t/t1", RowStyledText(row, DetailPaneView.DetailCellStyle.TaskLink));
+        Assert.Equal("https://example.com", RowStyledText(row, DetailPaneView.DetailCellStyle.WebLink));
+    }
+
     // Exercises the real SetBody → TextView.Load path (no driver needed to load the model) and inspects
     // the loaded cells. This is the reviewer's concern (PR #184): the terminal-default (Color.None)
     // background must stay on the separator line only, and must not carry forward to the comment/
