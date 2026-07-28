@@ -146,7 +146,10 @@ if (launch.HasId)
         return 1;
     }
 
-    new SingleTaskApp(taskService, config, configStore, launchTask, launchComments).Run(driverName);
+    // Hand the single-task tab the same cross-process nudge channel the dashboard gets (#377), so an
+    // edit to the launched task in another tab surfaces here promptly rather than only on the 30s tick.
+    new SingleTaskApp(taskService, config, configStore, launchTask, launchComments,
+        changeMarkers: changeMarkers).Run(driverName);
     return 0;
 }
 
