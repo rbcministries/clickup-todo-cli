@@ -2012,8 +2012,10 @@ public sealed class TodoApp
                     screen.QuickOpenRequested += (_, _) => OpenQuickOpenFromScreen();
                     // Ctrl+Enter opens this task in its own terminal tab (#384) — the detail counterpart
                     // of the main list's #301 gesture, reusing the exact launcher + copy-command fallback.
-                    // The launch needs only the (fixed) resolved id; detail.Name is the status-flash label.
-                    screen.OpenInNewTabRequested += (_, _) => LaunchAppTabForTask(resolvedId, detail.Name);
+                    // The launch needs only the (fixed) resolved id; screen.Task.Name is the status-flash
+                    // label, read live so a mid-view refresh that renamed the task is reflected (mirrors
+                    // OpenQuickUpdatesForDetail reading the screen's current task).
+                    screen.OpenInNewTabRequested += (_, _) => LaunchAppTabForTask(resolvedId, screen.Task.Name);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
