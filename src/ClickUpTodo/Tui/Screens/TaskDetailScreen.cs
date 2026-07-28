@@ -813,6 +813,27 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // #319 (E): on a text pane, bare Tab/Shift+Tab step keyboard focus across the in-pane links and
+        // Enter activates the focused one — the keyboard equivalent of the #318 click. Routed here (not in
+        // the pane) because OnKey already owns the screen's key vocabulary and fires before Terminal.Gui's
+        // focus traversal, so it can consume bare Tab. Guarded to the text panes (their scroll target is a
+        // DetailPaneView): the Task Tree tab's Enter is handled above and the Other tab has no links. Each
+        // call is inert (returns false → key falls through) when there's nothing to do — no links for Tab,
+        // no focused link for Enter — so an empty pane's Tab and an unfocused Enter behave as they did.
+        if (ActiveTextPane() is { } linkPane)
+        {
+            if (key.KeyCode == KeyCode.Tab && linkPane.StepLinkFocus(forward: !key.IsShift))
+            {
+                key.Handled = true;
+                return;
+            }
+            if (key.KeyCode == KeyCode.Enter && linkPane.ActivateFocusedLink())
+            {
+                key.Handled = true;
+                return;
+            }
+        }
+
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
         {
             key.Handled = true;
@@ -1205,6 +1226,15 @@ public sealed class TaskDetailScreen : Screen
         if (current < 0)
             current = 0;
         _scrollTargets[current].SetFocus();
+    }
+
+    /// <summary>The front-most tab's scroll target when it is a read-only text pane (Stream / Description /
+    /// Comments), or <c>null</c> for the Task Tree / Other tabs. The seam for the #319 link focus keys, so
+    /// bare Tab/Enter act only where there are links to traverse.</summary>
+    private DetailPaneView? ActiveTextPane()
+    {
+        var current = Array.IndexOf(_tabContents, _tabs.Value);
+        return current < 0 ? null : _scrollTargets[current] as DetailPaneView;
     }
 
     // ── Comment composer (#216) ───────────────────────────────────────────────
