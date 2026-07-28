@@ -78,9 +78,9 @@ The re-entrancy guard stays first so the new branch can't fire while a modal is 
   invariant — the crux of this issue); an explicit `false` round-trips through `ConfigStore`
   save/load; the value persists as a JSON bool (`"confirmOnExit": false`), never an ordinal.
   Mirrors `DetailViewSettingsTests`' persistence pattern.
-- **Unit (`SettingsScreenResultTests` or an addition to the settings tests):** a `SettingsResult`
-  carries `ConfirmOnExit` through unchanged — the record is the pure transaction object the F2
-  glue populates.
+- No separate `SettingsResult` test: it's a positional record the compiler guarantees carries the
+  new field, and the F2 glue that populates it is Terminal.Gui code (build + reasoning). The
+  backward-compat load above is where the real risk is, so that's where the tests concentrate.
 - **TUI (build + reasoning; existing `exit_confirm_check.py` unchanged):** the default-on path
   is already covered by the #299 `exit_confirm_check.py` and `single_task_launch_check.py` (the
   preference defaults on, so their assertions are unaffected). The off path — `Esc` exits with

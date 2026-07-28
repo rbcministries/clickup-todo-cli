@@ -5,7 +5,7 @@ namespace ClickUpTodo.Tests;
 
 /// <summary>
 /// Unit tests for the optional skip-exit-confirmation preference (issue #407): the persisted
-/// <see cref="AppConfig.ConfirmOnExit"/> flag its default, its round-trip through
+/// <see cref="AppConfig.ConfirmOnExit"/> flag — its default, its round-trip through
 /// <see cref="ConfigStore"/>, and — the crux of the issue — that an older <c>config.json</c> with no
 /// <c>confirmOnExit</c> key loads with the confirmation still <b>on</b>, so existing users keep the
 /// #299 guard with no migration. The F2 Settings glue and the hosts' <c>RequestExit</c> branch are
