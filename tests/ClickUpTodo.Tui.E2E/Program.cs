@@ -154,6 +154,14 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
     //  • E2E_STALL_CLOSED_MS=<ms> — delay the *authoritative* include_closed=true team-task refresh by
     //    this many ms once armed (see ArmClosedStall), so the F12→All pre-refresh bridge frame is
     //    deterministically observable before the superset lands.
+    // #395 opt-in: serve a small set of fillable Custom Field definitions from GET /list/{id}/field so the
+    // New Task screen's custom-field page renders and the required-block + drop-down paths are assertable.
+    // Off by default, so every existing check sees the empty field set (Save creates directly, as before).
+    private static bool CustomFields => Environment.GetEnvironmentVariable("E2E_CUSTOM_FIELDS") == "1";
+
+    private const string CustomFieldsJson =
+        """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false},{"id":"cf_estimate","name":"Estimate","type":"number","required":true},{"id":"cf_stage","name":"Stage","type":"drop_down","required":false,"type_config":{"options":[{"id":"opt_alpha","name":"Alpha","orderindex":0},{"id":"opt_beta","name":"Beta","orderindex":1}]}}]}""";
+
     private static bool WarmClosed => Environment.GetEnvironmentVariable("E2E_WARM_CLOSED") == "1";
     private static readonly int ClosedStallMs =
         int.TryParse(Environment.GetEnvironmentVariable("E2E_STALL_CLOSED_MS"), out var ms) ? ms : 0;
@@ -285,11 +293,26 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
             body = _foreign ? ForeignTeamTasks() : TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
         }
         else if (request.Method == HttpMethod.Post && path.Contains("/list/") && path.EndsWith("/task"))
+        {
             // Create-task (#209/#213): echo a created task so the New Task screen's Save round-trips
             // through the facade and closes back to the list. (Not persisted into the team-tasks list.)
+            // #395: when E2E_CAPTURE_FILE is set, write the outgoing request body to that file so a check
+            // can assert the custom_fields array actually reached the POST (a regression that dropped it
+            // would leave the file without the values). Off by default, so no other check is affected.
+            if (request.Content is not null
+                && Environment.GetEnvironmentVariable("E2E_CAPTURE_FILE") is { Length: > 0 } capturePath)
+            {
+                var requestBody = await request.Content.ReadAsStringAsync(ct);
+                try { File.WriteAllText(capturePath, requestBody); } catch { /* best-effort capture */ }
+            }
             body = """{"id":"tnew","name":"New task from Ctrl+N","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/tnew"}""";
+        }
         else if (path.Contains("/list/") && path.EndsWith("/task"))
             body = """{"tasks":[],"last_page":true}""";
+        else if (path.Contains("/list/") && path.EndsWith("/field"))
+            // Custom Field definitions (#249/#395): the seeded fillable set under E2E_CUSTOM_FIELDS, else
+            // an empty set (so the New Task screen creates directly, as every other check expects).
+            body = CustomFields ? CustomFieldsJson : """{"fields":[]}""";
         else if (path.Contains("/list/"))
             body = ListJson(path);
         else if (path.EndsWith("/team"))
