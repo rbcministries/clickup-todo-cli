@@ -822,7 +822,9 @@ public sealed class TaskDetailScreen : Screen
         // no focused link for Enter — so an empty pane's Tab and an unfocused Enter behave as they did.
         if (ActiveTextPane() is { } linkPane)
         {
-            if (key.KeyCode == KeyCode.Tab && linkPane.StepLinkFocus(forward: !key.IsShift))
+            // Mask ShiftMask so Shift+Tab (which the ansi driver folds into KeyCode.Tab | ShiftMask) is
+            // matched too; IsShift then picks the direction — the same shape the comment composer uses.
+            if ((key.KeyCode & ~KeyCode.ShiftMask) == KeyCode.Tab && linkPane.StepLinkFocus(forward: !key.IsShift))
             {
                 key.Handled = true;
                 return;

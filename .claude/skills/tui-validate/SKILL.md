@@ -152,6 +152,21 @@ file rather than guessed from the screen). Expected: `ok — Ctrl+click → brow
 task click → stacked detail, click under an open composer → inert`. Ctrl is the `+16` modifier bit on
 the SGR button code (`ESC[<16;x;yM`).
 
+**9. Link keyboard focus traversal + activation (#319)** — the keyboard counterpart of check 8. Drives
+`Tab`/`Shift+Tab` (Tab = `0x09`, Shift+Tab = `ESC[Z`) to move a focus highlight across the same two
+seeded links and `Enter` to activate the focused one, asserting `Enter` reaches the same destinations a
+click does: an unfocused `Enter` is inert; `Tab` highlights the Description **task** link (a pyte
+cell-attribute change) and `Enter` opens its Task Detail stacked in-app (proven by the extra `Esc` to
+reach the list); `Shift+Tab` highlights the Comments **web** link and `Enter` opens the browser:
+
+```bash
+timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/link_tab_check.py $DLL
+```
+
+Self-contained (sets its own `E2E_BROWSER_LOG`). Expected: `ok — unfocused Enter inert; Tab highlights +
+Enter opens the task link's detail (stacked); Shift+Tab highlights + Enter opens the web link in the
+browser`.
+
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 
 - **Answer the terminal's queries or nothing ever renders.** Terminal.Gui's ANSI driver

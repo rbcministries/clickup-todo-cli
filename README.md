@@ -154,6 +154,8 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `Ctrl+N`              | ➕   | Add a comment                                          |
 | `Ctrl+E`              | ✏    | Edit the description                                   |
 | `Ctrl+B`              | 🌐   | Open the task in your browser                          |
+| `Tab` / `Shift+Tab`   |      | Move the focus highlight to the next / previous link in the pane |
+| `Enter`               |      | Follow the focused link (task link → Task Detail, other → browser) |
 | Left-click a link     |      | Follow it — see [Follow links in a task's text](#follow-links-in-a-tasks-text) |
 | `Ctrl+U`              |      | Quick Updates for this task                            |
 | `Ctrl+O`              | 🗁   | Open another task by id, custom id, or URL             |
@@ -179,8 +181,11 @@ Links in a task's **Description**, **Comments** and **Stream** panes are underli
 | --- | --- | --- |
 | Left-click | Opens that task's **Task Detail** here — `Esc` walks back to the one you came from | Opens in your **browser** |
 | `Ctrl+`Left-Click | Opens in your **browser** | Opens in your **browser** |
+| `Tab` / `Shift+Tab` then `Enter` | Same as left-click — steps a focus highlight across the pane's links and follows the focused one | Opens in your **browser** |
 
-`Ctrl+`Left-Click is Windows Terminal's own "open this link" gesture, so it always means *browser*
+`Tab`/`Shift+Tab` step a focus highlight over the links in the current pane (wrapping at the ends) and
+`Enter` follows the focused one — the keyboard equivalent of a left-click, for when you'd rather not reach
+for the mouse. `Ctrl+`Left-Click is Windows Terminal's own "open this link" gesture, so it always means *browser*
 whatever the link is. A task link works with either a plain ClickUp id or a **custom id**
 (`/t/{teamId}/{customId}`). In single-task mode (`--task`) every link opens in the browser, since that
 mode has no list to stack another task on top of.
