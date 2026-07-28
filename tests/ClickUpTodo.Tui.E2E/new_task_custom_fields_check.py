@@ -6,11 +6,16 @@ per-type widgets render (a text field, a required number field marked "*", a dro
 options) → Save with the required number empty is BLOCKED with a flash naming the field → fill the
 number + pick a drop-down option → Save creates the task and returns to the list. Asserts each step
 on the pyte screen. Requires the fake backend's E2E_CUSTOM_FIELDS=1 field seeding."""
-import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
+import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess, tempfile
 import pyte
 
 ROWS, COLS = 50, 200
 DLL = sys.argv[1]
+
+# The fake backend writes the outgoing create-task POST body here (E2E_CAPTURE_FILE), so we can assert
+# the entered custom-field values actually reached the request — not just that the screen closed.
+CAPTURE = tempfile.NamedTemporaryFile(prefix="cf_post_", suffix=".json", delete=False).name
+open(CAPTURE, "w").close()
 
 screen = pyte.Screen(COLS, ROWS)
 stream = pyte.ByteStream(screen)
@@ -18,7 +23,7 @@ stream = pyte.ByteStream(screen)
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
 env = dict(os.environ, TERM="xterm-256color", DOTNET_ROOT="/usr/local/dotnet",
-           E2E_CUSTOM_FIELDS="1")
+           E2E_CUSTOM_FIELDS="1", E2E_CAPTURE_FILE=CAPTURE)
 proc = subprocess.Popen(["dotnet", DLL], stdin=slave, stdout=slave, stderr=slave,
                         env=env, close_fds=True, preexec_fn=os.setsid)
 os.close(slave)
@@ -101,8 +106,23 @@ try:
     assert "Custom fields" not in v, f"Save did not close the Custom fields page:\n{v}"
     assert "New task" not in v, f"Save did not close the New Task screen:\n{v}"
     assert "Task" in v, f"did not return to the task list after Save:\n{v}"
-    print("CREATE ok — task created with custom-field values and returned to the list")
+    print("CREATE ok — task created and returned to the list")
+
+    # The entered values actually reached the create POST: the fake captured the request body, which must
+    # carry the custom_fields array with the filled number (Estimate=5) and the picked drop-down option
+    # (Stage=opt_alpha). The blank Notes text field is skipped, so it must NOT appear.
+    with open(CAPTURE) as f:
+        posted = f.read()
+    assert '"custom_fields"' in posted, f"create POST carried no custom_fields array:\n{posted}"
+    assert '"cf_estimate"' in posted and '"value":5' in posted, \
+        f"required number value did not reach the create POST:\n{posted}"
+    assert '"cf_stage"' in posted and 'opt_alpha' in posted, \
+        f"picked drop-down option did not reach the create POST:\n{posted}"
+    assert 'cf_notes' not in posted, f"a blank text field was sent instead of skipped:\n{posted}"
+    print("ROUNDTRIP ok — custom_fields reached the create POST (Estimate=5, Stage=opt_alpha; blank Notes skipped)")
     print("NEW TASK CUSTOM FIELDS E2E: PASS")
 finally:
     try: os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception: pass
+    try: os.unlink(CAPTURE)
     except Exception: pass

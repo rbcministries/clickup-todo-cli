@@ -124,6 +124,31 @@ public sealed class NewTaskCustomFieldFormTests
     }
 
     [Fact]
+    public void DropDown_NoSelection_IsSkipped()
+    {
+        var fields = new[] { Field("drop_down", "f1", "Stage", options: [("o1", "Alpha")]) };
+
+        // The "(none)" row leaves SelectedOptionIds empty — nothing to send for the field.
+        var result = Collect(fields, ("f1", new CustomFieldEntry { SelectedOptionIds = [] }));
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Values);
+    }
+
+    [Fact]
+    public void Labels_MultipleSelected_ProduceAnOptionIdArray()
+    {
+        var fields = new[] { Field("labels", "f1", "Tags", options: [("o1", "A"), ("o2", "B"), ("o3", "C")]) };
+
+        var result = Collect(fields, ("f1", new CustomFieldEntry { SelectedOptionIds = ["o1", "o3"] }));
+
+        Assert.True(result.IsValid);
+        Assert.Single(result.Values);
+        Assert.Equal(JsonValueKind.Array, result.Values[0].Value.ValueKind);
+        Assert.Equal(["o1", "o3"], result.Values[0].Value.EnumerateArray().Select(e => e.GetString()));
+    }
+
+    [Fact]
     public void Checkbox_ExplicitState_ProducesABool()
     {
         var fields = new[] { Field("checkbox", "f1", "Done") };

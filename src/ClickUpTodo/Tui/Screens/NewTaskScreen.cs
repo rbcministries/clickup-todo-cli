@@ -265,6 +265,11 @@ public sealed class NewTaskScreen : Screen
 
     private void OnCancel()
     {
+        // Ignore Cancel/Esc while a fetch or create is in flight: on the Custom fields page it would
+        // otherwise flip to the base page mid-create, so a create failure would land on the base page and
+        // abandon the entered custom-field values instead of keeping page 2 open for retry.
+        if (_busy)
+            return;
         if (_onFieldsPage)
             ShowBasePage();
         else
