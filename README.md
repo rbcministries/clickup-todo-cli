@@ -208,6 +208,10 @@ on the status line so you can run it yourself. Requires `clickup-todo` to be ins
 (the global tool) — a `dotnet run` dev launch can't relaunch itself, so it shows the copy-command
 fallback.
 
+A tab launched this way (or any `clickup-todo --task <id>`) **titles its terminal window/tab** with
+the task — `{id}: {title}`, using the custom id when the task has one, truncated to 40 characters — so
+several single-task tabs stay distinguishable at a glance from the tab strip alone.
+
 ## Mentions & Comments feed
 
 Press `Ctrl+E` to open a feed of recent comments and `@`-mentions across the tasks assigned to you
