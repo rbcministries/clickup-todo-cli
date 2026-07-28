@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Drives the Quick Updates MOUSE click-to-apply path (#288): a single left-click on a row does the
-same as select + Enter. Two boots, each against the fake backend that models the relevant write:
+same as select + Enter. Two boots, each against the fake backend that models the relevant write.
+Run it as documented with NO operator-supplied env — each phase sets the backend knob it needs on
+its own boot, so an ambient E2E_FOREIGN=1 is neither required nor safe (Phase B forces it off):
 
-  Phase A (E2E_FOREIGN=1 — the only scenario that models a Status/Priority PUT truthfully, #232):
-    open Quick Updates on the assigned parent pt1 → click the "in progress" Status row → its ✓ moves
-    there (the modelled PUT round-trips and ApplyStatus reconciles ✓ to the server value) → click a
-    blank row below the last status → no-op (✓ stays put, never applies the nearest row) → click the
-    "Urgent" Priority row → its ✓ moves there.
+  Phase A (boots with E2E_FOREIGN=1 — the only scenario that models a Status/Priority PUT truthfully,
+    #232): open Quick Updates (Ctrl+U) on the assigned parent pt1 → click the "in progress" Status
+    row → its ✓ moves there (the modelled PUT round-trips and ApplyStatus reconciles ✓ to the server
+    value) → click a blank row below the last status → no-op (✓ stays put, never applies the nearest
+    row) → click the "Urgent" Priority row → its ✓ moves there.
 
-  Phase B (default backend — models the Assignee PUT on a shared mutable set):
-    open Quick Updates → click a candidate in the Assignees pane → ✓ appears (add round-trips) →
-    click that ✓ row → ✓ clears (remove round-trips).
+  Phase B (boots with the default backend, E2E_FOREIGN forced off — models the Assignee PUT on a
+    shared mutable set): open Quick Updates (Ctrl+U) → click a candidate in the Assignees pane → ✓
+    appears (add round-trips) → click that ✓ row → ✓ clears (remove round-trips).
 
 Mouse is injected as SGR-1006 sequences (ESC[<b;x;yM/m) written to the PTY; the Terminal.Gui ansi
 driver enables mouse reporting on boot, so we only emit the click bytes at the screen cell where the
@@ -21,6 +23,8 @@ import pyte
 
 ROWS, COLS = 50, 200
 DLL = sys.argv[1]
+
+CTRL_U = b"\x15"   # Quick Updates — standardized to Ctrl+U (#159/#290); was Space before #290
 
 
 def boot(extra_env):
@@ -112,10 +116,10 @@ def phase_a():
         assert "Assigned parent" in visible() or "Personal Tasks" in visible(), \
             "foreign scenario never rendered:\n" + visible()
 
-        # Open Quick Updates on the assigned parent (a normal top-level row, always visible). Space opens
-        # QU on the cursor row; retry down the list until its title is pt1.
+        # Open Quick Updates on the assigned parent (a normal top-level row, always visible). Ctrl+U
+        # opens QU on the cursor row; retry down the list until its title is pt1.
         for _ in range(8):
-            send(b" ", 2.0)
+            send(CTRL_U, 2.0)
             if qu_open() and PT1 in visible():
                 break
             if qu_open():
@@ -151,12 +155,14 @@ def phase_a():
 
 # ── Phase B: Assignees click add/remove (default backend models the assignee PUT) ────────────────────
 def phase_b():
-    screen, stream, master, proc = boot({})
+    # Force E2E_FOREIGN off (not just absent) so an ambient E2E_FOREIGN=1 — which the Phase A note
+    # invites an operator to set — can't leak in and swap out the default Assignee-PUT backend (#409).
+    screen, stream, master, proc = boot({"E2E_FOREIGN": "0"})
     pump, visible, lines, send, cell_of, click_row, click_xy, marked, qu_open = make_io(screen, stream, master)
     try:
         pump(8.0)
         assert "Task" in visible(), "default scenario never rendered:\n" + visible()[-1500:]
-        send(b" ", 2.0)
+        send(CTRL_U, 2.0)
         assert qu_open(), f"Quick Updates did not open:\n{visible()}"
 
         # The Assignees empty state (bottom frame) shows the seeded frequency-pool candidates. Click
