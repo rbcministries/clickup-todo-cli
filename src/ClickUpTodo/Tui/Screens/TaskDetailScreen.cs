@@ -602,12 +602,13 @@ public sealed class TaskDetailScreen : Screen
         Add([_headerView, _tabs, _promptBox, _commentBox, _descriptionBox]);
     }
 
+    // While the comment composer (Ctrl+N) or description editor (Ctrl+E) overlay is open, the footer
+    // shows only that overlay's keys — the command chords are inert to a keypress (OnKey returns early)
+    // but their clickable footer hints would otherwise re-raise the chord into the composer (#436). The
+    // Task Tree tab's F6 badge cycle (#415) is only offered when that tab exists (a loader was supplied);
+    // single-task launch mode has no tree tab, so it keeps the F6-less Detail set.
     public override IReadOnlyList<HelpItem> HelpItems =>
-        _descriptionBox.Visible ? HelpItemSets.DetailDescriptionEditor
-        // The Task Tree tab's F6 badge cycle (#415) is only offered when that tab exists (a loader was
-        // supplied). Single-task launch mode has no tree tab, so it keeps the F6-less Detail set.
-        : _treeList is not null ? HelpItemSets.DetailWithTaskTree
-        : HelpItemSets.Detail;
+        HelpItemSets.DetailFooter(_commentBox.Visible, _descriptionBox.Visible, _treeList is not null);
 
     public override void OnShown()
     {
