@@ -165,9 +165,74 @@ public sealed class TaskServiceTaskTreeTests
         Assert.True(rows[0].IsCurrent);
     }
 
+    [Fact]
+    public async Task DescendantBfs_WideLevel_FetchesFirstBudgetParentsInFifoOrder()
+    {
+        // A single level wider than the fetch budget: every child of T is a descendant, but only the first
+        // MaxTreeSubtaskFetches-1 of them (after T's own probe) get their subtasks fetched — and in FIFO
+        // order — so batching honours the budget and the breadth-first fetch order exactly. (#417)
+        var fake = new FakeClient();
+        fake.Items["T"] = Item("T");
+        var width = TaskService.MaxTreeSubtaskFetches + 5;
+        var children = new List<TaskItem>();
+        for (var i = 0; i < width; i++)
+            children.Add(Item($"c{i:D2}", parent: "T"));
+        fake.Subtasks["T"] = children;
+
+        var rows = await Service(fake).GetTaskTreeAsync("T");
+
+        // Budget spent exactly: T's own probe + the first (budget-1) children, in FIFO order.
+        var expected = new List<string> { "T" };
+        for (var i = 0; i < TaskService.MaxTreeSubtaskFetches - 1; i++)
+            expected.Add($"c{i:D2}");
+        Assert.Equal(expected, fake.SubtaskCalls);
+        // Every child is still present as a descendant row (a child is added when T is probed, whether or
+        // not its own subtasks were later fetched), so the cap never drops a discovered node.
+        Assert.Equal(width + 1, rows.Count); // T + all its children
+        Assert.True(rows[0].IsCurrent);
+    }
+
+    [Fact]
+    public async Task DescendantBfs_FetchesAFrontierConcurrently()
+    {
+        // T's three children form one frontier; their subtask probes must be in flight at once, not serial.
+        var fake = new GatedClient(gatedIds: ["c1", "c2", "c3"]);
+        fake.Items["T"] = Item("T");
+        fake.Subtasks["T"] = [Item("c1", parent: "T"), Item("c2", parent: "T"), Item("c3", parent: "T")];
+
+        var treeTask = Service(fake).GetTaskTreeAsync("T");
+        await fake.WaitForInFlightAsync(3);   // all three probes reached the gate together
+        var peak = fake.MaxInFlight;
+        fake.Release();
+        var rows = await treeTask;
+
+        Assert.Equal(3, peak);                // the whole frontier was fetched concurrently
+        Assert.Equal([("T", 0, true), ("c1", 1, false), ("c2", 1, false), ("c3", 1, false)], rows.Select(Row));
+    }
+
+    [Fact]
+    public async Task DescendantBfs_NeverExceedsConcurrencyBound()
+    {
+        // A frontier wider than the bound must fetch at most MaxTreeSubtaskConcurrency at a time.
+        var width = TaskService.MaxTreeSubtaskConcurrency + 4;
+        var childIds = Enumerable.Range(0, width).Select(i => $"c{i:D2}").ToArray();
+        var fake = new GatedClient(gatedIds: childIds);
+        fake.Items["T"] = Item("T");
+        fake.Subtasks["T"] = childIds.Select(id => Item(id, parent: "T")).ToList();
+
+        var treeTask = Service(fake).GetTaskTreeAsync("T");
+        await fake.WaitForInFlightAsync(TaskService.MaxTreeSubtaskConcurrency); // first batch fills the bound
+        var peak = fake.MaxInFlight;
+        fake.Release();
+        var rows = await treeTask;
+
+        Assert.Equal(TaskService.MaxTreeSubtaskConcurrency, peak); // filled the bound, never beyond it
+        Assert.Equal(width + 1, rows.Count);                       // T + all children still discovered
+    }
+
     /// <summary>In-memory <see cref="IClickUpClient"/> exposing only the two fetch paths the tree walk
     /// uses; every other member throws so accidental reliance is loud.</summary>
-    private sealed class FakeClient : IClickUpClient
+    private class FakeClient : IClickUpClient
     {
         public Dictionary<string, TaskItem> Items { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, IReadOnlyList<TaskItem>> Subtasks { get; } = new(StringComparer.Ordinal);
@@ -186,7 +251,7 @@ public sealed class TaskServiceTaskTreeTests
                 : throw new InvalidOperationException($"no task {taskId}"));
         }
 
-        public Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default)
+        public virtual Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default)
         {
             SubtaskCalls.Add(taskId);
             if (ThrowOnSubtask.Contains(taskId))
@@ -214,5 +279,74 @@ public sealed class TaskServiceTaskTreeTests
         public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default) => throw new NotImplementedException();
+    }
+
+    /// <summary>A <see cref="FakeClient"/> whose subtask fetches for <c>gatedIds</c> block on a release gate,
+    /// tracking how many are in flight at once — so a test can prove the descendant BFS fetches a frontier
+    /// concurrently and never past the bound (#417) deterministically, with no timing/<c>Task.Delay</c>
+    /// dependence in the assertion. Ungated ids (e.g. the root's own probe) return immediately.</summary>
+    private sealed class GatedClient(IReadOnlyCollection<string> gatedIds) : FakeClient
+    {
+        private readonly HashSet<string> _gated = new(gatedIds, StringComparer.Ordinal);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly object _lock = new();
+        private int _inFlight;
+
+        private int _maxInFlight;
+
+        /// <summary>The peak number of gated probes seen simultaneously in flight, read under the lock so
+        /// the assertion sees the fold from the fetch threads without relying on a happens-before.</summary>
+        public int MaxInFlight
+        {
+            get { lock (_lock) return _maxInFlight; }
+        }
+
+        public void Release()
+        {
+            lock (_lock)
+                _release.TrySetResult();
+        }
+
+        /// <summary>Completes once at least <paramref name="target"/> gated probes are simultaneously in
+        /// flight. Bounded so a regression (serial fetching) falls through rather than hanging forever — the
+        /// test's <see cref="MaxInFlight"/> assertion then reports the shortfall.</summary>
+        public async Task WaitForInFlightAsync(int target)
+        {
+            for (var i = 0; i < 500; i++)
+            {
+                lock (_lock)
+                {
+                    if (_inFlight >= target)
+                        return;
+                }
+                await Task.Delay(10);
+            }
+        }
+
+        public override async Task<IReadOnlyList<TaskItem>> GetSubtasksAsync(string taskId, CancellationToken ct = default)
+        {
+            lock (_lock)
+                SubtaskCalls.Add(taskId);
+
+            if (!_gated.Contains(taskId))
+                return Subtasks.TryGetValue(taskId, out var immediate) ? immediate : (IReadOnlyList<TaskItem>)[];
+
+            lock (_lock)
+            {
+                _inFlight++;
+                if (_inFlight > _maxInFlight)
+                    _maxInFlight = _inFlight;
+            }
+            try
+            {
+                await _release.Task.WaitAsync(ct);
+            }
+            finally
+            {
+                lock (_lock)
+                    _inFlight--;
+            }
+            return Subtasks.TryGetValue(taskId, out var v) ? v : (IReadOnlyList<TaskItem>)[];
+        }
     }
 }

@@ -121,6 +121,23 @@ Self-contained (fixed COLS=120 so the seeded URLs don't wrap). Expected: `ok —
 underlined+default-fg (Description), web link underlined+recoloured (Comments)`. The colour/underline
 change is invisible to the text-only `detail_check.py` A/B, which stays identical.
 
+**6b. In-text link styling on WRAPPED lines (#413)** — the wrapped-line case check 6 deliberately
+avoids (it fixes `COLS=120` so URLs don't wrap). Runs at a narrow `COLS=50` where the seeded Description
+line (`Parent ticket: https://app.clickup.com/t/86a1b2c3d …`) word-wraps so the task URL lands on a
+continuation row, then asserts the underline covers **exactly** the URL cells and never the trailing
+prose. Terminal.Gui 2.4.10's word wrap keeps a wrapped row's graphemes but rebuilds its attributes from
+source index 0, so the pre-#413 underline was painted `len("Parent ticket: ")` columns too far right;
+the app now recomputes link cells per rendered row from the row's own graphemes. This is the **only**
+check that exercises the true wrapped-render draw path (the unit tests cover the pure helper on
+unwrapped lines), so run it whenever the detail-pane link styling or wrapping changes:
+
+```bash
+E2E_TASKS=20 timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/link_wrap_check.py $DLL
+```
+
+Self-contained (fixed `COLS=50`). Expected: `ok — wrapped task URL underlined exactly (no shift into
+trailing prose), COLS=50`. Fails on the pre-#413 code (underline shifted right off the URL).
+
 **7. Task Detail tab-boundary crash guard** — Terminal.Gui 2.4.10's stock `Tabs` control crashes
 (`InvalidOperationException: FocusChanging was not cancelled …` in `Tabs.SelectNextTab`/
 `SelectPreviousTab`) when a bare arrow drives tab navigation past the first/last tab; the app disables
@@ -137,7 +154,68 @@ Self-contained (sets `E2E_TREE=1` itself). Expected: `ok — survived bare arrow
 boundaries; ↑ on the Task Tree tab stays on the tab`. Reproduces the crash on the stock control (revert
 `NavSafeTabs`→`Tabs` to confirm) and passes on the fix.
 
-**8. Task Tree tab in single-task launch mode (#374)** — boots `SingleTaskApp` straight into `t0`
+**8. Link click activation (#318)** — drives real SGR mouse clicks at the same two seeded links and
+checks where each gesture goes: `Ctrl`+click a **task** link → the browser; plain click a **web** link
+→ the browser; plain click the **task** link → that task's Task Detail, stacked in-app (proven by the
+extra `Esc` it then takes to reach the list); a click while the comment composer is open → nothing.
+Ordinary clicks (prose, empty space right of a line, below the body) stay inert:
+
+```bash
+timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/link_click_check.py $DLL
+```
+
+Self-contained (sets its own `E2E_BROWSER_LOG`, so browser launches are asserted from the recorder
+file rather than guessed from the screen). Expected: `ok — Ctrl+click → browser, web click → browser,
+task click → stacked detail, click under an open composer → inert`. Ctrl is the `+16` modifier bit on
+the SGR button code (`ESC[<16;x;yM`).
+
+**9. Link keyboard focus traversal + activation (#319)** — the keyboard counterpart of check 8. Drives
+`Tab`/`Shift+Tab` (Tab = `0x09`, Shift+Tab = `ESC[Z`) to move a focus highlight across the same two
+seeded links and `Enter` to activate the focused one, asserting `Enter` reaches the same destinations a
+click does: an unfocused `Enter` is inert; `Tab` highlights the Description **task** link (a pyte
+cell-attribute change) and `Enter` opens its Task Detail stacked in-app (proven by the extra `Esc` to
+reach the list); `Shift+Tab` highlights the Comments **web** link and `Enter` opens the browser:
+
+```bash
+timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/link_tab_check.py $DLL
+```
+
+Self-contained (sets its own `E2E_BROWSER_LOG`). Expected: `ok — unfocused Enter inert; Tab highlights +
+Enter opens the task link's detail (stacked); Shift+Tab highlights + Enter opens the web link in the
+browser`.
+
+**10. OSC-8 terminal hyperlinks (#380)** — opens Task Detail and asserts that the two links #317 seeds
+(the task link on the Description, the web link on the Comments tab) are each wrapped in an OSC-8
+hyperlink escape (`ESC ] 8 ; ; <url> ST … ESC ] 8 ; ; ST`) targeting their own URL. This is the **one
+check that asserts on raw bytes** (see the pitfall below): OSC-8 is a hyperlink escape a VT emulator
+consumes, so it never appears on the pyte screen — pyte is driven only to boot/navigate:
+
+```bash
+timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/osc8_link_check.py $DLL
+```
+
+Self-contained (fixed COLS=120 so the seeded URLs don't wrap — a wrapped link is out of #380's scope,
+tracked with the wrapped-line rendering work, #413). Expected: `ok — task link (Description) and web link
+(Comments) each wrapped in a bounded OSC-8 hyperlink`. Invisible to the text-only `detail_check.py` A/B
+and to `link_check.py`'s pyte styling assertions, which both stay green.
+
+**11. Threaded comments render nested (#329)** — opens Task Detail, cycles to the Comments tab, and
+asserts on the pyte screen that a comment's reply thread renders **indented** under its parent, not
+flat. Two legs: with `E2E_THREADS=1` the fake backend marks comment `c2` with a two-reply thread and
+serves `GET /comment/c2/reply`, so the real `CommentThreadLoader` fetches the replies and the
+formatter indents them (asserts an indented reply-marker line `^\s+↳` — measured after stripping the
+pane's box-drawing border — plus both reply bodies, with the parent at the pane's left margin); the
+control leg (no `E2E_THREADS`) asserts the marker and reply bodies are absent, proving the nesting is
+driven by loaded thread data:
+
+```bash
+timeout 150 python3 -u tests/ClickUpTodo.Tui.E2E/thread_check.py $DLL
+```
+
+Self-contained (drives both legs, sets its own env). Expected: `ok — threaded leg nests N indented
+reply line(s) … control leg has no marker and no replies`.
+
+**12. Task Tree tab in single-task launch mode (#374)** — boots `SingleTaskApp` straight into `t0`
 (`E2E_SINGLE_TASK=t0` + `E2E_TREE=1`, i.e. `clickup-todo --task t0`), cycles to the Task Tree tab, and
 asserts the wiring single-task mode gained: the tab is present and renders the ancestry + task +
 descendants; F6 cycles the badge display through all three modes (dashboard parity, #415); activating a
@@ -160,10 +238,13 @@ real keyboard activation path.
   asks the terminal for size (`ESC[18t`) and cursor position (`ESC[6n`); the scripts'
   `answer_queries()` replies on every read. A dumb pipe that never answers = permanently
   blank app.
-- **Assert on the pyte screen, never on raw output bytes.** With diffed flushing, text
-  reaches the terminal as fragments interleaved with cursor moves — `b"Task 1"` may never
-  appear contiguously in the byte stream even though the screen is perfect. Raw bytes are
-  only valid for *volume* metrics.
+- **Assert on the pyte screen, never on raw output bytes — with two exceptions.** With
+  diffed flushing, text reaches the terminal as fragments interleaved with cursor moves —
+  `b"Task 1"` may never appear contiguously in the byte stream even though the screen is
+  perfect. Raw bytes are valid only for (a) *volume* metrics and (b) *escape*-sequence
+  checks for things a VT emulator consumes rather than renders, so they never reach the
+  pyte screen at all — e.g. OSC-8 hyperlinks (check 10). Even then, accumulate the whole
+  stream and search it; an escape wrapping one repainted run is contiguous within that run.
 - **"First output byte" is not latency.** The app emits idle chatter every 40 ms
   iteration (cursor hide/home, periodic size query). Measure to a chunk containing row
   content; subtract the idle-window byte count from volume numbers.

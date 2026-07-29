@@ -14,7 +14,7 @@ using Terminal.Gui.Views;
 namespace ClickUpTodo.Tui.Screens;
 
 /// <summary>The result of editing settings, or null when the user cancels.</summary>
-public sealed record SettingsResult(int RefreshSeconds, int FeedRefreshSeconds, int FeedActivityLookbackDays, string DefaultWorkingDirectory, string WorkspaceSubdomain, AgentDispatchSettings AgentDispatch, DetailViewSettings DetailView);
+public sealed record SettingsResult(int RefreshSeconds, int FeedRefreshSeconds, int FeedActivityLookbackDays, string DefaultWorkingDirectory, string WorkspaceSubdomain, AgentDispatchSettings AgentDispatch, DetailViewSettings DetailView, bool ConfirmOnExit);
 
 /// <summary>
 /// Carries a prompt-template edit request from the settings screen to the host (#100): the current
@@ -63,7 +63,7 @@ public sealed class SettingsScreen : Screen
     /// </summary>
     public event EventHandler<PromptTemplateEditRequest>? EditPromptTemplateRequested;
 
-    public SettingsScreen(int refreshSeconds, int feedRefreshSeconds, int feedActivityLookbackDays, string defaultWorkingDirectory, string workspaceSubdomain, AgentDispatchSettings dispatch, DetailViewSettings detailView)
+    public SettingsScreen(int refreshSeconds, int feedRefreshSeconds, int feedActivityLookbackDays, string defaultWorkingDirectory, string workspaceSubdomain, AgentDispatchSettings dispatch, DetailViewSettings detailView, bool confirmOnExit)
     {
         Title = "Settings";
         _promptTemplate = dispatch.PromptTemplate;
@@ -168,6 +168,18 @@ public sealed class SettingsScreen : Screen
             autoScrollButton.Text = AutoScrollText(autoScroll);
         };
 
+        // ── General (#407): opt out of the exit-confirmation modal ──────────────
+        // A cycle toggle mirroring the Dispatch section's On/Off buttons. On by default; Off restores the
+        // pre-#299 one-key quit. Both hosts' RequestExit read the persisted value live.
+        var generalHeader = new Label { X = 1, Y = 13, Text = "─ General ─" };
+        var confirmExit = confirmOnExit;
+        var confirmOnExitButton = new Button { X = 1, Y = 14, Text = ConfirmOnExitText(confirmExit) };
+        confirmOnExitButton.Accepting += (_, _) =>
+        {
+            confirmExit = !confirmExit;
+            confirmOnExitButton.Text = ConfirmOnExitText(confirmExit);
+        };
+
         // ── Right column: Dispatch (#27, consolidated in #101) ──────────────────
         var rightX = Pos.Percent(50) + 1;
         var dispatchHeader = new Label { X = rightX, Y = 0, Text = "─ Dispatch ─" };
@@ -203,6 +215,12 @@ public sealed class SettingsScreen : Screen
         var templateButton = new Button { X = rightX, Y = 12, Text = "Edit prompt template…" };
         templateButton.Accepting += (_, _) =>
             EditPromptTemplateRequested?.Invoke(this, new PromptTemplateEditRequest(_promptTemplate, t => _promptTemplate = t));
+
+        // Custom terminal launch command (#385): a user-specified emulator/wrapper tried ahead of the
+        // auto-detected chain (covers an emulator not in the probe list, or a macOS/Linux preference).
+        // `{}` marks where the launched command is spliced in (appended if omitted). Blank = auto-detect.
+        var customTermLabel = new Label { X = rightX, Y = 13, Text = "Custom terminal cmd ({} = command):" };
+        var customTermField = new TextField { X = rightX, Y = 14, Width = Dim.Fill(2), Text = dispatch.CustomTerminalCommand };
 
         // Dispatch-pane defaults (#101): the per-dispatch toggles #94/#97 add to the pane initialize
         // from these. Cycle buttons mirror the terminal/working-dir buttons above.
@@ -245,6 +263,7 @@ public sealed class SettingsScreen : Screen
                 new AgentDispatchSettings
                 {
                     PreferredTerminal = terminal,
+                    CustomTerminalCommand = customTermField.Text?.Trim() ?? "",
                     ClaudeExecutable = string.IsNullOrWhiteSpace(exeField.Text) ? "claude" : exeField.Text!.Trim(),
                     ExtraArgs = SettingsForm.ParseExtraArgs(argsField.Text),
                     WorkingDirectory = workingDir,
@@ -259,7 +278,8 @@ public sealed class SettingsScreen : Screen
                     DefaultTab = defaultTab,
                     StreamSort = activityOrder,
                     AutoScroll = autoScroll,
-                });
+                },
+                confirmExit);
             Close();
         };
         cancel.Accepting += (_, _) => Close();
@@ -286,8 +306,9 @@ public sealed class SettingsScreen : Screen
             workingDirLabel, workingDirField, workingDirNote,
             subdomainLabel, subdomainField,
             detailHeader, defaultTabButton, activityOrderButton, autoScrollButton,
+            generalHeader, confirmOnExitButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
-            fixedDirLabel, fixedDirField, templateButton,
+            fixedDirLabel, fixedDirField, templateButton, customTermLabel, customTermField,
             sessionModeButton, postToCommentsButton, launchLocationButton,
             save, cancel,
         ]);
@@ -320,6 +341,8 @@ public sealed class SettingsScreen : Screen
     };
 
     private static string PostToCommentsText(bool on) => "Default post to Comments: " + (on ? "On" : "Off");
+
+    private static string ConfirmOnExitText(bool on) => "Confirm on exit: " + (on ? "On" : "Off");
 
     private static string LaunchLocationText(LaunchLocation l) => "Launch: " + l switch
     {

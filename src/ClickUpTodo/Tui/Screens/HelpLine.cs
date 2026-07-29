@@ -206,9 +206,11 @@ public static class HelpItemSets
         new("Esc", "back"),
     ];
 
-    /// <summary>The task detail view when the Task Tree tab is present (#291): identical to
-    /// <see cref="Detail"/> plus the tab's F6 badge-display cycle (#415), which mirrors the main list's F6.
-    /// Single-task launch mode has no tree tab and keeps the F6-less <see cref="Detail"/> set.</summary>
+    /// <summary>The task detail view when the Task Tree tab is present (#291) — i.e. the dashboard-hosted
+    /// detail: <see cref="Detail"/> plus the tab's F6 badge-display cycle (#415, mirroring the main list's
+    /// F6) and the Ctrl+Enter "open this task in a new terminal tab" gesture (#384, the detail counterpart
+    /// of the list's #301 gesture). Single-task launch mode has no tree tab and keeps the leaner
+    /// <see cref="Detail"/> set, which carries neither.</summary>
     public static readonly IReadOnlyList<HelpItem> DetailWithTaskTree =
     [
         new("Ctrl+←/→", "switch tab", IsAction: false),
@@ -220,6 +222,7 @@ public static class HelpItemSets
         new("Ctrl+B", "🌐"),
         new("Ctrl+U", "quick update"),
         new("Ctrl+O", "🗁 by ID"),
+        new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
         new("F5", "↻"),
         new("F6", "badges"),
         new("F1", "ℹ"),
@@ -236,6 +239,32 @@ public static class HelpItemSets
         new("F1", "ℹ"),
         new("Esc", "cancel"),
     ];
+
+    /// <summary>The Task Detail comment composer overlay (Ctrl+N, #216): a multi-line editor whose own
+    /// keys are Ctrl+Enter (or Tab→Post) to post and Esc to cancel; F1 opens Help even while composing
+    /// (<c>OnCommentKey</c>). Mirrors <see cref="DetailDescriptionEditor"/> so the footer advertises only
+    /// what the composer actually does — otherwise the full command footer stays up and a click on an
+    /// inert hint re-raises its chord into the composer (#436).</summary>
+    public static readonly IReadOnlyList<HelpItem> DetailCommentComposer =
+    [
+        new("Tab", "editor/Post/Cancel"),
+        new("Ctrl+Enter", "post"),
+        new("F1", "ℹ"),
+        new("Esc", "cancel"),
+    ];
+
+    /// <summary>Picks the Task Detail footer set for the current overlay state (#436). Pure so the
+    /// branch order is unit-testable — the <see cref="TaskDetailScreen.HelpItems"/> property that calls
+    /// it lives on a Terminal.Gui view and can't run in CI. The comment composer and description editor
+    /// overlays are mutually exclusive; the composer is checked first. When neither overlay is open the
+    /// set depends on whether the Task Tree tab is present (its F6 badge cycle, #415): present →
+    /// <see cref="DetailWithTaskTree"/>, absent (e.g. single-task launch mode) → <see cref="Detail"/>.</summary>
+    public static IReadOnlyList<HelpItem> DetailFooter(
+        bool commentComposerVisible, bool descriptionEditorVisible, bool hasTaskTree) =>
+        commentComposerVisible ? DetailCommentComposer
+        : descriptionEditorVisible ? DetailDescriptionEditor
+        : hasTaskTree ? DetailWithTaskTree
+        : Detail;
 
     /// <summary>The settings screen (F2).</summary>
     public static readonly IReadOnlyList<HelpItem> Settings =

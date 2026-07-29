@@ -62,6 +62,28 @@ public sealed class HelpLineTests
         Assert.True(item.IsAction);
     }
 
+    // #384 — the detail view's Ctrl+Enter opens the current task in its own terminal tab, the detail
+    // counterpart of the main list's #301 gesture. It rides the same glyph key `Ctrl+↩` re-raising the
+    // parseable `Ctrl+Enter` chord when the footer item is clicked (#289), and — like the list — uses the
+    // same key as the list so the two surfaces stay consistent.
+    [Fact]
+    public void DetailWithTaskTree_CarriesCtrlEnterNewTab_ReRaisingCtrlEnter()
+    {
+        var item = HelpItemSets.DetailWithTaskTree.Single(i => i.Label == "new tab");
+        Assert.Equal("Ctrl+↩", item.Key);
+        Assert.Equal("Ctrl+Enter", item.ActionKey);
+        Assert.True(item.IsAction);
+        // Same key as the list's new-tab gesture, so the shortcut doesn't drift across surfaces.
+        Assert.Equal(HelpItemSets.MainList.Single(i => i.Label == "new tab").ActionKey, item.ActionKey);
+    }
+
+    // The gesture is scoped to the dashboard-hosted detail (the one with the Task Tree tab). Single-task
+    // launch mode uses the leaner Detail set and neither advertises nor fires it — so a single-task tab
+    // never offers "open another tab of myself".
+    [Fact]
+    public void Detail_SingleTaskMode_DoesNotCarryNewTab()
+        => Assert.DoesNotContain(HelpItemSets.Detail, i => i.Label == "new tab");
+
     // #290 — the "quick update" action must use one shortcut everywhere. It launches Quick Updates from
     // both the main list and Task Detail, so both help sets must advertise the same key (Ctrl+U).
     [Fact]
@@ -99,6 +121,50 @@ public sealed class HelpLineTests
         Assert.Equal(listItem.Key, treeItem.Key);
         Assert.DoesNotContain(HelpItemSets.Detail, i => i.Key == "F6");
     }
+
+    // #436 — while an overlay editor (comment composer Ctrl+N / description editor Ctrl+E) is open the
+    // footer must show only that overlay's keys. Otherwise the full command footer stays up and, since
+    // footer hints are clickable, a click re-raises an inert chord into the composer (e.g. Ctrl+Enter →
+    // Post). DetailFooter is the pure selector the (view-bound, CI-untestable) HelpItems property calls.
+    [Fact]
+    public void DetailFooter_CommentComposerOpen_ShowsComposerKeys()
+        => Assert.Same(
+            HelpItemSets.DetailCommentComposer,
+            HelpItemSets.DetailFooter(commentComposerVisible: true, descriptionEditorVisible: false, hasTaskTree: true));
+
+    [Fact]
+    public void DetailFooter_DescriptionEditorOpen_ShowsEditorKeys()
+        => Assert.Same(
+            HelpItemSets.DetailDescriptionEditor,
+            HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: true, hasTaskTree: true));
+
+    // The composer branch wins if both flags are somehow set — the overlays are mutually exclusive, but
+    // the selector must be deterministic rather than depend on that invariant holding.
+    [Fact]
+    public void DetailFooter_ComposerTakesPrecedenceOverDescription()
+        => Assert.Same(
+            HelpItemSets.DetailCommentComposer,
+            HelpItemSets.DetailFooter(commentComposerVisible: true, descriptionEditorVisible: true, hasTaskTree: false));
+
+    [Fact]
+    public void DetailFooter_NoOverlay_WithTaskTree_ShowsTaskTreeSet()
+        => Assert.Same(
+            HelpItemSets.DetailWithTaskTree,
+            HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: false, hasTaskTree: true));
+
+    [Fact]
+    public void DetailFooter_NoOverlay_NoTaskTree_ShowsBaseDetailSet()
+        => Assert.Same(
+            HelpItemSets.Detail,
+            HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: false, hasTaskTree: false));
+
+    // The composer footer advertises only the composer's own keys (mirrors the description editor's set):
+    // Ctrl+Enter/Tab→Post, Esc cancel, F1 Help — matching the composer FrameView title and OnCommentKey.
+    [Fact]
+    public void Format_DetailCommentComposer_RendersComposerKeys()
+        => Assert.Equal(
+            "Tab editor/Post/Cancel · Ctrl+Enter post · F1 ℹ · Esc cancel",
+            HelpLine.Format(HelpItemSets.DetailCommentComposer));
 
     // #290 — refresh is standardized on F5 (icon ↻) across every screen that can refresh, so the footer
     // never drifts. (Ctrl+R remains an undisplayed alias in each handler.)
@@ -360,7 +426,7 @@ public sealed class HelpLineTests
         IReadOnlyList<HelpItem>[] sets =
         [
             HelpItemSets.MainList, HelpItemSets.Detail, HelpItemSets.DetailWithTaskTree,
-            HelpItemSets.DetailDescriptionEditor,
+            HelpItemSets.DetailDescriptionEditor, HelpItemSets.DetailCommentComposer,
             HelpItemSets.Settings, HelpItemSets.FilterSortGroup, HelpItemSets.QuickUpdates,
             HelpItemSets.QuickOpen, HelpItemSets.NewTask, HelpItemSets.PromptTemplateEditor,
             HelpItemSets.NotificationsFeed, HelpItemSets.AgentRun, HelpItemSets.Help,

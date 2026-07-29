@@ -34,8 +34,47 @@ public abstract class FileSecretBackend : ISecretBackend
     public bool TrySave(string secret)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-        File.WriteAllBytes(FilePath, Encode(Encoding.UTF8.GetBytes(secret)));
+        WriteOwnerOnly(FilePath, Encode(Encoding.UTF8.GetBytes(secret)));
         return true;
+    }
+
+    /// <summary>
+    /// Writes <paramref name="bytes"/> to <paramref name="path"/> so that, on POSIX, only the owning
+    /// user can read or write it (mode <c>0600</c>) — this hardens the disclosed plaintext fallback
+    /// (#382) against other local users, and is harmless defense-in-depth on the DPAPI-encrypted file.
+    /// The restrictive mode is applied <b>at creation</b> so there is never a moment where a fresh
+    /// <c>token.bin</c> is world-readable, and re-applied after the write so a file left behind by an
+    /// older build (created with the default umask) is tightened on the next save too. On Windows the
+    /// file inherits the user-profile directory's ACL and Unix modes don't apply, so it's a plain write.
+    /// </summary>
+    private static void WriteOwnerOnly(string path, byte[] bytes)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            File.WriteAllBytes(path, bytes);
+            return;
+        }
+
+        const UnixFileMode ownerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+        // Tighten a pre-existing file *before* writing the new secret into it: FileMode.Create truncates
+        // the existing inode without changing its mode, so a file left looser by an older build would
+        // otherwise hold the fresh token at that looser mode until the post-write chmod. UnixCreateMode
+        // only applies when the file is *created*, so it can't cover this case — do it explicitly first.
+        if (File.Exists(path))
+            File.SetUnixFileMode(path, ownerOnly);
+
+        var options = new FileStreamOptions
+        {
+            Mode = FileMode.Create,
+            Access = FileAccess.Write,
+            UnixCreateMode = ownerOnly, // a freshly created file is 0600 from the start — no world-readable window
+        };
+        using (var stream = new FileStream(path, options))
+            stream.Write(bytes);
+
+        // Belt-and-braces (e.g. the file appeared between the Exists check and the open).
+        File.SetUnixFileMode(path, ownerOnly);
     }
 
     public void Delete()

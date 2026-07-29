@@ -360,6 +360,34 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task CreateTaskComment_WithMention_MaterializesMention_OnRefetch()
+    {
+        // The G spike (#321) confirmed the comment-mention write shape from ClickUp's published example
+        // but not from a captured live request, flagging one doubt: does a bare { type:"tag", user:{id} }
+        // block (no `attributes`) really materialize a mention? This is that confirmation gate (#322).
+        // It self-mentions the authenticated user so no colleague is notified by the test.
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+        var me = await client.GetMeAsync();
+        // Unique marker text so the re-fetch can find exactly this comment; the mention self-tags `me`.
+        var marker = $"clickup-todo integration mention test {Guid.NewGuid():N}";
+
+        var created = await client.CreateTaskCommentAsync(
+            TaskId!,
+            [new CommentRun.Text(marker + " "), new CommentRun.Mention(me.Id)]);
+
+        Assert.False(string.IsNullOrWhiteSpace(created.Id));
+        Assert.Contains(me.Id, created.MentionedUserIds);
+        Assert.Equal(TaskId, created.TaskId);
+
+        // On read-back ClickUp echoes the persisted structured blocks, so the mapped comment's
+        // MentionedUserIds (#167) must contain the tagged id — proving the tag block materialized.
+        var comments = await client.GetTaskCommentsAsync(TaskId!);
+        Assert.Contains(comments, c => c.Id == created.Id && c.MentionedUserIds.Contains(me.Id));
+    }
+
+    [SkippableFact]
     public async Task GetThreadedComments_ReturnsReplies()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(CommentId),

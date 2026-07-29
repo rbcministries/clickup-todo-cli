@@ -19,10 +19,14 @@ namespace ClickUpTodo.Configuration;
 /// allocation and the upsert need not be a single joint transaction.
 /// </para>
 /// <para>
-/// Every write is wrapped so a LiteDB error (contention, full disk) is <b>swallowed</b>: a nudge rides
-/// on an already-succeeded user edit and must never surface as a failure, exactly as #293 established
-/// for the shared store. An in-process lock serialises this process's own emissions so the seq-table
-/// watermark trim and the count/TTL trims stay orderly.
+/// Every write is wrapped so a LiteDB error (contention, full disk) is ultimately <b>swallowed</b>: a
+/// nudge rides on an already-succeeded user edit and must never surface as a failure, exactly as #293
+/// established for the shared store. Because <see cref="ConnectionType.Shared"/> reopens the file per
+/// operation, a reopen can transiently fail under load (two tabs writing at once, a busy machine); to
+/// keep a transient blip from silently dropping a nudge (#410) the write is retried a few times
+/// (<see cref="WriteRetryPolicy"/>) before it gives up. The seq is allocated once and reused across
+/// retries, so a retried write neither collides nor leaves a gap. An in-process lock serialises this
+/// process's own emissions so the seq-table watermark trim and the count/TTL trims stay orderly.
 /// </para>
 /// This store does <b>not</b> own the <see cref="LiteDatabase"/> — it shares the connection
 /// <see cref="LiteDbStateStore"/> holds for the process lifetime and must not dispose it.
@@ -37,6 +41,7 @@ public sealed class LiteDbChangeMarkerStore : IChangeMarkerStore
     private readonly ILiteCollection<SeqDocument> _seq;
     private readonly ChangeMarkerOptions _options;
     private readonly TimeProvider _timeProvider;
+    private readonly WriteRetryPolicy _retry;
     private readonly object _gate = new();
 
     /// <inheritdoc/>
@@ -49,6 +54,16 @@ public sealed class LiteDbChangeMarkerStore : IChangeMarkerStore
     /// <param name="timeProvider">Clock for TTL aging. Defaults to <see cref="TimeProvider.System"/>.</param>
     public LiteDbChangeMarkerStore(
         LiteDatabase db, string instanceId, ChangeMarkerOptions? options = null, TimeProvider? timeProvider = null)
+        : this(db, instanceId, options, timeProvider, retryPolicy: null)
+    {
+    }
+
+    /// <summary>Test seam (#410): lets a unit test inject an instant/short-circuit retry policy so the
+    /// write's retry-and-reuse-seq behaviour is verifiable deterministically and without real back-off
+    /// sleeps.</summary>
+    internal LiteDbChangeMarkerStore(
+        LiteDatabase db, string instanceId, ChangeMarkerOptions? options, TimeProvider? timeProvider,
+        WriteRetryPolicy? retryPolicy)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
         if (string.IsNullOrEmpty(instanceId))
@@ -56,6 +71,7 @@ public sealed class LiteDbChangeMarkerStore : IChangeMarkerStore
         InstanceId = instanceId;
         _options = options ?? ChangeMarkerOptions.Default;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _retry = retryPolicy ?? new WriteRetryPolicy();
 
         _changes = _db.GetCollection<MarkerDocument>(ChangesCollection);
         _seq = _db.GetCollection<SeqDocument>(SeqCollection);
@@ -71,25 +87,33 @@ public sealed class LiteDbChangeMarkerStore : IChangeMarkerStore
 
         lock (_gate)
         {
-            try
+            // Allocate the seq once and reuse it across retries: the marker upsert is idempotent on
+            // (taskId, seq), so a retried write re-runs with the *same* seq and never burns a number
+            // (which would leave a gap). A seq is allocated only once the allocation itself succeeds
+            // (see AllocateSeq), so a failed-then-retried allocation doesn't skip either.
+            // The retry (incl. its short backoff) runs under _gate: the whole write must be serialised
+            // so the seq allocation, marker upsert, and trims stay ordered. The backoff only ever runs
+            // on a failing write and is bounded (tens of ms worst case), so briefly holding the gate is
+            // acceptable for a background nudge.
+            long? seq = null;
+            _retry.Run(() =>
             {
-                var seq = AllocateSeq();
+                seq ??= AllocateSeq();
                 var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
                 _changes.Upsert(new MarkerDocument
                 {
                     TaskId = taskId,
-                    Seq = seq,
+                    Seq = seq.Value,
                     ServerDateUpdatedMs = serverDateUpdatedMs,
                     ChangedFields = changedFields is { Count: > 0 } ? [.. changedFields] : [],
                     InstanceId = InstanceId,
                     RecordedUtcMs = nowMs,
                 });
                 Trim(nowMs);
-            }
-            catch
-            {
-                // Best-effort: a nudge that can't persist must never break the already-succeeded edit.
-            }
+            });
+            // If every attempt threw, the nudge is dropped — best-effort, exactly as before: a nudge
+            // that can't persist must never break the already-succeeded edit it rides on. The retry
+            // just means a transient Shared-mode contention blip no longer drops it on the first try.
         }
     }
 
@@ -104,7 +128,11 @@ public sealed class LiteDbChangeMarkerStore : IChangeMarkerStore
         var id = _seq.Insert(new SeqDocument()).AsInt64;
         // Keep only the just-allocated watermark row; older rows are dead weight. Never deletes the max,
         // so the next auto-id is always id+1 (a full-empty collection could reset the sequence).
-        _seq.DeleteMany(x => x.Id < id);
+        // Best-effort: the id is already allocated, so a trim failure must not surface as an allocation
+        // failure — otherwise the write's retry (#410) would re-allocate and burn this id, leaving a gap.
+        // Stale rows are harmless (the max survives, so auto-increment keeps climbing).
+        try { _seq.DeleteMany(x => x.Id < id); }
+        catch { /* best-effort watermark trim */ }
         return id;
     }
 

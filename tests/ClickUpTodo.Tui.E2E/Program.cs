@@ -154,6 +154,14 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
     //  • E2E_STALL_CLOSED_MS=<ms> — delay the *authoritative* include_closed=true team-task refresh by
     //    this many ms once armed (see ArmClosedStall), so the F12→All pre-refresh bridge frame is
     //    deterministically observable before the superset lands.
+    // #395 opt-in: serve a small set of fillable Custom Field definitions from GET /list/{id}/field so the
+    // New Task screen's custom-field page renders and the required-block + drop-down paths are assertable.
+    // Off by default, so every existing check sees the empty field set (Save creates directly, as before).
+    private static bool CustomFields => Environment.GetEnvironmentVariable("E2E_CUSTOM_FIELDS") == "1";
+
+    private const string CustomFieldsJson =
+        """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false},{"id":"cf_estimate","name":"Estimate","type":"number","required":true},{"id":"cf_stage","name":"Stage","type":"drop_down","required":false,"type_config":{"options":[{"id":"opt_alpha","name":"Alpha","orderindex":0},{"id":"opt_beta","name":"Beta","orderindex":1}]}}]}""";
+
     private static bool WarmClosed => Environment.GetEnvironmentVariable("E2E_WARM_CLOSED") == "1";
     private static readonly int ClosedStallMs =
         int.TryParse(Environment.GetEnvironmentVariable("E2E_STALL_CLOSED_MS"), out var ms) ? ms : 0;
@@ -227,6 +235,12 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
             body = """{"id":9014000000001,"hist_id":"h1","date":1751500000000}""";
         else if (path.Contains("/task/") && path.EndsWith("/comment"))
             body = CommentsJson(TaskIdOfComment(path));
+        // GET /comment/{comment_id}/reply (#329, threaded comments C): a comment's reply thread. Only the
+        // seeded thread parent (c2) returns replies, and only under E2E_THREADS — so every other scenario,
+        // which sees reply_count=0 on all comments, never reaches this branch. Same CommentsResponse wire
+        // shape as the flat comment list, which GetThreadedCommentsAsync reads.
+        else if (request.Method == HttpMethod.Get && path.Contains("/comment/") && path.EndsWith("/reply"))
+            body = RepliesJson(CommentIdOfReply(path));
         else if (path.Contains("/task/") && request.Method == HttpMethod.Put)
         {
             // Status/priority PUTs carry no assignees (the set is untouched); an assignee add/remove
@@ -285,11 +299,26 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
             body = _foreign ? ForeignTeamTasks() : TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
         }
         else if (request.Method == HttpMethod.Post && path.Contains("/list/") && path.EndsWith("/task"))
+        {
             // Create-task (#209/#213): echo a created task so the New Task screen's Save round-trips
             // through the facade and closes back to the list. (Not persisted into the team-tasks list.)
+            // #395: when E2E_CAPTURE_FILE is set, write the outgoing request body to that file so a check
+            // can assert the custom_fields array actually reached the POST (a regression that dropped it
+            // would leave the file without the values). Off by default, so no other check is affected.
+            if (request.Content is not null
+                && Environment.GetEnvironmentVariable("E2E_CAPTURE_FILE") is { Length: > 0 } capturePath)
+            {
+                var requestBody = await request.Content.ReadAsStringAsync(ct);
+                try { File.WriteAllText(capturePath, requestBody); } catch { /* best-effort capture */ }
+            }
             body = """{"id":"tnew","name":"New task from Ctrl+N","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/tnew"}""";
+        }
         else if (path.Contains("/list/") && path.EndsWith("/task"))
             body = """{"tasks":[],"last_page":true}""";
+        else if (path.Contains("/list/") && path.EndsWith("/field"))
+            // Custom Field definitions (#249/#395): the seeded fillable set under E2E_CUSTOM_FIELDS, else
+            // an empty set (so the New Task screen creates directly, as every other check expects).
+            body = CustomFields ? CustomFieldsJson : """{"fields":[]}""";
         else if (path.Contains("/list/"))
             body = ListJson(path);
         else if (path.EndsWith("/team"))
@@ -321,6 +350,29 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
     {
         var trimmed = path.EndsWith("/comment") ? path[..^"/comment".Length] : path;
         return trimmed[(trimmed.LastIndexOf('/') + 1)..];
+    }
+
+    /// <summary>The comment id from a <c>/v2/comment/{id}/reply</c> path.</summary>
+    private static string CommentIdOfReply(string path)
+    {
+        var trimmed = path.EndsWith("/reply") ? path[..^"/reply".Length] : path;
+        return trimmed[(trimmed.LastIndexOf('/') + 1)..];
+    }
+
+    /// <summary>The reply thread for a comment (#329): two replies for the seeded thread parent (c2),
+    /// empty for any other comment. A <c>CommentsResponse</c>-shaped payload, exactly like the flat comment
+    /// list, so <c>GetThreadedCommentsAsync</c> maps it the same way.</summary>
+    private static string RepliesJson(string commentId)
+    {
+        if (commentId != "c2")
+            return JsonSerializer.Serialize(new { comments = Array.Empty<object>() });
+
+        var replies = new[]
+        {
+            new { id = "c2r1", comment_text = "Reply one: thanks — taking a look now.", user = new { username = "Alex Kim" }, date = "1751481000000", resolved = false },
+            new { id = "c2r2", comment_text = "Reply two: confirmed fixed ✅", user = new { username = "Ben Seymour" }, date = "1751482000000", resolved = false },
+        };
+        return JsonSerializer.Serialize(new { comments = replies });
     }
 
     private static string TasksJson(int page, int total, bool includeClosed)
@@ -610,6 +662,12 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
                 },
             });
 
+        // Threaded comments (#329): under E2E_THREADS, the middle comment (c2) reports a two-reply thread,
+        // so the real CommentThreadLoader fetches its replies from the /comment/c2/reply route (RepliesJson)
+        // and the detail view renders them nested. Off by default (reply_count "0"), so every existing
+        // scenario sees the same flat three comments as before.
+        var threads = Environment.GetEnvironmentVariable("E2E_THREADS") == "1";
+
         // 🛠️ is U+1F6E0 + U+FE0F (variation selector): ambiguous-width emoji presentation —
         // the worst case for column-model vs terminal disagreement (field-reported trigger).
         var text = "🛠️ Session summary — implementation (“ship now” approach)\n\n" +
@@ -620,7 +678,7 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
         var comments = new List<object>
         {
             new { id = "c1", comment_text = text, user = new { username = "Ben Seymour" }, date = "1751476320000", resolved = false },
-            new { id = "c2", comment_text = "Follow-up: verified against the staging account — looks good ✅", user = new { username = "Ben Seymour" }, date = "1751480000000", resolved = false },
+            new { id = "c2", comment_text = "Follow-up: verified against the staging account — looks good ✅", user = new { username = "Ben Seymour" }, date = "1751480000000", resolved = false, reply_count = threads ? "2" : "0" },
             // Mentions the signed-in user (username "bench", see the /user response), so the feed
             // (#114) can be validated end-to-end: this row gets the mention chip and is the only one
             // the F3 mentions-only filter keeps. Newest date so it sorts to the top of the feed.

@@ -43,6 +43,17 @@ public sealed class AgentDispatchSettings
     public PreferredTerminal PreferredTerminal { get; set; } = PreferredTerminal.Auto;
 
     /// <summary>
+    /// A user-specified terminal launch command / template (#385) for launching an emulator not in the
+    /// auto-detection matrix, or to prefer a specific emulator on macOS/Linux (where
+    /// <see cref="PreferredTerminal"/> doesn't apply). A shell-style command line where a
+    /// <c>{}</c> placeholder marks where the launched command is spliced in (appended if omitted) —
+    /// e.g. <c>alacritty -e {}</c>, <c>kitty {}</c>, <c>wezterm start -- {}</c>. When set and its
+    /// executable is on PATH it is tried first, ahead of the built-in chain; blank ⇒ auto-detection
+    /// only. Absent in an old config ⇒ blank.
+    /// </summary>
+    public string CustomTerminalCommand { get; set; } = "";
+
+    /// <summary>
     /// Where an interactive dispatch opens its session (#255): a new window (default, today's
     /// behavior) or a new tab of the current terminal where the host supports it. Absent in an old
     /// config ⇒ <see cref="LaunchLocation.NewWindow"/>.
@@ -98,6 +109,7 @@ public sealed class AgentDispatchSettings
     /// <summary>True when nothing has been customised, so all launcher/composer defaults apply.</summary>
     public bool IsDefault =>
         PreferredTerminal == PreferredTerminal.Auto
+        && string.IsNullOrWhiteSpace(CustomTerminalCommand)
         && LaunchLocation == LaunchLocation.NewWindow
         && (string.IsNullOrWhiteSpace(ClaudeExecutable) || ClaudeExecutable == "claude")
         && ExtraArgs.Count == 0
@@ -118,6 +130,7 @@ public sealed class AgentDispatchSettings
         // dialog's ParseExtraArgs cleans typed input (and the executable is coalesced above).
         ExtraArgs = [.. ExtraArgs.Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim())],
         Preferred = PreferredTerminal,
+        CustomTerminalCommand = TerminalCommandParser.Parse(CustomTerminalCommand),
         LaunchLocation = LaunchLocation,
     };
 

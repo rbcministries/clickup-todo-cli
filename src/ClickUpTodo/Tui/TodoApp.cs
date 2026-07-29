@@ -682,18 +682,32 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// Ctrl+Enter / Ctrl+Left-Click — open <paramref name="task"/> in its own terminal tab (#301):
-    /// resolves how to relaunch this app (<see cref="AppLaunchCommand.ForTask(string)"/>) and hands it to
-    /// the shared cross-platform launcher off the UI thread, preferring a new tab of the current terminal
-    /// (falling back to a new window per emulator support). On success the status line names the terminal;
-    /// when no emulator can be launched, it flashes the exact command and copies it to the clipboard so
-    /// the user can run it themselves (the issue's documented fallback). A null task (header/spacer row)
-    /// no-ops. Re-entrancy-guarded so a rapid second gesture can't spawn duplicate tabs.
+    /// The main list's Ctrl+Enter / Ctrl+Left-Click — open <paramref name="task"/> in its own terminal
+    /// tab (#301). A null task (header/spacer row) no-ops, and it only fires from the list itself (no
+    /// screen stacked over it); the actual launch is <see cref="LaunchAppTabForTask"/>, shared with Task
+    /// Detail's Ctrl+Enter (#384).
     /// </summary>
     private void LaunchTaskInNewTab(TaskItem? task)
     {
         if (task is null || ActiveScreen is not null)
             return;
+        LaunchAppTabForTask(task.Id, task.Name);
+    }
+
+    /// <summary>
+    /// The core new-terminal-tab launch shared by the main list's Ctrl+Enter / Ctrl+Left-Click gesture
+    /// (#301, via <see cref="LaunchTaskInNewTab"/>) and Task Detail's Ctrl+Enter (#384): resolves how to
+    /// relaunch this app (<see cref="AppLaunchCommand.ForTask(string)"/>) and hands it to the shared
+    /// cross-platform launcher off the UI thread, preferring a new tab of the current terminal (falling
+    /// back to a new window per emulator support). On success the status line names the terminal; when no
+    /// emulator can be launched it flashes the exact command and copies it to the clipboard so the user
+    /// can run it themselves (the documented fallback). Re-entrancy-guarded so a rapid second gesture
+    /// can't spawn duplicate tabs. Unlike the list wrapper it does <b>not</b> guard on
+    /// <see cref="ActiveScreen"/>: the detail path launches while the detail screen is front-most, exactly
+    /// as Quick Updates (Ctrl+U) stacks over the detail.
+    /// </summary>
+    private void LaunchAppTabForTask(string taskId, string name)
+    {
         if (_launchingTab)
         {
             Flash("A task tab is already opening…");
@@ -702,7 +716,7 @@ public sealed class TodoApp
 
         // Resolve the command before arming the re-entrancy guard: ForTask is pure and could in principle
         // throw (a blank id), and doing it first means such a throw can't leave _launchingTab stuck true.
-        var command = AppLaunchCommand.ForTask(task.Id);
+        var command = AppLaunchCommand.ForTask(taskId);
         // A new tab of the current terminal where the host supports it (#255's LaunchLocation), honouring
         // the user's preferred-terminal setting on Windows. ClaudeExecutable/ExtraArgs don't apply to an
         // app launch, so a purpose-built options value (not AgentDispatch.ToLauncherOptions) is used.
@@ -710,9 +724,9 @@ public sealed class TodoApp
         {
             LaunchLocation = LaunchLocation.NewTab,
             Preferred = _config.AgentDispatch.PreferredTerminal,
+            CustomTerminalCommand = TerminalCommandParser.Parse(_config.AgentDispatch.CustomTerminalCommand),
         };
         _launchingTab = true;
-        var name = task.Name;
         Flash($"Opening '{name}' in a new terminal tab…");
         _ = Task.Run(async () =>
         {
@@ -1167,7 +1181,7 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
-        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.WorkspaceSubdomain, _config.AgentDispatch, _config.DetailView);
+        var screen = new SettingsScreen(_config.RefreshSeconds, _config.FeedRefreshSeconds, _config.FeedActivityLookbackDays, _config.DefaultWorkingDirectory, _config.WorkspaceSubdomain, _config.AgentDispatch, _config.DetailView, _config.ConfirmOnExit);
 
         // Opening the prompt-template editor (#100) stacks it over the settings screen (like Help). On
         // save it folds the edited template back into the settings screen via the request's callback, so
@@ -1201,6 +1215,8 @@ public sealed class TodoApp
             _config.WorkspaceSubdomain = result.WorkspaceSubdomain;
             _config.AgentDispatch = result.AgentDispatch;
             _config.DetailView = result.DetailView;
+            // Read live by RequestExit (#407) on the next quit, so a saved change takes effect immediately.
+            _config.ConfirmOnExit = result.ConfirmOnExit;
             _configStore.Save(_config);
 
             // Rebuild the dispatcher so edited terminal / claude path / extra args apply without a
@@ -1261,7 +1277,8 @@ public sealed class TodoApp
             listTopFrequent: (n, exclude) => _lists.TopMostFrequent(n, exclude),
             primaryList: primaryList,
             createAsync: (targetListId, request, ct) => _tasks.CreateTaskAsync(targetListId, request, ct),
-            addToListAsync: (taskId, targetListId, ct) => _tasks.AddTaskToListAsync(taskId, targetListId, ct));
+            addToListAsync: (taskId, targetListId, ct) => _tasks.AddTaskToListAsync(taskId, targetListId, ct),
+            fetchListFieldsAsync: (targetListId, ct) => _tasks.GetListCustomFieldsAsync(targetListId, ct));
         screen.Created += (_, result) =>
         {
             // Land the next refresh on the new task, then kick that refresh directly (RequestRefresh's
@@ -1527,6 +1544,15 @@ public sealed class TodoApp
     {
         if (ActiveScreen is ExitConfirmScreen)
             return;
+
+        // #407: the confirmation is opt-out. When the user has turned it off in F2 Settings, quit is the
+        // pre-#299 one-key exit — read live so a saved change applies on the next quit with no rewiring.
+        // The re-entrancy guard stays above this so the branch can never fire while a modal is already up.
+        if (!_config.ConfirmOnExit)
+        {
+            Application.RequestStop();
+            return;
+        }
 
         var confirm = new ExitConfirmScreen();
         ShowScreen(confirm, () =>
@@ -1878,6 +1904,28 @@ public sealed class TodoApp
         LaunchBrowser(task?.Url, task?.Name);
     }
 
+    /// <summary>
+    /// Acts on a link the user clicked in a Task Detail pane (#318). A browser target goes through the
+    /// same <see cref="LaunchBrowser"/> path as Ctrl+B (so it gets the workspace-subdomain rewrite and the
+    /// launch-failure fallback), naming the URL itself in the status flash since a link has no task name.
+    /// An in-app target is handed to <see cref="ResolveAndOpen"/> — the quick-open resolver already opens a
+    /// <em>ClickUp task URL</em> cache-first and covers plain ids, custom ids and the URL's own team id
+    /// (#303/#353), so a custom-id link (<c>/t/{teamId}/{customId}</c>) needs no separate path here, and
+    /// its "couldn't resolve" flashes are the ones the user already knows.
+    /// </summary>
+    private void ActivateLink(LinkActivationRequest request)
+    {
+        switch (request.Action)
+        {
+            case LinkAction.OpenTaskDetail:
+                ResolveAndOpen(request.Url);
+                break;
+            default:
+                LaunchBrowser(request.Url, Ellipsize(request.Url));
+                break;
+        }
+    }
+
     /// <summary>Opens a task URL in the system browser, or flashes why it couldn't.</summary>
     private void LaunchBrowser(string? url, string? name)
     {
@@ -1997,6 +2045,15 @@ public sealed class TodoApp
                     // Ctrl+O quick-opens another task from within the detail (#353), stacked over it; the
                     // resolved Task Detail opens over this one, so Esc walks back through them.
                     screen.QuickOpenRequested += (_, _) => OpenQuickOpenFromScreen();
+                    // Ctrl+Enter opens this task in its own terminal tab (#384) — the detail counterpart
+                    // of the main list's #301 gesture, reusing the exact launcher + copy-command fallback.
+                    // The launch needs only the (fixed) resolved id; screen.Task.Name is the status-flash
+                    // label, read live so a mid-view refresh that renamed the task is reflected (mirrors
+                    // OpenQuickUpdatesForDetail reading the screen's current task).
+                    screen.OpenInNewTabRequested += (_, _) => LaunchAppTabForTask(resolvedId, screen.Task.Name);
+                    // Clicking a link in a text pane (#318): a task link opens in-app, anything else (and
+                    // any Ctrl+click) in the browser.
+                    screen.LinkActivationRequested += (_, request) => ActivateLink(request);
                     ShowScreen(screen, () =>
                     {
                         // Use the URL we already fetched rather than re-reading the (possibly
@@ -2162,16 +2219,22 @@ public sealed class TodoApp
     }
 
     /// <summary>
-    /// Off-thread single-task fetch for a nudged list row (#295): pull the task's detail and overlay its
-    /// status + priority onto the existing row in place — the same <see cref="UpdateTaskRow"/> reconcile
-    /// Quick Updates uses — on the UI thread. We overlay onto the live <c>_all</c> item (keeping its
-    /// ParentId / list / status-type and its <b>real</b> assignee ids) rather than the projected detail,
-    /// because a <see cref="TaskDetail"/> is lossy relative to a list item (assignees by name only, id 0;
-    /// no parent) — see <see cref="TaskItemProjection"/>. Status and priority are exactly what a cross-tab
-    /// Quick Update changes, so this reflects the common case without degrading the row; other cross-tab
-    /// field changes (assignee-by-id, name, due) continue to surface via the normal delta poll. Re-checks
+    /// Off-thread single-task fetch for a nudged list row (#295/#376): pull the task's <b>full</b>
+    /// <see cref="TaskItem"/> (<see cref="TaskService.GetTaskItemAsync"/>) and replace the existing row
+    /// <b>wholesale</b> — the full-fidelity reconcile (#376). Unlike the earlier lossy
+    /// <see cref="TaskDetail"/> overlay (status + priority only), a full item carries real assignee ids,
+    /// <c>ParentId</c>, <c>StatusType</c> and due date, so a cross-tab assignee / name / due-date change
+    /// (not just status/priority) reflects on the row immediately rather than waiting for the next delta
+    /// poll. The stale-fetch ordering is decided by the pure <see cref="NudgedRowReconciler"/>. Re-checks
     /// membership on the way back in (a background resync may have dropped the task), and swallows a fetch
     /// failure (the nudge rides on an already-succeeded edit).
+    /// <para>
+    /// For a task linked into multiple lists (#237), <c>GET /task/{id}</c> reports its <b>home</b> list, so
+    /// the wholesale replace adopts the home <c>ListId</c>/<c>ListName</c> rather than the queried-list
+    /// values the row was fetched under. In the rare case of viewing a non-home list, a group-by-list
+    /// placement could momentarily shift until the next authoritative delta poll (which re-maps from the
+    /// queried-list endpoint) self-heals it — an accepted, transient cost of the full-fidelity replace.
+    /// </para>
     /// </summary>
     private void RefreshNudgedRow(string taskId)
     {
@@ -2179,35 +2242,18 @@ public sealed class TodoApp
         {
             try
             {
-                var detail = await _tasks.GetTaskDetailAsync(taskId);
-                var fresh = TaskItemProjection.FromDetail(detail);
+                var fresh = await _tasks.GetTaskItemAsync(taskId);
                 Application.Invoke(() =>
                 {
                     var existing = _all.FirstOrDefault(t => t.Id == taskId)
                                    ?? _rows.FirstOrDefault(r => r?.Id == taskId);
                     if (existing is null)
                         return; // dropped by a background resync meanwhile — nothing to update.
-                    // Drop a stale out-of-order fetch: nudged rows are fire-and-forget and can overlap
-                    // across ticks (or race the delta poll), so an older in-flight fetch resolving last must
-                    // not clobber a newer version already on the row. When either side has no version we
-                    // can't order them — apply (best-effort). This is the row-path analogue of the detail
-                    // path's _refreshingDetail / Quick Updates' commit-generation guards.
-                    if (fresh.UpdatedMs is long fu && existing.UpdatedMs is long eu && fu < eu)
-                        return;
-                    var updated = existing with
-                    {
-                        StatusName = fresh.StatusName,
-                        StatusColor = fresh.StatusColor,
-                        PriorityLevel = fresh.PriorityLevel,
-                        PriorityName = fresh.PriorityName,
-                        PriorityColor = fresh.PriorityColor,
-                        // Carry the fresh activity stamp so the row's version reflects this reconcile (and a
-                        // later stale fetch is ordered out above). StatusType / ParentId / assignee-ids stay
-                        // from `existing` — a TaskDetail can't carry them (full-fidelity reconcile is #376);
-                        // they self-heal on the next authoritative delta poll.
-                        UpdatedMs = fresh.UpdatedMs ?? existing.UpdatedMs,
-                    };
-                    UpdateTaskRow(updated, sending: false);
+                    // The pure reconciler drops a stale out-of-order fetch (nudged rows are
+                    // fire-and-forget and can overlap across ticks or race the delta poll) and guards the
+                    // row's activity stamp from regressing to null. Non-null ⇒ apply wholesale.
+                    if (NudgedRowReconciler.Reconcile(existing, fresh) is { } updated)
+                        UpdateTaskRow(updated, sending: false, wholesale: true);
                 });
             }
             catch
@@ -2728,13 +2774,20 @@ public sealed class TodoApp
     /// scroll position stay put). Keeping <see cref="_all"/> and <see cref="_signature"/> in sync
     /// means the next periodic background refresh reconciles silently when the server agrees.
     /// </summary>
-    private void UpdateTaskRow(TaskItem updated, bool sending)
+    private void UpdateTaskRow(TaskItem updated, bool sending, bool wholesale = false)
     {
-        // Per-field sync (#158): the `updated` record always carries the current value for the fields a
-        // given caller didn't touch, so folding all three never clobbers — a status/priority commit
-        // re-applies the task's existing assignees (a no-op) and an assignee change re-applies its
-        // existing status/priority. This is the same pure reconcile the single-task target uses (#297).
-        _all = TaskService.ApplyFieldChanges(_all, updated);
+        // Two fold modes into the canonical snapshot:
+        //  • Per-field sync (#158, the default) — the `updated` record always carries the current value
+        //    for the fields a given caller didn't touch, so folding status/priority/assignees never
+        //    clobbers (a status/priority commit re-applies the task's existing assignees, a no-op, and an
+        //    assignee change re-applies its status/priority). The same pure reconcile the single-task
+        //    target uses (#297).
+        //  • Wholesale (#376, the cross-tab nudge path) — `updated` is an authoritative full TaskItem
+        //    freshly fetched for the task, so it replaces the snapshot row outright, carrying real
+        //    assignee ids / ParentId / due date a per-field fold would leave stale.
+        _all = wholesale
+            ? TaskService.ReplaceTaskItem(_all, updated)
+            : TaskService.ApplyFieldChanges(_all, updated);
         _signature = CurrentSignature(_all);
 
         var index = _rows.FindIndex(r => r?.Id == updated.Id);

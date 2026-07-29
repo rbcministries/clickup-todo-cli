@@ -154,7 +154,11 @@ try:
 
     # ── 3) Enter on a non-current row stacks its detail; a single Esc WALKS BACK to the launch task
     # Select CHILDTWO by clicking it (arrow-key selection isn't exercisable here — see the header),
-    # then Enter drives the keyboard activation path.
+    # then Enter drives the keyboard activation path. Discriminate on the tree-only rows
+    # (ANCESTOR / CHILDONE / GRANDKID) rather than the launch task's name: the #418 window title carries
+    # "Release task ROOT" in the border at all times, so the name can't tell "on the launch task" from
+    # "stacked over it". Those three tokens appear only on the launch task's Task Tree tab — never in the
+    # window title, and never in a child detail opened on its Stream tab.
     y = row_of("CHILDTWO")
     assert y >= 0, "CHILDTWO row not found to select:\n" + visible()
     click(12, y)
@@ -162,30 +166,33 @@ try:
     send(ENTER)          # open CHILDTWO's detail stacked over t0's
     pump(3.0)
     v = visible()
-    assert "CHILDTWO" in v, "Enter did not navigate to the child task in single-task mode:\n" + v
-    assert "GRANDKID" not in v, "expected the new detail on its Stream tab, not the tree:\n" + v
-    assert "Release task" not in v, "still showing the launch task we navigated from:\n" + v
+    assert "Subtask two CHILDTWO" in v, "Enter did not navigate to the child task in single-task mode:\n" + v
+    for token in ("ANCESTOR", "CHILDONE", "GRANDKID"):
+        assert token not in v, f"launch task's tree still visible ({token}) — did not stack over it / open on Stream:\n{v}"
 
     send(ESC)            # Back: walk one task back to the launch task (NOT a quit)
     pump(2.0)
     v = visible()
-    assert "Release task" in v, "Esc did not walk back to the launch task's detail:\n" + v
+    for token in ("ANCESTOR", "CHILDONE", "GRANDKID"):
+        assert token in v, f"Esc did not walk back to the launch task's Task Tree tab (missing {token}):\n{v}"
     assert proc.poll() is None, "Esc from a stacked child quit the single-task tab instead of walking back"
     assert "Are you sure you want to exit?" not in v, "Esc from a stacked child raised the exit prompt:\n" + v
 
     # ── 4) Double-clicking a tree row navigates the same way (stacked) ──────────────────────────
-    # We are back on the launch task's Task Tree tab; double-click CHILDONE.
+    # We are back on the launch task's Task Tree tab; double-click CHILDONE. CHILDONE's own child detail
+    # shows "Subtask one CHILDONE" in its frame, so discriminate "tree gone" on the other tree-only rows.
     y = row_of("CHILDONE")
     assert y >= 0, "CHILDONE row not found for double-click:\n" + visible()
     double_click(12, y)
     pump(3.0)
     v = visible()
-    assert "CHILDONE" in v, "double-click did not navigate to the child task:\n" + v
-    assert "GRANDKID" not in v, "double-click did not land on the new detail's Stream tab:\n" + v
-    assert "Release task" not in v, "double-click did not stack over the launch task:\n" + v
+    assert "Subtask one CHILDONE" in v, "double-click did not navigate to the child task:\n" + v
+    for token in ("ANCESTOR", "GRANDKID", "CHILDTWO"):
+        assert token not in v, f"double-click did not stack over the launch task / open on Stream ({token} visible):\n{v}"
     send(ESC)            # back to the launch task
     pump(2.0)
-    assert "Release task" in visible(), "Esc did not walk back to the launch task after double-click:\n" + visible()
+    for token in ("ANCESTOR", "CHILDONE", "GRANDKID"):
+        assert token in visible(), f"Esc did not walk back to the launch task's Task Tree tab (missing {token}):\n{visible()}"
 
     # ── 5) Esc at the launch-task ROOT asks to confirm the exit (#299), then Y quits ────────────
     send(ESC)

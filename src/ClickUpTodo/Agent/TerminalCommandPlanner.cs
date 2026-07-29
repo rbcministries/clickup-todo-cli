@@ -82,6 +82,55 @@ public static class TerminalCommandPlanner
     private static bool EnvPresent(Func<string, string?> getEnv, params string[] vars)
         => vars.Any(v => !string.IsNullOrWhiteSpace(getEnv(v)));
 
+    // ── User-configured custom launch command (#385) ────────────────────────────
+    //
+    // An explicit, user-configured emulator/wrapper, tried ahead of the built-in chain on every
+    // platform (the explicit-preference-first shape the Windows `Preferred` setting already uses,
+    // generalised). It carries no new-tab detection — the user encodes window-vs-tab in their own
+    // template (e.g. `gnome-terminal --tab -- {}`). Gated on the executable being present so an unset
+    // or unavailable command is a strict no-op and the normal chain runs unchanged.
+
+    /// <summary>
+    /// The custom launch candidate (#385) from <see cref="TerminalLauncherOptions.CustomTerminalCommand"/>,
+    /// or null when none is set or its executable isn't on PATH. <paramref name="hostArgs"/> is the OS
+    /// host invocation of the command to run (POSIX: <c>bash -lc &lt;inner&gt;</c>; Windows:
+    /// <c>&lt;host&gt; -NoExit -Command &lt;command&gt;</c>), spliced in at the <b>first</b> <c>{}</c>
+    /// placeholder token (any further <c>{}</c> are passed through literally), or appended when the
+    /// template has none.
+    /// </summary>
+    private static LaunchSpec? CustomLaunchSpec(
+        Func<string, bool> exists, TerminalLauncherOptions options, IReadOnlyList<string> hostArgs, string? cwd)
+    {
+        var template = options.CustomTerminalCommand;
+        if (template.Count == 0)
+            return null;
+
+        var exe = template[0];
+        if (string.IsNullOrWhiteSpace(exe) || !exists(exe))
+            return null;
+
+        var args = new List<string>();
+        var placed = false;
+        foreach (var token in template.Skip(1))
+        {
+            // Splice at the first placeholder only; a stray second `{}` (a malformed template) is a
+            // literal token rather than a second, argv-breaking splice.
+            if (token == TerminalCommandParser.Placeholder && !placed)
+            {
+                args.AddRange(hostArgs);
+                placed = true;
+            }
+            else
+            {
+                args.Add(token);
+            }
+        }
+        if (!placed)
+            args.AddRange(hostArgs);
+
+        return new LaunchSpec(exe, args, cwd, $"{exe} (configured)");
+    }
+
     // ── Windows: Windows Terminal → pwsh → powershell → cmd, all running the same pwsh command ──
     //
     // The first three launch the PowerShell host directly. The `cmd` last resort (#45) opens a new
@@ -119,6 +168,13 @@ public static class TerminalCommandPlanner
             : new[] { options.Preferred }.Concat(order.Where(t => t != options.Preferred));
 
         var specs = new List<LaunchSpec>();
+
+        // A user-configured custom command (#385) runs the pwsh payload inside its own emulator, so it
+        // needs a PowerShell host; skipped when neither pwsh nor powershell is present. Tried first.
+        if (PwshHost(exists) is { } customHost
+            && CustomLaunchSpec(exists, options, [customHost, "-NoExit", "-Command", command], cwd) is { } custom)
+            specs.Add(custom);
+
         foreach (var terminal in chain)
         {
             var spec = terminal switch
@@ -154,11 +210,17 @@ public static class TerminalCommandPlanner
     private static IReadOnlyList<LaunchSpec> PlanMacOS(
         Func<string, bool> exists, Func<string, string?> getEnv, string inner, string? cwd, TerminalLauncherOptions options, bool oneOff)
     {
-        if (!exists("osascript"))
-            return [];
-
         // <paramref name="inner"/> is the POSIX shell command to run — `cd …; 'claude' [-p] …
         // "$(cat '<file>')"` for a dispatch, or `'clickup-todo' '--task' '<id>'` for an app launch.
+        var specs = new List<LaunchSpec>();
+
+        // A user-configured custom emulator (#385) runs `bash -lc <inner>` directly — no osascript
+        // needed — so it's emitted first and even when Terminal.app scripting is unavailable.
+        if (CustomLaunchSpec(exists, options, ["bash", "-lc", inner], cwd) is { } custom)
+            specs.Add(custom);
+
+        if (!exists("osascript"))
+            return specs;
 
         // Terminal.app new-window path (the historical default) — `do script` only ever makes windows,
         // so it stays window-only and doubles as the fallback for the iTerm tab path below.
@@ -171,7 +233,7 @@ public static class TerminalCommandPlanner
         if (NewTabRequested(options, oneOff) && getEnv("TERM_PROGRAM") == "iTerm.app")
         {
             var escaped = AppleScriptEscape(inner);
-            var iTermSpec = new LaunchSpec(
+            specs.Add(new LaunchSpec(
                 "osascript",
                 [
                     "-e", "tell application \"iTerm\"",
@@ -182,11 +244,11 @@ public static class TerminalCommandPlanner
                     "-e", "end tell",
                 ],
                 cwd,
-                "iTerm2 (new tab)");
-            return [iTermSpec, windowSpec];
+                "iTerm2 (new tab)"));
         }
 
-        return [windowSpec];
+        specs.Add(windowSpec);
+        return specs;
     }
 
     // ── Linux: honor $TERMINAL, else probe common emulators ──
@@ -197,6 +259,11 @@ public static class TerminalCommandPlanner
         // <paramref name="inner"/> is the POSIX shell command run via `bash -lc` (or tmux) — built by
         // the caller (a `cd …; 'claude' …` dispatch, or an `'clickup-todo' '--task' '<id>'` app launch).
         var tab = NewTabRequested(options, oneOff);
+
+        // A user-configured custom emulator/wrapper (#385) is tried first, ahead of $TERMINAL, the probe
+        // list and tmux — an explicit preference beats auto-detection. It runs `bash -lc <inner>` like
+        // every other Linux candidate; the user encodes any tab flag in their own template.
+        var custom = CustomLaunchSpec(exists, options, ["bash", "-lc", inner], cwd);
 
         // Tab specs are collected separately and returned *ahead* of the window specs. The launcher
         // starts candidates in order and stops at the first that starts, and a valid emulator always
@@ -257,7 +324,7 @@ public static class TerminalCommandPlanner
                 windowSpecs.Add(tmuxSpec);
         }
 
-        return [.. tabSpecs, .. windowSpecs];
+        return custom is null ? [.. tabSpecs, .. windowSpecs] : [custom, .. tabSpecs, .. windowSpecs];
     }
 
     /// <summary>
