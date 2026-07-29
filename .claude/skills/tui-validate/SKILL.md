@@ -215,6 +215,23 @@ timeout 150 python3 -u tests/ClickUpTodo.Tui.E2E/thread_check.py $DLL
 Self-contained (drives both legs, sets its own env). Expected: `ok — threaded leg nests N indented
 reply line(s) … control leg has no marker and no replies`.
 
+**12. Task Tree tab in single-task launch mode (#374)** — boots `SingleTaskApp` straight into `t0`
+(`E2E_SINGLE_TASK=t0` + `E2E_TREE=1`, i.e. `clickup-todo --task t0`), cycles to the Task Tree tab, and
+asserts the wiring single-task mode gained: the tab is present and renders the ancestry + task +
+descendants; F6 cycles the badge display through all three modes (dashboard parity, #415); activating a
+non-current row (Enter after a click-select, and a double-click) **stacks** that task's detail so a
+single Esc walks back to the launch task; and Esc at the launch-task root hands off to the #299 exit
+confirmation (no main list to fall back to). Self-contained (sets its own env):
+
+```bash
+timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/single_task_tree_check.py $DLL
+```
+
+Expected: `ok`. Note: the Enter leg selects its row with a click rather than ↑/↓ — arrow-key selection
+inside the detail's Tabs-hosted ListView isn't exercisable under the headless PTY (the sibling
+`tree_tab_check.py` hits the same limit), so the row is selected deterministically and Enter drives the
+real keyboard activation path.
+
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 
 - **Answer the terminal's queries or nothing ever renders.** Terminal.Gui's ANSI driver
