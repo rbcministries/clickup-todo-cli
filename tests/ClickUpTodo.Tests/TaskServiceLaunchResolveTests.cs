@@ -145,6 +145,41 @@ public sealed class TaskServiceLaunchResolveTests
         Assert.Equal("ws1", client.LastTeamId);
     }
 
+    [Fact]
+    public async Task StaleSnapshotHit_PlainIdMatchedById_404_SurfacesWithoutDoubleFetch()
+    {
+        // A plain-id ref matched by Id: the cached and live ids are identical, so a 404 means the task is
+        // genuinely gone. Re-fetching the same id (and a custom-id lookup of a known-plain id) would be
+        // wasteful — the 404 surfaces after exactly one request, no fall-through.
+        var client = new FakeClient(byId: _ => throw NotFound());
+        var snapshot = new[] { Item("86plain") };
+
+        var ex = await Assert.ThrowsAsync<ClickUpApiException>(
+            () => Service(client).ResolveLaunchTaskAsync(QuickOpenRef.Task("86plain"), snapshot, "ws1"));
+
+        Assert.Equal(404, ex.StatusCode);
+        Assert.Equal(1, client.PlainCalls);
+        Assert.Equal(0, client.CustomCalls);
+    }
+
+    [Fact]
+    public async Task StaleSnapshotHit_HyphenlessCustomId_404_FallsBackToLive()
+    {
+        // A hyphenless custom id parses as a plain-id ref but matches the snapshot by CustomId, so the
+        // cached plain id differs from the ref. A stale cached plain id (404) is worth a live retry: the
+        // fallback re-tries the ORIGINAL token, 404s as a plain id, then resolves it as a custom id.
+        var client = new FakeClient(
+            byId: id => id == "realid" ? Task.FromResult(Detail("realid")) : throw NotFound(),
+            byCustomId: (_, _) => Task.FromResult(Detail("realid")));
+        var snapshot = new[] { Item("86stale", customId: "PROJ123") };
+
+        var detail = await Service(client).ResolveLaunchTaskAsync(QuickOpenRef.Task("PROJ123"), snapshot, "ws1");
+
+        Assert.Equal("realid", detail.Id);
+        Assert.Equal("PROJ123", client.LastCustomId);
+        Assert.Equal(1, client.CustomCalls);
+    }
+
     // ── Live resolution (snapshot miss) ─────────────────────────────────────────
 
     [Fact]

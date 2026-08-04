@@ -545,8 +545,10 @@ public sealed class TaskService(
     /// <list type="number">
     /// <item>a <b>snapshot</b> hit (<see cref="QuickOpenParser.FindInCache"/>) already knows the task's
     /// <b>plain</b> id, so it costs a single correct <c>GET /task/{id}</c> — no wrong-endpoint round-trip.
-    /// A <b>stale</b> mapping (task deleted / custom id reassigned) whose plain id 404s is <b>not fatal</b>:
-    /// it falls through to the live path below rather than failing the launch;</item>
+    /// A <b>stale</b> mapping (task deleted / custom id reassigned) whose plain id 404s is <b>not fatal</b>
+    /// when a live retry could still resolve it — a custom id, or a hyphenless custom id matched by
+    /// <c>CustomId</c> — in which case it falls through rather than failing; a plain-id ref matched by its
+    /// own id surfaces the 404 directly, since re-fetching it would be identical;</item>
     /// <item>otherwise a <b>live</b> lookup — a hyphenated <b>custom id</b> straight through
     /// <see cref="GetTaskDetailByCustomIdAsync"/> (one correct request), and a <b>plain id</b> (including a
     /// hyphenless custom id misclassified as one, #353) through
@@ -575,10 +577,16 @@ public sealed class TaskService(
             {
                 return await client.GetTaskDetailAsync(cached.Id, ct).ConfigureAwait(false);
             }
-            catch (ClickUpApiException ex) when (ex.StatusCode == 404)
+            // A stale mapping (task deleted / custom id reassigned) whose plain GET 404s falls through to a
+            // live lookup of the ORIGINAL reference — but only when that would try something new. A plain-id
+            // ref matched by Id (cached.Id == reference.Value) would re-issue the identical GET and then a
+            // spurious custom-id lookup of a known-plain id, so its 404 just surfaces (one request). A custom
+            // id, or a hyphenless custom id matched by CustomId (cached.Id differs), resolves against a
+            // different endpoint/id below and is worth the retry.
+            catch (ClickUpApiException ex) when (ex.StatusCode == 404
+                && !(reference.Kind == QuickOpenKind.TaskId && cached.Id == reference.Value))
             {
-                // Stale mapping (task deleted / custom id reassigned): fall through to a live lookup of the
-                // original reference rather than failing the launch.
+                // Fall through to the live path.
             }
         }
 

@@ -65,8 +65,10 @@ uses.
 
 ### 4. Error messages (in `Program`, echoing what the user typed)
 
-- **Unparseable** (`QuickOpenKind.Invalid`, e.g. `--task ???`) → fails **before**
-  any setup/auth, with a message distinct from "didn't resolve".
+- **Unparseable** (`QuickOpenKind.Invalid` — a foreign URL, or a ClickUp URL with
+  no `/t/` task segment) → fails **before** any setup/auth, with a message distinct
+  from "didn't resolve". (A bare hyphenless token like `???` is *not* `Invalid` — it
+  classifies as a plain id and resolves live, then 404s, exactly as Ctrl+O does.)
 - **Custom id + no configured workspace** → a message naming *that* cause, not
   "task not found".
 - **Not found** (404 out of the resolver) → echoes the **typed** token, not the
