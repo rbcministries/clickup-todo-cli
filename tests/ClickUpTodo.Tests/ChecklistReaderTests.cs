@@ -156,6 +156,54 @@ public sealed class ChecklistReaderTests
     }
 
     [Fact]
+    public void ReadItems_NestingViaBothParentPointerAndChildrenArray_ReadsChildrenRecursively()
+    {
+        // #454 names nesting as a `parent` id-pointer AND/OR a populated `children` array. When ClickUp
+        // supplies both at once, the reader reads `children` recursively regardless of `parent`, and
+        // preserves each item's ParentId — so the row projection (B, #455) has both signals and its own
+        // choice of how to de-dup. This pins that coexistence contract.
+        var items = ChecklistReader.ReadItems(Parse("""
+            {"items":[
+                {"id":"root","name":"R","parent":null,"children":[
+                    {"id":"child","name":"C","parent":"root","children":[]}]}]}
+            """));
+
+        var root = Assert.Single(items);
+        Assert.Null(root.ParentId);
+        var child = Assert.Single(root.Children);
+        Assert.Equal("child", child.Id);
+        Assert.Equal("root", child.ParentId);
+        Assert.Empty(child.Children);
+    }
+
+    [Fact]
+    public void ReadItems_SkipsNonObjectElements_AndTreatsNullChildrenAsEmpty()
+    {
+        var items = ChecklistReader.ReadItems(Parse("""
+            {"items":["not an object", 42, {"id":"a","name":"real","children":null}]}
+            """));
+
+        var only = Assert.Single(items);
+        Assert.Equal("a", only.Id);
+        Assert.Empty(only.Children);
+    }
+
+    [Fact]
+    public void ReadItems_AssigneeEmptyObject_YieldsNoAssignee()
+        => Assert.Null(ChecklistReader.ReadItems(Parse("""{"items":[{"id":"a","assignee":{}}]}""")).Single().Assignee);
+
+    [Fact]
+    public void ReadItems_AssigneeObjectWithNumericStringId_KeepsId()
+    {
+        var items = ChecklistReader.ReadItems(Parse("""
+            {"items":[{"id":"a","assignee":{"id":"77","username":"Casey"}}]}
+            """));
+
+        Assert.Equal(77, items[0].Assignee!.Id);
+        Assert.Equal("Casey", items[0].Assignee!.Name);
+    }
+
+    [Fact]
     public void ReadItems_ResolvedTolerance_NumericAndString()
     {
         var items = ChecklistReader.ReadItems(Parse("""
