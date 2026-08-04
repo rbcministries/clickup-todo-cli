@@ -343,6 +343,46 @@ public sealed record ActivityItem(
 }
 
 /// <summary>
+/// One item in a task <see cref="TaskChecklist"/> (#454). Reuses <see cref="TaskAssignee"/> for the
+/// optional per-item assignee rather than inventing a new shape. Nesting is carried in both forms ClickUp
+/// may express it — <see cref="ParentId"/> (the id-pointer on a child) and <see cref="Children"/>
+/// (a parent's populated child items) — so the row projection (B, #455) can reconstruct the tree from
+/// either without re-deriving it. <see cref="OrderIndex"/> is read tolerantly from the item's
+/// number-or-numeric-string <c>orderindex</c>. <see cref="Assignee"/> is null when the item is
+/// unassigned; when the API supplies only a bare user id its <see cref="TaskAssignee.Name"/> is empty for
+/// a later slice to resolve.
+/// </summary>
+public sealed record TaskChecklistItem(
+    string Id,
+    string Name,
+    bool Resolved,
+    double? OrderIndex = null,
+    string? ParentId = null,
+    TaskAssignee? Assignee = null,
+    IReadOnlyList<TaskChecklistItem>? Children = null)
+{
+    /// <summary>The item's nested children (#454); never null (empty when the item has none, or the API
+    /// expressed nesting via <see cref="ParentId"/> pointers only).</summary>
+    public IReadOnlyList<TaskChecklistItem> Children { get; init; } = Children ?? [];
+}
+
+/// <summary>
+/// A native ClickUp task checklist (group), the read foundation of the Checklists tab (epic #453,
+/// slice #454). <see cref="Resolved"/>/<see cref="Unresolved"/> are ClickUp's item counts (for a
+/// progress badge); <see cref="OrderIndex"/> orders the checklists on the task. <see cref="Items"/> are
+/// the checklist's items as the API lists them (the top level of its <c>items</c> array, in API order),
+/// each carrying its own nesting via <see cref="TaskChecklistItem.ParentId"/> /
+/// <see cref="TaskChecklistItem.Children"/>.
+/// </summary>
+public sealed record TaskChecklist(
+    string Id,
+    string Name,
+    double? OrderIndex,
+    int Resolved,
+    int Unresolved,
+    IReadOnlyList<TaskChecklistItem> Items);
+
+/// <summary>
 /// The full detail of a single task, fetched on demand for the detail view (issue #17). Richer than
 /// <see cref="TaskItem"/>: it carries the description, tags, assignees, dates, priority and custom
 /// fields. Shaped to also seed the agent-dispatch prompt composer (#24).
@@ -380,4 +420,11 @@ public sealed record TaskDetail
     public IReadOnlyList<string> Tags { get; init; } = [];
     public IReadOnlyList<string> Assignees { get; init; } = [];
     public IReadOnlyList<CustomFieldItem> CustomFields { get; init; } = [];
+
+    /// <summary>The task's native ClickUp checklists (#454), populated by
+    /// <see cref="IClickUpClient.GetTaskDetailAsync"/>; empty when the task has none or the API omitted
+    /// the <c>checklists</c> key. Defaulting to <c>[]</c> keeps every existing construction site
+    /// compiling and makes a task without checklists indistinguishable from today. The read foundation
+    /// the Checklists tab (epic #453) builds on.</summary>
+    public IReadOnlyList<TaskChecklist> Checklists { get; init; } = [];
 }
