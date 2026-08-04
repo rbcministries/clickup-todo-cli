@@ -1997,8 +1997,9 @@ public sealed class TodoApp
                     var browserRoot = Directory.Exists(detailBaseDir) ? detailBaseDir : detailHome;
                     // #419: freeze the in-memory working set now (UI thread) so the tree load — which runs
                     // off the UI thread on first cycle to the Task Tree tab — can resolve ancestry levels
-                    // from tasks already in hand without racing the live _rows list. Any staleness only
-                    // ever causes a snapshot miss → API fetch (the tree also re-fetches on F5).
+                    // from tasks already in hand without racing the live _rows list. A stale snapshot can
+                    // at worst misplace/mislabel a level (never truncate the tree or drop the initial-fetch
+                    // error); F5 re-fetches the tree fresh.
                     var treeSnapshot = TaskService.BuildSnapshotLookup(_all, _rows);
                     var screen = new TaskDetailScreen(
                         detail, comments, browserRoot,

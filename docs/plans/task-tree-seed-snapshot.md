@@ -84,8 +84,8 @@ public static Func<string, TaskItem?> BuildSnapshotLookup(
 - **`TodoApp`** (detail-screen construction, UI thread): capture
   `TaskService.BuildSnapshotLookup(_all, _rows)` once and pass it into the `loadTaskTreeAsync`
   delegate. Freezing at construction avoids racing the live `_rows` list from the off-thread tree
-  load; any staleness only ever causes a snapshot **miss** → API fetch, never wrong data (the tree
-  also re-fetches on F5).
+  load; a stale snapshot can at worst **misplace/mislabel** an ancestry level (never truncate the tree
+  or drop the initial-fetch error), and F5 re-fetches the tree fresh.
 - **`SingleTaskApp`** (`--task` mode): pass `snapshotLookup: null` — single-task mode holds no
   broader working set to seed ancestry from, so behaviour is unchanged.
 

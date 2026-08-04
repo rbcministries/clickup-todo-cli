@@ -327,6 +327,21 @@ public sealed class TaskServiceTaskTreeTests
             () => Service(fake).GetTaskTreeAsync("T", Snapshot(Item("T"))));
     }
 
+    [Fact]
+    public async Task SeededAncestryCycle_TerminatesWithoutLooping()
+    {
+        // A cycle reached entirely through the snapshot: the seeded parent "p" points back at "T". The
+        // seen-set guard runs in the while-condition before resolution, so the walk terminates on the
+        // seeded path exactly as it does when the cycle is fetched (cf. AncestryCycle_Terminates…).
+        var fake = new FakeClient();
+        fake.Items["T"] = Item("T", parent: "p");
+
+        var rows = await Service(fake).GetTaskTreeAsync("T", Snapshot(Item("p", parent: "T")));
+
+        Assert.Equal([("p", 0, false), ("T", 1, true)], rows.Select(Row));
+        Assert.Equal(["T"], fake.ItemCalls); // current fetched; "p" seeded; "T" is not re-walked
+    }
+
     /// <summary>In-memory <see cref="IClickUpClient"/> exposing only the two fetch paths the tree walk
     /// uses; every other member throws so accidental reliance is loud.</summary>
     private class FakeClient : IClickUpClient

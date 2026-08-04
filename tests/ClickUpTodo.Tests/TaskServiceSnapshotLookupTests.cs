@@ -58,4 +58,15 @@ public sealed class TaskServiceSnapshotLookupTests
 
         Assert.Null(lookup("nope"));
     }
+
+    [Fact]
+    public void SkipsEmptyIdEntries_FromEitherSide()
+    {
+        // A record with an empty Id (in primary or rows) is skipped, never indexed under "" — so a later
+        // empty-parentId walk step (guarded out upstream anyway) can't accidentally resolve to it.
+        var lookup = TaskService.BuildSnapshotLookup([Item(""), Item("a")], [Item("")]);
+
+        Assert.Null(lookup(""));
+        Assert.Equal("a", lookup("a")?.Id);
+    }
 }

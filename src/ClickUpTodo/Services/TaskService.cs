@@ -771,8 +771,9 @@ public sealed class TaskService(
     /// subtasks #70/#179, context parents #46). Snapshotting here (rather than closing over the live
     /// lists) matters because the tree load runs off the UI thread: the returned delegate reads only the
     /// frozen dictionary, so it never races the UI thread mutating <c>_rows</c>. A miss returns
-    /// <c>null</c> — the tree walk then fetches that level — so an incomplete snapshot only ever costs a
-    /// round-trip, never wrong data.
+    /// <c>null</c> — the tree walk then fetches that level. A stale <em>hit</em> (a task re-parented or
+    /// renamed since the snapshot was taken) can misplace or mislabel an ancestry level, but never
+    /// truncates the tree or drops the initial-fetch error path — and F5 re-fetches the tree fresh.
     /// </summary>
     public static Func<string, TaskItem?> BuildSnapshotLookup(
         IReadOnlyList<TaskItem> primary, IEnumerable<TaskItem?> rows)
