@@ -21,6 +21,14 @@ public sealed class TaskServiceTaskTreeTests
 
     private static (string Id, int Depth, bool Current) Row(TaskTreeRow r) => (r.Task.Id, r.Depth, r.IsCurrent);
 
+    /// <summary>A #419 ancestry seed backed by the given items — the lookup form the TUI passes into
+    /// <see cref="TaskService.GetTaskTreeAsync"/> so a parent already in hand skips its round-trip.</summary>
+    private static Func<string, TaskItem?> Snapshot(params TaskItem[] items)
+    {
+        var map = items.ToDictionary(i => i.Id, StringComparer.Ordinal);
+        return id => map.TryGetValue(id, out var v) ? v : null;
+    }
+
     [Fact]
     public async Task LoneTask_NoAncestryNoSubtasks_SingleRow()
     {
@@ -228,6 +236,95 @@ public sealed class TaskServiceTaskTreeTests
 
         Assert.Equal(TaskService.MaxTreeSubtaskConcurrency, peak); // filled the bound, never beyond it
         Assert.Equal(width + 1, rows.Count);                       // T + all children still discovered
+    }
+
+    // --- #419 idea #2: seeding the ancestry walk from the in-memory snapshot ---
+
+    [Fact]
+    public async Task SeededAncestor_SkipsItsFetch()
+    {
+        // "p" is only in the snapshot, never in fake.Items — so a round-trip for it would throw
+        // "no task p". The walk completing (and placing "p") proves the fetch was skipped, seeded instead.
+        var fake = new FakeClient();
+        fake.Items["T"] = Item("T", parent: "p");
+
+        var rows = await Service(fake).GetTaskTreeAsync("T", Snapshot(Item("p")));
+
+        Assert.Equal([("p", 0, false), ("T", 1, true)], rows.Select(Row));
+        Assert.Equal(["T"], fake.ItemCalls); // only the current task fetched; "p" came from the snapshot
+    }
+
+    [Fact]
+    public async Task PartialSeed_FetchesOnlyTheMissingLevels()
+    {
+        // Chain gp <- p <- T. The snapshot holds "p" (pointing at "gp") but not "gp"; "gp" is API-only.
+        var fake = new FakeClient();
+        fake.Items["gp"] = Item("gp");
+        fake.Items["T"] = Item("T", parent: "p");
+
+        var rows = await Service(fake).GetTaskTreeAsync("T", Snapshot(Item("p", parent: "gp")));
+
+        Assert.Equal([("gp", 0, false), ("p", 1, false), ("T", 2, true)], rows.Select(Row));
+        Assert.Equal(["T", "gp"], fake.ItemCalls); // T (current) + gp (missing); "p" seeded, not fetched
+    }
+
+    [Fact]
+    public async Task NullReturningLookup_ReproducesUnseededFetches()
+    {
+        // A seed that misses on everything must leave the fetch path byte-for-byte identical to no seed.
+        var fake = new FakeClient();
+        fake.Items["gp"] = Item("gp");
+        fake.Items["p"] = Item("p", parent: "gp");
+        fake.Items["T"] = Item("T", parent: "p");
+
+        var rows = await Service(fake).GetTaskTreeAsync("T", _ => null);
+
+        Assert.Equal([("gp", 0, false), ("p", 1, false), ("T", 2, true)], rows.Select(Row));
+        Assert.Equal(["T", "p", "gp"], fake.ItemCalls); // current, then up the chain — all fetched
+    }
+
+    [Fact]
+    public async Task Cap_CountsSeededAncestors_BoundsDepth()
+    {
+        // A fully-seeded chain longer than the cap: none of the ancestors are fetched, but the walk still
+        // stops at MaxAncestorFetches — so the cap bounds ancestry *depth*, not just round-trips.
+        var fake = new FakeClient();
+        var depth = TaskService.MaxAncestorFetches + 5;
+        var currentId = $"t{depth}";
+        fake.Items[currentId] = Item(currentId, parent: $"t{depth - 1}"); // current task is API-fetched
+        var snapshot = new List<TaskItem>();
+        for (var i = 0; i < depth; i++)
+            snapshot.Add(Item($"t{i}", parent: i == 0 ? null : $"t{i - 1}"));
+
+        var rows = await Service(fake).GetTaskTreeAsync(currentId, Snapshot(snapshot.ToArray()));
+
+        Assert.Equal(TaskService.MaxAncestorFetches + 1, rows.Count); // current + exactly cap ancestors
+        Assert.True(rows[^1].IsCurrent);
+        Assert.Equal([currentId], fake.ItemCalls); // only the current task hit the API; all ancestors seeded
+    }
+
+    [Fact]
+    public async Task SeedPresent_InitialTaskIsStillFetched()
+    {
+        // Even when the snapshot also holds the current task, the initial fetch is deliberately NOT seeded
+        // (#419): it stays a round-trip so its data is fresh and its error can propagate (next test).
+        var fake = new FakeClient();
+        fake.Items["T"] = Item("T");
+
+        await Service(fake).GetTaskTreeAsync("T", Snapshot(Item("T")));
+
+        Assert.Equal(["T"], fake.ItemCalls); // the current task was fetched despite being in the snapshot
+    }
+
+    [Fact]
+    public async Task SeedPresent_InitialTaskError_StillPropagates()
+    {
+        // The seed must not swallow the one error the tree walk is allowed to surface.
+        var fake = new FakeClient();
+        fake.ThrowOnItem.Add("T");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Service(fake).GetTaskTreeAsync("T", Snapshot(Item("T"))));
     }
 
     /// <summary>In-memory <see cref="IClickUpClient"/> exposing only the two fetch paths the tree walk
