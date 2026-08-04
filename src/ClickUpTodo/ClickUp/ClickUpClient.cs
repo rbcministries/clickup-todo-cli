@@ -866,7 +866,40 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             .Where(f => !string.IsNullOrWhiteSpace(f.Name))
             .Select(MapCustomField)
             .ToList() ?? [],
+        // The API may omit `checklists` entirely (older/edge responses) → empty list, never a null-deref.
+        Checklists = t.Checklists?.Select(MapChecklist).ToList() ?? [],
     };
+
+    /// <summary>
+    /// Maps a generated <see cref="Checklist"/> onto the stable <see cref="TaskChecklist"/> (#454). The
+    /// container fields are read from the typed generated properties; the loosely-typed <c>items</c> array
+    /// rides on Kiota's <c>AdditionalData</c>, so — mirroring <see cref="MapCustomField"/> — the checklist
+    /// is re-serialized to JSON and its items read back via the pure <see cref="ChecklistReader"/>, so no
+    /// generated type escapes this facade and every item-shape tolerance lives in one testable place.
+    /// internal (not private) so the mapping can be unit-tested without hitting the live API.
+    /// </summary>
+    internal static TaskChecklist MapChecklist(Checklist c)
+    {
+        IReadOnlyList<TaskChecklistItem> items;
+        try
+        {
+            items = ChecklistReader.ReadItems(SerializeToJson(c));
+        }
+        catch
+        {
+            // One malformed checklist must never sink the whole task's detail — degrade to an empty item
+            // list (the counts/name still render), mirroring MapCustomField's defensive fallback.
+            items = [];
+        }
+
+        return new TaskChecklist(
+            Id: c.Id ?? "",
+            Name: c.Name ?? "",
+            OrderIndex: c.Orderindex,
+            Resolved: c.Resolved ?? 0,
+            Unresolved: c.Unresolved ?? 0,
+            Items: items);
+    }
 
     /// <summary>
     /// Maps a generated <see cref="CustomField"/> onto the stable <see cref="CustomFieldItem"/>,

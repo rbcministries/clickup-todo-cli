@@ -328,6 +328,47 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task GetTaskDetail_ChecklistsRoundTrip_AreMaterializedAndWellFormed()
+    {
+        // The checklist read model (#454): the task fetch already carries `checklists`, so the mapped
+        // detail must surface them (never null) and every checklist/item must be well-formed. A scratch
+        // task may legitimately have no checklists, so we don't assert non-empty — pointing
+        // CLICKUP_CHECKLIST_TASK_ID at a task that HAS a checklist exercises the nested-item path below.
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var detail = await client.GetTaskDetailAsync(TaskId!);
+
+        Assert.NotNull(detail.Checklists);
+        Assert.All(detail.Checklists, c =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(c.Id));
+            Assert.NotNull(c.Items);
+            Assert.True(c.Resolved >= 0 && c.Unresolved >= 0);
+            Assert.All(c.Items, i => Assert.False(string.IsNullOrWhiteSpace(i.Id)));
+        });
+    }
+
+    [SkippableFact]
+    public async Task GetTaskDetail_ChecklistBearingTask_HasNestedItems()
+    {
+        // Deep round-trip against a task known to carry a checklist (#454). Gated on its own env var so
+        // the general suite doesn't require every scratch task to have one; when set, it proves the whole
+        // spec → Kiota → ChecklistReader → domain path surfaces a real checklist with at least one item.
+        var checklistTaskId = Environment.GetEnvironmentVariable("CLICKUP_CHECKLIST_TASK_ID");
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(checklistTaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_CHECKLIST_TASK_ID (a task that has a checklist) to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var detail = await client.GetTaskDetailAsync(checklistTaskId!);
+
+        Assert.NotEmpty(detail.Checklists);
+        Assert.All(detail.Checklists, c => Assert.False(string.IsNullOrWhiteSpace(c.Name)));
+        Assert.Contains(detail.Checklists, c => c.Items.Count > 0);
+    }
+
+    [SkippableFact]
     public async Task GetTaskComments_ReturnsComments()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),

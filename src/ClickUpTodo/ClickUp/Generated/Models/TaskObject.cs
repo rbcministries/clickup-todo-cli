@@ -24,6 +24,14 @@ namespace ClickUpTodo.ClickUp.Generated.Models
 #else
         public List<global::ClickUpTodo.ClickUp.Generated.Models.User> Assignees { get; set; }
 #endif
+        /// <summary>The checklists property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.Checklist>? Checklists { get; set; }
+#nullable restore
+#else
+        public List<global::ClickUpTodo.ClickUp.Generated.Models.Checklist> Checklists { get; set; }
+#endif
         /// <summary>The custom_fields property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -187,6 +195,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             {
                 { "archived", n => { Archived = n.GetBoolValue(); } },
                 { "assignees", n => { Assignees = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.User>(global::ClickUpTodo.ClickUp.Generated.Models.User.CreateFromDiscriminatorValue)?.AsList(); } },
+                { "checklists", n => { Checklists = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.Checklist>(global::ClickUpTodo.ClickUp.Generated.Models.Checklist.CreateFromDiscriminatorValue)?.AsList(); } },
                 { "custom_fields", n => { CustomFields = n.GetCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.CustomField>(global::ClickUpTodo.ClickUp.Generated.Models.CustomField.CreateFromDiscriminatorValue)?.AsList(); } },
                 { "custom_id", n => { CustomId = n.GetStringValue(); } },
                 { "date_created", n => { DateCreated = n.GetStringValue(); } },
@@ -215,6 +224,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
             writer.WriteBoolValue("archived", Archived);
             writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.User>("assignees", Assignees);
+            writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.Checklist>("checklists", Checklists);
             writer.WriteCollectionOfObjectValues<global::ClickUpTodo.ClickUp.Generated.Models.CustomField>("custom_fields", CustomFields);
             writer.WriteStringValue("custom_id", CustomId);
             writer.WriteStringValue("date_created", DateCreated);

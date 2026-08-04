@@ -440,7 +440,19 @@
           "tags": { "type": "array", "items": { "$ref": "#/components/schemas/Tag" } },
           "assignees": { "type": "array", "items": { "$ref": "#/components/schemas/User" } },
           "custom_fields": { "type": "array", "items": { "$ref": "#/components/schemas/CustomField" } },
-          "subtasks": { "type": "array", "items": { "$ref": "#/components/schemas/Task" }, "nullable": true }
+          "subtasks": { "type": "array", "items": { "$ref": "#/components/schemas/Task" }, "nullable": true },
+          "checklists": { "type": "array", "items": { "$ref": "#/components/schemas/Checklist" }, "nullable": true }
+        }
+      },
+      "Checklist": {
+        "type": "object",
+        "description": "A task checklist (group) from GET /task/{task_id} — read comes free on the existing task fetch (#454). Only the stable, cleanly-typed container fields are surfaced: 'id', 'name', the checklist-level integer 'orderindex', and the 'resolved'/'unresolved' item counts. The per-checklist 'items' array is intentionally left untyped (it rides on Kiota's AdditionalData) because its item shape is loosely typed and varies by API version — item 'orderindex' is a number OR a numeric string, 'assignee' is null / a bare user id / a full user object, and nesting is expressed as a 'parent' id-pointer and/or a populated 'children' array. Those items are read out with System.Text.Json via ChecklistReader, mirroring the task CustomField value read path (#35), which keeps every tolerance in one pure, unit-testable place off Kiota's typed deserializer. No /checklist… write paths are added here; they land with the write slices (D–G) so an unused endpoint never ships generated.",
+        "properties": {
+          "id": { "type": "string", "nullable": true },
+          "name": { "type": "string", "nullable": true },
+          "orderindex": { "type": "integer", "nullable": true },
+          "resolved": { "type": "integer", "nullable": true },
+          "unresolved": { "type": "integer", "nullable": true }
         }
       },
       "Priority": {
