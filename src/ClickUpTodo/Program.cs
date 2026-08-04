@@ -40,10 +40,12 @@ if (args.Any(a => a is "--help" or "-h" or "-?"))
 {
     Console.WriteLine($"clickup-todo — {AppBranding.DisplayName}, a keyboard-driven ClickUp task list.");
     Console.WriteLine();
-    Console.WriteLine("Usage: clickup-todo [--task <id>] [--reset] [--driver <name>]");
+    Console.WriteLine("Usage: clickup-todo [--task <ref>] [--reset] [--driver <name>]");
     Console.WriteLine("  (no args)        Launch the task UI (runs first-time setup if needed).");
-    Console.WriteLine("  --task <id>      Open straight into that task's detail view (a single-task tab;");
+    Console.WriteLine("  --task <ref>     Open straight into that task's detail view (a single-task tab;");
     Console.WriteLine("                   titles the terminal window/tab with the task's id + name).");
+    Console.WriteLine("                   <ref> is a task id (86abc123), a custom id (ABC-123), or a");
+    Console.WriteLine("                   ClickUp task URL — the same forms the in-app Ctrl+O accepts.");
     Console.WriteLine("  --reset          Forget the saved token and settings.");
     Console.WriteLine("  --driver <name>  Force a Terminal.Gui console driver. One of:");
     Console.WriteLine("                     windows  native Win32 input (try this if input feels laggy)");
@@ -71,7 +73,17 @@ if (!string.IsNullOrEmpty(driverName) && !validDrivers.Contains(driverName))
 var launch = TaskLaunchArg.Parse(args);
 if (launch.MissingValue)
 {
-    Console.Error.WriteLine("Provide a task id, e.g. `clickup-todo --task 86abc123`.");
+    Console.Error.WriteLine("Provide a task reference, e.g. `clickup-todo --task 86abc123` (id), `--task ABC-123` (custom id), or a ClickUp task URL.");
+    return 1;
+}
+
+// Classify the launch token through the same parser Ctrl+O uses (#464), so `--task` accepts a plain id,
+// a custom id, or a task URL with one shared classifier. A token that isn't any of those fails here —
+// before any setup/auth runs, and with a message distinct from "that reference didn't resolve".
+var launchRef = launch.HasId ? QuickOpenParser.Parse(launch.TaskId!) : QuickOpenRef.Invalid;
+if (launch.HasId && launchRef.Kind == QuickOpenKind.Invalid)
+{
+    Console.Error.WriteLine($"'{launch.TaskId}' isn't a task reference. Pass a task id (86abc123), a custom id (ABC-123), or a ClickUp task URL.");
     return 1;
 }
 
@@ -129,16 +141,29 @@ var taskService = new TaskService(client, config, userId, stateStore: stateStore
 // exits with a clear message before the terminal is switched into the alt-screen.
 if (launch.HasId)
 {
+    // A URL-carried team id wins over the configured workspace (#464), matching the in-app Ctrl+O
+    // precedence (TodoApp.ResolveAndOpen). A custom id can't be resolved without one, so fail with a
+    // message naming *that* cause rather than a misleading "task not found".
+    var teamId = string.IsNullOrWhiteSpace(launchRef.TeamId) ? config.WorkspaceId : launchRef.TeamId;
+    if (launchRef.Kind == QuickOpenKind.CustomId && string.IsNullOrWhiteSpace(teamId))
+    {
+        Console.Error.WriteLine($"Can't resolve custom id '{launch.TaskId}' — no workspace is configured. Run `clickup-todo --reset` to sign in and pick one.");
+        return 1;
+    }
+
     TaskDetail launchTask;
     IReadOnlyList<CommentItem> launchComments;
     try
     {
-        launchTask = await taskService.GetTaskDetailAsync(launch.TaskId!);
-        launchComments = await taskService.GetTaskCommentsWithRepliesAsync(launch.TaskId!);
+        // Cache-first resolution, mirroring Ctrl+O: a snapshot hit yields the plain id and one correct
+        // GET; a custom id / URL resolves live. Comments are then fetched by the *resolved* plain id.
+        var snapshot = taskCache.Load(config) ?? [];
+        launchTask = await taskService.ResolveLaunchTaskAsync(launchRef, snapshot, teamId);
+        launchComments = await taskService.GetTaskCommentsWithRepliesAsync(launchTask.Id);
     }
     catch (ClickUpApiException ex) when (ex.StatusCode == 404)
     {
-        Console.Error.WriteLine($"No task found with id '{launch.TaskId}'. Check the id and try again.");
+        Console.Error.WriteLine($"No task found matching '{launch.TaskId}'. Check the reference and try again.");
         return 1;
     }
     catch (Exception ex)

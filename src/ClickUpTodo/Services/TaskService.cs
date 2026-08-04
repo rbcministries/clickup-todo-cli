@@ -538,6 +538,56 @@ public sealed class TaskService(
         }
     }
 
+    /// <summary>
+    /// Resolves a single-task launch reference (<c>--task</c>, #464) to full detail, in the same
+    /// cache-first order the in-app Ctrl+O quick-open uses (<c>TodoApp.ResolveAndOpen</c>) so the two
+    /// can't drift:
+    /// <list type="number">
+    /// <item>a <b>snapshot</b> hit (<see cref="QuickOpenParser.FindInCache"/>) already knows the task's
+    /// <b>plain</b> id, so it costs a single correct <c>GET /task/{id}</c> — no wrong-endpoint round-trip.
+    /// A <b>stale</b> mapping (task deleted / custom id reassigned) whose plain id 404s is <b>not fatal</b>:
+    /// it falls through to the live path below rather than failing the launch;</item>
+    /// <item>otherwise a <b>live</b> lookup — a hyphenated <b>custom id</b> straight through
+    /// <see cref="GetTaskDetailByCustomIdAsync"/> (one correct request), and a <b>plain id</b> (including a
+    /// hyphenless custom id misclassified as one, #353) through
+    /// <see cref="GetTaskDetailWithCustomIdFallbackAsync"/> (plain first, custom-id retry only on a 404).</item>
+    /// </list>
+    /// The snapshot is passed in (not read here) so this stays free of a <c>TaskCache</c> dependency and
+    /// fully unit-testable through the <see cref="IClickUpClient"/> seam. A not-found reference surfaces the
+    /// underlying <see cref="ClickUpApiException"/> (404) for the caller to message.
+    /// </summary>
+    /// <param name="reference">A parsed, non-<see cref="QuickOpenKind.Invalid"/> reference; an invalid one
+    /// is a caller bug and throws.</param>
+    /// <param name="snapshot">The persisted working-set snapshot to match against; empty is a silent miss.</param>
+    /// <param name="teamId">The workspace/team id for a custom-id lookup — a URL-carried id in preference
+    /// to the configured one. When a custom id needs it but it is blank, the custom-id lookup fails; the
+    /// caller guards that case for a clearer message.</param>
+    public async Task<TaskDetail> ResolveLaunchTaskAsync(
+        QuickOpenRef reference, IReadOnlyList<TaskItem> snapshot, string? teamId, CancellationToken ct = default)
+    {
+        if (reference.Kind == QuickOpenKind.Invalid)
+            throw new ArgumentException("A launch reference must be a task id, custom id, or task URL.", nameof(reference));
+
+        // 1. Snapshot hit → we already hold the plain task id; one correct GET, no wrong-endpoint retry.
+        if (QuickOpenParser.FindInCache(snapshot, reference) is { } cached)
+        {
+            try
+            {
+                return await client.GetTaskDetailAsync(cached.Id, ct).ConfigureAwait(false);
+            }
+            catch (ClickUpApiException ex) when (ex.StatusCode == 404)
+            {
+                // Stale mapping (task deleted / custom id reassigned): fall through to a live lookup of the
+                // original reference rather than failing the launch.
+            }
+        }
+
+        // 2. Live, mirroring ResolveAndOpen's kind branch.
+        return reference.Kind == QuickOpenKind.CustomId
+            ? await client.GetTaskDetailByCustomIdAsync(reference.Value, teamId!, ct).ConfigureAwait(false)
+            : await GetTaskDetailWithCustomIdFallbackAsync(reference.Value, teamId, ct).ConfigureAwait(false);
+    }
+
     /// <summary>The comments on a task, for the detail view's Comments tab (#17).</summary>
     public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskCommentsAsync(taskId, ct);
