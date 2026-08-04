@@ -35,13 +35,15 @@ public static class TerminalCommandPlanner
         string promptFilePath,
         string? workingDir,
         TerminalLauncherOptions options,
-        bool oneOff = false) => os switch
-        {
-            OSPlatformKind.Windows => PlanWindows(exists, getEnv, PwshCommand(promptFilePath, workingDir, options, oneOff), workingDir, options, oneOff),
-            OSPlatformKind.MacOS => PlanMacOS(exists, getEnv, PosixCommand(promptFilePath, workingDir, options, oneOff), workingDir, options, oneOff),
-            OSPlatformKind.Linux => PlanLinux(exists, getEnv, PosixCommand(promptFilePath, workingDir, options, oneOff), workingDir, options, oneOff),
-            _ => [],
-        };
+        bool oneOff = false)
+        => PlanFor(
+            os, exists, getEnv,
+            new InnerCommand(
+                PwshCommand(promptFilePath, workingDir, options, oneOff),
+                PosixCommand(promptFilePath, workingDir, options, oneOff),
+                workingDir,
+                oneOff),
+            options);
 
     /// <summary>
     /// The ordered launch candidates for opening <b>this app</b> in a new terminal tab/window running
@@ -59,14 +61,43 @@ public static class TerminalCommandPlanner
         TerminalLauncherOptions options)
     {
         ArgumentNullException.ThrowIfNull(command);
-        return os switch
+        return PlanFor(
+            os, exists, getEnv,
+            new InnerCommand(PwshAppCommand(command), PosixAppCommand(command), WorkingDir: null, OneOff: false),
+            options);
+    }
+
+    /// <summary>
+    /// The single OS-dispatch matrix shared by both public entry points (#438). Given an
+    /// <see cref="InnerCommand"/> — the already-built pwsh and POSIX payloads plus the working directory
+    /// and one-off mode that vary per caller — it picks the per-OS emulator builder. Windows runs the
+    /// pwsh payload; macOS and Linux run the POSIX one. This is the only place the OS is switched on, so
+    /// <see cref="Plan"/> and <see cref="PlanAppLaunch"/> reduce to building their respective payloads.
+    /// </summary>
+    private static IReadOnlyList<LaunchSpec> PlanFor(
+        OSPlatformKind os,
+        Func<string, bool> exists,
+        Func<string, string?> getEnv,
+        in InnerCommand inner,
+        TerminalLauncherOptions options) => os switch
         {
-            OSPlatformKind.Windows => PlanWindows(exists, getEnv, PwshAppCommand(command), null, options, oneOff: false),
-            OSPlatformKind.MacOS => PlanMacOS(exists, getEnv, PosixAppCommand(command), null, options, oneOff: false),
-            OSPlatformKind.Linux => PlanLinux(exists, getEnv, PosixAppCommand(command), null, options, oneOff: false),
+            OSPlatformKind.Windows => PlanWindows(exists, getEnv, inner.Pwsh, inner.WorkingDir, options, inner.OneOff),
+            OSPlatformKind.MacOS => PlanMacOS(exists, getEnv, inner.Posix, inner.WorkingDir, options, inner.OneOff),
+            OSPlatformKind.Linux => PlanLinux(exists, getEnv, inner.Posix, inner.WorkingDir, options, inner.OneOff),
             _ => [],
         };
-    }
+
+    /// <summary>
+    /// The per-caller inputs to the shared <see cref="PlanFor"/> dispatch: the two OS-specific inner
+    /// command payloads (<paramref name="Pwsh"/> for Windows, <paramref name="Posix"/> for macOS/Linux),
+    /// the working directory baked onto each <see cref="LaunchSpec"/>, and whether this is a one-off
+    /// <c>claude -p</c> run (which gates new-tab). A dispatch (<see cref="Plan"/>) supplies the
+    /// file-indirected claude payloads and a real working dir; an app launch (<see cref="PlanAppLaunch"/>)
+    /// supplies the plain executable payloads with no working dir and <c>OneOff = false</c>. Both payloads
+    /// are built eagerly by the caller — they are pure, I/O-free string construction, so building the one
+    /// the target OS won't use is a harmless discarded string.
+    /// </summary>
+    private readonly record struct InnerCommand(string Pwsh, string Posix, string? WorkingDir, bool OneOff);
 
     // ── New-tab launch location (#255) ──────────────────────────────────────────
     //
