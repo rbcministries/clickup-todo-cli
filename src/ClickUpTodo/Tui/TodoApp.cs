@@ -1995,6 +1995,12 @@ public sealed class TodoApp
                     var detailHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                     var detailBaseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, detailHome);
                     var browserRoot = Directory.Exists(detailBaseDir) ? detailBaseDir : detailHome;
+                    // #419: freeze the in-memory working set now (UI thread) so the tree load — which runs
+                    // off the UI thread on first cycle to the Task Tree tab — can resolve ancestry levels
+                    // from tasks already in hand without racing the live _rows list. A stale snapshot can
+                    // at worst misplace/mislabel a level (never truncate the tree or drop the initial-fetch
+                    // error); F5 re-fetches the tree fresh.
+                    var treeSnapshot = TaskService.BuildSnapshotLookup(_all, _rows);
                     var screen = new TaskDetailScreen(
                         detail, comments, browserRoot,
                         settings: _config.DetailView,
@@ -2021,7 +2027,7 @@ public sealed class TodoApp
                         // RESOLVED id (identical to taskId for a real id; correct for a custom-id fallback).
                         currentUserId: _tasks.UserId,
                         treeBadgeDisplay: _config.BadgeDisplay,
-                        loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(resolvedId, ct));
+                        loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(resolvedId, treeSnapshot, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the

@@ -578,8 +578,20 @@ public sealed class TaskService(
     /// unchanged. The ancestry walk stays serial — each parent id is only known once the level below it
     /// resolves, so it is an inherent linked-list traversal with nothing to parallelize.
     /// </para>
+    /// <para>
+    /// <paramref name="snapshotLookup"/> (#419 idea #2) lets the caller resolve an ancestry level from
+    /// tasks already in hand (the main list's working-set snapshot) instead of a round-trip. Because the
+    /// ancestry walk is the one serial HTTP chain #417's batching can't help, seeding it from the
+    /// snapshot is idea #2's highest-value win. It is applied to the <b>ancestry walk only</b>: the
+    /// initial task fetch is left as a round-trip so its error still propagates (a snapshot can be
+    /// stale/absent), and the descendant BFS still fetches — a snapshot can't guarantee a parent's
+    /// <em>complete</em> child set, so seeding it could truncate a branch. A snapshot miss (delegate
+    /// returns <c>null</c>) falls through to the identical fetch path, so passing <c>null</c> reproduces
+    /// the pre-#419 behaviour byte-for-byte. Build one with <see cref="BuildSnapshotLookup"/>.
+    /// </para>
     /// </summary>
-    public async Task<IReadOnlyList<TaskTreeRow>> GetTaskTreeAsync(string taskId, CancellationToken ct = default)
+    public async Task<IReadOnlyList<TaskTreeRow>> GetTaskTreeAsync(
+        string taskId, Func<string, TaskItem?>? snapshotLookup = null, CancellationToken ct = default)
     {
         var current = await client.GetTaskItemAsync(taskId, ct);
 
@@ -593,13 +605,24 @@ public sealed class TaskService(
         while (!string.IsNullOrEmpty(parentId) && ancestors.Count < MaxAncestorFetches && seen.Add(parentId!))
         {
             TaskItem parent;
-            try
+            // #419: prefer an already-loaded copy from the caller's snapshot. A hit skips the round-trip;
+            // a miss (null) falls through to the same fetch+best-effort path. A seeded ancestor still
+            // counts toward MaxAncestorFetches, so the cap bounds total ancestry depth (seeded + fetched).
+            var seeded = snapshotLookup?.Invoke(parentId!);
+            if (seeded is not null)
             {
-                parent = await client.GetTaskItemAsync(parentId!, ct);
+                parent = seeded;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            else
             {
-                break;
+                try
+                {
+                    parent = await client.GetTaskItemAsync(parentId!, ct);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    break;
+                }
             }
             ancestors.Add(parent);
             parentId = parent.ParentId;
@@ -738,6 +761,32 @@ public sealed class TaskService(
             if (r is not null && r.Id == taskId)
                 return r;
         return null;
+    }
+
+    /// <summary>
+    /// Freezes <paramref name="primary"/> + the non-null entries of <paramref name="rows"/> into an
+    /// immutable id→task lookup for <see cref="GetTaskTreeAsync"/>'s ancestry seed (#419 idea #2). It is
+    /// the map form of <see cref="FindById"/> — <paramref name="primary"/> wins on an id collision, and
+    /// the visible <paramref name="rows"/> add the context rows that live outside the snapshot (foreign
+    /// subtasks #70/#179, context parents #46). Snapshotting here (rather than closing over the live
+    /// lists) matters because the tree load runs off the UI thread: the returned delegate reads only the
+    /// frozen dictionary, so it never races the UI thread mutating <c>_rows</c>. A miss returns
+    /// <c>null</c> — the tree walk then fetches that level. A stale <em>hit</em> (a task re-parented or
+    /// renamed since the snapshot was taken) can misplace or mislabel an ancestry level, but never
+    /// truncates the tree or drops the initial-fetch error path — and F5 re-fetches the tree fresh.
+    /// </summary>
+    public static Func<string, TaskItem?> BuildSnapshotLookup(
+        IReadOnlyList<TaskItem> primary, IEnumerable<TaskItem?> rows)
+    {
+        var byId = new Dictionary<string, TaskItem>(StringComparer.Ordinal);
+        // rows first, then primary overwrites — so primary wins the collision, matching FindById's order.
+        foreach (var r in rows)
+            if (r is not null && !string.IsNullOrEmpty(r.Id))
+                byId[r.Id] = r;
+        foreach (var t in primary)
+            if (!string.IsNullOrEmpty(t.Id))
+                byId[t.Id] = t;
+        return id => byId.TryGetValue(id, out var v) ? v : null;
     }
 
     /// <summary>
