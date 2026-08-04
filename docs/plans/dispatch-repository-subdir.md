@@ -76,7 +76,12 @@ checkout, so scaffolding a scratch folder in the working tree would litter
   dir, non-null only when the match actually drove the working dir — i.e. no
   explicit pick). A pure `DispatchCoordinator.RepositoryMatchNote(plan)` returns a
   status suffix; `RunInteractive` appends it to the reported message so the user can
-  tell why the session opened where it did.
+  tell why the session opened where it did. **Interactive-only, by design:** the note
+  answers "why did a terminal window open *there*", which only arises for the
+  interactive path. A one-off `claude -p` run has no window — its output renders in an
+  in-app `AgentRunScreen` the user is already watching — and splicing a launcher
+  status line into that agent-output stream would conflate two content streams, so
+  `RunBackground` deliberately does not carry the note.
 - **Field name hard-coded** `Repository` (case-insensitive); not a setting until a
   second convention appears (decision recorded here).
 

@@ -24,8 +24,9 @@ public static class RepositoryWorkingDirectory
     public const string FieldName = "Repository";
 
     /// <summary>A resolved repo sub-directory: its absolute <see cref="Directory"/> and the child
-    /// <see cref="Name"/> that matched (the on-disk name, so a case-insensitive hit reports the real
-    /// casing).</summary>
+    /// <see cref="Name"/> that matched. For a case-insensitive scan hit this is the on-disk directory
+    /// name; for an exact-case hit it is the (already case-matching) value segment. Either way the OS
+    /// resolves <see cref="Directory"/> identically.</summary>
     public readonly record struct Match(string Directory, string Name);
 
     /// <summary>
@@ -193,7 +194,9 @@ public static class RepositoryWorkingDirectory
         if (value.ValueKind != JsonValueKind.Array || value.GetArrayLength() != 1)
             return null;
         var id = value[0].ValueKind == JsonValueKind.String ? value[0].GetString() : ScalarString(value[0]);
-        return options.FirstOrDefault(o => o.Id == id)?.Name;
+        // A non-string element (unexpected shape) yields no id; don't let a null id match an option that
+        // happens to carry a null Id.
+        return id is null ? null : options.FirstOrDefault(o => o.Id == id)?.Name;
     }
 
     /// <summary>A JSON scalar as a plain string (string as-is, number/bool via raw text), else null.</summary>

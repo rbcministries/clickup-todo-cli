@@ -98,6 +98,12 @@ public sealed class RepositoryWorkingDirectoryTests
         => Assert.Null(RepositoryWorkingDirectory.RepositoryValue(TaskWith(Field("Repository", "labels", "[]"))));
 
     [Fact]
+    public void RepositoryValue_LabelsSingleNonStringElement_ReturnsNull()
+        // A non-string label element yields no id; a null id must not match an option carrying a null Id.
+        => Assert.Null(RepositoryWorkingDirectory.RepositoryValue(
+            TaskWith(Field("Repository", "labels", "[{\"x\":1}]", new CustomFieldOption(null, "NullId", 0)))));
+
+    [Fact]
     public void RepositoryValue_StructuredValueWithoutKnownType_ReturnsNull()
     {
         // A `users`/object-valued Repository field isn't a repo name → no match.
