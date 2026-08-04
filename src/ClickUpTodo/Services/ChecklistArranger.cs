@@ -1,4 +1,3 @@
-using System.Globalization;
 using ClickUpTodo.ClickUp;
 
 namespace ClickUpTodo.Services;
@@ -197,12 +196,17 @@ public static class ChecklistArranger
         {
             if (string.IsNullOrEmpty(item.Id))
                 continue; // the reader already drops id-less items; defensive against a hand-built list.
-            if (!byId.TryAdd(item.Id, item))
-                continue; // already seen (present in both a Children array and flat): first occurrence wins.
-            order.Add(item.Id);
+            var isNew = byId.TryAdd(item.Id, item); // first occurrence wins for the item's own data.
+            if (isNew)
+                order.Add(item.Id);
+            // Record the structural parent found via a Children array even for an already-seen item (first
+            // structural parent wins), so a flat duplicate discovered before its owning parent still nests —
+            // the dedup is order-independent, not reliant on the parent appearing first.
             if (parentId is not null)
-                structuralParent[item.Id] = parentId;
-            if (item.Children.Count > 0)
+                structuralParent.TryAdd(item.Id, parentId);
+            // Recurse only on first sight so a self-referential Children array (pathological) terminates;
+            // the same item object carries the same Children either way, so the subtree isn't missed.
+            if (isNew && item.Children.Count > 0)
                 Collect(item.Children, item.Id, byId, order, structuralParent);
         }
     }

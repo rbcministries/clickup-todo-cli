@@ -201,6 +201,58 @@ public sealed class ChecklistArrangerTests
     }
 
     [Fact]
+    public void ThreeLevelNesting_ViaParentPointers()
+    {
+        // A flat list nested only by ParentId pointers, three deep — the representation ClickUp actually
+        // sends. Each level must indent one further.
+        var p = ChecklistArranger.Project([
+            List("c1", "L", 0,
+                Item("a", orderIndex: 0),
+                Item("b", orderIndex: 0, parentId: "a"),
+                Item("c", orderIndex: 0, parentId: "b")),
+        ]);
+
+        var items = Items(p);
+        Assert.Equal(["a", "b", "c"], items.Select(r => r.ItemId));
+        Assert.Equal([0, 1, 2], items.Select(r => r.Depth));
+    }
+
+    [Fact]
+    public void OrphanWithSubtree_SurfacesAtTopLevel_WithChildNested()
+    {
+        // An orphan (ParentId → an id not in the set) that is itself a parent: it surfaces at depth 0 and
+        // keeps its own child nested beneath it, rather than the whole subtree vanishing.
+        var p = ChecklistArranger.Project([
+            List("c1", "L", 0,
+                Item("orphan", orderIndex: 0, parentId: "ghost"),
+                Item("child", orderIndex: 0, parentId: "orphan")),
+        ]);
+
+        var items = Items(p);
+        Assert.Equal(["orphan", "child"], items.Select(r => r.ItemId));
+        Assert.Equal([0, 1], items.Select(r => r.Depth));
+    }
+
+    [Fact]
+    public void DualRepresentation_FlatChildBeforeParent_StillNests()
+    {
+        // The flat copy of the child (no ParentId pointer) appears *before* its owning parent, whose
+        // Children array carries it. Collect records the structural parent order-independently, so the
+        // child still nests rather than surfacing flat.
+        var child = Item("child", orderIndex: 0);
+        var p = ChecklistArranger.Project([
+            List("c1", "L", 0,
+                child,
+                Item("parent", orderIndex: 1, children: [child])),
+        ]);
+
+        var items = Items(p);
+        Assert.Equal(["parent", "child"], items.Select(r => r.ItemId));
+        Assert.Equal([0, 1], items.Select(r => r.Depth));
+        Assert.Equal(2, p.TotalCount);
+    }
+
+    [Fact]
     public void DualRepresentation_ChildInBothChildrenAndFlat_NotDoubled()
     {
         // ClickUp may send the child both inside the parent's Children array and again flat with a
