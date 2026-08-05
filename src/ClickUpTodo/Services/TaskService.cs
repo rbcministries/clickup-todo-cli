@@ -1198,6 +1198,11 @@ public sealed class TaskService(
         // concurrent write and the next frontier is deterministic.
         var budget = opts.MaxPerParentFetches;
         var spent = 0;
+        // #450: each successful per-parent GetSubtasksAsync returns a parent's COMPLETE child set, so record
+        // it here (keyed by parent id) to seed the Task Tree tab's descendant BFS. Only the per-parent branch
+        // populates this — the whole-list branch above can't vouch for a parent's children per-parent — and a
+        // failed fetch is never recorded (below), so no incomplete set is ever exposed as complete.
+        var completeChildren = new Dictionary<string, IReadOnlyList<TaskItem>>(StringComparer.Ordinal);
         var expanded = new HashSet<string>(StringComparer.Ordinal);
         using var gate = new SemaphoreSlim(MaxFanOutConcurrency);
         // plan.PerParentIds is already distinct (SubtaskFetchStrategy dedups parents); the per-level
@@ -1234,7 +1239,8 @@ public sealed class TaskService(
             spent += level.Count;
 
             // Fetch the level concurrently, bounded by the gate, preserving order so the merge below is
-            // deterministic. Best-effort: a parent whose fetch throws contributes no children.
+            // deterministic. Best-effort: a parent whose fetch throws returns null so it contributes no
+            // children AND isn't recorded as a (falsely-empty) complete set — distinct from a genuine empty.
             var childLists = await Task.WhenAll(level.Select(async id =>
             {
                 await gate.WaitAsync(ct);
@@ -1244,7 +1250,7 @@ public sealed class TaskService(
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    return (IReadOnlyList<TaskItem>)[];
+                    return null;
                 }
                 finally
                 {
@@ -1253,10 +1259,15 @@ public sealed class TaskService(
             }));
 
             // Merge single-threaded in level order; newly-pooled children become the next frontier
-            // (their own subtasks may be foreign too).
+            // (their own subtasks may be foreign too). Indexed against `level` so each result pairs with its
+            // parent id for the #450 complete-children record.
             var next = new List<string>();
-            foreach (var children in childLists)
+            for (var i = 0; i < level.Count; i++)
             {
+                var children = childLists[i];
+                if (children is null)
+                    continue; // fetch failed: no children, and not vouched complete
+                completeChildren[level[i]] = children; // a successful per-parent fetch is a complete child set
                 foreach (var child in children)
                 {
                     if (string.IsNullOrEmpty(child.Id) || !fetched.TryAdd(child.Id, child))
@@ -1267,7 +1278,8 @@ public sealed class TaskService(
             frontier = next;
         }
 
-        return new ForeignSubtaskResolution(ForeignDescendants(snapshot, fetched.Values.ToList()), truncated);
+        return new ForeignSubtaskResolution(
+            ForeignDescendants(snapshot, fetched.Values.ToList()), truncated, completeChildren);
     }
 
     /// <summary>Stable ordering: by due date (soonest first, undated last), then by name.</summary>
