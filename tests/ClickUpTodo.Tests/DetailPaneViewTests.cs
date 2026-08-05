@@ -1,3 +1,4 @@
+using ClickUpTodo.Configuration;
 using ClickUpTodo.Tui;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
@@ -477,6 +478,54 @@ public sealed class DetailPaneViewTests
         Assert.Equal(LinkAction.OpenInBrowser, requests[1].Action);
         Assert.Equal(TaskUrl, requests[1].Url);
         Assert.Equal(LinkKind.Task, requests[1].Span.Kind);
+    }
+
+    [Fact]
+    public void CtrlClick_OnTaskLink_WhenDestinationIsNewTerminalTab_RequestsNewTab()
+    {
+        // #320: the configured Ctrl+Click destination flows through the pane into Resolve.
+        var (pane, requests) = ClickablePane($"Related: {TaskUrl} ok", width: 60);
+        pane.TaskLinkCtrlClickDestination = TaskLinkCtrlClickDestination.NewTerminalTab;
+
+        Click(pane, Locate(pane, TaskUrl), ctrl: true);
+
+        var request = Assert.Single(requests);
+        Assert.Equal(LinkAction.OpenTaskInNewTab, request.Action);
+        Assert.Equal(LinkKind.Task, request.Span.Kind);
+        Assert.Equal("abc123", request.Span.TaskId);
+    }
+
+    [Theory]
+    // (configured default, expected Ctrl+Shift action) — Ctrl+Shift inverts the default (#320).
+    [InlineData(TaskLinkCtrlClickDestination.Browser, LinkAction.OpenTaskInNewTab)]
+    [InlineData(TaskLinkCtrlClickDestination.NewTerminalTab, LinkAction.OpenInBrowser)]
+    public void CtrlShiftClick_OnTaskLink_InvertsTheConfiguredDestination(
+        TaskLinkCtrlClickDestination destination, LinkAction expected)
+    {
+        var (pane, requests) = ClickablePane($"Related: {TaskUrl} ok", width: 60);
+        pane.TaskLinkCtrlClickDestination = destination;
+
+        ClickWith(pane, Locate(pane, TaskUrl), MouseFlags.LeftButtonClicked | MouseFlags.Ctrl | MouseFlags.Shift);
+
+        var request = Assert.Single(requests);
+        Assert.Equal(expected, request.Action);
+        Assert.Equal(LinkKind.Task, request.Span.Kind);
+    }
+
+    [Theory]
+    [InlineData(TaskLinkCtrlClickDestination.Browser)]
+    [InlineData(TaskLinkCtrlClickDestination.NewTerminalTab)]
+    public void CtrlShiftClick_OnAWebLink_StillOpensBrowser(TaskLinkCtrlClickDestination destination)
+    {
+        // A web link ignores the task-link destination entirely, under every modifier.
+        var (pane, requests) = ClickablePane($"See {WebUrl} now", width: 60);
+        pane.TaskLinkCtrlClickDestination = destination;
+
+        ClickWith(pane, Locate(pane, WebUrl), MouseFlags.LeftButtonClicked | MouseFlags.Ctrl | MouseFlags.Shift);
+
+        var request = Assert.Single(requests);
+        Assert.Equal(LinkAction.OpenInBrowser, request.Action);
+        Assert.Equal(WebUrl, request.Url);
     }
 
     [Fact]

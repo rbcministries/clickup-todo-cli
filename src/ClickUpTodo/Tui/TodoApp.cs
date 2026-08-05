@@ -1920,6 +1920,12 @@ public sealed class TodoApp
             case LinkAction.OpenTaskDetail:
                 ResolveAndOpen(request.Url);
                 break;
+            case LinkAction.OpenTaskInNewTab when request.Span.TaskId is { Length: > 0 } taskId:
+                // The configured Ctrl+Click (or Ctrl+Shift+Click) new-tab destination (#320). Reuses the
+                // shared launch core — re-entrancy guard, off-thread launch, clipboard fallback (#301/#384).
+                // A task link always carries a TaskId; the guard keeps a defensive fallthrough to browser.
+                LaunchAppTabForTask(taskId, taskId);
+                break;
             default:
                 LaunchBrowser(request.Url, Ellipsize(request.Url));
                 break;

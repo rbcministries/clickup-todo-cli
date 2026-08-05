@@ -392,8 +392,14 @@ public sealed class TaskDetailScreen : Screen
 
         // Click a link in any pane → act on it (D, #318). Each pane hit-tests its own body and resolves
         // the action; the screen only gates it on no overlay owning input and forwards it to the host.
+        // The configurable Ctrl+Click destination (#320) rides on the persisted DetailViewSettings — the
+        // pane's Resolve consults it, and the host does what the destination asks (a new-tab action
+        // degrades to the browser in single-task mode, tracked by #435).
         foreach (var pane in new[] { _streamPane, _descriptionPane, _commentsPane })
+        {
+            pane.TaskLinkCtrlClickDestination = prefs.TaskLinkCtrlClick;
             pane.LinkActivationRequested += OnPaneLinkActivation;
+        }
 
         // The Other tab colours its Priority/Status values (#66), which a plain TextView can't do. Its
         // content is a container (a coloured, fixed-height header view on top of the scrollable,
