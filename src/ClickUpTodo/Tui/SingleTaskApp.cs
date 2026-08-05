@@ -254,10 +254,11 @@ public sealed class SingleTaskApp
             // persisted BadgeDisplay so it opens in the same state as the main list, and lazy-loads off the
             // UI thread on first cycle to the tab, keyed to this tab's task id. No ancestry snapshot to
             // seed here (#419): single-task (--task) mode holds no broader working set, so this stays a
-            // plain fetch.
+            // plain fetch. No descendant children index either (#450): the F4 foreign-subtask resolution
+            // that vouches for complete child sets is a dashboard concern, absent in single-task mode.
             currentUserId: _tasks.UserId,
             treeBadgeDisplay: _config.BadgeDisplay,
-            loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(id, snapshotLookup: null, ct));
+            loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(id, snapshotLookup: null, childrenIndex: null, ct: ct));
 
         var tab = new DetailTab(screen, id, task, comments);
 
