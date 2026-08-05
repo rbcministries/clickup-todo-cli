@@ -162,6 +162,18 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
     private const string CustomFieldsJson =
         """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false},{"id":"cf_estimate","name":"Estimate","type":"number","required":true},{"id":"cf_stage","name":"Stage","type":"drop_down","required":false,"type_config":{"options":[{"id":"opt_alpha","name":"Alpha","orderindex":0},{"id":"opt_beta","name":"Beta","orderindex":1}]}}]}""";
 
+    // #446 opt-in: serve a *tall* fillable set — nine single-line text fields plus a required tenth — so
+    // the New Task Custom fields page's widget stack (2 + 10×3 = 32 content rows) is taller than a short
+    // emulated terminal. This exercises the page's content-scroll: "Last Field" seeded below the fold is
+    // only reachable/visible once Tab (scroll-on-focus) or PgUp/PgDn scrolls it in. Off by default; takes
+    // precedence over E2E_CUSTOM_FIELDS when both are set. "Last Field" being required also drives the
+    // required-block path for a below-the-fold field. NATO-word names avoid substring collisions on the
+    // pyte screen.
+    private static bool CustomFieldsMany => Environment.GetEnvironmentVariable("E2E_CUSTOM_FIELDS_MANY") == "1";
+
+    private const string CustomFieldsManyJson =
+        """{"fields":[{"id":"cf_1","name":"Alpha","type":"text","required":false},{"id":"cf_2","name":"Bravo","type":"text","required":false},{"id":"cf_3","name":"Charlie","type":"text","required":false},{"id":"cf_4","name":"Delta","type":"text","required":false},{"id":"cf_5","name":"Echo","type":"text","required":false},{"id":"cf_6","name":"Foxtrot","type":"text","required":false},{"id":"cf_7","name":"Golf","type":"text","required":false},{"id":"cf_8","name":"Hotel","type":"text","required":false},{"id":"cf_9","name":"India","type":"text","required":false},{"id":"cf_last","name":"Last Field","type":"text","required":true}]}""";
+
     private static bool WarmClosed => Environment.GetEnvironmentVariable("E2E_WARM_CLOSED") == "1";
     private static readonly int ClosedStallMs =
         int.TryParse(Environment.GetEnvironmentVariable("E2E_STALL_CLOSED_MS"), out var ms) ? ms : 0;
@@ -316,9 +328,12 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
         else if (path.Contains("/list/") && path.EndsWith("/task"))
             body = """{"tasks":[],"last_page":true}""";
         else if (path.Contains("/list/") && path.EndsWith("/field"))
-            // Custom Field definitions (#249/#395): the seeded fillable set under E2E_CUSTOM_FIELDS, else
-            // an empty set (so the New Task screen creates directly, as every other check expects).
-            body = CustomFields ? CustomFieldsJson : """{"fields":[]}""";
+            // Custom Field definitions (#249/#395): the tall set (#446) under E2E_CUSTOM_FIELDS_MANY, else
+            // the small seeded set under E2E_CUSTOM_FIELDS, else an empty set (so the New Task screen
+            // creates directly, as every other check expects).
+            body = CustomFieldsMany ? CustomFieldsManyJson
+                : CustomFields ? CustomFieldsJson
+                : """{"fields":[]}""";
         else if (path.Contains("/list/"))
             body = ListJson(path);
         else if (path.EndsWith("/team"))
