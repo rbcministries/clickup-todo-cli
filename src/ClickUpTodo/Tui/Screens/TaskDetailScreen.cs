@@ -849,6 +849,22 @@ public sealed class TaskDetailScreen : Screen
             }
         }
 
+        // Bare ↑/↓ scroll the front-most text pane one line, or move the Task Tree selection one row
+        // (#452). Claimed here — on the focused pane/list's own KeyDown, which fires before its bindings
+        // and before the arrow bubbles up to NavSafeTabs — because otherwise the arrow is swallowed:
+        // the read-only TextView moves an invisible caret (no viewport scroll), and the tree ListView's
+        // Command.Down bubbles up to NavSafeTabs' inert crash-guard, cancelling its own MoveDown. Inert
+        // while the Dispatch prompt is open (its dir-browser owns bare ↑/↓, like the command blocks
+        // below) and for any modified arrow (Ctrl+←/→ tab-cycle, Shift-extend). Always consumed, so a
+        // press at a content boundary is a no-op that stays on the tab — never a tab switch or crash.
+        if (!_promptBox.Visible && !key.IsCtrl && !key.IsShift && !key.IsAlt
+            && (key.KeyCode == KeyCode.CursorUp || key.KeyCode == KeyCode.CursorDown))
+        {
+            key.Handled = true;
+            MoveActiveTab(key.KeyCode == KeyCode.CursorDown ? 1 : -1);
+            return;
+        }
+
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
         {
             key.Handled = true;
@@ -1205,6 +1221,31 @@ public sealed class TaskDetailScreen : Screen
         if (current < 0)
             current = 0;
         _scrollTargets[current].InvokeCommand(command);
+    }
+
+    /// <summary>Moves the front-most tab by <paramref name="delta"/> rows for a bare ↑/↓ (#452): a
+    /// text pane (or the Other tab's fields body) scrolls one line via its viewport; the Task Tree
+    /// <see cref="ListView"/> moves its selection one row (its setter calls
+    /// <c>EnsureSelectedItemVisible</c>, so the list scrolls to follow). The pure
+    /// <see cref="DetailScrollModel"/> clamps to the content edges, so at a boundary this is a no-op.</summary>
+    private void MoveActiveTab(int delta)
+    {
+        var current = Array.IndexOf(_tabContents, _tabs.Value);
+        if (current < 0)
+            current = 0;
+        switch (_scrollTargets[current])
+        {
+            case ListView list:
+                var count = list.Source?.Count ?? 0;
+                var selected = list.SelectedItem is int i && i >= 0 ? i : 0;
+                list.SelectedItem = DetailScrollModel.NextIndex(selected, count, delta);
+                break;
+            case TextView pane:
+                var vp = pane.Viewport;
+                var top = DetailScrollModel.NextTop(vp.Y, vp.Height, pane.Lines, delta);
+                pane.Viewport = new Rectangle(vp.X, top, vp.Width, vp.Height);
+                break;
+        }
     }
 
     private void ShowPrompt()
