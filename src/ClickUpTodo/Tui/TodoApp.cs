@@ -2027,7 +2027,7 @@ public sealed class TodoApp
                         // RESOLVED id (identical to taskId for a real id; correct for a custom-id fallback).
                         currentUserId: _tasks.UserId,
                         treeBadgeDisplay: _config.BadgeDisplay,
-                        loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(resolvedId, treeSnapshot, ct));
+                        loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(resolvedId, treeSnapshot, childrenIndex: null, ct: ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the
