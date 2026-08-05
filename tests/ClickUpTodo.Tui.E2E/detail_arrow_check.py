@@ -13,21 +13,26 @@ Drives, at a short terminal so the Stream body overflows its pane:
   1. Stream tab (auto-scrolled to the newest comment at the bottom): a bare ↑ scrolls the body up
      (the visible text changes), and a following bare ↓ scrolls it back down — proving one-line,
      both-directions viewport scroll, not caret movement.
+  1b. #468: with the viewport scrolled well up (bare ↑) and the read-only caret pinned far below, a
+     PgUp pages the viewport UP and a PgDn pages it back DOWN — pinning that PgUp/PgDn scroll the same
+     explicit viewport state as ↑/↓ and compose with it (they page relative to the view, not the
+     off-screen caret). This is behaviour-preserving on Terminal.Gui 2.4.10, whose stock paging is
+     already viewport-based; the check guards the composition against a driver/version that isn't.
   2. Task Tree tab: a bare ↓ moves the focus-highlighted row down one, and a bare ↑ moves it back —
      proving keyboard row selection, which was completely inert before the fix.
 
-Requires E2E_TREE=1 so the five-node Task Tree tab is present. Fails on the pre-#452 code."""
-import os, pty, select, struct, sys, termios, fcntl, time
+Requires E2E_TREE=1 so the five-node Task Tree tab is present. Fails on pre-#452 code."""
+import os, pty, select, struct, sys, termios, fcntl, time, re
 import pyte, subprocess
 
-ROWS, COLS = 18, 100
+ROWS, COLS = 32, 100
 DLL = sys.argv[1]
 
 screen = pyte.Screen(COLS, ROWS)
 stream = pyte.ByteStream(screen)
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-env = dict(os.environ, TERM="xterm-256color", E2E_TREE="1", E2E_TASKS="6")
+env = dict(os.environ, TERM="xterm-256color", E2E_TREE="1", E2E_TASKS="6", E2E_LONG_STREAM="1")
 proc = subprocess.Popen(["dotnet", DLL], stdin=slave, stdout=slave, stderr=slave,
                         env=env, close_fds=True, preexec_fn=os.setsid)
 os.close(slave)
@@ -99,6 +104,8 @@ def tree_selected_index():
 CTRL_RIGHT = b"\x1b[1;5C"
 UP = b"\x1b[A"
 DOWN = b"\x1b[B"
+PGUP = b"\x1b[5~"
+PGDN = b"\x1b[6~"
 ENTER = b"\r"
 
 
@@ -138,6 +145,40 @@ try:
     if after_down == after_up:
         fail("bare ↓ after ↑ did not scroll the Stream pane back down:")
 
+    # ── 1b) PgUp/PgDn scroll the same explicit viewport as ↑/↓ and compose with it (#468) ─────────
+    # The Stream overflows by well over a page (E2E_LONG_STREAM seeds 40 numbered filler comments,
+    # oldest→newest top→bottom, so the visible "Filler stream line NN" numbers *increase downward* — a
+    # monotonic proxy for the viewport's scroll position). Scroll the viewport well up with bare ↑
+    # (proven above) so the read-only caret is pinned far below it, then check PgUp/PgDn page relative
+    # to the *view*, not the off-screen caret: PgUp continues the viewport UP, PgDn pages it back DOWN.
+    def top_filler():
+        nums = [int(m) for row in pane_body() for m in re.findall(r"line (\d+)", row)]
+        return min(nums) if nums else None
+
+    for _ in range(80):
+        send(UP)
+        pump(0.03)
+    pump(0.6)
+    pos_mid = top_filler()
+    if pos_mid is None:
+        fail("expected numbered filler lines visible mid-scroll (E2E_LONG_STREAM):")
+
+    # PgUp pages the viewport UP one page (smaller filler numbers) — a viewport write on the same state
+    # as ↑. A jump DOWN toward the off-screen caret (larger numbers) would mean paging fought the caret.
+    send(PGUP)
+    pump(0.6)
+    pos_up = top_filler()
+    if pos_up is None or pos_up >= pos_mid:
+        fail(f"PgUp did not page the shared viewport up (top filler number went {pos_mid}→{pos_up}, "
+             f"expected a decrease):")
+
+    # PgDn then pages back DOWN the same viewport (larger filler numbers).
+    send(PGDN)
+    pump(0.6)
+    pos_down = top_filler()
+    if pos_down is None or pos_down <= pos_up:
+        fail(f"PgDn did not page the Stream back down ({pos_up}→{pos_down}, expected an increase):")
+
     # ── 2) Task Tree tab: bare ↓ moves the selection down one row, bare ↑ moves it back ───────────
     for _ in range(4):               # Stream -> Description -> Comments -> Other -> Task Tree
         send(CTRL_RIGHT)
@@ -161,8 +202,8 @@ try:
     if up1 != start:
         fail(f"bare ↑ did not move the tree selection back up (expected {start}, now {up1}):")
 
-    print("ok — bare ↑/↓ scroll the Stream pane one line (both directions) and move the Task "
-          "Tree selection one row")
+    print("ok — bare ↑/↓ scroll the Stream pane one line (both directions), PgUp/PgDn page the same "
+          "viewport up/down, and bare ↑/↓ move the Task Tree selection one row")
     os.killpg(os.getpgid(proc.pid), 9)
 except AssertionError as e:
     fail(str(e))

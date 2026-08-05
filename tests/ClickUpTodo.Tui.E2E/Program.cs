@@ -684,6 +684,16 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
             // the F3 mentions-only filter keeps. Newest date so it sorts to the top of the feed.
             new { id = "c3", comment_text = "@bench can you take a look when you get a chance?", user = new { username = "Alex Kim" }, date = "1751490000000", resolved = false },
         };
+        // Optional: a deterministic tall tail so the Stream overflows by well over a page — the geometry
+        // the #468 page-scroll composition check needs (detail_arrow_check.py). Fixed count + fixed text +
+        // fixed dates, so it's stable across refreshes; off by default, so every other scenario is
+        // unaffected. Distinct from E2E_VARY_COMMENTS, whose tail grows on each fetch.
+        if (Environment.GetEnvironmentVariable("E2E_LONG_STREAM") == "1")
+        {
+            for (var i = 1; i <= 40; i++)
+                comments.Add(new { id = $"ls{i}", comment_text = $"Filler stream line {i:D2} — deterministic content for the #468 page-scroll composition check.", user = new { username = "Filler Bot" }, date = $"{1751490100000L + i}", resolved = false });
+        }
+
         // Optional: append a growing tail of comments so each refresh changes content (scroll-preservation
         // check). Off by default, so every existing scenario sees the exact same three comments as before.
         if (Environment.GetEnvironmentVariable("E2E_VARY_COMMENTS") == "1")

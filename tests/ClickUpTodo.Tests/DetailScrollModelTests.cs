@@ -72,4 +72,42 @@ public sealed class DetailScrollModelTests
     public void NextIndex_MovesOneRowAndSaturatesAtEnds(
         int currentIndex, int count, int delta, int expected)
         => Assert.Equal(expected, DetailScrollModel.NextIndex(currentIndex, count, delta));
+
+    // ── PgUp/PgDn page-scroll sharing the viewport with ↑/↓ (#468) ────────────────────────────────
+
+    [Theory]
+    [InlineData(20, 19)]   // a full page keeps one line of overlap for continuity
+    [InlineData(2, 1)]     // a two-row viewport pages one row (still one line of context)
+    [InlineData(1, 1)]     // a single-row viewport still advances one row
+    [InlineData(0, 1)]     // degenerate height never yields a zero (or negative) page
+    [InlineData(-3, 1)]    // a negative height clamps to a single row too
+    public void PageDelta_IsOnePageWithOneLineOverlap(int viewportHeight, int expected)
+        => Assert.Equal(expected, DetailScrollModel.PageDelta(viewportHeight));
+
+    [Fact]
+    public void PageScroll_SharesTheViewportWithLineScroll_SoTheyComposeAdditively()
+    {
+        // The heart of #468: because PgUp and a bare ↑ both clamp the same viewport top via NextTop, a
+        // line move followed by a page move equals a single move by their summed delta — the two gestures
+        // compose on one explicit scroll state. Here: ↑ (−1) then PgUp (−PageDelta) from top 30 in a
+        // height-10 / 100-line pane.
+        const int height = 10, lines = 100, start = 30;
+        var afterUp = DetailScrollModel.NextTop(start, height, lines, -1);
+        var afterUpThenPageUp = DetailScrollModel.NextTop(afterUp, height, lines, -DetailScrollModel.PageDelta(height));
+        var combined = DetailScrollModel.NextTop(start, height, lines, -1 - DetailScrollModel.PageDelta(height));
+        Assert.Equal(combined, afterUpThenPageUp);
+        Assert.Equal(start - 1 - 9, afterUpThenPageUp);   // 30 − 1 − 9 = 20, all clamped within bounds
+    }
+
+    [Theory]
+    // A page saturates at the content edges exactly like a line move: NextTop(currentTop, h, lines, ±PageDelta).
+    [InlineData(2, 10, 100, -1, 0)]     // PgUp near the top clamps to 0 (can't page past the first row)
+    [InlineData(85, 10, 100, 1, 90)]    // PgDn near the bottom clamps to MaxTop (90), not past it
+    [InlineData(0, 10, 5, 1, 0)]        // content shorter than the viewport: PgDn is a no-op
+    [InlineData(0, 10, 5, -1, 0)]       // …and PgUp is a no-op too
+    public void PageScroll_SaturatesAtEdges(
+        int currentTop, int viewportHeight, int lineCount, int direction, int expectedTop)
+        => Assert.Equal(
+            expectedTop,
+            DetailScrollModel.NextTop(currentTop, viewportHeight, lineCount, direction * DetailScrollModel.PageDelta(viewportHeight)));
 }
