@@ -116,6 +116,7 @@ if (!string.IsNullOrWhiteSpace(singleTaskId))
     var launchTask = await tasks.GetTaskDetailAsync(singleTaskId);
     var launchComments = await tasks.GetTaskCommentsAsync(singleTaskId);
     new SingleTaskApp(tasks, config, configStore, launchTask, launchComments, browser).Run("ansi");
+    markerStateStore?.Dispose();
     return;
 }
 
@@ -236,8 +237,11 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
     }
 
     /// <summary>Upserts one task's overlaid status (#376) via read-modify-write with an atomic replace
-    /// (temp file + <see cref="File.Move(string, string, bool)"/>, atomic on POSIX), so a concurrent reader
-    /// never sees a torn file.</summary>
+    /// (unique temp file + <see cref="File.Move(string, string, bool)"/>, atomic on POSIX), so a concurrent
+    /// reader never sees a torn file. The RMW itself assumes a <b>single writer</b> — the scenario only ever
+    /// commits in one instance, so this is a status mirror, not the multi-writer channel (that's the marker
+    /// <i>store</i>). A unique temp name keeps overlapping writes within a process from clobbering each
+    /// other even though the scenario issues just one PUT.</summary>
     private static void WriteOverlay(string taskId, StatusOverlay entry)
     {
         var path = SharedStatePath;
@@ -249,7 +253,7 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
             {
                 var map = ReadOverlay();
                 map[taskId] = entry;
-                var tmp = $"{path}.{Environment.ProcessId}.tmp";
+                var tmp = $"{path}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
                 File.WriteAllText(tmp, JsonSerializer.Serialize(map));
                 File.Move(tmp, path, overwrite: true);
                 return;
@@ -766,8 +770,11 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
     {
         var id = path[(path.LastIndexOf('/') + 1)..];
         var overlay = ReadOverlay();
-        var status = overlay.TryGetValue(id, out var cur) ? cur.Status : DefaultStatus(id);
-        var color = overlay.TryGetValue(id, out var cur2) ? cur2.Color : ForeignStatusColor(status);
+        string status, color;
+        if (overlay.TryGetValue(id, out var cur))
+            (status, color) = (cur.Status, cur.Color);
+        else
+            (status, color) = (DefaultStatus(id), ForeignStatusColor(DefaultStatus(id)));
         try
         {
             using var doc = JsonDocument.Parse(requestBody);

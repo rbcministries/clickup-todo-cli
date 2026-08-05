@@ -130,17 +130,24 @@ def fail(msg):
     sys.exit(1)
 
 
+def qu_open(app):
+    """True when the Quick Updates screen is up (all three panes present), mirroring
+    foreign_quickupdates_check.py's oracle rather than a bare title match."""
+    v = app.visible()
+    return "Quick Updates" in v and "Priority" in v and "Assignees" in v
+
+
 def open_qu_on_t0(app):
-    """Open Quick Updates on t0 in `app`; Down + retry if the cursor lands on another row.
-    While Quick Updates is open the task's title is the screen's heading, so "Task 0" in view is a
-    reliable oracle for "on t0"."""
-    for _ in range(6):
+    """Open Quick Updates on t0 in `app`; Esc+Down and retry if the cursor lands on another row.
+    While Quick Updates is open the task's title is the screen's heading (a full-window screen over the
+    list), so "Task 0" in view is a reliable oracle for "on t0". t0 is the initial selection, so the first
+    Ctrl+U normally lands it; the retry budget mirrors the foreign check's."""
+    for _ in range(12):
         app.send(CTRL_U)
         pump(2.5)
-        v = app.visible()
-        if "Quick Updates" in v and "Task 0" in v:
+        if qu_open(app) and "Task 0" in app.visible():
             return True
-        if "Quick Updates" in v:
+        if qu_open(app):
             app.send(ESC)
             pump(1.2)
         app.send(DOWN)
