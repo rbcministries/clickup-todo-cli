@@ -1,6 +1,8 @@
+using ClickUpTodo.Configuration;
+
 namespace ClickUpTodo.Tui;
 
-/// <summary>What activating a <see cref="LinkSpan"/> should do (#318).</summary>
+/// <summary>What activating a <see cref="LinkSpan"/> should do (#318, extended in #320).</summary>
 public enum LinkAction
 {
     /// <summary>Hand the link's URL to the system browser.</summary>
@@ -8,6 +10,9 @@ public enum LinkAction
 
     /// <summary>Open the linked ClickUp task's Task Detail in-app.</summary>
     OpenTaskDetail,
+
+    /// <summary>Open the linked task in a new terminal tab (<c>clickup-todo --task</c>, #320).</summary>
+    OpenTaskInNewTab,
 }
 
 /// <summary>
@@ -32,18 +37,39 @@ public readonly record struct LinkActivationRequest(LinkSpan Span, LinkAction Ac
 public static class LinkActivator
 {
     /// <summary>
-    /// The action for activating <paramref name="span"/>. <paramref name="ctrl"/> (Windows Terminal's own
-    /// "open this link" gesture) always means the browser, whatever the link kind; an unmodified
-    /// activation follows the kind — a ClickUp task link opens in-app, anything else in the browser.
+    /// The action for activating <paramref name="span"/>.
+    /// <list type="bullet">
+    /// <item><description>A <b>web</b> link always opens in the browser, whatever the modifiers.</description></item>
+    /// <item><description>A <b>task</b> link with <b>no</b> <paramref name="ctrl"/> opens in-app
+    /// (the plain-click / <c>Enter</c> gesture); <paramref name="shift"/> is irrelevant here — a plain
+    /// <c>Shift</c> activation isn't a gesture the pane admits.</description></item>
+    /// <item><description>A <b>task</b> link with <paramref name="ctrl"/> follows the configured
+    /// <paramref name="ctrlDestination"/> (#320) — <see cref="TaskLinkCtrlClickDestination.Browser"/> →
+    /// browser, <see cref="TaskLinkCtrlClickDestination.NewTerminalTab"/> → a new terminal tab — and
+    /// <paramref name="shift"/> <b>inverts</b> that choice (<c>Ctrl+Shift</c> does the other one).</description></item>
+    /// </list>
     /// <para>
-    /// A <see cref="LinkSpan.IsCustomTaskId"/> task link is no different here: it is still an in-app
-    /// open, and resolving the custom id to a task is the host's job (it already does exactly that for a
-    /// pasted custom-id URL, #353). #320 extends the plain-click arm with a configurable task
-    /// destination (browser ↔ new terminal tab) and a Shift inversion; this is that arm's one caller.
+    /// A <see cref="LinkSpan.IsCustomTaskId"/> task link is no different here: resolving the custom id to
+    /// a task is the host's job for every arm (it already does exactly that for a pasted custom-id URL,
+    /// #353, and for the new-tab arm hands the id to <c>clickup-todo --task</c>).
     /// </para>
     /// </summary>
-    public static LinkAction Resolve(LinkSpan span, bool ctrl)
-        => !ctrl && span.Kind == LinkKind.Task ? LinkAction.OpenTaskDetail : LinkAction.OpenInBrowser;
+    public static LinkAction Resolve(
+        LinkSpan span,
+        bool ctrl,
+        bool shift = false,
+        TaskLinkCtrlClickDestination ctrlDestination = TaskLinkCtrlClickDestination.Browser)
+    {
+        if (span.Kind != LinkKind.Task)
+            return LinkAction.OpenInBrowser;
+        if (!ctrl)
+            return LinkAction.OpenTaskDetail;
+        // Ctrl on a task link follows the configured destination; Ctrl+Shift inverts it.
+        var destination = shift ? ctrlDestination.Next() : ctrlDestination;
+        return destination == TaskLinkCtrlClickDestination.NewTerminalTab
+            ? LinkAction.OpenTaskInNewTab
+            : LinkAction.OpenInBrowser;
+    }
 
     /// <summary>
     /// The span in <paramref name="spans"/> covering <paramref name="charOffset"/>, or <c>null</c> when

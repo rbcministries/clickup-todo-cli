@@ -26,4 +26,10 @@ public sealed class DetailViewSettings
     /// <summary>Where the Stream tab is scrolled to on open (#107). Default:
     /// <see cref="StreamAutoScroll.Newest"/>.</summary>
     public StreamAutoScroll AutoScroll { get; set; } = StreamAutoScroll.Newest;
+
+    /// <summary>Where a <c>Ctrl</c>+click on a <b>task</b> link in a detail pane goes (#320);
+    /// <c>Ctrl+Shift</c>+click performs the other one. Default:
+    /// <see cref="TaskLinkCtrlClickDestination.Browser"/> — byte-identical to the fixed behaviour
+    /// #318 shipped.</summary>
+    public TaskLinkCtrlClickDestination TaskLinkCtrlClick { get; set; } = TaskLinkCtrlClickDestination.Browser;
 }

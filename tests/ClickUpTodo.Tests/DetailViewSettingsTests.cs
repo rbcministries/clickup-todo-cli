@@ -50,6 +50,13 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal(StreamAutoScroll.Newest, StreamAutoScroll.Oldest.Next());
     }
 
+    [Fact]
+    public void TaskLinkCtrlClickDestination_Next_TogglesAndBack()
+    {
+        Assert.Equal(TaskLinkCtrlClickDestination.NewTerminalTab, TaskLinkCtrlClickDestination.Browser.Next());
+        Assert.Equal(TaskLinkCtrlClickDestination.Browser, TaskLinkCtrlClickDestination.NewTerminalTab.Next());
+    }
+
     // ── defaults ────────────────────────────────────────────────────────────
 
     [Fact]
@@ -59,6 +66,8 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal(DetailTab.Stream, d.DefaultTab);
         Assert.Equal(StreamSort.Ascending, d.StreamSort);
         Assert.Equal(StreamAutoScroll.Newest, d.AutoScroll);
+        // #320: the Ctrl+Click destination defaults to Browser (byte-identical to #318).
+        Assert.Equal(TaskLinkCtrlClickDestination.Browser, d.TaskLinkCtrlClick);
     }
 
     [Fact]
@@ -69,6 +78,7 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal(DetailTab.Stream, d.DefaultTab);
         Assert.Equal(StreamSort.Ascending, d.StreamSort);
         Assert.Equal(StreamAutoScroll.Newest, d.AutoScroll);
+        Assert.Equal(TaskLinkCtrlClickDestination.Browser, d.TaskLinkCtrlClick);
     }
 
     // ── persistence ─────────────────────────────────────────────────────────
@@ -86,6 +96,7 @@ public sealed class DetailViewSettingsTests : IDisposable
                 DefaultTab = DetailTab.Comments,
                 StreamSort = StreamSort.Descending,
                 AutoScroll = StreamAutoScroll.Oldest,
+                TaskLinkCtrlClick = TaskLinkCtrlClickDestination.NewTerminalTab,
             },
         });
 
@@ -93,6 +104,7 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal(DetailTab.Comments, d.DefaultTab);
         Assert.Equal(StreamSort.Descending, d.StreamSort);
         Assert.Equal(StreamAutoScroll.Oldest, d.AutoScroll);
+        Assert.Equal(TaskLinkCtrlClickDestination.NewTerminalTab, d.TaskLinkCtrlClick);
     }
 
     [Fact]
@@ -106,6 +118,7 @@ public sealed class DetailViewSettingsTests : IDisposable
                 DefaultTab = DetailTab.Other,
                 StreamSort = StreamSort.Descending,
                 AutoScroll = StreamAutoScroll.Oldest,
+                TaskLinkCtrlClick = TaskLinkCtrlClickDestination.NewTerminalTab,
             },
         });
 
@@ -115,6 +128,7 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal("Other", detail.GetProperty("defaultTab").GetString());
         Assert.Equal("Descending", detail.GetProperty("streamSort").GetString());
         Assert.Equal("Oldest", detail.GetProperty("autoScroll").GetString());
+        Assert.Equal("NewTerminalTab", detail.GetProperty("taskLinkCtrlClick").GetString());
         // Never ordinals.
         Assert.DoesNotContain("\"defaultTab\":3", json);
     }
@@ -131,6 +145,7 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal(DetailTab.Stream, d.DefaultTab);
         Assert.Equal(StreamSort.Ascending, d.StreamSort);
         Assert.Equal(StreamAutoScroll.Newest, d.AutoScroll);
+        Assert.Equal(TaskLinkCtrlClickDestination.Browser, d.TaskLinkCtrlClick);
     }
 
     public void Dispose()
