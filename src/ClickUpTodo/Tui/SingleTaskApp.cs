@@ -83,6 +83,12 @@ public sealed class SingleTaskApp
     // One-in-flight guard for the marker poll so two scans can't overlap (#377). UI-thread-only.
     private bool _pollingMarkers;
 
+    // The cross-platform "open this task in its own terminal tab" launcher (#435) — the single-task
+    // counterpart of the dashboard's Ctrl+Enter (#301/#384). `_launchingTab` is a one-in-flight guard so a
+    // rapid second Ctrl+Enter can't spawn duplicate tabs. UI-thread-only, mirroring TodoApp.
+    private readonly ITerminalLauncher _tabLauncher = new TerminalLauncher();
+    private bool _launchingTab;
+
     private string _status;
 
     public SingleTaskApp(TaskService tasks, AppConfig config, ConfigStore configStore, TaskDetail task,
@@ -284,6 +290,14 @@ public sealed class SingleTaskApp
         // F6 on the Task Tree tab (#415) cycles the tree's badge display; the host owns the flip/persist
         // and reflects it across the root and every stacked child so the visited-task chain stays in step.
         screen.CycleBadgeDisplayRequested += (_, _) => CycleTreeBadgeDisplay(tab.Screen);
+        // Ctrl+Enter opens this tab's task in its own terminal tab (#435) — the single-task counterpart of
+        // the dashboard's #384 gesture, reusing the exact launcher + copy-command fallback. Since #374 gave
+        // single-task mode the Task Tree tab, the detail screen already raises this event and already
+        // advertises "Ctrl+↩ new tab" on its footer (DetailWithTaskTree); subscribing here is what makes the
+        // advertised key actually launch instead of being a dead key. Keyed to this tab so a task opened by
+        // walking the tree launches its own task; tab.Task.Name is read live so a mid-view refresh that
+        // renamed it is reflected (mirrors the dashboard reading screen.Task.Name).
+        screen.OpenInNewTabRequested += (_, _) => LaunchAppTabForTask(tab.TaskId, tab.Task.Name);
 
         return tab;
     }
@@ -595,6 +609,73 @@ public sealed class SingleTaskApp
             if (confirm.Confirmed)
                 Application.RequestStop();
         });
+    }
+
+    // ── Open in a new terminal tab (Ctrl+Enter, #435) ─────────────────────────
+
+    /// <summary>
+    /// Ctrl+Enter from a single-task tab: opens the front-most tab's task in its own terminal tab —
+    /// <c>clickup-todo --task &lt;id&gt;</c> (#301) — through the same cross-platform launcher and
+    /// copy-command fallback the dashboard uses (#384), sharing the option/message helper
+    /// (<see cref="AppTabLaunch"/>) so the two hosts can't drift. Re-entrancy-guarded so a rapid second
+    /// press can't spawn duplicate tabs; the launch runs off the UI thread and reports back via the shared
+    /// footer. Re-launching the <em>same</em> task is "a bit odd but harmless" (#384/#435) — the value is
+    /// footer parity and the copy-command fallback where a tab can't be targeted.
+    /// </summary>
+    private void LaunchAppTabForTask(string taskId, string name)
+    {
+        if (_launchingTab)
+        {
+            Flash("A task tab is already opening…");
+            return;
+        }
+
+        // Resolve the command before arming the guard: ForTask is pure and could throw on a blank id, and
+        // doing it first means such a throw can't leave _launchingTab stuck true (mirrors TodoApp).
+        var command = AppLaunchCommand.ForTask(taskId);
+        var options = AppTabLaunch.Options(
+            _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
+        _launchingTab = true;
+        Flash(AppTabLaunch.Opening(name));
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var result = await _tabLauncher.LaunchAppAsync(command, options);
+                Application.Invoke(() =>
+                {
+                    _launchingTab = false;
+                    if (result.Success)
+                        Flash(AppTabLaunch.Opened(name, result));
+                    else
+                        FlashLaunchFallback(command);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => { _launchingTab = false; FlashLaunchFallback(command, ErrorText.Short(ex)); });
+            }
+        });
+    }
+
+    /// <summary>The no-terminal fallback (#301): flash the exact relaunch command and copy it to the
+    /// clipboard so the user can open the task tab themselves. <paramref name="reason"/> names the failure
+    /// when the launch threw (vs. simply finding no emulator to launch).</summary>
+    private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
+        => Flash(AppTabLaunch.Fallback(command, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+
+    /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard yields false
+    /// so the caller shows the run-it-yourself form instead (mirrors TodoApp).</summary>
+    private static bool TryCopyToClipboard(string text)
+    {
+        try
+        {
+            return Clipboard.TrySetClipboardData(text);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     // ── Footer / status ──────────────────────────────────────────────────────
