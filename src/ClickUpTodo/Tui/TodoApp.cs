@@ -82,7 +82,7 @@ public sealed class TodoApp
     // Opens a task in its own terminal tab (#301) via the shared cross-platform launcher (#25/#307).
     // Interactive-only, so a plain field (not rebuilt on F2 like _agent); the tab launch reads the
     // preferred-terminal setting at call time.
-    private readonly ITerminalLauncher _tabLauncher = new TerminalLauncher();
+    private readonly ITerminalLauncher _tabLauncher;
     // True while a new-tab launch is in flight, so a rapid second Ctrl+Enter can't spawn duplicate tabs.
     // UI-thread-only (set in LaunchTaskInNewTab, cleared via Application.Invoke), like _dispatching.
     private bool _launchingTab;
@@ -201,7 +201,7 @@ public sealed class TodoApp
     public TodoApp(TaskService tasks, FeedService feed, AppConfig config, ConfigStore configStore,
         IFocusStore focus, TaskCache taskCache, FeedCache feedCache, AssigneeFrequencyCache assignees,
         ListFrequencyCache lists, IBrowserLauncher? browserLauncher = null,
-        IChangeMarkerStore? changeMarkers = null)
+        IChangeMarkerStore? changeMarkers = null, ITerminalLauncher? tabLauncher = null)
     {
         _tasks = tasks;
         _feed = feed;
@@ -213,6 +213,10 @@ public sealed class TodoApp
         _assignees = assignees;
         _lists = lists;
         _browser = browserLauncher ?? new SystemBrowserLauncher();
+        // The new-terminal-tab launcher for the list's Ctrl+Enter (#301), detail's Ctrl+Enter (#384),
+        // and a task-link Ctrl+Click that resolves to a new tab (#320). Defaults to the real launcher;
+        // injectable so the E2E harness can record launches without spawning a terminal.
+        _tabLauncher = tabLauncher ?? new TerminalLauncher();
         // The nudge channel's read side (#295). Defaults to the no-op store so every existing caller/test
         // is unchanged; the Null store's empty InstanceId disarms the marker poll (see Run).
         _changeMarkers = changeMarkers ?? NullChangeMarkerStore.Instance;
