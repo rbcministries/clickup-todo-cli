@@ -151,6 +151,17 @@ public sealed class CommentComposerModelTests
         => Assert.Empty(CommentComposerModel.BuildRuns("", [new CommentComposerModel.MentionToken(1, "A")]));
 
     [Fact]
+    public void BuildRuns_NullText_IsNoRuns()
+        => Assert.Empty(CommentComposerModel.BuildRuns(null, [new CommentComposerModel.MentionToken(1, "A")]));
+
+    [Fact]
+    public void BuildRuns_NullTokens_IsASingleTextRun()
+    {
+        var run = Assert.IsType<CommentRun.Text>(Assert.Single(CommentComposerModel.BuildRuns("plain", null)));
+        Assert.Equal("plain", run.Value);
+    }
+
+    [Fact]
     public void BuildRuns_MentionInTheMiddle_SplitsTextAroundTheTag()
     {
         var tokens = new[] { new CommentComposerModel.MentionToken(42, "Ada") };

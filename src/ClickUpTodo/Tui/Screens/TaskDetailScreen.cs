@@ -122,6 +122,10 @@ public sealed class TaskDetailScreen : Screen
     // mentions inserted into the current composer session (cleared on each ShowCommentComposer). Null box
     // until the first show; only built when the feature is enabled.
     private FrameView? _mentionBox;
+    // The currently-hosted picker instance, retained so it can be disposed on the next open (safe — no
+    // pick/Esc event is unwinding at that point) and on screen teardown; SelectorView owns a debounce
+    // timer + CancellationTokenSource that RemoveAll alone wouldn't release.
+    private MentionPickerView? _mentionPicker;
     private readonly List<CommentComposerModel.MentionToken> _mentionTokens = [];
     private bool MentionEnabled => _postStructuredCommentAsync is not null && _memberMatch is not null && _memberTopFrequent is not null;
     // The composer's ideal height: the multi-line editor rows + the Post/Cancel button row + the
@@ -1409,7 +1413,11 @@ public sealed class TaskDetailScreen : Screen
         if (!MentionEnabled || !_commentBox.Visible)
             return;
 
-        _mentionBox?.RemoveAll(); // drop any prior picker instance before hosting a fresh one
+        // Detach and dispose any prior picker before hosting a fresh one. Disposing here (on the next
+        // open) rather than in HideMentionPicker keeps us off the stack of the outgoing picker's own
+        // pick/Esc event — RemoveAll only detaches; SelectorView's timer/CTS need an explicit Dispose.
+        _mentionBox?.RemoveAll();
+        _mentionPicker?.Dispose();
         var picker = new MentionPickerView(_memberMatch!, _memberTopFrequent!)
         {
             X = 0,
@@ -1417,6 +1425,7 @@ public sealed class TaskDetailScreen : Screen
             Width = Dim.Fill(),
             Height = Dim.Fill(),
         };
+        _mentionPicker = picker;
         picker.MemberPicked += OnMentionPicked;
         // Esc dismisses the picker back to the composer (not "back to the list"): handled on the picker
         // and marked so it never reaches the screen's OnKey. The base SelectorView owns typing / ↑↓ /
@@ -1997,6 +2006,11 @@ public sealed class TaskDetailScreen : Screen
                 Application.RemoveTimeout(token);
                 _autoRefreshToken = null;
             }
+            // Dispose the live mention picker (#325), if any — a fresh one is built per open and the
+            // outgoing one is otherwise disposed on the next open, so this releases the last instance's
+            // debounce timer / CancellationTokenSource (owned by SelectorView) on screen teardown.
+            _mentionPicker?.Dispose();
+            _mentionPicker = null;
         }
         base.Dispose(disposing);
     }
