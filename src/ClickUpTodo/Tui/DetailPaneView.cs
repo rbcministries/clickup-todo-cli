@@ -180,9 +180,11 @@ public sealed class DetailPaneView : TextView
 
     /// <summary>
     /// Raised when the user activates a link in this pane with the mouse (#318): a plain left click on a
-    /// ClickUp task link asks for that task's Task Detail, any other click on a link (or any
-    /// <c>Ctrl</c>+click) asks for the browser — see <see cref="LinkActivator.Resolve"/>. The host owns
-    /// the destinations; the pane only reports what was clicked and what it means.
+    /// ClickUp task link asks for that task's Task Detail; a <c>Ctrl</c>+click (or <c>Ctrl+Shift</c>+click,
+    /// #320) on a task link asks for the configured <see cref="TaskLinkCtrlClickDestination"/> (browser or
+    /// a new terminal tab, with Shift inverting); any click on a web link asks for the browser — see
+    /// <see cref="LinkActivator.Resolve"/>. The host owns the destinations; the pane only reports what was
+    /// clicked and what it means.
     /// </summary>
     public event EventHandler<LinkActivationRequest>? LinkActivationRequested;
 

@@ -381,9 +381,12 @@ public sealed class SettingsScreen : Screen
         _ => "Newest",
     };
 
+    // Kept short ("New tab", not "New terminal tab") so the widest state stays within the left column at
+    // ~80 cols — the right column starts at Pos.Percent(50)+1 (#320 review). README spells out the full
+    // "new terminal tab" behaviour.
     private static string TaskLinkCtrlClickText(TaskLinkCtrlClickDestination d) => "Ctrl+Click task link: " + d switch
     {
-        TaskLinkCtrlClickDestination.NewTerminalTab => "New terminal tab",
+        TaskLinkCtrlClickDestination.NewTerminalTab => "New tab",
         _ => "Browser",
     };
 }
