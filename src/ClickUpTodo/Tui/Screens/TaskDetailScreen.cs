@@ -1528,7 +1528,11 @@ public sealed class TaskDetailScreen : Screen
                 {
                     if (_disposed)
                         return; // the detail screen was closed mid-post — don't touch torn-down views
-                    UpdateData(_task, CommentComposerModel.Reconcile(_comments, pendingId, confirmed));
+                    // Adopt the server id/date; for a structured post keep the composed display text (with
+                    // the visible "@Name" literals), since the client-built confirmed item can only render a
+                    // mention by its numeric id ("@101"). The 30s refresh later pulls ClickUp's own rendering.
+                    var reconciled = structured ? confirmed with { Text = text } : confirmed;
+                    UpdateData(_task, CommentComposerModel.Reconcile(_comments, pendingId, reconciled));
                     RequestFlash("Comment posted.");
                 });
             }

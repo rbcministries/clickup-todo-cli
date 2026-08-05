@@ -159,6 +159,11 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
     // Off by default, so every existing check sees the empty field set (Save creates directly, as before).
     private static bool CustomFields => Environment.GetEnvironmentVariable("E2E_CUSTOM_FIELDS") == "1";
 
+    // #325 opt-in: when set, the POST /task/{id}/comment handler appends each request body (one per line)
+    // to this file so mention_check.py can assert the structured @-mention tag block was actually sent.
+    // Off by default, so every existing check's comment post is unaffected.
+    private static readonly string? CommentLog = Environment.GetEnvironmentVariable("E2E_COMMENT_LOG");
+
     private const string CustomFieldsJson =
         """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false},{"id":"cf_estimate","name":"Estimate","type":"number","required":true},{"id":"cf_stage","name":"Stage","type":"drop_down","required":false,"type_config":{"options":[{"id":"opt_alpha","name":"Alpha","orderindex":0},{"id":"opt_beta","name":"Beta","orderindex":1}]}}]}""";
 
@@ -232,7 +237,14 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
         // (the GET read path returns it as a string) — mirror that so the fake matches the real API (#144).
         // Must precede the GET /comment branch below.
         else if (request.Method == HttpMethod.Post && path.Contains("/task/") && path.EndsWith("/comment"))
+        {
+            // #325: when E2E_COMMENT_LOG is set, record the raw request body (one per line) so a check can
+            // assert the structured `comment` blocks array — an @-mention tag, {"type":"tag","user":{"id":…}}
+            // — was actually sent. Otherwise the body is ignored (the canned response covers the round-trip).
+            if (!string.IsNullOrEmpty(CommentLog) && request.Content is { } commentContent)
+                File.AppendAllText(CommentLog, await commentContent.ReadAsStringAsync(ct) + "\n");
             body = """{"id":9014000000001,"hist_id":"h1","date":1751500000000}""";
+        }
         else if (path.Contains("/task/") && path.EndsWith("/comment"))
             body = CommentsJson(TaskIdOfComment(path));
         // GET /comment/{comment_id}/reply (#329, threaded comments C): a comment's reply thread. Only the
