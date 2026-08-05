@@ -865,6 +865,25 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // Bare PgUp/PgDn page the front-most text pane via the same viewport write as ↑/↓ (#468), so the
+        // whole scroll vocabulary of the read-only panes lives in one explicit viewport model rather than
+        // split between our ↑/↓ code (#452) and Terminal.Gui's stock TextView paging. Owning it keeps the
+        // two gestures composing on one state (`viewport.Y`) regardless of what a given TG version or
+        // terminal driver does for Command.PageUp/PageDown — the cross-platform concern behind #468/#312.
+        // (On TG 2.4.10 the stock commands already page the viewport, so this is behaviour-preserving
+        // today; the value is the explicit, driver-independent ownership.) Text panes only — the Task Tree
+        // ListView keeps its stock page-selection (PageActiveTextPane returns false ⇒ the key falls
+        // through to it). Inert while the Dispatch prompt is open (its dir-browser owns paging) and for any
+        // modified key: Ctrl+PgUp/PgDn are the Stream-sort chords below, excluded here by !IsCtrl. NextTop
+        // clamps, so a page at the content boundary is a consumed no-op that stays on the tab.
+        if (!_promptBox.Visible && !key.IsCtrl && !key.IsShift && !key.IsAlt
+            && (key.KeyCode == KeyCode.PageUp || key.KeyCode == KeyCode.PageDown)
+            && PageActiveTextPane(key.KeyCode == KeyCode.PageDown ? 1 : -1))
+        {
+            key.Handled = true;
+            return;
+        }
+
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
         {
             key.Handled = true;
@@ -1220,7 +1239,15 @@ public sealed class TaskDetailScreen : Screen
         var current = Array.IndexOf(_tabContents, _tabs.Value);
         if (current < 0)
             current = 0;
-        _scrollTargets[current].InvokeCommand(command);
+        // A text pane pages via the shared viewport model (#468), so the composer's "scroll underlying"
+        // (PgUp/PgDn) uses the same explicit scroll state as the reading-path ↑/↓ and PgUp/PgDn rather than
+        // Terminal.Gui's stock TextView paging; the Task Tree ListView keeps its stock command
+        // (page-selection). Any other command still routes straight through.
+        if (_scrollTargets[current] is TextView
+            && (command == Command.PageUp || command == Command.PageDown))
+            PageActiveTextPane(command == Command.PageUp ? -1 : 1);
+        else
+            _scrollTargets[current].InvokeCommand(command);
     }
 
     /// <summary>Moves the front-most tab by <paramref name="delta"/> rows for a bare ↑/↓ (#452): a
@@ -1246,6 +1273,28 @@ public sealed class TaskDetailScreen : Screen
                 pane.Viewport = new Rectangle(vp.X, top, vp.Width, vp.Height);
                 break;
         }
+    }
+
+    /// <summary>Pages the front-most tab's text pane one viewport page in <paramref name="direction"/>
+    /// (−1 up, +1 down) for a bare PgUp/PgDn (#468) — the page counterpart of <see cref="MoveActiveTab"/>'s
+    /// one-line ↑/↓ branch, a viewport write on the same <c>viewport.Y</c> so the two gestures share one
+    /// explicit scroll state independent of Terminal.Gui's stock paging. The pure
+    /// <see cref="DetailScrollModel"/> supplies the page size (<see cref="DetailScrollModel.PageDelta"/>)
+    /// and clamps to the content edges, so a page at a boundary is a no-op. Returns <see langword="false"/>
+    /// when the front-most tab is not a text pane (the Task Tree <see cref="ListView"/>), so the caller
+    /// leaves the key to that list's stock page-selection.</summary>
+    private bool PageActiveTextPane(int direction)
+    {
+        var current = Array.IndexOf(_tabContents, _tabs.Value);
+        if (current < 0)
+            current = 0;
+        if (_scrollTargets[current] is not TextView pane)
+            return false;
+        var vp = pane.Viewport;
+        var delta = direction * DetailScrollModel.PageDelta(vp.Height);
+        var top = DetailScrollModel.NextTop(vp.Y, vp.Height, pane.Lines, delta);
+        pane.Viewport = new Rectangle(vp.X, top, vp.Width, vp.Height);
+        return true;
     }
 
     private void ShowPrompt()
