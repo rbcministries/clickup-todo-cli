@@ -1562,6 +1562,7 @@ public sealed class TaskDetailScreen : Screen
         if (!_replyPickerBox.Visible)
             return;
         _replyPickerBox.Visible = false;
+        _replyTargets = []; // drop the snapshot's CommentItem references; ShowReplyPicker rebuilds it
         FocusCurrentPane();
     }
 
@@ -2005,13 +2006,14 @@ public sealed class TaskDetailScreen : Screen
     /// <summary>
     /// A link click in one of the text panes (D, #318) — forwarded to the host as
     /// <see cref="LinkActivationRequested"/>, except while an overlay is up. The Dispatch pane, the comment
-    /// composer and the description editor each own input while open (the same rule <see cref="OnKey"/>
-    /// applies to the screen's chords), and they only partially cover the panes — so without this guard a
-    /// click on the still-visible part of a pane could navigate away from an open draft.
+    /// composer, the description editor and the reply-target picker (#330) each own input while open (the
+    /// same rule <see cref="OnKey"/> applies to the screen's chords), and they only partially cover the
+    /// panes — so without this guard a click on the still-visible part of a pane could navigate away from
+    /// an open draft or picker.
     /// </summary>
     private void OnPaneLinkActivation(object? sender, LinkActivationRequest request)
     {
-        if (_promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible)
+        if (_promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible)
             return;
         LinkActivationRequested?.Invoke(this, request);
     }

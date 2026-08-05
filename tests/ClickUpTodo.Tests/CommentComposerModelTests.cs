@@ -249,6 +249,25 @@ public sealed class CommentComposerModelTests
     }
 
     [Fact]
+    public void RevertReply_ClampsReplyCountAtZero_IfItWasAlreadyZero()
+    {
+        // Defensive: a provisional reply present while the parent reports ReplyCount 0 (an inconsistent
+        // state a refresh could leave) must not drive the count negative on revert.
+        var provisional = CommentComposerModel.ProvisionalReply("__pending__1", "hi", 300, "c1", "t1");
+        var comments = new List<CommentItem>
+        {
+            new("c1", "Ada", 100, "first", false, "t1", ReplyCount: 0,
+                Replies: new List<CommentItem> { provisional }),
+        };
+
+        var result = CommentComposerModel.RevertReply(comments, "c1", "__pending__1");
+
+        var c1 = result.Single(c => c.Id == "c1");
+        Assert.Empty(c1.Replies);
+        Assert.Equal(0, c1.ReplyCount); // clamped, not -1
+    }
+
+    [Fact]
     public void RevertReply_IsNoOp_WhenProvisionalAbsent()
     {
         var comments = new List<CommentItem>
