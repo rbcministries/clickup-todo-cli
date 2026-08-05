@@ -219,6 +219,20 @@ public sealed class TaskDetailScreen : Screen
     // True once the lazy tree load has been kicked off (guarding against re-fetching on every tab cycle).
     private bool _treeLoaded;
 
+    // ── Checklists tab (C, #456) ────────────────────────────────────────────────
+    // The Checklists tab's ListView (its own scroll target). Always present — unlike the host-gated Task
+    // Tree tab, the checklist data (TaskDetail.Checklists, #454) is already on the screen, so the tab
+    // appears in both the dashboard detail and single-task launch mode. Built synchronously from the pure
+    // projection (ChecklistArranger, #455); no lazy load.
+    private readonly ListView _checklistList;
+    // Parallel to the ListView's rows: the projected ChecklistRow each line renders (empty on the
+    // empty-state row), so a refresh can re-anchor the selection by item id (ChecklistTabModel) and the
+    // D–G write slices can resolve a selected row without re-walking the tree.
+    private List<ChecklistRow> _checklistRows = [];
+    // Content fingerprint of the last-rendered projection, so an unchanged refresh leaves the selection
+    // and scroll untouched (the OtherTabSignature discipline, applied to the checklist rows).
+    private string _checklistSignature = "";
+
     /// <summary>Raised when the user activates a tree row (Enter or double-click) for a task other than
     /// the one being shown (#291). The host opens that task's detail stacked over this one, so Esc walks
     /// back one task at a time — the canonical "Esc = Back" model (#401/#298), uniform with the Ctrl+O
@@ -410,8 +424,21 @@ public sealed class TaskDetailScreen : Screen
         // means "quit the tab", not "return to the list") stays a four-tab screen. It's its own scroll
         // target; CycleTab/FocusCurrentPane/ScrollActiveTab are array-length-driven and pick it up. Rows
         // load lazily on first cycle to the tab (EnsureTreeLoaded), so opening any detail isn't slowed.
-        var tabContents = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab };
-        var scrollTargets = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab.ScrollTarget };
+        // The Checklists tab (C, #456): a focusable ListView rendering the task's native ClickUp
+        // checklists (groups + nested items, from the pure ChecklistArranger projection over #454's read
+        // model). Inserted after Other at index 4 — before the conditionally-appended Task Tree tab, so
+        // both indices are stable across hosts — and present in both hosts (the data is already on the
+        // screen, no host-supplied loader). Its own scroll target; CycleTab/FocusCurrentPane/MoveActiveTab
+        // are array-length-driven and pick it up. Rendered synchronously below (no lazy load).
+        _checklistList = new ListView
+        {
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+        };
+        RenderChecklist(ChecklistArranger.Project(task.Checklists));
+
+        var tabContents = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab, _checklistList };
+        var scrollTargets = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab.ScrollTarget, _checklistList };
         if (_loadTaskTreeAsync is not null)
         {
             _treeList = new ListView
@@ -717,6 +744,21 @@ public sealed class TaskDetailScreen : Screen
         {
             _otherSignature = otherSignature;
             _otherTab.Update(headerLines, customFieldsBody);
+        }
+
+        // Checklists tab (C, #456): rebuild only when the projected content moved, so an unchanged poll
+        // leaves the selected row and scroll untouched (the ListView keeps its own state while its Source
+        // is not reassigned). When it changed, re-anchor the cursor to the same item id where it survives.
+        var checklistProjection = ChecklistArranger.Project(task.Checklists);
+        if (!string.Equals(_checklistSignature, ChecklistTabModel.Signature(checklistProjection), StringComparison.Ordinal))
+        {
+            var oldRows = _checklistRows;
+            var oldIndex = _checklistList.SelectedItem ?? 0;
+            RenderChecklist(checklistProjection);
+            var anchored = ChecklistTabModel.AnchorSelection(oldRows, oldIndex, _checklistRows);
+            var count = _checklistList.Source?.Count ?? 0;
+            if (count > 0 && anchored >= 0 && anchored < count)
+                _checklistList.SelectedItem = anchored;
         }
     }
 
@@ -1820,6 +1862,45 @@ public sealed class TaskDetailScreen : Screen
         // disposes the previous one. Mirrors TodoApp.Render's main-list wiring.
         _treeList!.Source = new StatusBadgeListSource(display, badges, headerAttrs: null, searchKeys: searchKeys);
         return currentIndex;
+    }
+
+    // ── Checklists tab (C, #456) ────────────────────────────────────────────────
+
+    /// <summary>Renders a checklist projection into the tab's ListView: group-header rows draw with the
+    /// shared neutral header attribute (like the main list's group headers, <see cref="GroupHeaderPalette"/>),
+    /// item rows carry <c>[x]</c>/<c>[ ]</c> glyphs, indentation and an assignee suffix — all from the
+    /// pure <see cref="ChecklistTabModel"/>. Sets the tab title to the aggregate progress and caches the
+    /// projected rows + a content <see cref="ChecklistTabModel.Signature"/> so a refresh can skip an
+    /// unchanged rebuild (<see cref="UpdateData"/>) and re-anchor the selection by item id. A task with no
+    /// checklists renders a single empty-state row. Type-ahead (#12) searches by row text.</summary>
+    private void RenderChecklist(ChecklistProjection projection)
+    {
+        _checklistSignature = ChecklistTabModel.Signature(projection);
+        _checklistList.Title = ChecklistTabModel.TabTitle(projection);
+
+        if (projection.IsEmpty)
+        {
+            _checklistRows = [];
+            _checklistList.SetSource(new ObservableCollection<string>([ChecklistTabModel.EmptyStateText]));
+            return;
+        }
+
+        var display = new ObservableCollection<string>();
+        var badges = new List<IReadOnlyList<StatusBadgeListSource.Badge>>(projection.Rows.Count);
+        var headerAttrs = new List<Terminal.Gui.Drawing.Attribute?>(projection.Rows.Count);
+        var searchKeys = new List<string>(projection.Rows.Count);
+        foreach (var row in projection.Rows)
+        {
+            display.Add(ChecklistTabModel.RenderRow(row));
+            badges.Add([]); // no status badges on checklist rows; headers colour via headerAttrs.
+            headerAttrs.Add(row.IsHeader ? StatusBadgeListSource.NeutralHeaderAttr : null);
+            searchKeys.Add(row.Text);
+        }
+
+        _checklistRows = [.. projection.Rows];
+        // Assigning .Source (not SetSource) lets us pass our colour-overlaying source (header bars); the
+        // ListView disposes the previous one. Mirrors the Task Tree tab's RenderTreeRows wiring.
+        _checklistList.Source = new StatusBadgeListSource(display, badges, headerAttrs, searchKeys);
     }
 
     /// <summary>Enter on the tree tab: navigate to the highlighted row's task.</summary>
