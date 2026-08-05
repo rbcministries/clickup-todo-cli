@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Drives the Task Detail "Checklists" tab (C, #456) end-to-end against the in-process fake backend.
 
-Populated leg (E2E_CHECKLISTS=1 seeds the opened task with two checklist groups):
+Populated leg (E2E_CHECKLISTS=1 seeds the opened task with two checklist groups). Headers and
+top-level items render flush-left; only a nested item is indented (two spaces per level):
 
     Release steps  (1/3)
-      [x] Cut the tag
-      [ ] Draft release notes — Ada Lovelace
-        [ ] Verify the changelog          ← nested one level under "Draft release notes"
+    [x] Cut the tag
+    [ ] Draft release notes — Ada Lovelace
+      [ ] Verify the changelog            ← nested one level under "Draft release notes"
     QA signoff  (1/2)
-      [x] Smoke test on staging
-      [ ] Cross-browser check
+    [x] Smoke test on staging
+    [ ] Cross-browser check
 
 Asserts:
   1. Cycling to the Checklists tab (index 4, after Other, before the Task Tree tab) renders both
