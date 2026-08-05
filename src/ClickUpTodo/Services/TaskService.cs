@@ -715,6 +715,13 @@ public sealed class TaskService(
     public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default)
         => client.CreateTaskCommentAsync(taskId, text, ct);
 
+    /// <summary>Posts a <b>structured</b> comment — literal text and/or @-mention tags (#322) — to a
+    /// task, the write path for the #325 @-mention composer. Returns the created comment as a
+    /// <see cref="CommentItem"/> so the detail view can append it optimistically, exactly like the
+    /// plain-text overload.</summary>
+    public Task<CommentItem> CreateTaskCommentAsync(string taskId, IReadOnlyList<CommentRun> runs, CancellationToken ct = default)
+        => client.CreateTaskCommentAsync(taskId, runs, ct);
+
     /// <summary>Writes a task's plain-text description (#217, over the #211 facade) and returns the
     /// server-confirmed value so the detail view can reflect it without a manual refresh. Pass <c>""</c>
     /// to clear the description.</summary>
