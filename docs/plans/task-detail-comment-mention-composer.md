@@ -58,11 +58,9 @@ by the dashboard host.
 
 ### Pure logic — `CommentComposerModel` additions (unit-tested)
 
-- `record MentionToken(long UserId, string DisplayName)` — an inserted mention; token text is
-  `"@" + DisplayName`.
-- `InsertMention(string text, int caret, string displayName) → (string NewText, int NewCaret)`:
-  splices `"@{displayName} "` (trailing space) at the clamped caret; new caret sits after the
-  inserted run.
+- `record MentionToken(long UserId, string DisplayName)` — an inserted mention; token text
+  (`.Token`) is `"@" + DisplayName`. (Insertion itself is done by the editor's own
+  `TextView.InsertText`, which handles the caret/word-wrap model — no manual caret arithmetic.)
 - `BuildRuns(string text, IReadOnlyList<MentionToken> tokens) → IReadOnlyList<CommentRun>`:
   greedy left-to-right scan. At each position, among not-yet-consumed tokens whose
   `"@{DisplayName}"` matches at that position, take the **longest** (so `@Ann` vs `@Ann Marie`
@@ -73,9 +71,6 @@ by the dashboard host.
 - `TrimRuns(runs)`: trims the leading `Text` run's start and the trailing `Text` run's end and
   drops any run that becomes empty — the structured analogue of the plain path's `Normalize`.
 - `HasMention(runs) => runs.Any(r => r is CommentRun.Mention)`.
-- `CaretIndex(string text, int row, int col)` / `CaretRowCol(string text, int index)` — pure
-  conversions between a `TextView` `(row,col)` caret and an absolute string index, so the
-  insertion glue keeps no arithmetic of its own.
 
 ### Facade seam
 
@@ -98,9 +93,8 @@ by the dashboard host.
   composer is visible and the rune is `@`: mark handled and `ShowMentionPicker()` (the literal
   `@` is not inserted — the picker inserts the full `@Name` token). Feature off ⇒ `@` types
   normally.
-- **On pick** (`MemberPicked` → `MentionTarget`): compute the editor caret index
-  (`CaretIndex`), `InsertMention` the `@DisplayName` token, set `_commentEditor.Text` + caret
-  (`CaretRowCol`), record the `MentionToken`, hide the picker, refocus the editor.
+- **On pick** (`MemberPicked` → `MentionTarget`): hide the picker (refocusing the editor),
+  `_commentEditor.InsertText("@{DisplayName} ")` at the caret, record the `MentionToken`.
 - **`Esc` in the picker** → hide the picker, refocus the editor (does not cancel the composer).
 - **`PostComment` routing** — build `runs = TrimRuns(BuildRuns(rawText, _mentionTokens))`. If
   `HasMention(runs)` and `_postStructuredCommentAsync != null`: optimistic provisional from the

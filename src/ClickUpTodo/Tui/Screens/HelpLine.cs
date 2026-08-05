@@ -248,20 +248,39 @@ public static class HelpItemSets
     public static readonly IReadOnlyList<HelpItem> DetailCommentComposer =
     [
         new("Tab", "editor/Post/Cancel"),
+        // The @ trigger (#325) is a character the user types, not a clickable chord — IsAction:false, like
+        // "type to search", so it isn't re-raised on a footer click.
+        new("@", "mention", IsAction: false),
         new("Ctrl+Enter", "post"),
         new("F1", "ℹ"),
         new("Esc", "cancel"),
     ];
 
+    /// <summary>The @-mention picker overlaid over the composer (#325): a search field over a candidate
+    /// list — type to search, ↑/↓ to move, Enter to insert the mention, Esc to go back to the composer.
+    /// Shown while the picker is open so the footer reflects only what it does (the composer's own keys
+    /// resume when it closes). Search/move are informational; Enter/Esc are clickable actions (they
+    /// re-raise into the focused picker).</summary>
+    public static readonly IReadOnlyList<HelpItem> DetailMentionPicker =
+    [
+        new("type", "search", IsAction: false),
+        new("↑↓", "move", IsAction: false),
+        new("Enter", "mention"),
+        new("Esc", "back"),
+    ];
+
     /// <summary>Picks the Task Detail footer set for the current overlay state (#436). Pure so the
     /// branch order is unit-testable — the <see cref="TaskDetailScreen.HelpItems"/> property that calls
-    /// it lives on a Terminal.Gui view and can't run in CI. The comment composer and description editor
-    /// overlays are mutually exclusive; the composer is checked first. When neither overlay is open the
-    /// set depends on whether the Task Tree tab is present (its F6 badge cycle, #415): present →
-    /// <see cref="DetailWithTaskTree"/>, absent (e.g. single-task launch mode) → <see cref="Detail"/>.</summary>
+    /// it lives on a Terminal.Gui view and can't run in CI. The mention picker (#325), comment composer
+    /// and description editor overlays are checked in that order (the picker sits over the composer, so it
+    /// wins when both are up). When no overlay is open the set depends on whether the Task Tree tab is
+    /// present (its F6 badge cycle, #415): present → <see cref="DetailWithTaskTree"/>, absent (e.g.
+    /// single-task launch mode) → <see cref="Detail"/>.</summary>
     public static IReadOnlyList<HelpItem> DetailFooter(
-        bool commentComposerVisible, bool descriptionEditorVisible, bool hasTaskTree) =>
-        commentComposerVisible ? DetailCommentComposer
+        bool commentComposerVisible, bool descriptionEditorVisible, bool hasTaskTree,
+        bool mentionPickerVisible = false) =>
+        mentionPickerVisible ? DetailMentionPicker
+        : commentComposerVisible ? DetailCommentComposer
         : descriptionEditorVisible ? DetailDescriptionEditor
         : hasTaskTree ? DetailWithTaskTree
         : Detail;

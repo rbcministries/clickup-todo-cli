@@ -87,21 +87,10 @@ public static class CommentComposerModel
     /// the #324 picker's <c>MentionTarget</c>).</summary>
     public readonly record struct MentionToken(long UserId, string DisplayName)
     {
-        /// <summary>The literal text spliced into the editor for this mention: <c>@</c> + the display
-        /// name (no trailing space — <see cref="InsertMention"/> adds the separating space).</summary>
+        /// <summary>The literal text the composer inserts into the editor for this mention: <c>@</c> +
+        /// the display name (the glue adds a trailing space). On post, <see cref="BuildRuns"/> matches
+        /// this literal back out of the final text to re-derive the mention run.</summary>
         public string Token => "@" + (DisplayName ?? string.Empty);
-    }
-
-    /// <summary>Splices <paramref name="displayName"/>'s <c>@{name} </c> token (with a trailing space so
-    /// the user keeps typing after it) into <paramref name="text"/> at the clamped
-    /// <paramref name="caret"/>. Returns the new text and the caret position just after the inserted
-    /// token. Pure so the Terminal.Gui glue keeps no string arithmetic of its own.</summary>
-    public static (string Text, int Caret) InsertMention(string? text, int caret, string displayName)
-    {
-        var s = text ?? string.Empty;
-        var at = Math.Clamp(caret, 0, s.Length);
-        var token = "@" + (displayName ?? string.Empty) + " ";
-        return (s.Insert(at, token), at + token.Length);
     }
 
     /// <summary>
@@ -193,50 +182,4 @@ public static class CommentComposerModel
     /// the structured write path (a mention-free body posts via the unchanged plain-text path).</summary>
     public static bool HasMention(IReadOnlyList<CommentRun>? runs)
         => runs is not null && runs.Any(r => r is CommentRun.Mention);
-
-    /// <summary>The absolute index into <paramref name="text"/> of the caret at logical
-    /// <paramref name="row"/>/<paramref name="col"/> (a Terminal.Gui <c>TextView.CursorPosition</c>,
-    /// model coordinates over <c>\n</c>-delimited lines). A row past the end clamps to the text end; a
-    /// column past its line's end clamps to that line's end. Pure, so the insertion glue owns no
-    /// arithmetic.</summary>
-    public static int CaretIndex(string? text, int row, int col)
-    {
-        var s = text ?? string.Empty;
-        if (row < 0)
-            row = 0;
-        if (col < 0)
-            col = 0;
-
-        var idx = 0;
-        for (var line = 0; line < row; line++)
-        {
-            var nl = s.IndexOf('\n', idx);
-            if (nl < 0)
-                return s.Length;
-            idx = nl + 1;
-        }
-        var lineEnd = s.IndexOf('\n', idx);
-        if (lineEnd < 0)
-            lineEnd = s.Length;
-        return Math.Min(idx + col, lineEnd);
-    }
-
-    /// <summary>The logical <c>(row, col)</c> caret (model coordinates over <c>\n</c>-delimited lines)
-    /// for an absolute <paramref name="index"/> into <paramref name="text"/> — the inverse of
-    /// <see cref="CaretIndex"/>, used to place the editor caret after an inserted mention token.</summary>
-    public static (int Row, int Col) CaretRowCol(string? text, int index)
-    {
-        var s = text ?? string.Empty;
-        var i = Math.Clamp(index, 0, s.Length);
-        int row = 0, lineStart = 0;
-        for (var p = 0; p < i; p++)
-        {
-            if (s[p] == '\n')
-            {
-                row++;
-                lineStart = p + 1;
-            }
-        }
-        return (row, i - lineStart);
-    }
 }

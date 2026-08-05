@@ -138,44 +138,6 @@ public sealed class CommentComposerModelTests
         => Assert.Equal(expected, new CommentComposerModel.MentionToken(1, name).Token);
 
     [Fact]
-    public void InsertMention_SplicesTokenWithTrailingSpace_AndReturnsCaretAfterIt()
-    {
-        var (text, caret) = CommentComposerModel.InsertMention("hi ", 3, "Ada");
-
-        Assert.Equal("hi @Ada ", text);
-        Assert.Equal(8, caret); // just past "@Ada "
-    }
-
-    [Fact]
-    public void InsertMention_InsertsMidText_AtTheCaret()
-    {
-        var (text, caret) = CommentComposerModel.InsertMention("ab", 1, "Bo");
-
-        Assert.Equal("a@Bo b", text);
-        Assert.Equal(5, caret); // after "a@Bo "
-    }
-
-    [Theory]
-    [InlineData(-4)]  // clamps to 0
-    [InlineData(999)] // clamps to end
-    public void InsertMention_ClampsOutOfRangeCaret(int caret)
-    {
-        var (text, _) = CommentComposerModel.InsertMention("xy", caret, "Q");
-
-        Assert.Contains("@Q ", text);
-        Assert.True(text.Length == "xy".Length + "@Q ".Length);
-    }
-
-    [Fact]
-    public void InsertMention_HandlesNullText()
-    {
-        var (text, caret) = CommentComposerModel.InsertMention(null, 0, "N");
-
-        Assert.Equal("@N ", text);
-        Assert.Equal(3, caret);
-    }
-
-    [Fact]
     public void BuildRuns_NoTokens_IsASingleTextRun()
     {
         var runs = CommentComposerModel.BuildRuns("just text", []);
@@ -332,38 +294,5 @@ public sealed class CommentComposerModelTests
         Assert.True(CommentComposerModel.HasMention([new CommentRun.Text("a"), new CommentRun.Mention(1)]));
         Assert.False(CommentComposerModel.HasMention([new CommentRun.Text("a")]));
         Assert.False(CommentComposerModel.HasMention(null));
-    }
-
-    [Theory]
-    [InlineData("hello", 0, 0, 0)]
-    [InlineData("hello", 0, 3, 3)]
-    [InlineData("hello", 0, 99, 5)]   // col past line end clamps to line end
-    [InlineData("ab\ncd", 1, 1, 4)]   // second line, col 1 → index of 'd'
-    [InlineData("ab\ncd", 1, 0, 3)]   // start of second line
-    [InlineData("ab\ncd", 9, 0, 5)]   // row past end clamps to text end
-    public void CaretIndex_MapsRowColToAbsoluteIndex(string text, int row, int col, int expected)
-        => Assert.Equal(expected, CommentComposerModel.CaretIndex(text, row, col));
-
-    [Theory]
-    [InlineData("hello", 3, 0, 3)]
-    [InlineData("ab\ncd", 4, 1, 1)]
-    [InlineData("ab\ncd", 3, 1, 0)]
-    [InlineData("ab\ncd", 0, 0, 0)]
-    public void CaretRowCol_MapsIndexToRowCol(string text, int index, int expectedRow, int expectedCol)
-    {
-        var (row, col) = CommentComposerModel.CaretRowCol(text, index);
-        Assert.Equal(expectedRow, row);
-        Assert.Equal(expectedCol, col);
-    }
-
-    [Fact]
-    public void CaretIndex_And_CaretRowCol_RoundTrip()
-    {
-        const string text = "first line\nsecond\n\nfourth";
-        for (var i = 0; i <= text.Length; i++)
-        {
-            var (row, col) = CommentComposerModel.CaretRowCol(text, i);
-            Assert.Equal(i, CommentComposerModel.CaretIndex(text, row, col));
-        }
     }
 }
