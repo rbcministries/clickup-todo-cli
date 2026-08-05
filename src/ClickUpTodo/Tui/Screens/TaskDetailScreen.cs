@@ -2009,6 +2009,13 @@ public sealed class TaskDetailScreen : Screen
             // Dispose the live mention picker (#325), if any — a fresh one is built per open and the
             // outgoing one is otherwise disposed on the next open, so this releases the last instance's
             // debounce timer / CancellationTokenSource (owned by SelectorView) on screen teardown.
+            // Detach it from its host box FIRST: RemoveAll only detaches (never disposes), so if the
+            // screen is torn down while the overlay is still shown, base.Dispose(disposing) below — which
+            // disposes the screen's subviews, _mentionBox among them — won't re-dispose a still-attached
+            // picker. SelectorView.Dispose is not re-entrant (its _cts.Cancel() throws once the CTS is
+            // disposed), so a double dispose would throw ObjectDisposedException during teardown. Mirrors
+            // the detach-before-dispose already done in ShowMentionPicker.
+            _mentionBox?.RemoveAll();
             _mentionPicker?.Dispose();
             _mentionPicker = null;
         }
