@@ -248,6 +248,8 @@ public sealed class SingleTaskApp
             // Ctrl+N posts a plain-text comment; Ctrl+E edits the description — same injected-async seam
             // the dashboard wires, keyed to *this* tab's task so a stacked child writes to its own task.
             postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(id, text, ct),
+            // Ctrl+T (#330) replies into a comment's thread — same injected-async seam, keyed to this tab's task.
+            postReplyAsync: (commentId, text, ct) => _tasks.CreateThreadedCommentAsync(commentId, text, ct),
             setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(id, text, ct),
             // The Task Tree tab (#374): identical wiring to the dashboard (#291/#415). The tree needs the
             // signed-in user's id for the trailing Assignees badge (#161), seeds its badge mode from the

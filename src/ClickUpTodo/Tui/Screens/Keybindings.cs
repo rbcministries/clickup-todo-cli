@@ -58,6 +58,7 @@ public enum KeyAction
     // Task Detail commands.
     DispatchToClaude,
     AddComment,
+    ReplyToComment,
     EditDescription,
 
     // Quick Updates.
@@ -109,6 +110,7 @@ public static class Keybindings
             // ── Task Detail ───────────────────────────────────────────────────────────────────
             [(ScreenContext.Detail, KeyAction.DispatchToClaude)] = "Ctrl+A",
             [(ScreenContext.Detail, KeyAction.AddComment)] = "Ctrl+N",
+            [(ScreenContext.Detail, KeyAction.ReplyToComment)] = "Ctrl+T",
             [(ScreenContext.Detail, KeyAction.EditDescription)] = "Ctrl+E",
             [(ScreenContext.Detail, KeyAction.OpenInBrowser)] = "Ctrl+B",
             [(ScreenContext.Detail, KeyAction.QuickUpdate)] = "Ctrl+U",
