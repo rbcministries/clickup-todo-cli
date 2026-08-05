@@ -520,7 +520,7 @@ public sealed class NewTaskScreen : Screen
                     dd.SetSource(rows);
                     dd.SelectedItem = 0;
                     dd.KeyDown += OnKey;
-                    WireScrollOnFocus(dd);
+                    WireScrollOnFocus(dd, labelRowsAbove: 1);
                     _fieldsPage.Add(dd);
                     _fieldReaders.Add((field, () =>
                     {
@@ -564,7 +564,7 @@ public sealed class NewTaskScreen : Screen
                     _fieldsPage.Add(new Label { X = 1, Y = y, Text = FieldPromptLabel(field, label) });
                     var tf = new TextField { X = 1, Y = y + 1, Width = Dim.Fill(2), Height = 1 };
                     tf.KeyDown += OnKey;
-                    WireScrollOnFocus(tf);
+                    WireScrollOnFocus(tf, labelRowsAbove: 1);
                     _fieldsPage.Add(tf);
                     _fieldReaders.Add((field, () => new CustomFieldEntry { Text = tf.Text?.ToString() }));
                     y += 3;
@@ -606,16 +606,21 @@ public sealed class NewTaskScreen : Screen
 
     // Scroll the page so a widget that Tab moved focus to is visible (#446) — the reachability guarantee
     // for fields below the fold. Reads the widget's content-space Frame (stable under scrolling) and asks
-    // the pure model for the minimal viewport top; assigns only on a real move.
-    private void WireScrollOnFocus(View widget)
+    // the pure model for the minimal viewport top; assigns only on a real move. <paramref name="labelRowsAbove"/>
+    // extends the revealed range upward to also show a field's prompt label (which sits that many rows
+    // above the input, e.g. a text field or drop-down); 0 when the widget carries its own label (a
+    // checkbox) or is one of several rows under a shared label (a labels option), where revealing the
+    // focused widget itself is what's wanted.
+    private void WireScrollOnFocus(View widget, int labelRowsAbove = 0)
         => widget.HasFocusChanged += (_, _) =>
         {
             if (!widget.HasFocus)
                 return;
             var vp = _fieldsPage.Viewport;
             var content = _fieldsPage.GetContentSize();
-            var newTop = NewTaskFieldsScrollModel.ScrollToShow(
-                vp.Y, widget.Frame.Y, widget.Frame.Height, vp.Height, content.Height);
+            var top = Math.Max(0, widget.Frame.Y - labelRowsAbove);
+            var height = widget.Frame.Height + (widget.Frame.Y - top);
+            var newTop = NewTaskFieldsScrollModel.ScrollToShow(vp.Y, top, height, vp.Height, content.Height);
             if (newTop != vp.Y)
                 _fieldsPage.Viewport = new Rectangle(vp.X, newTop, vp.Width, vp.Height);
         };

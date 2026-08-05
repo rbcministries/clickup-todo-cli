@@ -20,6 +20,9 @@ public sealed class NewTaskFieldsScrollModelTests
     [InlineData(5, 40, 10, 5)]
     [InlineData(30, 40, 10, 30)]   // exactly the max
     [InlineData(100, 40, 10, 30)]  // past the max → clamped to the max
+    // Degenerate/hostile inputs never produce a negative or out-of-range top.
+    [InlineData(5, -10, 5, 0)]     // negative content height → only valid top is 0
+    [InlineData(5, 40, -3, 5)]     // negative viewport height → treated as 0; top stays in bounds
     public void ClampTop_ClampsToContentBounds(int desiredTop, int contentHeight, int viewportHeight, int expected)
         => Assert.Equal(expected, NewTaskFieldsScrollModel.ClampTop(desiredTop, contentHeight, viewportHeight));
 
@@ -68,10 +71,24 @@ public sealed class NewTaskFieldsScrollModelTests
     }
 
     [Fact]
-    public void ScrollToShow_DegenerateViewportHeight_DoesNotThrowAndStaysInBounds()
+    public void ScrollToShow_DegenerateViewportHeight_TreatedAsOneRow()
     {
-        // A zero/one-row viewport is treated as at least one row; the result is still clamped.
-        var top = NewTaskFieldsScrollModel.ScrollToShow(currentTop: 0, itemTop: 5, itemHeight: 1, viewportHeight: 0, contentHeight: 20);
-        Assert.InRange(top, 0, 20);
+        // A zero-row viewport is treated as one row; item at row 5 is below that one-row window at top
+        // 0, so it scrolls down to align the (as-tall-as-the-viewport) item's top at row 5, in-bounds.
+        Assert.Equal(5, NewTaskFieldsScrollModel.ScrollToShow(currentTop: 0, itemTop: 5, itemHeight: 1, viewportHeight: 0, contentHeight: 20));
+    }
+
+    [Fact]
+    public void ScrollToShow_NegativeItemTop_ClampsToZero()
+    {
+        // A negative item top (shouldn't happen, but must not escape bounds) resolves to top 0.
+        Assert.Equal(0, NewTaskFieldsScrollModel.ScrollToShow(currentTop: 3, itemTop: -5, itemHeight: 1, viewportHeight: 10, contentHeight: 20));
+    }
+
+    [Fact]
+    public void ScrollToShow_NegativeItemHeight_TreatedAsOneRow_NoMoveWhenVisible()
+    {
+        // A non-positive item height floors to one row; the row is inside the viewport, so no move.
+        Assert.Equal(0, NewTaskFieldsScrollModel.ScrollToShow(currentTop: 0, itemTop: 5, itemHeight: -3, viewportHeight: 10, contentHeight: 20));
     }
 }
