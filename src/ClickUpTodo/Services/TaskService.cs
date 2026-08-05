@@ -715,6 +715,12 @@ public sealed class TaskService(
     public Task<CommentItem> CreateTaskCommentAsync(string taskId, string text, CancellationToken ct = default)
         => client.CreateTaskCommentAsync(taskId, text, ct);
 
+    /// <summary>Posts a plain-text reply into a comment's thread (#330, over the #327 create-reply facade)
+    /// and returns it as a <see cref="CommentItem"/> so the detail view can append it optimistically under
+    /// its parent. A thin passthrough, mirroring <see cref="CreateTaskCommentAsync"/>.</summary>
+    public Task<CommentItem> CreateThreadedCommentAsync(string commentId, string text, CancellationToken ct = default)
+        => client.CreateThreadedCommentAsync(commentId, text, ct);
+
     /// <summary>Writes a task's plain-text description (#217, over the #211 facade) and returns the
     /// server-confirmed value so the detail view can reflect it without a manual refresh. Pass <c>""</c>
     /// to clear the description.</summary>
