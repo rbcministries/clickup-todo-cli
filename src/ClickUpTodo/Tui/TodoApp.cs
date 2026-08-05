@@ -727,16 +727,14 @@ public sealed class TodoApp
         // throw (a blank id), and doing it first means such a throw can't leave _launchingTab stuck true.
         var command = AppLaunchCommand.ForTask(taskId);
         // A new tab of the current terminal where the host supports it (#255's LaunchLocation), honouring
-        // the user's preferred-terminal setting on Windows. ClaudeExecutable/ExtraArgs don't apply to an
-        // app launch, so a purpose-built options value (not AgentDispatch.ToLauncherOptions) is used.
-        var options = new TerminalLauncherOptions
-        {
-            LaunchLocation = LaunchLocation.NewTab,
-            Preferred = _config.AgentDispatch.PreferredTerminal,
-            CustomTerminalCommand = TerminalCommandParser.Parse(_config.AgentDispatch.CustomTerminalCommand),
-        };
+        // the user's preferred-terminal setting on Windows. The options + status strings are shared with
+        // single-task mode's Ctrl+Enter (#435) via AppTabLaunch so the two hosts can't drift; the helper
+        // deliberately doesn't use AgentDispatch.ToLauncherOptions (ClaudeExecutable/ExtraArgs are a
+        // dispatch concern that doesn't apply to relaunching this app).
+        var options = AppTabLaunch.Options(
+            _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
         _launchingTab = true;
-        Flash($"Opening '{name}' in a new terminal tab…");
+        Flash(AppTabLaunch.Opening(name));
         _ = Task.Run(async () =>
         {
             try
@@ -750,8 +748,7 @@ public sealed class TodoApp
                         FlashLaunchFallback(command);
                         return;
                     }
-                    var message = $"Opened '{name}' in a new tab ({result.LaunchedWith}).";
-                    Flash(string.IsNullOrWhiteSpace(result.Note) ? message : $"{message} {result.Note}");
+                    Flash(AppTabLaunch.Opened(name, result));
                 });
             }
             catch (Exception ex)
@@ -765,13 +762,7 @@ public sealed class TodoApp
     /// the user can open the task tab themselves. <paramref name="reason"/> names the failure when the
     /// launch threw (vs. simply finding no emulator).</summary>
     private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
-    {
-        var cmd = command.ToDisplayCommand();
-        var lead = reason is null ? "Couldn't open a terminal tab." : $"Couldn't open a terminal tab ({reason}).";
-        Flash(TryCopyToClipboard(cmd)
-            ? $"{lead} Command copied to clipboard: {cmd}"
-            : $"{lead} Run: {cmd}");
-    }
+        => Flash(AppTabLaunch.Fallback(command, TryCopyToClipboard(command.ToDisplayCommand()), reason));
 
     /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard just yields
     /// false so the caller shows the run-it-yourself form instead.</summary>
