@@ -128,4 +128,56 @@ public sealed class TerminalTitleTests
     {
         Assert.Equal("", TerminalTitle.ForTask("86abc", null, "Ship it", maxLength));
     }
+
+    // ── Retitle (#425): the pure refresh-time decision — a new title only when it moved ──
+
+    [Fact]
+    public void Retitle_ReturnsNull_WhenTitleUnchanged()
+    {
+        // The launch task refreshed with the same id/name → nothing to push to the terminal.
+        var current = TerminalTitle.ForTask("t5", null, "Ship it");
+        Assert.Null(TerminalTitle.Retitle(current, "t5", null, "Ship it"));
+    }
+
+    [Fact]
+    public void Retitle_ReturnsNewTitle_WhenNameChanged()
+    {
+        Assert.Equal("t5: Renamed", TerminalTitle.Retitle("t5: Ship it", "t5", null, "Renamed"));
+    }
+
+    [Fact]
+    public void Retitle_ReturnsNewTitle_WhenCustomIdNewlyAssigned()
+    {
+        // A task that gains a custom id mid-session: the id part flips from numeric to the custom id.
+        Assert.Equal("DEV-9: Ship it", TerminalTitle.Retitle("t5: Ship it", "t5", "DEV-9", "Ship it"));
+    }
+
+    [Fact]
+    public void Retitle_ComparesOrdinally_SoACaseOnlyChangeIsANewTitle()
+    {
+        Assert.Equal("t5: ship it", TerminalTitle.Retitle("t5: Ship it", "t5", null, "ship it"));
+    }
+
+    [Fact]
+    public void Retitle_AppliesTruncation_SoAChangeToALongNameIsCutToTheCap()
+    {
+        var title = TerminalTitle.Retitle("t5: short", "t5", null, new string('x', 100));
+        Assert.NotNull(title);
+        Assert.Equal(TerminalTitle.MaxLength, title!.Length);
+        Assert.StartsWith("t5: xxxx", title);
+    }
+
+    [Fact]
+    public void Retitle_ReturnsNull_WhenALongRenameTruncatesBackToTheCurrentTitle()
+    {
+        // Two different names that both truncate to the same ≤40-char title are not a real change.
+        var current = TerminalTitle.ForTask("t5", null, new string('x', 100));
+        Assert.Null(TerminalTitle.Retitle(current, "t5", null, new string('x', 80)));
+    }
+
+    [Fact]
+    public void Retitle_NullCurrentTitle_ReturnsTheComposedTitle()
+    {
+        Assert.Equal("t5: Ship it", TerminalTitle.Retitle(null, "t5", null, "Ship it"));
+    }
 }

@@ -310,6 +310,16 @@ public sealed class SingleTaskApp
                     tab.Task = detail;
                     tab.Comments = comments;
                     tab.Screen.UpdateData(detail, comments);
+                    // Keep the terminal tab title current if the *launch* task was renamed / gained a
+                    // custom id mid-session (#425). Only the launch (root) task titles the window (#418);
+                    // a stacked child's refresh (Task Tree #374) leaves it, so the tab stays identifiable
+                    // by what was launched. Retitle only pushes a new value when it actually moved.
+                    if (ReferenceEquals(tab, _root)
+                        && TerminalTitle.Retitle(_window.Title, detail.Id, detail.CustomId, detail.Name)
+                            is { } title)
+                    {
+                        _window.Title = title;
+                    }
                 });
             }
             catch (Exception ex)
