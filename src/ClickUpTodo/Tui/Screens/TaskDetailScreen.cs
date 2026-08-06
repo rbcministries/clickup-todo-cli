@@ -197,8 +197,9 @@ public sealed class TaskDetailScreen : Screen
 
     // ── Task Tree tab (#291) ───────────────────────────────────────────────────
     // The Task Tree tab's ListView (its own scroll target), or null when no tree loader was supplied
-    // (the tab is then absent — e.g. single-task launch mode, where "Esc returns to the list" has no
-    // meaning). Built from TaskRowRenderer rows exactly like the main list, so ancestry/children badge
+    // (the tab is then absent). Both hosts supply a loader today — the dashboard, and single-task launch
+    // mode since #374 — so this is non-null in both; the null case is the general no-loader fallback.
+    // Built from TaskRowRenderer rows exactly like the main list, so ancestry/children badge
     // identically. Loaded lazily the first time the user cycles to the tab.
     private readonly ListView? _treeList;
     // Fetches the tree (ancestry + task + descendants) off the UI thread; injected by the host so the
@@ -218,6 +219,20 @@ public sealed class TaskDetailScreen : Screen
     private IReadOnlyList<TaskTreeRow> _loadedTreeRows = [];
     // True once the lazy tree load has been kicked off (guarding against re-fetching on every tab cycle).
     private bool _treeLoaded;
+
+    // ── Checklists tab (C, #456) ────────────────────────────────────────────────
+    // The Checklists tab's ListView (its own scroll target). Always present — unlike the host-gated Task
+    // Tree tab, the checklist data (TaskDetail.Checklists, #454) is already on the screen, so the tab
+    // appears in both the dashboard detail and single-task launch mode. Built synchronously from the pure
+    // projection (ChecklistArranger, #455); no lazy load.
+    private readonly ListView _checklistList;
+    // Parallel to the ListView's rows: the projected ChecklistRow each line renders (empty on the
+    // empty-state row), so a refresh can re-anchor the selection by item id (ChecklistTabModel) and the
+    // D–G write slices can resolve a selected row without re-walking the tree.
+    private List<ChecklistRow> _checklistRows = [];
+    // Content fingerprint of the last-rendered projection, so an unchanged refresh leaves the selection
+    // and scroll untouched (the OtherTabSignature discipline, applied to the checklist rows).
+    private string _checklistSignature = "";
 
     /// <summary>Raised when the user activates a tree row (Enter or double-click) for a task other than
     /// the one being shown (#291). The host opens that task's detail stacked over this one, so Esc walks
@@ -284,9 +299,10 @@ public sealed class TaskDetailScreen : Screen
     /// Raised when the user asks to open the current task in its own terminal tab (Ctrl+Enter, #384) —
     /// the detail-view counterpart of the main list's Ctrl+Enter / Ctrl+Left-Click gesture (#301). The
     /// host owns the cross-platform launch (and its copy-command fallback), reusing the exact launcher
-    /// the list gesture uses. Only wired/advertised on the dashboard-hosted detail (the one carrying the
-    /// Task Tree tab); it stays absent in single-task launch mode — see the <c>_treeList</c> guard in
-    /// <see cref="OnKey"/> and the <see cref="HelpItemSets.DetailWithTaskTree"/> footer set.
+    /// the list gesture uses. Raised (and advertised) wherever a tree loader was supplied — the
+    /// dashboard-hosted detail (#384) and, since #374 gave single-task launch mode the Task Tree tab, that
+    /// host too (its subscriber wired in #435) — see the <c>_treeList</c> guard in <see cref="OnKey"/> and
+    /// the <see cref="HelpItemSets.DetailWithTaskTree"/> footer set.
     /// </summary>
     public event EventHandler? OpenInNewTabRequested;
 
@@ -406,12 +422,25 @@ public sealed class TaskDetailScreen : Screen
 
         // The Task Tree tab (#291): a focusable ListView showing the task's ancestry + itself + its
         // descendants, indented and badged like the main list (via the shared TaskRowRenderer). Appended
-        // as a fifth tab only when the host supplied a loader — so single-task launch mode (whose Esc
-        // means "quit the tab", not "return to the list") stays a four-tab screen. It's its own scroll
+        // as a fifth tab whenever the host supplied a loader — both the dashboard and single-task launch
+        // mode do (the latter since #374), so it's present in both. It's its own scroll
         // target; CycleTab/FocusCurrentPane/ScrollActiveTab are array-length-driven and pick it up. Rows
         // load lazily on first cycle to the tab (EnsureTreeLoaded), so opening any detail isn't slowed.
-        var tabContents = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab };
-        var scrollTargets = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab.ScrollTarget };
+        // The Checklists tab (C, #456): a focusable ListView rendering the task's native ClickUp
+        // checklists (groups + nested items, from the pure ChecklistArranger projection over #454's read
+        // model). Inserted after Other at index 4 — before the conditionally-appended Task Tree tab, so
+        // both indices are stable across hosts — and present in both hosts (the data is already on the
+        // screen, no host-supplied loader). Its own scroll target; CycleTab/FocusCurrentPane/MoveActiveTab
+        // are array-length-driven and pick it up. Rendered synchronously below (no lazy load).
+        _checklistList = new ListView
+        {
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+        };
+        RenderChecklist(ChecklistArranger.Project(task.Checklists));
+
+        var tabContents = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab, _checklistList };
+        var scrollTargets = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab.ScrollTarget, _checklistList };
         if (_loadTaskTreeAsync is not null)
         {
             _treeList = new ListView
@@ -630,8 +659,9 @@ public sealed class TaskDetailScreen : Screen
     // While the comment composer (Ctrl+N) or description editor (Ctrl+E) overlay is open, the footer
     // shows only that overlay's keys — the command chords are inert to a keypress (OnKey returns early)
     // but their clickable footer hints would otherwise re-raise the chord into the composer (#436). The
-    // Task Tree tab's F6 badge cycle (#415) is only offered when that tab exists (a loader was supplied);
-    // single-task launch mode has no tree tab, so it keeps the F6-less Detail set.
+    // Task Tree tab's F6 badge cycle (#415) and the Ctrl+Enter new-tab gesture (#384/#435) are only
+    // offered when that tab exists (a loader was supplied) — true for both the dashboard and single-task
+    // launch mode (since #374); the F6-/Ctrl+Enter-less Detail set is the no-loader fallback.
     public override IReadOnlyList<HelpItem> HelpItems =>
         HelpItemSets.DetailFooter(_commentBox.Visible, _descriptionBox.Visible, _treeList is not null);
 
@@ -717,6 +747,21 @@ public sealed class TaskDetailScreen : Screen
         {
             _otherSignature = otherSignature;
             _otherTab.Update(headerLines, customFieldsBody);
+        }
+
+        // Checklists tab (C, #456): rebuild only when the projected content moved, so an unchanged poll
+        // leaves the selected row and scroll untouched (the ListView keeps its own state while its Source
+        // is not reassigned). When it changed, re-anchor the cursor to the same item id where it survives.
+        var checklistProjection = ChecklistArranger.Project(task.Checklists);
+        if (!string.Equals(_checklistSignature, ChecklistTabModel.Signature(checklistProjection), StringComparison.Ordinal))
+        {
+            var oldRows = _checklistRows;
+            var oldIndex = _checklistList.SelectedItem ?? 0;
+            RenderChecklist(checklistProjection);
+            var anchored = ChecklistTabModel.AnchorSelection(oldRows, oldIndex, _checklistRows);
+            var count = _checklistList.Source?.Count ?? 0;
+            if (count > 0 && anchored >= 0 && anchored < count)
+                _checklistList.SelectedItem = anchored;
         }
     }
 
@@ -849,6 +894,41 @@ public sealed class TaskDetailScreen : Screen
             }
         }
 
+        // Bare ↑/↓ scroll the front-most text pane one line, or move the Task Tree selection one row
+        // (#452). Claimed here — on the focused pane/list's own KeyDown, which fires before its bindings
+        // and before the arrow bubbles up to NavSafeTabs — because otherwise the arrow is swallowed:
+        // the read-only TextView moves an invisible caret (no viewport scroll), and the tree ListView's
+        // Command.Down bubbles up to NavSafeTabs' inert crash-guard, cancelling its own MoveDown. Inert
+        // while the Dispatch prompt is open (its dir-browser owns bare ↑/↓, like the command blocks
+        // below) and for any modified arrow (Ctrl+←/→ tab-cycle, Shift-extend). Always consumed, so a
+        // press at a content boundary is a no-op that stays on the tab — never a tab switch or crash.
+        if (!_promptBox.Visible && !key.IsCtrl && !key.IsShift && !key.IsAlt
+            && (key.KeyCode == KeyCode.CursorUp || key.KeyCode == KeyCode.CursorDown))
+        {
+            key.Handled = true;
+            MoveActiveTab(key.KeyCode == KeyCode.CursorDown ? 1 : -1);
+            return;
+        }
+
+        // Bare PgUp/PgDn page the front-most text pane via the same viewport write as ↑/↓ (#468), so the
+        // whole scroll vocabulary of the read-only panes lives in one explicit viewport model rather than
+        // split between our ↑/↓ code (#452) and Terminal.Gui's stock TextView paging. Owning it keeps the
+        // two gestures composing on one state (`viewport.Y`) regardless of what a given TG version or
+        // terminal driver does for Command.PageUp/PageDown — the cross-platform concern behind #468/#312.
+        // (On TG 2.4.10 the stock commands already page the viewport, so this is behaviour-preserving
+        // today; the value is the explicit, driver-independent ownership.) Text panes only — the Task Tree
+        // ListView keeps its stock page-selection (PageActiveTextPane returns false ⇒ the key falls
+        // through to it). Inert while the Dispatch prompt is open (its dir-browser owns paging) and for any
+        // modified key: Ctrl+PgUp/PgDn are the Stream-sort chords below, excluded here by !IsCtrl. NextTop
+        // clamps, so a page at the content boundary is a consumed no-op that stays on the tab.
+        if (!_promptBox.Visible && !key.IsCtrl && !key.IsShift && !key.IsAlt
+            && (key.KeyCode == KeyCode.PageUp || key.KeyCode == KeyCode.PageDown)
+            && PageActiveTextPane(key.KeyCode == KeyCode.PageDown ? 1 : -1))
+        {
+            key.Handled = true;
+            return;
+        }
+
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
         {
             key.Handled = true;
@@ -859,9 +939,10 @@ public sealed class TaskDetailScreen : Screen
 
         // Ctrl+Enter opens this task in its own terminal tab (#384) — the detail counterpart of the main
         // list's #301 gesture; the host owns the launch + copy-command fallback. Ctrl+Enter carries
-        // KeyCode.Enter | CtrlMask, so it never trips the bare-Enter tree-row navigation above. Scoped to
-        // the dashboard-hosted detail via _treeList (the same seam HelpItems uses to pick the footer set),
-        // so the footer hint and the key stay in lock-step and single-task mode carries neither. Inert
+        // KeyCode.Enter | CtrlMask, so it never trips the bare-Enter tree-row navigation above. Gated on
+        // _treeList (the same seam HelpItems uses to pick the footer set), so the footer hint and the key
+        // stay in lock-step — present wherever a loader was supplied: the dashboard, and single-task launch
+        // mode too since #374/#435 (subscriber in SingleTaskApp). Inert
         // while the Dispatch pane is open (like the other command chords), and unreachable while the
         // comment composer / description editor is open (they own the keyboard via the guard above, where
         // Ctrl+Enter means Save).
@@ -1204,7 +1285,62 @@ public sealed class TaskDetailScreen : Screen
         var current = Array.IndexOf(_tabContents, _tabs.Value);
         if (current < 0)
             current = 0;
-        _scrollTargets[current].InvokeCommand(command);
+        // A text pane pages via the shared viewport model (#468), so the composer's "scroll underlying"
+        // (PgUp/PgDn) uses the same explicit scroll state as the reading-path ↑/↓ and PgUp/PgDn rather than
+        // Terminal.Gui's stock TextView paging; the Task Tree ListView keeps its stock command
+        // (page-selection). Any other command still routes straight through.
+        if (_scrollTargets[current] is TextView
+            && (command == Command.PageUp || command == Command.PageDown))
+            PageActiveTextPane(command == Command.PageUp ? -1 : 1);
+        else
+            _scrollTargets[current].InvokeCommand(command);
+    }
+
+    /// <summary>Moves the front-most tab by <paramref name="delta"/> rows for a bare ↑/↓ (#452): a
+    /// text pane (or the Other tab's fields body) scrolls one line via its viewport; the Task Tree
+    /// <see cref="ListView"/> moves its selection one row (its setter calls
+    /// <c>EnsureSelectedItemVisible</c>, so the list scrolls to follow). The pure
+    /// <see cref="DetailScrollModel"/> clamps to the content edges, so at a boundary this is a no-op.</summary>
+    private void MoveActiveTab(int delta)
+    {
+        var current = Array.IndexOf(_tabContents, _tabs.Value);
+        if (current < 0)
+            current = 0;
+        switch (_scrollTargets[current])
+        {
+            case ListView list:
+                var count = list.Source?.Count ?? 0;
+                var selected = list.SelectedItem is int i && i >= 0 ? i : 0;
+                list.SelectedItem = DetailScrollModel.NextIndex(selected, count, delta);
+                break;
+            case TextView pane:
+                var vp = pane.Viewport;
+                var top = DetailScrollModel.NextTop(vp.Y, vp.Height, pane.Lines, delta);
+                pane.Viewport = new Rectangle(vp.X, top, vp.Width, vp.Height);
+                break;
+        }
+    }
+
+    /// <summary>Pages the front-most tab's text pane one viewport page in <paramref name="direction"/>
+    /// (−1 up, +1 down) for a bare PgUp/PgDn (#468) — the page counterpart of <see cref="MoveActiveTab"/>'s
+    /// one-line ↑/↓ branch, a viewport write on the same <c>viewport.Y</c> so the two gestures share one
+    /// explicit scroll state independent of Terminal.Gui's stock paging. The pure
+    /// <see cref="DetailScrollModel"/> supplies the page size (<see cref="DetailScrollModel.PageDelta"/>)
+    /// and clamps to the content edges, so a page at a boundary is a no-op. Returns <see langword="false"/>
+    /// when the front-most tab is not a text pane (the Task Tree <see cref="ListView"/>), so the caller
+    /// leaves the key to that list's stock page-selection.</summary>
+    private bool PageActiveTextPane(int direction)
+    {
+        var current = Array.IndexOf(_tabContents, _tabs.Value);
+        if (current < 0)
+            current = 0;
+        if (_scrollTargets[current] is not TextView pane)
+            return false;
+        var vp = pane.Viewport;
+        var delta = direction * DetailScrollModel.PageDelta(vp.Height);
+        var top = DetailScrollModel.NextTop(vp.Y, vp.Height, pane.Lines, delta);
+        pane.Viewport = new Rectangle(vp.X, top, vp.Width, vp.Height);
+        return true;
     }
 
     private void ShowPrompt()
@@ -1779,6 +1915,45 @@ public sealed class TaskDetailScreen : Screen
         // disposes the previous one. Mirrors TodoApp.Render's main-list wiring.
         _treeList!.Source = new StatusBadgeListSource(display, badges, headerAttrs: null, searchKeys: searchKeys);
         return currentIndex;
+    }
+
+    // ── Checklists tab (C, #456) ────────────────────────────────────────────────
+
+    /// <summary>Renders a checklist projection into the tab's ListView: group-header rows draw with the
+    /// shared neutral header attribute (like the main list's group headers, <see cref="GroupHeaderPalette"/>),
+    /// item rows carry <c>[x]</c>/<c>[ ]</c> glyphs, indentation and an assignee suffix — all from the
+    /// pure <see cref="ChecklistTabModel"/>. Sets the tab title to the aggregate progress and caches the
+    /// projected rows + a content <see cref="ChecklistTabModel.Signature"/> so a refresh can skip an
+    /// unchanged rebuild (<see cref="UpdateData"/>) and re-anchor the selection by item id. A task with no
+    /// checklists renders a single empty-state row. Type-ahead (#12) searches by row text.</summary>
+    private void RenderChecklist(ChecklistProjection projection)
+    {
+        _checklistSignature = ChecklistTabModel.Signature(projection);
+        _checklistList.Title = ChecklistTabModel.TabTitle(projection);
+
+        if (projection.IsEmpty)
+        {
+            _checklistRows = [];
+            _checklistList.SetSource(new ObservableCollection<string>([ChecklistTabModel.EmptyStateText]));
+            return;
+        }
+
+        var display = new ObservableCollection<string>();
+        var badges = new List<IReadOnlyList<StatusBadgeListSource.Badge>>(projection.Rows.Count);
+        var headerAttrs = new List<Terminal.Gui.Drawing.Attribute?>(projection.Rows.Count);
+        var searchKeys = new List<string>(projection.Rows.Count);
+        foreach (var row in projection.Rows)
+        {
+            display.Add(ChecklistTabModel.RenderRow(row));
+            badges.Add([]); // no status badges on checklist rows; headers colour via headerAttrs.
+            headerAttrs.Add(row.IsHeader ? StatusBadgeListSource.NeutralHeaderAttr : null);
+            searchKeys.Add(row.Text);
+        }
+
+        _checklistRows = [.. projection.Rows];
+        // Assigning .Source (not SetSource) lets us pass our colour-overlaying source (header bars); the
+        // ListView disposes the previous one. Mirrors the Task Tree tab's RenderTreeRows wiring.
+        _checklistList.Source = new StatusBadgeListSource(display, badges, headerAttrs, searchKeys);
     }
 
     /// <summary>Enter on the tree tab: navigate to the highlighted row's task.</summary>
