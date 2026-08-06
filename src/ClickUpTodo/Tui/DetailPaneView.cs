@@ -1,4 +1,5 @@
 using System.Text;
+using ClickUpTodo.Configuration;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
@@ -165,11 +166,21 @@ public sealed class DetailPaneView : TextView
 
     /// <summary>
     /// Raised when the user activates a link in this pane with the mouse (#318): a plain left click on a
-    /// ClickUp task link asks for that task's Task Detail, any other click on a link (or any
-    /// <c>Ctrl</c>+click) asks for the browser — see <see cref="LinkActivator.Resolve"/>. The host owns
-    /// the destinations; the pane only reports what was clicked and what it means.
+    /// ClickUp task link asks for that task's Task Detail; a <c>Ctrl</c>+click (or <c>Ctrl+Shift</c>+click,
+    /// #320) on a task link asks for the configured <see cref="TaskLinkCtrlClickDestination"/> (browser or
+    /// a new terminal tab, with Shift inverting); any click on a web link asks for the browser — see
+    /// <see cref="LinkActivator.Resolve"/>. The host owns the destinations; the pane only reports what was
+    /// clicked and what it means.
     /// </summary>
     public event EventHandler<LinkActivationRequest>? LinkActivationRequested;
+
+    /// <summary>
+    /// Where a <c>Ctrl</c>+click on a <b>task</b> link goes (#320); <c>Ctrl+Shift</c>+click does the
+    /// other one. The screen sets this from the persisted <see cref="DetailViewSettings.TaskLinkCtrlClick"/>.
+    /// Default <see cref="TaskLinkCtrlClickDestination.Browser"/> — the fixed behaviour #318 shipped, so a
+    /// pane that is never told otherwise behaves exactly as before. Web links ignore it entirely.
+    /// </summary>
+    public TaskLinkCtrlClickDestination TaskLinkCtrlClickDestination { get; set; } = TaskLinkCtrlClickDestination.Browser;
 
     // The body exactly as SetBody loaded it, split on '\n' — one entry per *source* line, which is the
     // coordinate space Terminal.Gui reports a click in (see OnMouseEvent) and the one TaskLinkExtractor
@@ -542,11 +553,12 @@ public sealed class DetailPaneView : TextView
     /// no "it declined to map this" signal to detect. A <c>Ctrl</c>+click therefore resolves its position
     /// by handing the base a synthesized plain click at the same point (the panes are read-only, so the
     /// caret move that entails is invisible, and it is what an unmodified click would have done anyway),
-    /// an unmodified click is passed to the base and its own mapping read back, and <b>every other
-    /// modifier is refused outright</b> — a <c>Shift</c>/<c>Alt</c>+click isn't an activation gesture, and
-    /// admitting one would activate whatever link the caret last sat on. When #320 adds
-    /// <c>Ctrl+Shift</c>+click it joins the resolved-by-synthesized-click arm, since it carries
-    /// <c>Ctrl</c>.
+    /// an unmodified click is passed to the base and its own mapping read back, and <b>a bare
+    /// <c>Shift</c> or any <c>Alt</c> click is refused outright</b> — it isn't an activation gesture, and
+    /// admitting one would activate whatever link the caret last sat on. A <c>Ctrl+Shift</c>+click (the
+    /// #320 inversion gesture) <em>is</em> admitted: it carries <c>Ctrl</c>, so it joins the
+    /// resolved-by-synthesized-click arm and its destination is chosen by
+    /// <see cref="TaskLinkCtrlClickDestination"/>.
     /// </description></item>
     /// <item><description>
     /// <b>It clamps a click outside the text onto the nearest position.</b> That turns two ordinary
@@ -568,13 +580,16 @@ public sealed class DetailPaneView : TextView
     /// </summary>
     protected override bool OnMouseEvent(Mouse mouseEvent)
     {
-        // Only a plain or Ctrl-modified left click activates. Every other flag combination — a wheel, a
-        // press/release (drag), a double- or triple-click (each its own distinct flag), and any
-        // Shift/Alt-modified click — falls through to the base view untouched. Refusing the other
-        // modifiers is what keeps a gesture the base won't map from resolving to the stale caret (see
-        // above); it is not merely a taste call about which gestures mean "activate".
+        // Only a plain, Ctrl, or Ctrl+Shift left click activates. Every other flag combination — a wheel,
+        // a press/release (drag), a double- or triple-click (each its own distinct flag), an Alt-modified
+        // click, and a *bare* Shift click — falls through to the base view untouched. Refusing those is
+        // what keeps a gesture the base won't map from resolving to the stale caret (see above); it is not
+        // merely a taste call about which gestures mean "activate". Ctrl+Shift is admitted (the #320
+        // inversion gesture): it carries Ctrl, so it joins the synthesized-plain-click position arm below.
+        var ctrl = mouseEvent.Flags.HasFlag(MouseFlags.Ctrl);
+        var shift = mouseEvent.Flags.HasFlag(MouseFlags.Shift);
         if (!mouseEvent.Flags.HasFlag(MouseFlags.LeftButtonClicked)
-            || mouseEvent.Flags.HasFlag(MouseFlags.Shift)
+            || (shift && !ctrl)
             || mouseEvent.Flags.HasFlag(MouseFlags.Alt)
             || mouseEvent.Position is not { } position)
             return base.OnMouseEvent(mouseEvent);
@@ -583,14 +598,14 @@ public sealed class DetailPaneView : TextView
         var viewport = Viewport;
 
         // An unmodified click is the one the base view maps itself, so let it handle the real event and
-        // read the position back; only a modified click needs the synthesized stand-in (see above), which
-        // keeps the common gesture a single pass through the base.
-        var ctrl = mouseEvent.Flags.HasFlag(MouseFlags.Ctrl);
+        // read the position back; only a modified click (Ctrl or Ctrl+Shift) needs the synthesized
+        // stand-in (see above), which keeps the common gesture a single pass through the base.
         var handledByBase = !ctrl && base.OnMouseEvent(mouseEvent);
         if (LinkAt(position, viewport, resolvePosition: ctrl) is not { } span)
             return handledByBase;
 
-        LinkActivationRequested?.Invoke(this, new LinkActivationRequest(span, LinkActivator.Resolve(span, ctrl)));
+        LinkActivationRequested?.Invoke(
+            this, new LinkActivationRequest(span, LinkActivator.Resolve(span, ctrl, shift, TaskLinkCtrlClickDestination)));
         mouseEvent.Handled = true;
         return true;
     }

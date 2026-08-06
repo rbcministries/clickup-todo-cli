@@ -174,12 +174,29 @@ public sealed class HelpLineTests
             HelpItemSets.Detail,
             HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: false, replyPickerVisible: false, hasTaskTree: false));
 
+    // #325: while the @-mention picker is overlaid on the composer, the footer shows only the picker's
+    // keys — and the picker branch wins over the composer's (it sits on top of it).
+    [Fact]
+    public void DetailFooter_MentionPickerOpen_ShowsPickerKeys()
+        => Assert.Same(
+            HelpItemSets.DetailMentionPicker,
+            HelpItemSets.DetailFooter(
+                commentComposerVisible: true, descriptionEditorVisible: false, replyPickerVisible: false,
+                hasTaskTree: true, mentionPickerVisible: true));
+
+    [Fact]
+    public void Format_DetailMentionPicker_RendersPickerKeys()
+        => Assert.Equal(
+            "type search · ↑↓ move · Enter mention · Esc back",
+            HelpLine.Format(HelpItemSets.DetailMentionPicker));
+
     // The composer footer advertises only the composer's own keys (mirrors the description editor's set):
-    // Ctrl+Enter/Tab→Post, Esc cancel, F1 Help — matching the composer FrameView title and OnCommentKey.
+    // Ctrl+Enter/Tab→Post, Esc cancel, F1 Help, and the #325 @ mention-trigger — matching the composer
+    // FrameView title and OnCommentKey.
     [Fact]
     public void Format_DetailCommentComposer_RendersComposerKeys()
         => Assert.Equal(
-            "Tab editor/Post/Cancel · Ctrl+Enter post · F1 ℹ · Esc cancel",
+            "Tab editor/Post/Cancel · @ mention · Ctrl+Enter post · F1 ℹ · Esc cancel",
             HelpLine.Format(HelpItemSets.DetailCommentComposer));
 
     // #290 — refresh is standardized on F5 (icon ↻) across every screen that can refresh, so the footer
@@ -443,7 +460,7 @@ public sealed class HelpLineTests
         [
             HelpItemSets.MainList, HelpItemSets.Detail, HelpItemSets.DetailWithTaskTree,
             HelpItemSets.DetailDescriptionEditor, HelpItemSets.DetailCommentComposer,
-            HelpItemSets.DetailReplyPicker,
+            HelpItemSets.DetailMentionPicker, HelpItemSets.DetailReplyPicker,
             HelpItemSets.Settings, HelpItemSets.FilterSortGroup, HelpItemSets.QuickUpdates,
             HelpItemSets.QuickOpen, HelpItemSets.NewTask, HelpItemSets.PromptTemplateEditor,
             HelpItemSets.NotificationsFeed, HelpItemSets.AgentRun, HelpItemSets.Help,

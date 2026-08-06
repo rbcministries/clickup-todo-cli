@@ -85,6 +85,114 @@ public static class CommentComposerModel
         IReadOnlyList<CommentItem> comments, string provisionalId)
         => [.. comments.Where(c => !string.Equals(c.Id, provisionalId, StringComparison.Ordinal))];
 
+    // ── @-mention authoring (#325, sub-issue K of #313) ───────────────────────────────────────
+    // The composer lets the user @-mention workspace members via the #324 picker. Each pick splices a
+    // visible "@{DisplayName}" literal into the editor and records a MentionToken; on post, BuildRuns
+    // re-derives the structured runs from the *final* editor text + the recorded tokens, so a token the
+    // user later edits/deletes safely degrades to literal text (never a wrong tag). The runs go to the
+    // #322 structured facade; a body with no mention falls back to the unchanged plain-text path.
+
+    /// <summary>An @-mention inserted into the composer: the picked member's numeric ClickUp
+    /// <c>userId</c> and the display name whose <c>@{name}</c> literal was spliced into the editor (from
+    /// the #324 picker's <c>MentionTarget</c>).</summary>
+    public readonly record struct MentionToken(long UserId, string DisplayName)
+    {
+        /// <summary>The literal text the composer inserts into the editor for this mention: <c>@</c> +
+        /// the display name (the glue adds a trailing space). On post, <see cref="BuildRuns"/> matches
+        /// this literal back out of the final text to re-derive the mention run.</summary>
+        public string Token => "@" + (DisplayName ?? string.Empty);
+    }
+
+    /// <summary>
+    /// Re-derives the structured comment runs from the final editor <paramref name="text"/> and the
+    /// <paramref name="tokens"/> the user inserted. A greedy left-to-right scan: at each position, among
+    /// the not-yet-consumed tokens whose <c>@{DisplayName}</c> literal matches there, it takes the
+    /// <b>longest</b> (so <c>@Ann</c> and <c>@Ann Marie</c> disambiguate), flushes the accumulated
+    /// literal text as a <see cref="CommentRun.Text"/>, emits a <see cref="CommentRun.Mention"/>, and
+    /// advances — each token consumed at most once. A token whose literal is no longer in the text
+    /// (the user deleted or edited it) simply never matches, so the mention degrades to whatever literal
+    /// text remains — never a wrong tag. Adjacent literal text is coalesced into one run.
+    /// </summary>
+    public static IReadOnlyList<CommentRun> BuildRuns(string? text, IReadOnlyList<MentionToken>? tokens)
+    {
+        var s = text ?? string.Empty;
+        var remaining = new List<MentionToken>(tokens ?? []);
+        var runs = new List<CommentRun>();
+        var literal = new System.Text.StringBuilder();
+
+        var i = 0;
+        while (i < s.Length)
+        {
+            // The longest remaining token literal that matches at i (strict >, so among equal-length /
+            // duplicate literals the first recorded one is consumed first, then the next occurrence).
+            var bestIndex = -1;
+            var bestLength = 0;
+            for (var k = 0; k < remaining.Count; k++)
+            {
+                var lit = remaining[k].Token;
+                if (lit.Length > bestLength
+                    && i + lit.Length <= s.Length
+                    && string.CompareOrdinal(s, i, lit, 0, lit.Length) == 0)
+                {
+                    bestIndex = k;
+                    bestLength = lit.Length;
+                }
+            }
+
+            if (bestIndex >= 0)
+            {
+                if (literal.Length > 0)
+                {
+                    runs.Add(new CommentRun.Text(literal.ToString()));
+                    literal.Clear();
+                }
+                runs.Add(new CommentRun.Mention(remaining[bestIndex].UserId));
+                remaining.RemoveAt(bestIndex);
+                i += bestLength;
+            }
+            else
+            {
+                literal.Append(s[i]);
+                i++;
+            }
+        }
+
+        if (literal.Length > 0)
+            runs.Add(new CommentRun.Text(literal.ToString()));
+        return runs;
+    }
+
+    /// <summary>Trims the leading <see cref="CommentRun.Text"/> run's start and the trailing one's end
+    /// (dropping any run that becomes empty) — the structured analogue of the plain path's
+    /// <see cref="Normalize"/>. Interior whitespace (e.g. the space between two adjacent mentions) is
+    /// preserved.</summary>
+    public static IReadOnlyList<CommentRun> TrimRuns(IReadOnlyList<CommentRun> runs)
+    {
+        var list = new List<CommentRun>(runs ?? []);
+        if (list.Count > 0 && list[0] is CommentRun.Text head)
+        {
+            var trimmed = head.Value.TrimStart();
+            if (trimmed.Length == 0)
+                list.RemoveAt(0);
+            else
+                list[0] = new CommentRun.Text(trimmed);
+        }
+        if (list.Count > 0 && list[^1] is CommentRun.Text tail)
+        {
+            var trimmed = tail.Value.TrimEnd();
+            if (trimmed.Length == 0)
+                list.RemoveAt(list.Count - 1);
+            else
+                list[^1] = new CommentRun.Text(trimmed);
+        }
+        return list;
+    }
+
+    /// <summary>True when <paramref name="runs"/> carries at least one @-mention — the gate for taking
+    /// the structured write path (a mention-free body posts via the unchanged plain-text path).</summary>
+    public static bool HasMention(IReadOnlyList<CommentRun>? runs)
+        => runs is not null && runs.Any(r => r is CommentRun.Mention);
+
     // ── Reply into a thread (#330) ─────────────────────────────────────────────
     // The list is top-level comments only; a reply lives nested in its parent's Replies (#328/#329), so
     // the reply transforms mirror the flat ones above but operate one level down, on the parent matched

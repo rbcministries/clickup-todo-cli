@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
@@ -45,6 +46,12 @@ if (foreign)
 // the detail view's Task Tree tab has real parents/children to render and navigate. Gated so no other
 // check's GET /task/{id} response changes.
 var tree = Environment.GetEnvironmentVariable("E2E_TREE") == "1";
+
+// #320: E2E_LINK_CTRL_DEST=tab sets the persisted task-link Ctrl+Click destination to a new terminal
+// tab, so the link-destination check can drive Ctrl+/Ctrl+Shift+click and observe the new-tab launch.
+// Default (unset) keeps the Browser destination, matching every other check's #318 behaviour.
+if (Environment.GetEnvironmentVariable("E2E_LINK_CTRL_DEST") == "tab")
+    config.DetailView.TaskLinkCtrlClick = TaskLinkCtrlClickDestination.NewTerminalTab;
 
 // Opt-in Checklists tab scenario (C, #456): serve the opened task with a seeded `checklists` array
 // (two groups, a nested item, mixed resolved state, one assigned item) so the Checklists tab has real
@@ -112,6 +119,13 @@ IBrowserLauncher browser = string.IsNullOrEmpty(browserLog)
     ? new NullBrowserLauncher()
     : new RecordingBrowserLauncher(browserLog);
 
+// #320: when E2E_TAB_LOG is set, record each new-terminal-tab launch (the Ctrl+Click new-tab
+// destination) to that file — one `clickup-todo --task <id>` display command per line — so a pyte
+// check asserts the launch from the recorder rather than the (failing, terminal-less) real launcher's
+// clipboard fallback. Null otherwise, so TodoApp uses the real TerminalLauncher as before.
+var tabLog = Environment.GetEnvironmentVariable("E2E_TAB_LOG");
+ITerminalLauncher? tabLauncher = string.IsNullOrEmpty(tabLog) ? null : new RecordingTerminalLauncher(tabLog);
+
 // Single-task launch mode (#296): E2E_SINGLE_TASK=<id> boots SingleTaskApp straight into that task's
 // detail view — the harness equivalent of `clickup-todo --task <id>` — instead of the dashboard. It
 // shares the same #304 browser launcher so a Ctrl+B host rewrite is observable in single-task mode too.
@@ -125,7 +139,8 @@ if (!string.IsNullOrWhiteSpace(singleTaskId))
     return;
 }
 
-new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser, changeMarkers).Run("ansi");
+new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser,
+    changeMarkers, tabLauncher).Run("ansi");
 markerStateStore?.Dispose();
 return;
 
@@ -144,6 +159,26 @@ sealed class RecordingBrowserLauncher(string path) : IBrowserLauncher
     {
         File.AppendAllText(path, url.ToString() + "\n");
         return true;
+    }
+}
+
+/// <summary>Records each new-terminal-tab app launch (#320's Ctrl+Click new-tab destination) to a file
+/// — one <c>clickup-todo --task &lt;id&gt;</c> display command per line — and reports success, so under
+/// the PTY the launch is observable from the recorder instead of failing to a clipboard fallback. Only
+/// <see cref="LaunchAppAsync"/> is exercised here; the prompt-file <c>LaunchAsync</c> (agent dispatch)
+/// runs through TodoApp's own real launcher, never this one.</summary>
+sealed class RecordingTerminalLauncher(string path) : ITerminalLauncher
+{
+    public Task<LaunchResult> LaunchAsync(
+        string promptFilePath, string? workingDir, TerminalLauncherOptions options,
+        bool oneOff = false, CancellationToken ct = default)
+        => throw new NotSupportedException("RecordingTerminalLauncher records only app-tab launches.");
+
+    public Task<LaunchResult> LaunchAppAsync(
+        AppLaunchCommand command, TerminalLauncherOptions options, CancellationToken ct = default)
+    {
+        File.AppendAllText(path, command.ToDisplayCommand() + "\n");
+        return Task.FromResult(new LaunchResult(true, "e2e-recorder", null));
     }
 }
 
@@ -188,6 +223,11 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     // New Task screen's custom-field page renders and the required-block + drop-down paths are assertable.
     // Off by default, so every existing check sees the empty field set (Save creates directly, as before).
     private static bool CustomFields => Environment.GetEnvironmentVariable("E2E_CUSTOM_FIELDS") == "1";
+
+    // #325 opt-in: when set, the POST /task/{id}/comment handler appends each request body (one per line)
+    // to this file so mention_check.py can assert the structured @-mention tag block was actually sent.
+    // Off by default, so every existing check's comment post is unaffected.
+    private static readonly string? CommentLog = Environment.GetEnvironmentVariable("E2E_COMMENT_LOG");
 
     private const string CustomFieldsJson =
         """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false},{"id":"cf_estimate","name":"Estimate","type":"number","required":true},{"id":"cf_stage","name":"Stage","type":"drop_down","required":false,"type_config":{"options":[{"id":"opt_alpha","name":"Alpha","orderindex":0},{"id":"opt_beta","name":"Beta","orderindex":1}]}}]}""";
@@ -363,7 +403,14 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
         // (the GET read path returns it as a string) — mirror that so the fake matches the real API (#144).
         // Must precede the GET /comment branch below.
         else if (request.Method == HttpMethod.Post && path.Contains("/task/") && path.EndsWith("/comment"))
+        {
+            // #325: when E2E_COMMENT_LOG is set, record the raw request body (one per line) so a check can
+            // assert the structured `comment` blocks array — an @-mention tag, {"type":"tag","user":{"id":…}}
+            // — was actually sent. Otherwise the body is ignored (the canned response covers the round-trip).
+            if (!string.IsNullOrEmpty(CommentLog) && request.Content is { } commentContent)
+                File.AppendAllText(CommentLog, await commentContent.ReadAsStringAsync(ct) + "\n");
             body = """{"id":9014000000001,"hist_id":"h1","date":1751500000000}""";
+        }
         else if (path.Contains("/task/") && path.EndsWith("/comment"))
             body = CommentsJson(TaskIdOfComment(path));
         // POST /comment/{comment_id}/reply (#330, threaded comments D): the create-reply write returns the

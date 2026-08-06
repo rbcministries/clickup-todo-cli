@@ -1,3 +1,4 @@
+using ClickUpTodo.Configuration;
 using ClickUpTodo.Tui;
 
 namespace ClickUpTodo.Tests;
@@ -42,11 +43,55 @@ public sealed class LinkActivationTests
     }
 
     [Fact]
-    public void Resolve_CtrlIsTheOneGestureThatAlwaysMeansBrowser()
+    public void Resolve_CtrlIsTheDefaultBrowserGesture_WhenTheDestinationIsUnset()
     {
-        // The property #318 states: whatever the kind, Ctrl+click opens the browser.
+        // The #318 behaviour is preserved by the default parameter: with no destination supplied,
+        // Ctrl+click on a task link still opens the browser (the setting defaults to Browser).
         foreach (var span in new[] { Web(), Task(), Task(customId: true) })
             Assert.Equal(LinkAction.OpenInBrowser, LinkActivator.Resolve(span, ctrl: true));
+    }
+
+    // ── Resolve: #320 configurable Ctrl+Click destination + Shift inversion ────
+
+    [Theory]
+    [InlineData(TaskLinkCtrlClickDestination.Browser, false, LinkAction.OpenInBrowser)]
+    [InlineData(TaskLinkCtrlClickDestination.Browser, true, LinkAction.OpenTaskInNewTab)]
+    [InlineData(TaskLinkCtrlClickDestination.NewTerminalTab, false, LinkAction.OpenTaskInNewTab)]
+    [InlineData(TaskLinkCtrlClickDestination.NewTerminalTab, true, LinkAction.OpenInBrowser)]
+    public void Resolve_CtrlOnTaskLink_FollowsTheDestination_AndShiftInvertsIt(
+        TaskLinkCtrlClickDestination destination, bool shift, LinkAction expected)
+        => Assert.Equal(expected, LinkActivator.Resolve(Task(), ctrl: true, shift, destination));
+
+    [Fact]
+    public void Resolve_CustomIdTaskLink_FollowsTheSameCtrlDestinationMatrix()
+    {
+        // A custom-id link is not special here — the host owns resolving the id (#353), so the action
+        // is chosen by the same modifiers/destination as a plain-id task link.
+        Assert.Equal(LinkAction.OpenTaskInNewTab,
+            LinkActivator.Resolve(Task(customId: true), ctrl: true, shift: false, TaskLinkCtrlClickDestination.NewTerminalTab));
+        Assert.Equal(LinkAction.OpenInBrowser,
+            LinkActivator.Resolve(Task(customId: true), ctrl: true, shift: true, TaskLinkCtrlClickDestination.NewTerminalTab));
+    }
+
+    [Theory]
+    [InlineData(TaskLinkCtrlClickDestination.Browser)]
+    [InlineData(TaskLinkCtrlClickDestination.NewTerminalTab)]
+    public void Resolve_WebLink_AlwaysOpensBrowser_WhateverTheModifiersOrDestination(TaskLinkCtrlClickDestination destination)
+    {
+        foreach (var ctrl in new[] { false, true })
+            foreach (var shift in new[] { false, true })
+                Assert.Equal(LinkAction.OpenInBrowser, LinkActivator.Resolve(Web(), ctrl, shift, destination));
+    }
+
+    [Theory]
+    [InlineData(TaskLinkCtrlClickDestination.Browser)]
+    [InlineData(TaskLinkCtrlClickDestination.NewTerminalTab)]
+    public void Resolve_PlainClickOnTaskLink_IsAlwaysInApp_RegardlessOfDestinationOrShift(TaskLinkCtrlClickDestination destination)
+    {
+        // Without Ctrl the gesture is an in-app open; the destination and a (pane-refused) Shift never
+        // apply. This is the plain-click / Enter path #319 shares.
+        Assert.Equal(LinkAction.OpenTaskDetail, LinkActivator.Resolve(Task(), ctrl: false, shift: false, destination));
+        Assert.Equal(LinkAction.OpenTaskDetail, LinkActivator.Resolve(Task(), ctrl: false, shift: true, destination));
     }
 
     // ── SpanAt ───────────────────────────────────────────────────────────────

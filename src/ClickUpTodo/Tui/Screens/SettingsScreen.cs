@@ -168,12 +168,22 @@ public sealed class SettingsScreen : Screen
             autoScrollButton.Text = AutoScrollText(autoScroll);
         };
 
+        // Where a Ctrl+Click on a task link in a detail pane goes (#320): browser or a new terminal tab
+        // (Ctrl+Shift inverts). Default Browser matches #318.
+        var taskLinkCtrlClick = detailView.TaskLinkCtrlClick;
+        var taskLinkCtrlClickButton = new Button { X = 1, Y = 13, Text = TaskLinkCtrlClickText(taskLinkCtrlClick) };
+        taskLinkCtrlClickButton.Accepting += (_, _) =>
+        {
+            taskLinkCtrlClick = taskLinkCtrlClick.Next();
+            taskLinkCtrlClickButton.Text = TaskLinkCtrlClickText(taskLinkCtrlClick);
+        };
+
         // ── General (#407): opt out of the exit-confirmation modal ──────────────
         // A cycle toggle mirroring the Dispatch section's On/Off buttons. On by default; Off restores the
         // pre-#299 one-key quit. Both hosts' RequestExit read the persisted value live.
-        var generalHeader = new Label { X = 1, Y = 13, Text = "─ General ─" };
+        var generalHeader = new Label { X = 1, Y = 14, Text = "─ General ─" };
         var confirmExit = confirmOnExit;
-        var confirmOnExitButton = new Button { X = 1, Y = 14, Text = ConfirmOnExitText(confirmExit) };
+        var confirmOnExitButton = new Button { X = 1, Y = 15, Text = ConfirmOnExitText(confirmExit) };
         confirmOnExitButton.Accepting += (_, _) =>
         {
             confirmExit = !confirmExit;
@@ -278,6 +288,7 @@ public sealed class SettingsScreen : Screen
                     DefaultTab = defaultTab,
                     StreamSort = activityOrder,
                     AutoScroll = autoScroll,
+                    TaskLinkCtrlClick = taskLinkCtrlClick,
                 },
                 confirmExit);
             Close();
@@ -305,7 +316,7 @@ public sealed class SettingsScreen : Screen
             feedLookbackLabel, _feedLookbackField, excludedNote,
             workingDirLabel, workingDirField, workingDirNote,
             subdomainLabel, subdomainField,
-            detailHeader, defaultTabButton, activityOrderButton, autoScrollButton,
+            detailHeader, defaultTabButton, activityOrderButton, autoScrollButton, taskLinkCtrlClickButton,
             generalHeader, confirmOnExitButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, templateButton, customTermLabel, customTermField,
@@ -369,5 +380,14 @@ public sealed class SettingsScreen : Screen
     {
         StreamAutoScroll.Oldest => "Oldest",
         _ => "Newest",
+    };
+
+    // Kept short ("New tab", not "New terminal tab") so the widest state stays within the left column at
+    // ~80 cols — the right column starts at Pos.Percent(50)+1 (#320 review). README spells out the full
+    // "new terminal tab" behaviour.
+    private static string TaskLinkCtrlClickText(TaskLinkCtrlClickDestination d) => "Ctrl+Click task link: " + d switch
+    {
+        TaskLinkCtrlClickDestination.NewTerminalTab => "New tab",
+        _ => "Browser",
     };
 }
