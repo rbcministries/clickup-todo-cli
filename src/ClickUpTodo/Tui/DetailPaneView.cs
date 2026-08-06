@@ -126,22 +126,22 @@ public sealed class DetailPaneView : TextView
     }
 
     /// <summary>
-    /// The OSC-8 hyperlink target (#380) for the link run covering cell <paramref name="idxCol"/> of the
-    /// laid-out (display) <paramref name="line"/>, or <see langword="null"/> when that cell is not part of a
-    /// link whose on-screen text is itself a navigable <c>http(s)</c> URL. Pure — no Terminal.Gui draw surface —
-    /// so it is unit-tested; the draw override (<see cref="OnDrawReadOnlyColor"/>) feeds the result to
-    /// <see cref="IDriver.CurrentUrl"/> so the ANSI output wraps the run in an OSC-8 escape.
+    /// The OSC-8 hyperlink target (#380/#430) for the cell at <paramref name="idxCol"/> of the laid-out
+    /// (display) <paramref name="line"/>, or <see langword="null"/> when that cell is not part of a link.
+    /// The target is the link's <b>resolved</b> <see cref="LinkSpan.Url"/> — for a <b>bare</b> link that is
+    /// the URL itself; for a <b>markdown</b> <c>[text](url)</c> link it is the true destination behind the
+    /// visible text (#430), recovered by re-extracting the row's own text (see <see cref="RowLinkUrls"/>),
+    /// not reconstructed from the drawn cells. Pure — no Terminal.Gui draw surface — so it is unit-tested;
+    /// the draw override (<see cref="OnDrawReadOnlyColor"/>) feeds the result to <see cref="IDriver.CurrentUrl"/>
+    /// so the ANSI output wraps the run in an OSC-8 escape.
     /// <para>
-    /// The emitted target is <b>always exactly the run's on-screen text</b>, returned only when that text
-    /// re-parses as an absolute <c>http(s)</c> URL with a real host. For a <b>bare</b> link that text <em>is</em>
-    /// the URL (the case #317 renders and #380 validates), so the target is exact. For a <b>markdown</b>
-    /// <c>[text](url)</c> link — whose true target (<see cref="LinkSpan.Url"/>) can differ from the visible
-    /// text — this returns <see langword="null"/> when the visible text is prose, and returns the <em>visible</em>
-    /// URL (not the markdown target) in the rare case the visible text is itself an <c>http(s)</c> URL. That
-    /// deviation is deliberate and bounded: the target then equals what the reader sees on screen (never a
-    /// hidden destination), and correct markdown-target OSC-8 — which needs the resolved span threaded into the
-    /// draw path — is deferred (#430; see the plan doc). A word-wrapped link's non-URL tail fragment likewise
-    /// fails the URL check; wrapped-link rendering is tracked separately (#413).
+    /// When a markdown link's <c>[text]</c> and <c>(url)</c> wrap onto <em>different</em> rendered rows, the
+    /// visible-text fragment yields <see langword="null"/> (its row holds no complete markdown link) and the
+    /// trailing <c>(url)</c> fragment re-extracts as an ordinary <em>bare</em> link to that URL itself — so a
+    /// split markdown link never produces a <em>wrong</em> target, only a less-rich one (the visible text is
+    /// left unlinked). Hyperlinking the visible text across the wrap needs the display→source mapping and is
+    /// tracked with #443, together with the pre-existing edge where a bare URL sitting inside the visible
+    /// <c>[text]</c> is itself extracted when the link wraps.
     /// </para>
     /// </summary>
     public static string? LinkUrlForCell(IReadOnlyList<Cell> line, int idxCol)
@@ -149,34 +149,20 @@ public sealed class DetailPaneView : TextView
         if (idxCol < 0 || idxCol >= line.Count)
             return null;
 
-        var kind = ClassifyCell(line[idxCol]);
-        if (kind is not (DetailCellStyle.TaskLink or DetailCellStyle.WebLink or DetailCellStyle.FocusedLink))
-            return null;
-
-        // Expand over the maximal contiguous run of same-kind link cells around idxCol. Runs are naturally
-        // separated by the untagged cells BuildCells leaves between links (a link is bounded by whitespace),
-        // so a run is exactly one link. FocusedLink (#319) is handled the same way — a keyboard-focused bare
-        // link keeps its OSC-8 hyperlink; its cells simply carry the focus marker instead of the kind marker.
-        var start = idxCol;
-        while (start > 0 && ClassifyCell(line[start - 1]) == kind)
-            start--;
-        var end = idxCol;
-        while (end + 1 < line.Count && ClassifyCell(line[end + 1]) == kind)
-            end++;
-
-        var text = string.Concat(Enumerable.Range(start, end - start + 1).Select(i => line[i].Grapheme ?? ""));
-
-        // Emit only when the run's on-screen text is itself a navigable absolute http(s) URL, and use that
-        // text as the target. A bare link passes (its text is the URL). A markdown link's visible prose, or a
-        // wrapped link's non-URL tail fragment, does not — so no wrong target is invented. (A markdown link
-        // whose *visible text* is itself a URL yields that displayed URL, not its true target — the bounded,
-        // never-hidden-destination deviation documented above; correct markdown targets are deferred to #430.)
-        return Uri.TryCreate(text, UriKind.Absolute, out var uri)
-            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
-            && !string.IsNullOrEmpty(uri.Host)
-                ? text
-                : null;
+        return RowLinkUrls(line)[idxCol];
     }
+
+    /// <summary>
+    /// The OSC-8 hyperlink target for every cell of a single rendered (possibly word-wrapped) row: one entry
+    /// per cell holding the resolved <see cref="LinkSpan.Url"/> of the link that covers it, or
+    /// <see langword="null"/> for a non-link cell. Derived — like <see cref="ClassifyRowLinkCells"/>, and
+    /// from the same single per-row re-extraction (<see cref="ClassifyRow"/>) — from the row's <em>own</em>
+    /// graphemes rather than the per-cell tags <see cref="BuildCells"/> applied, so it is offset-correct on
+    /// wrapped continuation rows (#413) and, because it consults the extracted <see cref="LinkSpan"/> rather
+    /// than the drawn text, carries a markdown link's <b>resolved</b> target on its visible-text cells (#430).
+    /// Pure and Terminal.Gui-draw-free, so it is unit-tested.
+    /// </summary>
+    public static string?[] RowLinkUrls(IReadOnlyList<Cell> row) => ClassifyRow(row).Urls;
 
     /// <summary>
     /// Raised when the user activates a link in this pane with the mouse (#318): a plain left click on a
@@ -456,11 +442,24 @@ public sealed class DetailPaneView : TextView
     /// leaves correct because a separator row is tagged uniformly). Pure and Terminal.Gui-draw-free so it
     /// is unit-tested.
     /// </summary>
-    public static DetailCellStyle[] ClassifyRowLinkCells(IReadOnlyList<Cell> row)
+    public static DetailCellStyle[] ClassifyRowLinkCells(IReadOnlyList<Cell> row) => ClassifyRow(row).Styles;
+
+    /// <summary>
+    /// The single per-row link re-extraction that both the underline (#413, <see cref="ClassifyRowLinkCells"/>)
+    /// and the OSC-8 target (#380/#430, <see cref="RowLinkUrls"/>) are projected from, so the two can never
+    /// disagree on which cells are a link. For each cell it returns its link kind style
+    /// (<see cref="DetailCellStyle.TaskLink"/> / <see cref="DetailCellStyle.WebLink"/> /
+    /// <see cref="DetailCellStyle.Normal"/> — separators are handled from the tag, which the wrap bug leaves
+    /// correct) and that link's resolved <see cref="LinkSpan.Url"/> (the true target, so a markdown link's
+    /// visible-text cells carry its destination, not its prose). Both are computed from the row's own
+    /// graphemes, so they are offset-correct on wrapped continuation rows.
+    /// </summary>
+    private static (DetailCellStyle[] Styles, string?[] Urls) ClassifyRow(IReadOnlyList<Cell> row)
     {
         var styles = new DetailCellStyle[row.Count];
+        var urls = new string?[row.Count];
         if (row.Count == 0)
-            return styles;
+            return (styles, urls);
 
         // Reconstruct the row's text and each cell's start char offset. A cell is one grapheme, which can
         // be more than one UTF-16 char (e.g. an emoji), so map by accumulated grapheme length — not cell
@@ -477,11 +476,11 @@ public sealed class DetailPaneView : TextView
         // Cheap bail-out: every link (bare or markdown) carries an http(s) scheme, so a row without one
         // has no links and skips the regex entirely — the common case for body text.
         if (rendered.IndexOf("http", StringComparison.OrdinalIgnoreCase) < 0)
-            return styles;
+            return (styles, urls);
 
         var links = TaskLinkExtractor.Extract(rendered);
         if (links.Count == 0)
-            return styles;
+            return (styles, urls);
 
         // Links are in document order and non-overlapping; walk cells and links together in one pass.
         var li = 0;
@@ -493,27 +492,44 @@ public sealed class DetailPaneView : TextView
             if (li >= links.Count)
                 break;
             if (off >= links[li].Start && off < links[li].End)
+            {
                 styles[i] = links[li].Kind == LinkKind.Task ? DetailCellStyle.TaskLink : DetailCellStyle.WebLink;
+                urls[i] = links[li].Url;
+            }
         }
 
-        return styles;
+        return (styles, urls);
     }
 
     // Per-row cache for the draw path: OnDrawReadOnlyColor is invoked once per cell, but the row's link
-    // classification only needs computing once per row. Keyed on the row list reference (Terminal.Gui's
-    // wrap model holds a distinct list per rendered row), so a new row triggers a recompute.
+    // classification (both the kind style #413 and the OSC-8 URL #380/#430) only needs computing once per
+    // row, from a single ClassifyRow re-extraction. Keyed on the row list reference (Terminal.Gui's wrap
+    // model holds a distinct list per rendered row), so a new row triggers a recompute.
     private List<Cell>? _linkRow;
     private DetailCellStyle[]? _linkRowStyles;
+    private string?[]? _linkRowUrls;
+
+    private void EnsureRowLinkCache(List<Cell> line)
+    {
+        if (ReferenceEquals(_linkRow, line) && _linkRowStyles is { } s && s.Length == line.Count && _linkRowUrls is not null)
+            return;
+
+        (_linkRowStyles, _linkRowUrls) = ClassifyRow(line);
+        _linkRow = line;
+    }
+
+    // The OSC-8 target for the cell about to be drawn (null outside the row / on a non-link cell), from the
+    // per-row cache — parallel to LinkStyleAt.
+    private string? LinkUrlAt(List<Cell> line, int idxCol)
+    {
+        EnsureRowLinkCache(line);
+        return idxCol >= 0 && idxCol < _linkRowUrls!.Length ? _linkRowUrls[idxCol] : null;
+    }
 
     private DetailCellStyle LinkStyleAt(List<Cell> line, int idxCol)
     {
-        if (!ReferenceEquals(_linkRow, line) || _linkRowStyles is null || _linkRowStyles.Length != line.Count)
-        {
-            _linkRowStyles = ClassifyRowLinkCells(line);
-            _linkRow = line;
-        }
-
-        return idxCol < _linkRowStyles.Length ? _linkRowStyles[idxCol] : DetailCellStyle.Normal;
+        EnsureRowLinkCache(line);
+        return idxCol >= 0 && idxCol < _linkRowStyles!.Length ? _linkRowStyles[idxCol] : DetailCellStyle.Normal;
     }
 
     /// <summary>
@@ -655,13 +671,14 @@ public sealed class DetailPaneView : TextView
     /// <inheritdoc/>
     protected override void OnDrawReadOnlyColor(List<Cell> line, int idxCol, int idxRow)
     {
-        // OSC-8 hyperlink (#380): tag the cell about to be drawn with its link's URL (or clear it for a
-        // non-link cell) so the subsequent AddRune associates it and the ANSI output wraps the run in an
-        // OSC-8 escape. Additive to #317's styling below; parallel to how SetAttribute drives CurrentAttribute.
-        // (Like the tag-driven cues below, LinkUrlForCell reads the per-cell tag, so on a wrapped
-        // continuation row its target degrades exactly as it does on main — #413 corrects the underline
-        // only; wrapped OSC-8/link-token handling is tracked in #443/#430.)
-        SetCurrentUrl(LinkUrlForCell(line, idxCol));
+        // OSC-8 hyperlink (#380/#430): tag the cell about to be drawn with its link's resolved URL (or clear
+        // it for a non-link cell) so the subsequent AddRune associates it and the ANSI output wraps the run in
+        // an OSC-8 escape. Additive to #317's styling below; parallel to how SetAttribute drives CurrentAttribute.
+        // The target comes from the same per-row re-extraction as the underline (#413), so it is offset-correct
+        // on wrapped rows and carries a markdown link's true destination on its visible-text cells (#430); a
+        // markdown link split across two rendered rows degrades gracefully — its (url) fragment becomes a plain
+        // bare link, never a wrong target — with the visible-text hyperlinking deferred to #443.
+        SetCurrentUrl(LinkUrlAt(line, idxCol));
 
         if (idxCol >= 0 && idxCol < line.Count)
         {

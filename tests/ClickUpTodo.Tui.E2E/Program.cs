@@ -53,6 +53,11 @@ var tree = Environment.GetEnvironmentVariable("E2E_TREE") == "1";
 if (Environment.GetEnvironmentVariable("E2E_LINK_CTRL_DEST") == "tab")
     config.DetailView.TaskLinkCtrlClick = TaskLinkCtrlClickDestination.NewTerminalTab;
 
+// Opt-in Checklists tab scenario (C, #456): serve the opened task with a seeded `checklists` array
+// (two groups, a nested item, mixed resolved state, one assigned item) so the Checklists tab has real
+// content to render. Gated so no other check's GET /task/{id} response changes.
+var checklists = Environment.GetEnvironmentVariable("E2E_CHECKLISTS") == "1";
+
 // Two-instance nudge channel (#376 item 1): when E2E_MARKER_DB is set, wire a real shared-file
 // LiteDbChangeMarkerStore into BOTH the producer (ClickUpClient) and the consumer (TodoApp), so a Quick
 // Update committed in one app process nudges the other (nudge-then-fetch, #294/#295). LiteDB's shared
@@ -73,7 +78,7 @@ if (!string.IsNullOrWhiteSpace(markerDbPath))
 }
 
 var client = new ClickUpClient(
-    "fake-token", new HttpClient(new FakeClickUp(taskCount, foreign, tree)), changeMarkers: changeMarkers);
+    "fake-token", new HttpClient(new FakeClickUp(taskCount, foreign, tree, checklists)), changeMarkers: changeMarkers);
 IStateStore stateStore = new JsonFileStateStore();
 var configStore = new ConfigStore(stateStore);
 var tasks = new TaskService(client, config, 1, userName: "Ben Seymour");
@@ -177,12 +182,15 @@ sealed class RecordingTerminalLauncher(string path) : ITerminalLauncher
     }
 }
 
-sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false) : HttpMessageHandler
+sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false, bool checklists = false) : HttpMessageHandler
 {
     // #232 opt-in scenario flag: serve the small not-mine-rows snapshot + a modelled Status/Priority
     // write instead of the default generated list. Off by default so every existing check is untouched.
     private readonly bool _foreign = foreign;
     private readonly bool _tree = tree;
+    // C (#456): when set, DetailJson embeds a seeded `checklists` array so the Checklists tab renders
+    // real groups/items. Off by default, so every other check's task-detail response is untouched.
+    private readonly bool _checklists = checklists;
 
     private static readonly string[] Statuses = ["to do", "in progress", "blocked", "in review"];
     private static readonly string[] StatusColors = ["#d3d3d3", "#4194f6", "#e50000", "#a875ff"];
@@ -341,8 +349,17 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
     // Ends with a ClickUp task link so the link-rendering check (#317) has a Task-kind link in the
     // Description pane to assert (the Comments pane already carries a Web-kind github URL). description_edit
     // only asserts the "Call Center training" substring, so the trailing URL is safe for it.
+    // #430 opt-in: append a markdown [text](url) link whose visible text is prose ("the runbook") and whose
+    // resolved target differs from it, so markdown_osc8_check.py can assert the OSC-8 hyperlink points at the
+    // RESOLVED url — not the visible text. Off by default, so every existing check sees the original body
+    // byte-for-byte. The visible text isn't a URL, so an OSC-8 open for MdLinkTarget can only come from the
+    // markdown resolution this exercises.
+    private static bool MdLink => Environment.GetEnvironmentVariable("E2E_MD_LINK") == "1";
+    public const string MdLinkTarget = "https://example.com/runbook-42";
+
     private string _description =
-        "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed\n\nParent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread";
+        "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed\n\nParent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread"
+        + (MdLink ? "\n\nSee [the runbook](" + MdLinkTarget + ") for steps" : "");
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
@@ -377,6 +394,18 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
             body = """{"id":9014000000001,"hist_id":"h1","date":1751500000000}""";
         else if (path.Contains("/task/") && path.EndsWith("/comment"))
             body = CommentsJson(TaskIdOfComment(path));
+        // POST /comment/{comment_id}/reply (#330, threaded comments D): the create-reply write returns the
+        // same minimal created-comment shape as the top-level comment POST (id as a JSON number, hist_id,
+        // date), so a reply posted from the composer's reply mode round-trips truthfully. Records the target
+        // comment id + request body to E2E_REPLY_LOG so a reply-post check can assert the write reached the
+        // backend (keyed to the picked parent) rather than guess from the screen. Must precede the GET reply
+        // branch below (both match .EndsWith("/reply")).
+        else if (request.Method == HttpMethod.Post && path.Contains("/comment/") && path.EndsWith("/reply"))
+        {
+            var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
+            RecordReply(CommentIdOfReply(path), reqBody);
+            body = """{"id":9014000000002,"hist_id":"h2","date":1751500500000}""";
+        }
         // GET /comment/{comment_id}/reply (#329, threaded comments C): a comment's reply thread. Only the
         // seeded thread parent (c2) returns replies, and only under E2E_THREADS — so every other scenario,
         // which sees reply_count=0 on all comments, never reaches this branch. Same CommentsResponse wire
@@ -501,6 +530,18 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
         return trimmed[(trimmed.LastIndexOf('/') + 1)..];
     }
 
+    /// <summary>Records a posted reply (#330) — its target comment id and the raw request body — to the
+    /// file named by <c>E2E_REPLY_LOG</c>, one <c>{commentId}\t{body}</c> line per POST, so a reply-post
+    /// check can assert the write reached the backend keyed to the picked parent. No-op when unset.</summary>
+    private static void RecordReply(string commentId, string requestBody)
+    {
+        var logPath = Environment.GetEnvironmentVariable("E2E_REPLY_LOG");
+        if (string.IsNullOrEmpty(logPath))
+            return;
+        try { File.AppendAllText(logPath, commentId + "\t" + requestBody.Replace('\n', ' ').Replace('\r', ' ') + "\n"); }
+        catch { /* best-effort capture */ }
+    }
+
     /// <summary>The comment id from a <c>/v2/comment/{id}/reply</c> path.</summary>
     private static string CommentIdOfReply(string path)
     {
@@ -581,15 +622,35 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
     /// <summary>Detail for the Enter → detail screen (and the echo for a task PUT). The description
     /// deliberately mixes plain prose with wide/multi-byte graphemes so per-cell rendering issues have
     /// something to bite; the assignees reflect the current mutable set so an assignee write round-trips.</summary>
+    // C (#456): a seeded checklists payload — two groups, mixed resolved state, one nested item, one
+    // assigned item — mirroring the ClickUp GET /task shape the read model (#454) maps. Aggregate: 2 of 5
+    // items resolved ⇒ the tab title reads "Checklists (2/5)".
+    private const string ChecklistsJson = """
+    [
+      {"id":"c1","name":"Release steps","orderindex":0,"resolved":1,"unresolved":2,
+       "items":[
+         {"id":"i1","name":"Cut the tag","resolved":true,"orderindex":0,"assignee":null},
+         {"id":"i2","name":"Draft release notes","resolved":false,"orderindex":1,
+          "assignee":{"id":101,"username":"Ada Lovelace"},
+          "children":[{"id":"i2a","name":"Verify the changelog","resolved":false,"orderindex":0}]}]},
+      {"id":"c2","name":"QA signoff","orderindex":1,"resolved":1,"unresolved":1,
+       "items":[
+         {"id":"i3","name":"Smoke test on staging","resolved":true,"orderindex":0,"assignee":null},
+         {"id":"i4","name":"Cross-browser check","resolved":false,"orderindex":1,"assignee":null}]}
+    ]
+    """;
+
     private string DetailJson(string path, HashSet<long> assignees)
     {
         var id = path[(path.LastIndexOf('/') + 1)..];
         // JSON-encode the (mutable, possibly user-edited) description so quotes/newlines/emoji round-trip.
         var description = JsonSerializer.Serialize(_description);
+        // C (#456): the seeded checklists array, or empty (the common case — no other check sees it).
+        var checklists = _checklists ? ChecklistsJson : "[]";
         // `locations` are the task's additional list memberships (#242), mutated by the membership
         // POST/DELETE so an add/remove from the List pane round-trips; empty in the common single-list case.
         return $$"""
-        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"locations":[{{LocationsJson()}}],"description":{{description}}}
+        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"locations":[{{LocationsJson()}}],"checklists":{{checklists}},"description":{{description}}}
         """;
     }
 

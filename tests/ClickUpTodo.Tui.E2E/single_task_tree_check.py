@@ -121,9 +121,9 @@ F6 = b"\x1b[17~"
 
 
 def cycle_to_tree_tab():
-    """From a freshly-shown detail (default Stream tab): cycle to the 5th Task Tree tab and let the
+    """From a freshly-shown detail (default Stream tab): cycle to the 6th Task Tree tab and let the
     lazy tree load land."""
-    for _ in range(4):   # Stream -> Description -> Comments -> Other -> Task Tree
+    for _ in range(5):   # Stream -> Description -> Comments -> Other -> Checklists -> Task Tree
         send(CTRL_RIGHT)
         pump(0.4)
     pump(3.0)

@@ -366,6 +366,7 @@ public sealed class SettingsScreen : Screen
         DetailTab.Description => "Description",
         DetailTab.Comments => "Comments",
         DetailTab.Other => "Other",
+        DetailTab.Checklists => "Checklists",
         _ => "Stream",
     };
 

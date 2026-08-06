@@ -224,9 +224,11 @@ public sealed class DetailPaneViewTests
         Assert.Equal("https://example.com", RowStyledText(row, DetailPaneView.DetailCellStyle.WebLink));
     }
 
-    // ── OSC-8 hyperlink target (#380) ────────────────────────────────────────────────────────────────
-    // LinkUrlForCell reconstructs a bare link's URL from its tagged cells so the draw override can feed it
-    // to IDriver.CurrentUrl. Pure — exercised through the real Cell.ToCellList model, no driver.
+    // ── OSC-8 hyperlink target (#380/#430) ───────────────────────────────────────────────────────────
+    // LinkUrlForCell returns the resolved LinkSpan.Url for a link cell (via RowLinkUrls' per-row
+    // re-extraction) so the draw override can feed it to IDriver.CurrentUrl — a bare link's own URL, and a
+    // markdown link's true target on its visible-text cells (#430). Pure — exercised through the real
+    // Cell.ToCellList model, no driver.
 
     // The single loaded line for `line`, as a cell list.
     private static IReadOnlyList<Cell> Line(string line) => DetailPaneView.BuildCells(line, Sep).Single();
@@ -286,33 +288,35 @@ public sealed class DetailPaneViewTests
     }
 
     [Fact]
-    public void LinkUrlForCell_IsNull_ForAMarkdownLinksVisibleProse()
+    public void LinkUrlForCell_ReturnsTheResolvedTarget_ForAMarkdownLink()
     {
-        // A markdown link renders only its visible text ("click here"); the real target lives in the markup
-        // the reader never sees. Reconstructing from the displayed cells therefore must NOT invent a target —
-        // the prose isn't a URL, so no OSC-8 is emitted (deferred: full markdown-link OSC-8).
-        const string line = "See [click here](https://example.com/deep) now";
+        // A markdown link renders its visible text ("click here"); its true target lives in the (url) markup.
+        // #430: because the whole "[click here](url)" sits on one rendered row, re-extracting the row recovers
+        // the LinkSpan and its resolved Url, so every visible-text cell carries the true destination.
+        const string target = "https://example.com/deep";
+        const string line = "See [click here](" + target + ") now";
         var cells = Line(line);
-        var visible = "click here";
-        var at = line.IndexOf(visible, StringComparison.Ordinal);
+        const string visible = "click here";
+        var first = line.IndexOf(visible, StringComparison.Ordinal);
         // The visible text is tagged as a (web) link by #317's rendering…
-        Assert.Equal(DetailPaneView.DetailCellStyle.WebLink, DetailPaneView.ClassifyCell(cells[at]));
-        // …but its reconstructed text is prose, not a URL, so LinkUrlForCell declines it.
-        Assert.Null(DetailPaneView.LinkUrlForCell(cells, at));
+        Assert.Equal(DetailPaneView.DetailCellStyle.WebLink, DetailPaneView.ClassifyCell(cells[first]));
+        // …and every cell of it now resolves to the markdown's RESOLVED target (not the visible prose).
+        Assert.Equal(target, DetailPaneView.LinkUrlForCell(cells, first));
+        Assert.Equal(target, DetailPaneView.LinkUrlForCell(cells, first + visible.Length / 2));
+        Assert.Equal(target, DetailPaneView.LinkUrlForCell(cells, first + visible.Length - 1));
     }
 
     [Fact]
-    public void LinkUrlForCell_ReturnsTheVisibleUrl_NotTheTarget_ForAMarkdownLinkWhoseTextIsAUrl()
+    public void LinkUrlForCell_ReturnsTheTarget_NotTheVisibleUrl_ForAMarkdownLinkWhoseTextIsAUrl()
     {
-        // Bounded, documented deviation: when a markdown link's VISIBLE text is itself a URL, the OSC-8 target
-        // reconstructed from the drawn cells is that displayed URL, not the markdown's true target. This is the
-        // safe direction (the target equals what the reader sees, never a hidden destination); correct
-        // markdown-target OSC-8 is deferred (#430). Pinned so the behaviour can't change silently.
+        // When a markdown link's VISIBLE text is itself a URL, the OSC-8 target is still the markdown's true
+        // destination, not the displayed URL (#430) — the reader's Ctrl+click follows where the link points.
+        const string target = "https://example.com/b";
         const string visibleUrl = "https://example.com/a";
-        const string line = "See [" + visibleUrl + "](https://example.com/b) now";
+        const string line = "See [" + visibleUrl + "](" + target + ") now";
         var cells = Line(line);
         var at = line.IndexOf(visibleUrl, StringComparison.Ordinal);
-        Assert.Equal(visibleUrl, DetailPaneView.LinkUrlForCell(cells, at));
+        Assert.Equal(target, DetailPaneView.LinkUrlForCell(cells, at));
     }
 
     [Fact]
@@ -328,6 +332,76 @@ public sealed class DetailPaneViewTests
         var at = line.IndexOf(url, StringComparison.Ordinal);
         Assert.Equal(DetailPaneView.DetailCellStyle.FocusedLink, DetailPaneView.ClassifyCell(cells[at]));
         Assert.Equal(url, DetailPaneView.LinkUrlForCell(cells, at));
+    }
+
+    // ── Per-row OSC-8 targets (#380/#430): RowLinkUrls ───────────────────────────────────────────────
+    // RowLinkUrls is the per-row projection LinkUrlForCell + the draw path read: one resolved URL per cell,
+    // from the row's own graphemes (offset-correct on wrapped rows) and the extracted LinkSpan (so a markdown
+    // link carries its true target, not its prose). Pure — no driver.
+
+    [Fact]
+    public void RowLinkUrls_CarriesTheResolvedTarget_OnlyOnAMarkdownLinksVisibleTextCells()
+    {
+        const string target = "https://example.com/deep";
+        const string visible = "click here";
+        const string line = "See [" + visible + "](" + target + ") end";
+        var urls = DetailPaneView.RowLinkUrls(Line(line));
+
+        var vis = line.IndexOf(visible, StringComparison.Ordinal);
+        // Every visible-text cell carries the resolved target…
+        for (var i = vis; i < vis + visible.Length; i++)
+            Assert.Equal(target, urls[i]);
+        // …while the surrounding prose, the '[' / '](' markup, and the raw URL inside the parens carry none
+        // (only the visible text is the hyperlink; the markup is not separately tagged).
+        Assert.Null(urls[0]);                                                       // "S" of "See"
+        Assert.Null(urls[vis - 1]);                                                 // the '[' before the text
+        Assert.Null(urls[line.IndexOf(target, StringComparison.Ordinal)]);          // inside the (url) markup
+        Assert.Null(urls[^1]);                                                      // trailing "end"
+    }
+
+    [Fact]
+    public void RowLinkUrls_CarriesTheUrl_OnEachOfTwoBareLinksSharingARow()
+    {
+        const string task = "https://app.clickup.com/t/t1";
+        const string web = "https://example.com";
+        const string line = "task " + task + " and web " + web + " end";
+        var urls = DetailPaneView.RowLinkUrls(Line(line));
+        Assert.Equal(task, urls[line.IndexOf(task, StringComparison.Ordinal)]);
+        Assert.Equal(web, urls[line.IndexOf(web, StringComparison.Ordinal)]);
+        Assert.Null(urls[0]);
+    }
+
+    [Fact]
+    public void RowLinkUrls_IsAllNull_ForALinkFreeRowAndASeparator()
+    {
+        Assert.All(DetailPaneView.RowLinkUrls(Line("no links on this row at all")), Assert.Null);
+        Assert.All(DetailPaneView.RowLinkUrls(Line(Sep)), Assert.Null);
+    }
+
+    [Fact]
+    public void RowLinkUrls_IsNull_OnTheVisibleTextFragmentOfASplitMarkdownLink()
+    {
+        // #443 safe-degradation: when a markdown link's "[text]" and "(url)" wrap onto different rendered
+        // rows, the visible-text row has no complete markdown link (and no bare http), so re-extraction
+        // finds nothing and no wrong OSC-8 target is invented on the prose.
+        const string fragment = "See [click here";   // the "(https://example.com/deep)" wrapped to the next row
+        var urls = DetailPaneView.RowLinkUrls(Line(fragment));
+        Assert.All(urls, Assert.Null);
+    }
+
+    [Fact]
+    public void RowLinkUrls_LinksTheUrlFragmentOfASplitMarkdownLinkAsABareUrl()
+    {
+        // The other half of the #443 split case: when "(url)" wraps onto its own row, that fragment
+        // re-extracts as an ordinary BARE link to the URL itself (the trailing ')' trimmed) — the safe
+        // degradation (correct URL, never a wrong/hidden target), not the markdown resolution. Pinned so the
+        // behaviour is explicit rather than incidental.
+        const string target = "https://example.com/deep";
+        const string fragment = "(" + target + ")";   // the "See [click here]" wrapped to the previous row
+        var urls = DetailPaneView.RowLinkUrls(Line(fragment));
+        Assert.Equal(target, urls[fragment.IndexOf(target, StringComparison.Ordinal)]);
+        Assert.Null(urls[0]);    // the leading '(' is prose, outside the link span
+        Assert.Null(urls[^1]);   // the trailing ')' is trimmed off the URL, so it carries no target
     }
 
     // Exercises the real SetBody → TextView.Load path (no driver needed to load the model) and inspects

@@ -16,23 +16,25 @@ public sealed class DetailViewSettingsTests : IDisposable
     // ── enum cycle helpers ──────────────────────────────────────────────────
 
     [Fact]
-    public void DetailTab_Next_CyclesAllFour_AndLoopsBack()
+    public void DetailTab_Next_CyclesAllFive_AndLoopsBack()
     {
         Assert.Equal(DetailTab.Description, DetailTab.Stream.Next());
         Assert.Equal(DetailTab.Comments, DetailTab.Description.Next());
         Assert.Equal(DetailTab.Other, DetailTab.Comments.Next());
-        Assert.Equal(DetailTab.Stream, DetailTab.Other.Next());
+        Assert.Equal(DetailTab.Checklists, DetailTab.Other.Next());
+        Assert.Equal(DetailTab.Stream, DetailTab.Checklists.Next());
     }
 
     [Fact]
-    public void DetailTab_Next_FourPresses_ReturnToStart()
-        => Assert.Equal(DetailTab.Stream, DetailTab.Stream.Next().Next().Next().Next());
+    public void DetailTab_Next_FivePresses_ReturnToStart()
+        => Assert.Equal(DetailTab.Stream, DetailTab.Stream.Next().Next().Next().Next().Next());
 
     [Theory]
     [InlineData(DetailTab.Stream, 0)]
     [InlineData(DetailTab.Description, 1)]
     [InlineData(DetailTab.Comments, 2)]
     [InlineData(DetailTab.Other, 3)]
+    [InlineData(DetailTab.Checklists, 4)]
     public void DetailTab_ToTabIndex_MapsToScreenOrder(DetailTab tab, int expected)
         => Assert.Equal(expected, tab.ToTabIndex());
 

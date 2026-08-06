@@ -111,6 +111,20 @@ public sealed class TaskDetailScreen : Screen
     private const int CommentEditorRows = 5;
     private const int CommentComposerPreferredHeight = CommentEditorRows + 1 + 2;
 
+    // Reply into a thread (#330): posts a plain-text reply to a comment's thread over the #327 facade.
+    // Null disables reply (Ctrl+T inert), so a non-interactive host stays unaffected. The composer
+    // (_commentBox) is reused in reply mode; _replyToCommentId is the target parent while it's open
+    // (null ⇒ the plain top-level path). The reply-target picker is a transient FrameView + ListView
+    // overlay, shown-then-dismissed like the composer, so the single-ListView model (#3) is untouched.
+    private readonly Func<string, string, CancellationToken, Task<CommentItem>>? _postReplyAsync;
+    private readonly FrameView _replyPickerBox;
+    private readonly ListView _replyPicker;
+    private IReadOnlyList<CommentReplyModel.ReplyTarget> _replyTargets = [];
+    private string? _replyToCommentId;
+    // The picker's ideal height: a few target rows + the top/bottom frame border. Clamped on show.
+    private const int ReplyPickerRows = 6;
+    private const int ReplyPickerPreferredHeight = ReplyPickerRows + 2;
+
     // The description editor (#217): a bottom-anchored FrameView hosting a multi-line editor above a
     // Save/Cancel button row (with a hidden inline confirm row between them), hidden until Ctrl+E. Like
     // the comment composer it's a transient child view within the single already-open screen (not a
@@ -220,6 +234,20 @@ public sealed class TaskDetailScreen : Screen
     // True once the lazy tree load has been kicked off (guarding against re-fetching on every tab cycle).
     private bool _treeLoaded;
 
+    // ── Checklists tab (C, #456) ────────────────────────────────────────────────
+    // The Checklists tab's ListView (its own scroll target). Always present — unlike the host-gated Task
+    // Tree tab, the checklist data (TaskDetail.Checklists, #454) is already on the screen, so the tab
+    // appears in both the dashboard detail and single-task launch mode. Built synchronously from the pure
+    // projection (ChecklistArranger, #455); no lazy load.
+    private readonly ListView _checklistList;
+    // Parallel to the ListView's rows: the projected ChecklistRow each line renders (empty on the
+    // empty-state row), so a refresh can re-anchor the selection by item id (ChecklistTabModel) and the
+    // D–G write slices can resolve a selected row without re-walking the tree.
+    private List<ChecklistRow> _checklistRows = [];
+    // Content fingerprint of the last-rendered projection, so an unchanged refresh leaves the selection
+    // and scroll untouched (the OtherTabSignature discipline, applied to the checklist rows).
+    private string _checklistSignature = "";
+
     /// <summary>Raised when the user activates a tree row (Enter or double-click) for a task other than
     /// the one being shown (#291). The host opens that task's detail stacked over this one, so Esc walks
     /// back one task at a time — the canonical "Esc = Back" model (#401/#298), uniform with the Ctrl+O
@@ -319,6 +347,13 @@ public sealed class TaskDetailScreen : Screen
     /// owns the off-thread ClickUp write via this callback (the same injected-async seam #212 uses).
     /// Null disables the composer (<c>Ctrl+N</c> is inert), so non-interactive hosts stay unaffected.
     /// </param>
+    /// <param name="postReplyAsync">
+    /// Posts a plain-text reply into a comment's thread (#330, over the #327 create-reply facade) and
+    /// returns the created <see cref="CommentItem"/>. Takes the parent comment id and the reply text. The
+    /// screen owns the reply-target picker + reply-mode composer + optimistic nested append/revert; the
+    /// host owns the off-thread ClickUp write via this callback. Null disables reply (<c>Ctrl+T</c> is
+    /// inert), so non-interactive hosts stay unaffected.
+    /// </param>
     /// <param name="setDescriptionAsync">
     /// Writes this task's plain-text description (#217, over the #211 facade) and returns the
     /// server-confirmed value. The screen owns the editor UI + the dirty-check + the in-place reflection;
@@ -336,6 +371,7 @@ public sealed class TaskDetailScreen : Screen
         LaunchLocation defaultLaunchLocation = LaunchLocation.NewWindow,
         Func<string>? workingDirectoryPreFill = null,
         Func<string, CancellationToken, Task<CommentItem>>? postCommentAsync = null,
+        Func<string, string, CancellationToken, Task<CommentItem>>? postReplyAsync = null,
         Func<string, CancellationToken, Task<string?>>? setDescriptionAsync = null,
         long? currentUserId = null,
         BadgeDisplay treeBadgeDisplay = BadgeDisplay.Text,
@@ -346,6 +382,7 @@ public sealed class TaskDetailScreen : Screen
         _comments = comments;
         _workingDirectoryPreFill = workingDirectoryPreFill;
         _postCommentAsync = postCommentAsync;
+        _postReplyAsync = postReplyAsync;
         _setDescriptionAsync = setDescriptionAsync;
         _currentUserId = currentUserId;
         _treeBadgeDisplay = treeBadgeDisplay;
@@ -418,8 +455,21 @@ public sealed class TaskDetailScreen : Screen
         // mode do (the latter since #374), so it's present in both. It's its own scroll
         // target; CycleTab/FocusCurrentPane/ScrollActiveTab are array-length-driven and pick it up. Rows
         // load lazily on first cycle to the tab (EnsureTreeLoaded), so opening any detail isn't slowed.
-        var tabContents = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab };
-        var scrollTargets = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab.ScrollTarget };
+        // The Checklists tab (C, #456): a focusable ListView rendering the task's native ClickUp
+        // checklists (groups + nested items, from the pure ChecklistArranger projection over #454's read
+        // model). Inserted after Other at index 4 — before the conditionally-appended Task Tree tab, so
+        // both indices are stable across hosts — and present in both hosts (the data is already on the
+        // screen, no host-supplied loader). Its own scroll target; CycleTab/FocusCurrentPane/MoveActiveTab
+        // are array-length-driven and pick it up. Rendered synchronously below (no lazy load).
+        _checklistList = new ListView
+        {
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+        };
+        RenderChecklist(ChecklistArranger.Project(task.Checklists));
+
+        var tabContents = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab, _checklistList };
+        var scrollTargets = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab.ScrollTarget, _checklistList };
         if (_loadTaskTreeAsync is not null)
         {
             _treeList = new ListView
@@ -588,6 +638,32 @@ public sealed class TaskDetailScreen : Screen
         foreach (var control in _commentControls)
             control.KeyDown += OnCommentKey;
 
+        // The reply-target picker (#330): a bottom-anchored FrameView hosting a single ListView of the
+        // task's top-level comments, hidden until Ctrl+T. Like the comment composer it's a transient child
+        // view within the single already-open screen (not a nested run-loop / second screen), so the
+        // single-ListView model (#3) is untouched. ↑/↓ move the highlight (native), Enter (or a row click,
+        // #283) picks — opening the composer in reply mode targeting that comment — and Esc cancels. Sized
+        // on show (ShowReplyPicker); its rows are set there from CommentReplyModel.
+        _replyPicker = new ListView
+        {
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+        };
+        _replyPicker.KeyDown += OnReplyPickerKey;
+        _replyPicker.MouseEvent += OnReplyPickerMouse;
+        _replyPickerBox = new FrameView
+        {
+            Title = "Reply to… — ↑/↓ choose · Enter reply · Esc cancel",
+            X = 0,
+            Y = Pos.AnchorEnd(ReplyPickerPreferredHeight),
+            Width = Dim.Fill(),
+            Height = ReplyPickerPreferredHeight,
+            Visible = false,
+        };
+        _replyPickerBox.Add(_replyPicker);
+
         // The description editor (#217): a bottom-anchored FrameView with a multi-line editor above a
         // Save/Cancel button row (and a hidden confirm row), shown on Ctrl+E. Modelled on the comment
         // composer — the editor keeps Enter for newlines (TabKeyAddsTab=false so Tab reaches the
@@ -632,7 +708,7 @@ public sealed class TaskDetailScreen : Screen
             target.KeyDown += OnKey;
         KeyDown += OnKey;
 
-        Add([_headerView, _tabs, _promptBox, _commentBox, _descriptionBox]);
+        Add([_headerView, _tabs, _promptBox, _commentBox, _replyPickerBox, _descriptionBox]);
     }
 
     // While the comment composer (Ctrl+N) or description editor (Ctrl+E) overlay is open, the footer
@@ -642,7 +718,7 @@ public sealed class TaskDetailScreen : Screen
     // offered when that tab exists (a loader was supplied) — true for both the dashboard and single-task
     // launch mode (since #374); the F6-/Ctrl+Enter-less Detail set is the no-loader fallback.
     public override IReadOnlyList<HelpItem> HelpItems =>
-        HelpItemSets.DetailFooter(_commentBox.Visible, _descriptionBox.Visible, _treeList is not null);
+        HelpItemSets.DetailFooter(_commentBox.Visible, _descriptionBox.Visible, _replyPickerBox.Visible, _treeList is not null);
 
     public override void OnShown()
     {
@@ -727,6 +803,21 @@ public sealed class TaskDetailScreen : Screen
             _otherSignature = otherSignature;
             _otherTab.Update(headerLines, customFieldsBody);
         }
+
+        // Checklists tab (C, #456): rebuild only when the projected content moved, so an unchanged poll
+        // leaves the selected row and scroll untouched (the ListView keeps its own state while its Source
+        // is not reassigned). When it changed, re-anchor the cursor to the same item id where it survives.
+        var checklistProjection = ChecklistArranger.Project(task.Checklists);
+        if (!string.Equals(_checklistSignature, ChecklistTabModel.Signature(checklistProjection), StringComparison.Ordinal))
+        {
+            var oldRows = _checklistRows;
+            var oldIndex = _checklistList.SelectedItem ?? 0;
+            RenderChecklist(checklistProjection);
+            var anchored = ChecklistTabModel.AnchorSelection(oldRows, oldIndex, _checklistRows);
+            var count = _checklistList.Source?.Count ?? 0;
+            if (count > 0 && anchored >= 0 && anchored < count)
+                _checklistList.SelectedItem = anchored;
+        }
     }
 
     /// <summary>
@@ -810,7 +901,7 @@ public sealed class TaskDetailScreen : Screen
         // lets the rest fall through to the editor. Don't let the screen's chords (Ctrl+B close,
         // Ctrl+A/U/N/E openers, Ctrl+←/→ tab-cycle, F5 refresh) fire underneath and disrupt (or discard)
         // the draft.
-        if (_commentBox.Visible || _descriptionBox.Visible)
+        if (_commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible)
             return;
 
         // Enter on the Task Tree tab (#291) navigates the detail screen to the selected row's task
@@ -935,6 +1026,18 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             ShowCommentComposer();
+            return;
+        }
+
+        // Ctrl+T opens the reply-target picker (#330), stacked as a bottom-anchored overlay like the
+        // comment composer. "T" for reply-into-Thread — Ctrl+R (the Reply mnemonic) is already the Detail
+        // refresh alias. Same chord shape; inert while the Dispatch prompt is open or when no reply
+        // callback was supplied (a non-interactive host). Picking a target opens the composer in reply
+        // mode; the picker owns the keyboard once shown (the guard at the top of this handler).
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.T && !_promptBox.Visible && _postReplyAsync is not null)
+        {
+            key.Handled = true;
+            ShowReplyPicker();
             return;
         }
 
@@ -1435,11 +1538,17 @@ public sealed class TaskDetailScreen : Screen
 
     /// <summary>Opens the comment composer: clears the editor, sizes the pane to the terminal (the
     /// editor rows clip before the button row on a very short window, reusing the Dispatch pane's
-    /// clamp), shows it and focuses the editor.</summary>
-    private void ShowCommentComposer()
+    /// clamp), shows it and focuses the editor. In <b>reply mode</b> (<paramref name="replyTo"/> set,
+    /// #330) it stashes the target comment id and retitles the frame "Reply to &lt;author&gt;"; a plain
+    /// open clears reply mode and titles it "New comment".</summary>
+    private void ShowCommentComposer(CommentReplyModel.ReplyTarget? replyTo = null)
     {
         if (_commentBox.Visible)
             return;
+        _replyToCommentId = replyTo?.CommentId;
+        _commentBox.Title = replyTo is { } t
+            ? $"Reply to {t.Author} — Ctrl+Enter or Tab→Post · Esc cancel"
+            : "New comment — Ctrl+Enter or Tab→Post · Esc cancel";
         _commentEditor.Text = string.Empty;
         var height = DispatchPaneModel.ClampHeight(CommentComposerPreferredHeight, Viewport.Height, minTabRows: 3);
         _commentBox.Height = height;
@@ -1448,12 +1557,14 @@ public sealed class TaskDetailScreen : Screen
         _commentEditor.SetFocus();
     }
 
-    /// <summary>Closes the composer and returns focus to the front-most tab (mirrors HidePrompt).</summary>
+    /// <summary>Closes the composer and returns focus to the front-most tab (mirrors HidePrompt). Clears
+    /// reply mode so a later plain Ctrl+N isn't stuck targeting a comment.</summary>
     private void HideCommentComposer()
     {
         if (!_commentBox.Visible)
             return;
         _commentBox.Visible = false;
+        _replyToCommentId = null;
         FocusCurrentPane();
     }
 
@@ -1469,7 +1580,12 @@ public sealed class TaskDetailScreen : Screen
     private void PostComment()
     {
         var raw = _commentEditor.Text?.ToString();
-        if (!CommentComposerModel.IsPostable(raw) || _postCommentAsync is null)
+        // Capture the reply target before HideCommentComposer clears it. Reply mode needs the reply
+        // callback; the top-level path needs the comment callback — bail (just close) if the required one
+        // is absent or the body is empty.
+        var replyTo = _replyToCommentId;
+        var required = replyTo is null ? _postCommentAsync is not null : _postReplyAsync is not null;
+        if (!CommentComposerModel.IsPostable(raw) || !required)
         {
             HideCommentComposer();
             return;
@@ -1477,11 +1593,19 @@ public sealed class TaskDetailScreen : Screen
         var text = CommentComposerModel.Normalize(raw);
         HideCommentComposer();
 
-        // Optimistic append: a provisional comment with a client sentinel id (so reconcile/revert can
-        // find it) and a client "now" stamp (so it sorts as the newest entry). Re-render via UpdateData,
-        // which recomputes the Stream/Comments panes in place with scroll preservation.
-        var pendingId = $"__pending__{++_pendingCommentSeq}";
+        // A client sentinel id (so reconcile/revert can find the optimistic entry) and a client "now"
+        // stamp (so it sorts as the newest entry). Re-render via UpdateData, which recomputes the
+        // Stream/Comments panes in place with scroll preservation.
+        var pendingId = $"{CommentComposerModel.PendingIdPrefix}{++_pendingCommentSeq}";
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        if (replyTo is not null)
+        {
+            PostReply(replyTo, pendingId, text, nowMs);
+            return;
+        }
+
+        // Top-level comment (#216): optimistic append + reconcile/revert.
         var provisional = CommentComposerModel.Provisional(pendingId, text, nowMs);
         UpdateData(_task, CommentComposerModel.Append(_comments, provisional));
         RequestFlash("Posting comment…");
@@ -1492,7 +1616,7 @@ public sealed class TaskDetailScreen : Screen
         {
             try
             {
-                var confirmed = await _postCommentAsync(text, CancellationToken.None).ConfigureAwait(false);
+                var confirmed = await _postCommentAsync!(text, CancellationToken.None).ConfigureAwait(false);
                 Application.Invoke(() =>
                 {
                     if (_disposed)
@@ -1512,6 +1636,122 @@ public sealed class TaskDetailScreen : Screen
                 });
             }
         });
+    }
+
+    /// <summary>Posts a reply into <paramref name="parentCommentId"/>'s thread (#330): optimistically
+    /// nests a provisional reply under its parent (per #329), writes off the UI thread via
+    /// <see cref="_postReplyAsync"/>, and reconciles the provisional to the server-confirmed reply on
+    /// success or reverts it on failure — the same optimistic/revert discipline as the top-level path. A
+    /// background refresh that lands mid-post can drop the parent before reconcile finds it; the transform
+    /// is then a no-op and the next refresh re-pulls the real reply (self-healing).</summary>
+    private void PostReply(string parentCommentId, string pendingId, string text, long nowMs)
+    {
+        var provisional = CommentComposerModel.ProvisionalReply(pendingId, text, nowMs, parentCommentId, _task.Id);
+        UpdateData(_task, CommentComposerModel.AppendReply(_comments, parentCommentId, provisional));
+        RequestFlash("Posting reply…");
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                var confirmed = await _postReplyAsync!(parentCommentId, text, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    if (_disposed)
+                        return;
+                    UpdateData(_task, CommentComposerModel.ReconcileReply(_comments, parentCommentId, pendingId, confirmed));
+                    RequestFlash("Reply posted.");
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    if (_disposed)
+                        return;
+                    UpdateData(_task, CommentComposerModel.RevertReply(_comments, parentCommentId, pendingId));
+                    RequestFlash($"Could not post reply: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>Opens the reply-target picker (#330): projects the current comments into pick rows
+    /// (top-level, non-pending, newest-first), or flashes and no-ops when there are none. Sizes the
+    /// overlay to the terminal (reusing the Dispatch clamp), shows it and focuses the list.</summary>
+    private void ShowReplyPicker()
+    {
+        if (_replyPickerBox.Visible || _postReplyAsync is null)
+            return;
+        _replyTargets = CommentReplyModel.Targets(_comments);
+        if (_replyTargets.Count == 0)
+        {
+            RequestFlash("No comments to reply to.");
+            return;
+        }
+        _replyPicker.SetSource(new ObservableCollection<string>(_replyTargets.Select(t => t.Label)));
+        _replyPicker.SelectedItem = 0;
+        var height = DispatchPaneModel.ClampHeight(ReplyPickerPreferredHeight, Viewport.Height, minTabRows: 3);
+        _replyPickerBox.Height = height;
+        _replyPickerBox.Y = Pos.AnchorEnd(height);
+        _replyPickerBox.Visible = true;
+        _replyPicker.SetFocus();
+    }
+
+    /// <summary>Closes the reply picker and returns focus to the front-most tab (mirrors HideCommentComposer).</summary>
+    private void HideReplyPicker()
+    {
+        if (!_replyPickerBox.Visible)
+            return;
+        _replyPickerBox.Visible = false;
+        _replyTargets = []; // drop the snapshot's CommentItem references; ShowReplyPicker rebuilds it
+        FocusCurrentPane();
+    }
+
+    /// <summary>Picks the highlighted reply target: closes the picker and opens the composer in reply mode
+    /// for that comment. Idempotent (a stray double-fire from key + mouse can't double-open) via the
+    /// picker-visible guard in <see cref="ShowCommentComposer"/>/here.</summary>
+    private void PickReplyTarget()
+    {
+        if (!_replyPickerBox.Visible)
+            return;
+        var index = _replyPicker.SelectedItem ?? -1;
+        if (index < 0 || index >= _replyTargets.Count)
+            return;
+        var target = _replyTargets[index];
+        HideReplyPicker();
+        ShowCommentComposer(target);
+    }
+
+    /// <summary>Reply-picker keys: Enter picks the highlighted comment, Esc cancels; ↑/↓ are the list's
+    /// own. Everything else falls through.</summary>
+    private void OnReplyPickerKey(object? sender, Key key)
+    {
+        switch (key.KeyCode)
+        {
+            case KeyCode.Enter:
+                key.Handled = true;
+                PickReplyTarget();
+                break;
+            case KeyCode.Esc:
+                key.Handled = true;
+                HideReplyPicker();
+                break;
+        }
+    }
+
+    /// <summary>A left-click on a reply-picker row selects and picks it (the mouse path, #283), mirroring
+    /// the shared selector's row hit-test (offset by the list's scroll).</summary>
+    private void OnReplyPickerMouse(object? sender, Mouse e)
+    {
+        if (!e.Flags.HasFlag(MouseFlags.LeftButtonClicked) || e.Position is not { Y: >= 0 } pos)
+            return;
+        var row = _replyPicker.Viewport.Y + pos.Y;
+        if (row < 0 || row >= _replyTargets.Count)
+            return;
+        e.Handled = true;
+        _replyPicker.SelectedItem = row;
+        PickReplyTarget();
     }
 
     /// <summary>A one-line, length-capped rendering of an exception for the status flash.</summary>
@@ -1881,6 +2121,45 @@ public sealed class TaskDetailScreen : Screen
         return currentIndex;
     }
 
+    // ── Checklists tab (C, #456) ────────────────────────────────────────────────
+
+    /// <summary>Renders a checklist projection into the tab's ListView: group-header rows draw with the
+    /// shared neutral header attribute (like the main list's group headers, <see cref="GroupHeaderPalette"/>),
+    /// item rows carry <c>[x]</c>/<c>[ ]</c> glyphs, indentation and an assignee suffix — all from the
+    /// pure <see cref="ChecklistTabModel"/>. Sets the tab title to the aggregate progress and caches the
+    /// projected rows + a content <see cref="ChecklistTabModel.Signature"/> so a refresh can skip an
+    /// unchanged rebuild (<see cref="UpdateData"/>) and re-anchor the selection by item id. A task with no
+    /// checklists renders a single empty-state row. Type-ahead (#12) searches by row text.</summary>
+    private void RenderChecklist(ChecklistProjection projection)
+    {
+        _checklistSignature = ChecklistTabModel.Signature(projection);
+        _checklistList.Title = ChecklistTabModel.TabTitle(projection);
+
+        if (projection.IsEmpty)
+        {
+            _checklistRows = [];
+            _checklistList.SetSource(new ObservableCollection<string>([ChecklistTabModel.EmptyStateText]));
+            return;
+        }
+
+        var display = new ObservableCollection<string>();
+        var badges = new List<IReadOnlyList<StatusBadgeListSource.Badge>>(projection.Rows.Count);
+        var headerAttrs = new List<Terminal.Gui.Drawing.Attribute?>(projection.Rows.Count);
+        var searchKeys = new List<string>(projection.Rows.Count);
+        foreach (var row in projection.Rows)
+        {
+            display.Add(ChecklistTabModel.RenderRow(row));
+            badges.Add([]); // no status badges on checklist rows; headers colour via headerAttrs.
+            headerAttrs.Add(row.IsHeader ? StatusBadgeListSource.NeutralHeaderAttr : null);
+            searchKeys.Add(row.Text);
+        }
+
+        _checklistRows = [.. projection.Rows];
+        // Assigning .Source (not SetSource) lets us pass our colour-overlaying source (header bars); the
+        // ListView disposes the previous one. Mirrors the Task Tree tab's RenderTreeRows wiring.
+        _checklistList.Source = new StatusBadgeListSource(display, badges, headerAttrs, searchKeys);
+    }
+
     /// <summary>Enter on the tree tab: navigate to the highlighted row's task.</summary>
     private void NavigateTreeSelection()
     {
@@ -1908,13 +2187,14 @@ public sealed class TaskDetailScreen : Screen
     /// <summary>
     /// A link click in one of the text panes (D, #318) — forwarded to the host as
     /// <see cref="LinkActivationRequested"/>, except while an overlay is up. The Dispatch pane, the comment
-    /// composer and the description editor each own input while open (the same rule <see cref="OnKey"/>
-    /// applies to the screen's chords), and they only partially cover the panes — so without this guard a
-    /// click on the still-visible part of a pane could navigate away from an open draft.
+    /// composer, the description editor and the reply-target picker (#330) each own input while open (the
+    /// same rule <see cref="OnKey"/> applies to the screen's chords), and they only partially cover the
+    /// panes — so without this guard a click on the still-visible part of a pane could navigate away from
+    /// an open draft or picker.
     /// </summary>
     private void OnPaneLinkActivation(object? sender, LinkActivationRequest request)
     {
-        if (_promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible)
+        if (_promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible)
             return;
         LinkActivationRequested?.Invoke(this, request);
     }
