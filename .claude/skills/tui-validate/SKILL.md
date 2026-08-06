@@ -249,7 +249,26 @@ Self-contained (sets `E2E_TREE=1` itself). Expected: `ok — bare ↑/↓ scroll
 7): together they pin that a bare arrow moves content *within* a tab but is still a no-op at a content
 boundary — never a tab switch or the `NavSafeTabs` crash.
 
-**14. Single-task terminal title on launch + refresh (#418/#425)** — `SingleTaskApp` titles its
+**14. Checklists tab in Task Detail (C, #456)** — opens Task Detail and cycles to the **Checklists** tab
+(index 4, inserted after Other and before the Task Tree tab). With `E2E_CHECKLISTS=1` the fake backend
+serves the opened task with a seeded `checklists` array (two groups, a nested item, mixed resolved
+state, one assigned item); the check asserts both group headers render with their `resolved/total`
+progress, every item carries a `[x]`/`[ ]` glyph, the nested item's checkbox sits further right than its
+parent's (indentation), the assignee suffix shows on the one assigned item, the tab title reads
+`Checklists (2/5)`, and bare ↑/↓ move the selection within the tab without ever switching away from it
+(the NavSafe boundary contract, pairing with check 7). A second leg (no `E2E_CHECKLISTS`) asserts a
+checklist-free task shows the single empty-state row and a bare `Checklists` title:
+
+```bash
+E2E_TASKS=6 timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/checklist_check.py $DLL
+```
+
+Self-contained (drives both legs, sets its own env). Expected: two `ok —` lines (populated + empty).
+Adding this tab shifted the Task Tree tab from index 4 to 5, so the fixed tab-cycle counts in
+`tree_tab_check.py`, `detail_arrow_check.py` and `single_task_tree_check.py` were bumped 4→5 (the A/B
+`detail_check.py` stays byte-identical — the extra tab renders in both legs).
+
+**15. Single-task terminal title on launch + refresh (#418/#425)** — `SingleTaskApp` titles its
 top-level `Window.Title` with the launched task (custom id preferred, `{id}: {name}` ≤40 chars), which
 Terminal.Gui emits to the host terminal as an OSC title escape (captured by pyte's `screen.title`), so
 several `--task` tabs stay distinguishable on the tab strip. Two checks, each self-contained:
