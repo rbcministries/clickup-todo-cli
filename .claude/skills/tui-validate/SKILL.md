@@ -285,6 +285,24 @@ Adding this tab shifted the Task Tree tab from index 4 to 5, so the fixed tab-cy
 `tree_tab_check.py`, `detail_arrow_check.py` and `single_task_tree_check.py` were bumped 4→5 (the A/B
 `detail_check.py` stays byte-identical — the extra tab renders in both legs).
 
+**15. @-mention authoring in the comment composer (#325)** — boots the dashboard `TodoApp`, opens Task
+Detail, and drives the `Ctrl+N` composer twice: a **plain** comment (no `@`) and a **mention** comment
+(type `hi `, press `@` to open the mention picker, type `Ada`, `Enter` to insert the `@Ada Lovelace`
+token, then Tab→Post→Enter). Asserts the plain post goes through the plain-text path (`comment_text`, no
+tag) and the mention post through the structured path (a `{"type":"tag","user":{"id":101}}` block, Ada
+Lovelace being seeded member 101), reading the actual POST bodies from the harness's `E2E_COMMENT_LOG`
+recorder — a file fact, not a screen guess — plus the on-screen `@Ada Lovelace` token in the composer
+and the posted comment in the pane. The member pool is the assignee top-up (`GET /team`) the #325 wiring
+projects into `WorkspaceMember`s, so no new fake endpoint is needed:
+
+```bash
+E2E_TASKS=20 timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/mention_check.py $DLL
+```
+
+Self-contained (sets its own `E2E_COMMENT_LOG`). Expected: `ok — plain comment → plain-text path …;
+@-mention → structured tag block for member 101 …`. Invisible to the text-only `detail_check.py` A/B
+(the composer/overlay are hidden until `Ctrl+N`), which stays identical.
+
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 
 - **Answer the terminal's queries or nothing ever renders.** Terminal.Gui's ANSI driver

@@ -251,9 +251,25 @@ public static class HelpItemSets
     public static readonly IReadOnlyList<HelpItem> DetailCommentComposer =
     [
         new("Tab", "editor/Post/Cancel"),
+        // The @ trigger (#325) is a character the user types, not a clickable chord — IsAction:false, like
+        // "type to search", so it isn't re-raised on a footer click.
+        new("@", "mention", IsAction: false),
         new("Ctrl+Enter", "post"),
         new("F1", "ℹ"),
         new("Esc", "cancel"),
+    ];
+
+    /// <summary>The @-mention picker overlaid over the composer (#325): a search field over a candidate
+    /// list — type to search, ↑/↓ to move, Enter to insert the mention, Esc to go back to the composer.
+    /// Shown while the picker is open so the footer reflects only what it does (the composer's own keys
+    /// resume when it closes). Search/move are informational; Enter/Esc are clickable actions (they
+    /// re-raise into the focused picker).</summary>
+    public static readonly IReadOnlyList<HelpItem> DetailMentionPicker =
+    [
+        new("type", "search", IsAction: false),
+        new("↑↓", "move", IsAction: false),
+        new("Enter", "mention"),
+        new("Esc", "back"),
     ];
 
     /// <summary>The Task Detail reply-target picker overlay (Ctrl+T, #330): a list of the task's comments
@@ -269,16 +285,19 @@ public static class HelpItemSets
 
     /// <summary>Picks the Task Detail footer set for the current overlay state (#436). Pure so the
     /// branch order is unit-testable — the <see cref="TaskDetailScreen.HelpItems"/> property that calls
-    /// it lives on a Terminal.Gui view and can't run in CI. The comment composer, reply-target picker and
-    /// description editor overlays are mutually exclusive; the composer is checked first, then the picker.
-    /// When no overlay is open the set depends on whether the Task Tree tab is present (its F6 badge cycle
-    /// #415, and the Ctrl+Enter new-tab gesture #384/#435): present → <see cref="DetailWithTaskTree"/>,
-    /// absent → <see cref="Detail"/>. Both the dashboard and single-task launch mode (since #374) supply a
-    /// tree loader, so both get <see cref="DetailWithTaskTree"/>; <see cref="Detail"/> is the
-    /// no-tree-loader case.</summary>
+    /// it lives on a Terminal.Gui view and can't run in CI. The mention picker (#325), comment composer,
+    /// reply-target picker (#330) and description editor overlays are checked in a fixed order: the mention
+    /// picker sits over the composer so it wins when both are up, then the composer, then the description
+    /// editor, then the reply picker. When no overlay is open the set depends on whether the Task Tree tab
+    /// is present (its F6 badge cycle #415, and the Ctrl+Enter new-tab gesture #384/#435): present →
+    /// <see cref="DetailWithTaskTree"/>, absent → <see cref="Detail"/>. Both the dashboard and single-task
+    /// launch mode (since #374) supply a tree loader, so both get <see cref="DetailWithTaskTree"/>;
+    /// <see cref="Detail"/> is the no-tree-loader case.</summary>
     public static IReadOnlyList<HelpItem> DetailFooter(
-        bool commentComposerVisible, bool descriptionEditorVisible, bool replyPickerVisible, bool hasTaskTree) =>
-        commentComposerVisible ? DetailCommentComposer
+        bool commentComposerVisible, bool descriptionEditorVisible, bool replyPickerVisible, bool hasTaskTree,
+        bool mentionPickerVisible = false) =>
+        mentionPickerVisible ? DetailMentionPicker
+        : commentComposerVisible ? DetailCommentComposer
         : descriptionEditorVisible ? DetailDescriptionEditor
         : replyPickerVisible ? DetailReplyPicker
         : hasTaskTree ? DetailWithTaskTree

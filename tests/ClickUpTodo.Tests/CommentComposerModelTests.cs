@@ -129,6 +129,184 @@ public sealed class CommentComposerModelTests
         Assert.Equal("c1", result[0].Id);
     }
 
+    // ── @-mention authoring (#325) ────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("Ben Seymour", "@Ben Seymour")]
+    [InlineData("", "@")]
+    public void MentionToken_TokenIsAtPlusDisplayName(string name, string expected)
+        => Assert.Equal(expected, new CommentComposerModel.MentionToken(1, name).Token);
+
+    [Fact]
+    public void BuildRuns_NoTokens_IsASingleTextRun()
+    {
+        var runs = CommentComposerModel.BuildRuns("just text", []);
+
+        var run = Assert.IsType<CommentRun.Text>(Assert.Single(runs));
+        Assert.Equal("just text", run.Value);
+    }
+
+    [Fact]
+    public void BuildRuns_EmptyText_IsNoRuns()
+        => Assert.Empty(CommentComposerModel.BuildRuns("", [new CommentComposerModel.MentionToken(1, "A")]));
+
+    [Fact]
+    public void BuildRuns_NullText_IsNoRuns()
+        => Assert.Empty(CommentComposerModel.BuildRuns(null, [new CommentComposerModel.MentionToken(1, "A")]));
+
+    [Fact]
+    public void BuildRuns_NullTokens_IsASingleTextRun()
+    {
+        var run = Assert.IsType<CommentRun.Text>(Assert.Single(CommentComposerModel.BuildRuns("plain", null)));
+        Assert.Equal("plain", run.Value);
+    }
+
+    [Fact]
+    public void BuildRuns_MentionInTheMiddle_SplitsTextAroundTheTag()
+    {
+        var tokens = new[] { new CommentComposerModel.MentionToken(42, "Ada") };
+
+        var runs = CommentComposerModel.BuildRuns("hey @Ada thanks", tokens);
+
+        Assert.Collection(runs,
+            r => Assert.Equal("hey ", Assert.IsType<CommentRun.Text>(r).Value),
+            r => Assert.Equal(42, Assert.IsType<CommentRun.Mention>(r).UserId),
+            r => Assert.Equal(" thanks", Assert.IsType<CommentRun.Text>(r).Value));
+    }
+
+    [Fact]
+    public void BuildRuns_MentionAtStartAndEnd()
+    {
+        var tokens = new[] { new CommentComposerModel.MentionToken(1, "A") };
+        var start = CommentComposerModel.BuildRuns("@A hi", tokens);
+        var end = CommentComposerModel.BuildRuns("hi @A", tokens);
+
+        Assert.Collection(start,
+            r => Assert.Equal(1, Assert.IsType<CommentRun.Mention>(r).UserId),
+            r => Assert.Equal(" hi", Assert.IsType<CommentRun.Text>(r).Value));
+        Assert.Collection(end,
+            r => Assert.Equal("hi ", Assert.IsType<CommentRun.Text>(r).Value),
+            r => Assert.Equal(1, Assert.IsType<CommentRun.Mention>(r).UserId));
+    }
+
+    [Fact]
+    public void BuildRuns_TwoDistinctMentions_AreBothTagged()
+    {
+        var tokens = new[]
+        {
+            new CommentComposerModel.MentionToken(1, "Ada"),
+            new CommentComposerModel.MentionToken(2, "Bo"),
+        };
+
+        var runs = CommentComposerModel.BuildRuns("@Ada @Bo", tokens);
+
+        Assert.Collection(runs,
+            r => Assert.Equal(1, Assert.IsType<CommentRun.Mention>(r).UserId),
+            r => Assert.Equal(" ", Assert.IsType<CommentRun.Text>(r).Value),
+            r => Assert.Equal(2, Assert.IsType<CommentRun.Mention>(r).UserId));
+    }
+
+    [Fact]
+    public void BuildRuns_SameMemberTwice_ConsumesBothTokens()
+    {
+        var tokens = new[]
+        {
+            new CommentComposerModel.MentionToken(7, "Ada"),
+            new CommentComposerModel.MentionToken(7, "Ada"),
+        };
+
+        var runs = CommentComposerModel.BuildRuns("@Ada and @Ada", tokens);
+
+        Assert.Collection(runs,
+            r => Assert.Equal(7, Assert.IsType<CommentRun.Mention>(r).UserId),
+            r => Assert.Equal(" and ", Assert.IsType<CommentRun.Text>(r).Value),
+            r => Assert.Equal(7, Assert.IsType<CommentRun.Mention>(r).UserId));
+    }
+
+    [Fact]
+    public void BuildRuns_PrefersLongestMatch_WhenOneNameIsAPrefixOfAnother()
+    {
+        // Both members mentioned; "@Ann" must not greedily swallow the "@Ann Marie" occurrence.
+        var tokens = new[]
+        {
+            new CommentComposerModel.MentionToken(1, "Ann"),
+            new CommentComposerModel.MentionToken(2, "Ann Marie"),
+        };
+
+        var runs = CommentComposerModel.BuildRuns("@Ann Marie", tokens);
+
+        var mention = Assert.IsType<CommentRun.Mention>(Assert.Single(runs));
+        Assert.Equal(2, mention.UserId); // the longer "@Ann Marie" wins
+    }
+
+    [Fact]
+    public void BuildRuns_TokenNoLongerInText_DegradesToLiteralText()
+    {
+        // The user deleted the inserted "@Ada" token: it must not tag anyone — the body is plain text.
+        var tokens = new[] { new CommentComposerModel.MentionToken(1, "Ada") };
+
+        var runs = CommentComposerModel.BuildRuns("no mention here", tokens);
+
+        var run = Assert.IsType<CommentRun.Text>(Assert.Single(runs));
+        Assert.Equal("no mention here", run.Value);
+        Assert.False(CommentComposerModel.HasMention(runs));
+    }
+
+    [Fact]
+    public void BuildRuns_ExtraLiteralBeyondTrackedCount_StaysText()
+    {
+        // Only one "@Ada" was inserted; a second literal "@Ada" the user typed by hand isn't a tag.
+        var tokens = new[] { new CommentComposerModel.MentionToken(1, "Ada") };
+
+        var runs = CommentComposerModel.BuildRuns("@Ada @Ada", tokens);
+
+        Assert.Collection(runs,
+            r => Assert.Equal(1, Assert.IsType<CommentRun.Mention>(r).UserId),
+            r => Assert.Equal(" @Ada", Assert.IsType<CommentRun.Text>(r).Value));
+    }
+
+    [Fact]
+    public void TrimRuns_TrimsOuterTextEdges_KeepsInteriorSpacing()
+    {
+        var runs = new List<CommentRun>
+        {
+            new CommentRun.Text("  hey "),
+            new CommentRun.Mention(1),
+            new CommentRun.Text(" there  "),
+        };
+
+        var trimmed = CommentComposerModel.TrimRuns(runs);
+
+        Assert.Collection(trimmed,
+            r => Assert.Equal("hey ", Assert.IsType<CommentRun.Text>(r).Value),
+            r => Assert.Equal(1, Assert.IsType<CommentRun.Mention>(r).UserId),
+            r => Assert.Equal(" there", Assert.IsType<CommentRun.Text>(r).Value));
+    }
+
+    [Fact]
+    public void TrimRuns_DropsEdgeRunsThatBecomeEmpty()
+    {
+        var runs = new List<CommentRun>
+        {
+            new CommentRun.Text("   "),
+            new CommentRun.Mention(9),
+            new CommentRun.Text("  "),
+        };
+
+        var trimmed = CommentComposerModel.TrimRuns(runs);
+
+        var only = Assert.IsType<CommentRun.Mention>(Assert.Single(trimmed));
+        Assert.Equal(9, only.UserId);
+    }
+
+    [Fact]
+    public void HasMention_TrueOnlyWhenATagIsPresent()
+    {
+        Assert.True(CommentComposerModel.HasMention([new CommentRun.Text("a"), new CommentRun.Mention(1)]));
+        Assert.False(CommentComposerModel.HasMention([new CommentRun.Text("a")]));
+        Assert.False(CommentComposerModel.HasMention(null));
+    }
+
     // ── Pending-id helpers (#330) ──────────────────────────────────────────────
 
     [Theory]

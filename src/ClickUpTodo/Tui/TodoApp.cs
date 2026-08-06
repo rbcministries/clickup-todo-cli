@@ -2045,7 +2045,17 @@ public sealed class TodoApp
                         // RESOLVED id (identical to taskId for a real id; correct for a custom-id fallback).
                         currentUserId: _tasks.UserId,
                         treeBadgeDisplay: _config.BadgeDisplay,
-                        loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(resolvedId, treeSnapshot, treeChildren, ct));
+                        loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(resolvedId, treeSnapshot, treeChildren, ct),
+                        // #325: @-mention authoring in the Ctrl+N composer. The structured write goes
+                        // through the #322 facade; the picker's candidate pool is projected from the same
+                        // warmed, frequency-ranked assignee cache the assignee selectors use — a
+                        // TaskAssignee(Id, Name) maps to WorkspaceMember(Id, Name, null) (DisplayName ⇐
+                        // Name), exactly the shape the picker renders/keys on, so no new fetch is needed.
+                        postStructuredCommentAsync: (runs, ct) => _tasks.CreateTaskCommentAsync(resolvedId, runs, ct),
+                        memberMatch: (query, exclude) =>
+                            _assignees.Match(query, exclude).Select(a => new WorkspaceMember(a.Id, a.Name, null)).ToList(),
+                        memberTopFrequent: (n, exclude) =>
+                            _assignees.TopMostFrequent(n, exclude).Select(a => new WorkspaceMember(a.Id, a.Name, null)).ToList());
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the

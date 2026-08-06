@@ -106,10 +106,35 @@ public sealed class TaskDetailScreen : Screen
     // Monotonic sentinel-id sequence for optimistic (provisional) comments, so a reconcile/revert
     // finds the right one even with overlapping posts. UI-thread only.
     private int _pendingCommentSeq;
+
+    // ── @-mention authoring in the composer (#325, sub-issue K of #313) ─────────────────────────
+    // Typing @ while composing opens the #324 mention picker in a transient bottom overlay (like the
+    // composer/description overlays — no second focusable pane, #3). Picking a member splices a visible
+    // "@{DisplayName}" token into the editor and records a MentionToken; on post, the composer re-derives
+    // structured runs (CommentComposerModel.BuildRuns) and writes via _postStructuredCommentAsync — a
+    // mention-free body still posts through the plain-text _postCommentAsync path. The feature is enabled
+    // only when the host supplies all three seams (the structured write + the member match/topFrequent
+    // pool); a null seam ⇒ @ types literally, exactly as before (e.g. single-task launch mode).
+    private readonly Func<IReadOnlyList<CommentRun>, CancellationToken, Task<CommentItem>>? _postStructuredCommentAsync;
+    private readonly Func<string, ISet<long>, IReadOnlyList<WorkspaceMember>>? _memberMatch;
+    private readonly Func<int, ISet<long>, IReadOnlyList<WorkspaceMember>>? _memberTopFrequent;
+    // The mention-picker overlay (a FrameView hosting a freshly-built MentionPickerView per open) and the
+    // mentions inserted into the current composer session (cleared on each ShowCommentComposer). Null box
+    // until the first show; only built when the feature is enabled.
+    private FrameView? _mentionBox;
+    // The currently-hosted picker instance, retained so it can be disposed on the next open (safe — no
+    // pick/Esc event is unwinding at that point) and on screen teardown; SelectorView owns a debounce
+    // timer + CancellationTokenSource that RemoveAll alone wouldn't release.
+    private MentionPickerView? _mentionPicker;
+    private readonly List<CommentComposerModel.MentionToken> _mentionTokens = [];
+    private bool MentionEnabled => _postStructuredCommentAsync is not null && _memberMatch is not null && _memberTopFrequent is not null;
     // The composer's ideal height: the multi-line editor rows + the Post/Cancel button row + the
     // top/bottom frame border. Clamped on show so it degrades gracefully on a short terminal.
     private const int CommentEditorRows = 5;
     private const int CommentComposerPreferredHeight = CommentEditorRows + 1 + 2;
+    // The mention picker overlay's ideal height (#325): a search field + a few candidate rows + the frame
+    // border. Clamped on show so it degrades on a short terminal, like the composer.
+    private const int MentionPickerPreferredHeight = 10;
 
     // Reply into a thread (#330): posts a plain-text reply to a comment's thread over the #327 facade.
     // Null disables reply (Ctrl+T inert), so a non-interactive host stays unaffected. The composer
@@ -375,7 +400,10 @@ public sealed class TaskDetailScreen : Screen
         Func<string, CancellationToken, Task<string?>>? setDescriptionAsync = null,
         long? currentUserId = null,
         BadgeDisplay treeBadgeDisplay = BadgeDisplay.Text,
-        Func<CancellationToken, Task<IReadOnlyList<TaskTreeRow>>>? loadTaskTreeAsync = null)
+        Func<CancellationToken, Task<IReadOnlyList<TaskTreeRow>>>? loadTaskTreeAsync = null,
+        Func<IReadOnlyList<CommentRun>, CancellationToken, Task<CommentItem>>? postStructuredCommentAsync = null,
+        Func<string, ISet<long>, IReadOnlyList<WorkspaceMember>>? memberMatch = null,
+        Func<int, ISet<long>, IReadOnlyList<WorkspaceMember>>? memberTopFrequent = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
@@ -387,6 +415,9 @@ public sealed class TaskDetailScreen : Screen
         _currentUserId = currentUserId;
         _treeBadgeDisplay = treeBadgeDisplay;
         _loadTaskTreeAsync = loadTaskTreeAsync;
+        _postStructuredCommentAsync = postStructuredCommentAsync;
+        _memberMatch = memberMatch;
+        _memberTopFrequent = memberTopFrequent;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
@@ -718,7 +749,9 @@ public sealed class TaskDetailScreen : Screen
     // offered when that tab exists (a loader was supplied) — true for both the dashboard and single-task
     // launch mode (since #374); the F6-/Ctrl+Enter-less Detail set is the no-loader fallback.
     public override IReadOnlyList<HelpItem> HelpItems =>
-        HelpItemSets.DetailFooter(_commentBox.Visible, _descriptionBox.Visible, _replyPickerBox.Visible, _treeList is not null);
+        HelpItemSets.DetailFooter(
+            _commentBox.Visible, _descriptionBox.Visible, _replyPickerBox.Visible, _treeList is not null,
+            _mentionBox?.Visible == true);
 
     public override void OnShown()
     {
@@ -1497,6 +1530,17 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // @ opens the mention picker (#325) when the feature is enabled and the editor has focus — the
+        // literal @ is consumed here (the picker inserts the full "@Name" token on pick). Feature off (a
+        // host that supplied no member/structured seams, e.g. single-task mode) ⇒ @ falls through to the
+        // editor and types a literal @, exactly as before.
+        if (MentionEnabled && _commentEditor.HasFocus && key.AsRune.Value == '@')
+        {
+            key.Handled = true;
+            ShowMentionPicker();
+            return;
+        }
+
         var action = CommentComposerModel.Route(ClassifyComposer(key));
         if (action == CommentComposerModel.ComposerAction.PassThrough)
             return;
@@ -1550,6 +1594,7 @@ public sealed class TaskDetailScreen : Screen
             ? $"Reply to {t.Author} — Ctrl+Enter or Tab→Post · Esc cancel"
             : "New comment — Ctrl+Enter or Tab→Post · Esc cancel";
         _commentEditor.Text = string.Empty;
+        _mentionTokens.Clear(); // fresh composer session — no carried-over mentions (#325)
         var height = DispatchPaneModel.ClampHeight(CommentComposerPreferredHeight, Viewport.Height, minTabRows: 3);
         _commentBox.Height = height;
         _commentBox.Y = Pos.AnchorEnd(height);
@@ -1557,15 +1602,98 @@ public sealed class TaskDetailScreen : Screen
         _commentEditor.SetFocus();
     }
 
-    /// <summary>Closes the composer and returns focus to the front-most tab (mirrors HidePrompt). Clears
-    /// reply mode so a later plain Ctrl+N isn't stuck targeting a comment.</summary>
+    /// <summary>Closes the composer and returns focus to the front-most tab (mirrors HidePrompt). Also
+    /// dismisses the mention picker (#325) if it was open over the composer, and clears reply mode (#330)
+    /// so a later plain Ctrl+N isn't stuck targeting a comment.</summary>
     private void HideCommentComposer()
     {
         if (!_commentBox.Visible)
             return;
+        HideMentionPicker();
         _commentBox.Visible = false;
         _replyToCommentId = null;
         FocusCurrentPane();
+    }
+
+    /// <summary>Opens the @-mention picker (#325) as a transient overlay over the composer: builds a
+    /// fresh <see cref="MentionPickerView"/> (so no stale query/selection carries between opens), sizes
+    /// and anchors it like the composer, shows it and focuses it. The box is built lazily on first use
+    /// and added to the screen then. No second focusable pane persists (#3) — it's a transient overlay,
+    /// like the composer itself.</summary>
+    private void ShowMentionPicker()
+    {
+        if (!MentionEnabled || !_commentBox.Visible)
+            return;
+
+        // Detach and dispose any prior picker before hosting a fresh one. Disposing here (on the next
+        // open) rather than in HideMentionPicker keeps us off the stack of the outgoing picker's own
+        // pick/Esc event — RemoveAll only detaches; SelectorView's timer/CTS need an explicit Dispose.
+        _mentionBox?.RemoveAll();
+        _mentionPicker?.Dispose();
+        var picker = new MentionPickerView(_memberMatch!, _memberTopFrequent!)
+        {
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+        };
+        _mentionPicker = picker;
+        picker.MemberPicked += OnMentionPicked;
+        // Esc dismisses the picker back to the composer (not "back to the list"): handled on the picker
+        // and marked so it never reaches the screen's OnKey. The base SelectorView owns typing / ↑↓ /
+        // Enter (which raises MemberPicked).
+        picker.KeyDown += (_, k) =>
+        {
+            if (k.KeyCode == KeyCode.Esc)
+            {
+                k.Handled = true;
+                HideMentionPicker();
+            }
+        };
+
+        if (_mentionBox is null)
+        {
+            _mentionBox = new FrameView
+            {
+                Title = "Mention — type to search · Enter pick · Esc back",
+                X = 0,
+                Width = Dim.Fill(),
+                Visible = false,
+            };
+            Add(_mentionBox);
+        }
+
+        _mentionBox.Add(picker);
+        var height = DispatchPaneModel.ClampHeight(MentionPickerPreferredHeight, Viewport.Height, minTabRows: 3);
+        _mentionBox.Height = height;
+        _mentionBox.Y = Pos.AnchorEnd(height);
+        _mentionBox.Visible = true;
+        picker.SetFocus();
+    }
+
+    /// <summary>Closes the mention picker and returns focus to the composer editor, leaving the composer
+    /// and its draft intact.</summary>
+    private void HideMentionPicker()
+    {
+        if (_mentionBox is null || !_mentionBox.Visible)
+            return;
+        _mentionBox.Visible = false;
+        _mentionBox.RemoveAll();
+        if (_commentBox.Visible)
+            _commentEditor.SetFocus();
+    }
+
+    /// <summary>A member was picked in the mention overlay: close the picker (refocusing the editor),
+    /// insert its <c>@{DisplayName}</c> token (plus a trailing space) at the caret via the editor's own
+    /// <see cref="TextView.InsertText"/> — which handles the caret/word-wrap model internally — and record
+    /// the <see cref="CommentComposerModel.MentionToken"/> so <see cref="PostComment"/> re-derives the
+    /// structured runs from the final text.</summary>
+    private void OnMentionPicked(object? sender, MentionTarget target)
+    {
+        var token = new CommentComposerModel.MentionToken(target.UserId, target.DisplayName);
+        HideMentionPicker(); // returns focus to the editor, whose caret is where the '@' was consumed
+        _commentEditor.InsertText(token.Token + " ");
+        _mentionTokens.Add(token);
     }
 
     /// <summary>
@@ -1591,6 +1719,17 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
         var text = CommentComposerModel.Normalize(raw);
+
+        // #325: if the draft carries @-mentions and the host wired the structured write, re-derive the
+        // structured runs from the *final* editor text + the recorded tokens and post those; a token the
+        // user deleted degrades to literal text (BuildRuns), and a mention-free body takes the unchanged
+        // plain-text path below. The optimistic echo uses the visible text (with the @Name literals),
+        // which is what the user sees; the reconcile replaces it with the server-confirmed comment.
+        var runs = _mentionTokens.Count > 0 && _postStructuredCommentAsync is not null
+            ? CommentComposerModel.TrimRuns(CommentComposerModel.BuildRuns(raw, _mentionTokens))
+            : null;
+        var structured = runs is not null && CommentComposerModel.HasMention(runs);
+
         HideCommentComposer();
 
         // A client sentinel id (so reconcile/revert can find the optimistic entry) and a client "now"
@@ -1616,12 +1755,18 @@ public sealed class TaskDetailScreen : Screen
         {
             try
             {
-                var confirmed = await _postCommentAsync!(text, CancellationToken.None).ConfigureAwait(false);
+                var confirmed = structured
+                    ? await _postStructuredCommentAsync!(runs!, CancellationToken.None).ConfigureAwait(false)
+                    : await _postCommentAsync!(text, CancellationToken.None).ConfigureAwait(false);
                 Application.Invoke(() =>
                 {
                     if (_disposed)
                         return; // the detail screen was closed mid-post — don't touch torn-down views
-                    UpdateData(_task, CommentComposerModel.Reconcile(_comments, pendingId, confirmed));
+                    // Adopt the server id/date; for a structured post keep the composed display text (with
+                    // the visible "@Name" literals), since the client-built confirmed item can only render a
+                    // mention by its numeric id ("@101"). The 30s refresh later pulls ClickUp's own rendering.
+                    var reconciled = structured ? confirmed with { Text = text } : confirmed;
+                    UpdateData(_task, CommentComposerModel.Reconcile(_comments, pendingId, reconciled));
                     RequestFlash("Comment posted.");
                 });
             }
@@ -2242,6 +2387,18 @@ public sealed class TaskDetailScreen : Screen
                 Application.RemoveTimeout(token);
                 _autoRefreshToken = null;
             }
+            // Dispose the live mention picker (#325), if any — a fresh one is built per open and the
+            // outgoing one is otherwise disposed on the next open, so this releases the last instance's
+            // debounce timer / CancellationTokenSource (owned by SelectorView) on screen teardown.
+            // Detach it from its host box FIRST: RemoveAll only detaches (never disposes), so if the
+            // screen is torn down while the overlay is still shown, base.Dispose(disposing) below — which
+            // disposes the screen's subviews, _mentionBox among them — won't re-dispose a still-attached
+            // picker. SelectorView.Dispose is not re-entrant (its _cts.Cancel() throws once the CTS is
+            // disposed), so a double dispose would throw ObjectDisposedException during teardown. Mirrors
+            // the detach-before-dispose already done in ShowMentionPicker.
+            _mentionBox?.RemoveAll();
+            _mentionPicker?.Dispose();
+            _mentionPicker = null;
         }
         base.Dispose(disposing);
     }
