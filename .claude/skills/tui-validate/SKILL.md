@@ -227,12 +227,29 @@ confirmation (no main list to fall back to). Self-contained (sets its own env):
 timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/single_task_tree_check.py $DLL
 ```
 
-Expected: `ok`. Note: the Enter leg selects its row with a click rather than ↑/↓ — arrow-key selection
-inside the detail's Tabs-hosted ListView isn't exercisable under the headless PTY (the sibling
-`tree_tab_check.py` hits the same limit), so the row is selected deterministically and Enter drives the
-real keyboard activation path.
+Expected: `ok`. Note: the Enter leg selects its row with a click rather than ↑/↓, and selects it
+deterministically before Enter drives the real keyboard activation path. (Bare ↑/↓ row selection *is*
+now exercisable under the PTY once #452 landed — check 13 asserts it directly — but this check keeps the
+click-select so its Enter leg stays pinned to one specific row regardless of where selection starts.)
 
-**13. Single-task terminal title on launch + refresh (#418/#425)** — `SingleTaskApp` titles its
+**13. Bare ↑/↓ scroll / row-move in Task Detail (#452)** — bare arrows used to be inert on every Task
+Detail tab: the read-only text panes moved an invisible caret instead of scrolling, and the Task Tree
+`ListView`'s `Command.Down` bubbled up to `NavSafeTabs`' inert crash-guard, cancelling its own
+`MoveDown`. The app now claims bare ↑/↓ in `TaskDetailScreen.OnKey`. At a short terminal (so the Stream
+body overflows) this asserts a bare ↑ scrolls the Stream pane up one line and a following ↓ scrolls it
+back (viewport scroll, not caret), then on the Task Tree tab a bare ↓ moves the highlighted row down one
+and ↑ moves it back. Requires `E2E_TREE=1`. Fails on the pre-#452 code:
+
+```bash
+E2E_TASKS=6 E2E_TREE=1 timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/detail_arrow_check.py $DLL
+```
+
+Self-contained (sets `E2E_TREE=1` itself). Expected: `ok — bare ↑/↓ scroll the Stream pane one line
+(both directions) and move the Task Tree selection one row`. Pairs with `tab_boundary_check.py` (check
+7): together they pin that a bare arrow moves content *within* a tab but is still a no-op at a content
+boundary — never a tab switch or the `NavSafeTabs` crash.
+
+**14. Single-task terminal title on launch + refresh (#418/#425)** — `SingleTaskApp` titles its
 top-level `Window.Title` with the launched task (custom id preferred, `{id}: {name}` ≤40 chars), which
 Terminal.Gui emits to the host terminal as an OSC title escape (captured by pyte's `screen.title`), so
 several `--task` tabs stay distinguishable on the tab strip. Two checks, each self-contained:

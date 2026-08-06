@@ -102,6 +102,37 @@ and is gated behind an env knob so it doesn't perturb the existing single-instan
 proves too large/timing-flaky for a clean green landing this session, it is deferred to a dedicated
 follow-up issue (linked from the PR) rather than shipped half-done.
 
+### Phase B — as built (#376 item 1)
+
+The whole extension is **additive and env-gated**, so every single-instance scenario and CI (which
+never runs the PTY harness) is untouched. Both `TodoApp` and `ClickUpClient` already accept an optional
+`IChangeMarkerStore`, so no production code changed — only `Program.cs`, `FakeClickUp`, and a new driver.
+
+Env knobs (a `_2`-suffixed process id keeps the two apps' markers distinguishable):
+
+- **`E2E_MARKER_DB=<path>`** — when set, `Program.cs` opens a shared `LiteDbStateStore(path)` (LiteDB
+  *shared* connection = cross-process mutex) and wires `CreateChangeMarkerStore(instanceId)` into **both**
+  the producer `ClickUpClient` and the consumer `TodoApp`. Absent ⇒ both null ⇒ the facade's Null store
+  and a disarmed marker poll, exactly as before.
+- **`E2E_INSTANCE_ID=<id>`** — the per-process marker instance id (defaults to a random id). The two
+  processes get distinct ids so the consumer skips its own writes by id (`ChangeMarkerConsumer`).
+- **`E2E_NUDGE=1` + `E2E_SHARED_STATE=<path>`** — `FakeClickUp` keeps a tiny **cross-process task-status
+  overlay** in a shared JSON file (read-modify-write with an atomic POSIX rename). A status PUT persists
+  the committed status there and **bumps `date_updated` past the seed** (`1700000000000` →
+  `1800000000000`) so the marker it records is strictly newer than the version the other instance holds —
+  otherwise the consumer's redundant-fetch guard (`held >= server`) would suppress the fetch. Every GET
+  (`/task/{id}` and the team list) reflects the overlay, so the reader's nudge re-fetch — and any later
+  resync — sees the committed status. No sockets: it stays an in-process `HttpMessageHandler`, just
+  file-backed for the one mutated field.
+
+Driver: `nudge_two_instance_check.py` boots two PTY app processes sharing one `E2E_MARKER_DB` +
+`E2E_SHARED_STATE` (distinct instance ids), waits for both to render, commits a status change on `t0` in
+instance A (`Ctrl+U` → Status pane `Down` → `Enter`, per `foreign_quickupdates_check.py`), and polls
+instance B's list row until its `t0` status chip flips from the seed (`(TD)` "to do") to the committed
+value (`(IP)` "in progress") within a generous multiple of the ~4s marker-poll window — proving
+cross-process nudge-then-fetch end-to-end. A control assertion confirms B's own row was `(TD)` before the
+edit, so the flip is the nudge, not a coincidence.
+
 ## Hard rules honored
 
 - **No `Generated/` hand-edit, no curated-spec change / no regen** — `GetTaskItemAsync` already

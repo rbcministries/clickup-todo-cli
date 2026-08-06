@@ -206,11 +206,12 @@ public static class HelpItemSets
         new("Esc", "back"),
     ];
 
-    /// <summary>The task detail view when the Task Tree tab is present (#291) — i.e. the dashboard-hosted
-    /// detail: <see cref="Detail"/> plus the tab's F6 badge-display cycle (#415, mirroring the main list's
-    /// F6) and the Ctrl+Enter "open this task in a new terminal tab" gesture (#384, the detail counterpart
-    /// of the list's #301 gesture). Single-task launch mode has no tree tab and keeps the leaner
-    /// <see cref="Detail"/> set, which carries neither.</summary>
+    /// <summary>The task detail view when the Task Tree tab is present (#291): <see cref="Detail"/> plus
+    /// the tab's F6 badge-display cycle (#415, mirroring the main list's F6) and the Ctrl+Enter "open this
+    /// task in a new terminal tab" gesture (#384/#435, the detail counterpart of the list's #301 gesture).
+    /// Both hosts carry it: the dashboard-hosted detail, and — since #374 gave single-task launch mode the
+    /// Task Tree tab too — single-task mode. The leaner <see cref="Detail"/> set (neither F6 nor Ctrl+Enter)
+    /// is only used when no tree loader was supplied.</summary>
     public static readonly IReadOnlyList<HelpItem> DetailWithTaskTree =
     [
         new("Ctrl+←/→", "switch tab", IsAction: false),
@@ -257,8 +258,10 @@ public static class HelpItemSets
     /// branch order is unit-testable — the <see cref="TaskDetailScreen.HelpItems"/> property that calls
     /// it lives on a Terminal.Gui view and can't run in CI. The comment composer and description editor
     /// overlays are mutually exclusive; the composer is checked first. When neither overlay is open the
-    /// set depends on whether the Task Tree tab is present (its F6 badge cycle, #415): present →
-    /// <see cref="DetailWithTaskTree"/>, absent (e.g. single-task launch mode) → <see cref="Detail"/>.</summary>
+    /// set depends on whether the Task Tree tab is present (its F6 badge cycle #415, and the Ctrl+Enter
+    /// new-tab gesture #384/#435): present → <see cref="DetailWithTaskTree"/>, absent → <see cref="Detail"/>.
+    /// Both the dashboard and single-task launch mode (since #374) supply a tree loader, so both get
+    /// <see cref="DetailWithTaskTree"/>; <see cref="Detail"/> is the no-tree-loader case.</summary>
     public static IReadOnlyList<HelpItem> DetailFooter(
         bool commentComposerVisible, bool descriptionEditorVisible, bool hasTaskTree) =>
         commentComposerVisible ? DetailCommentComposer
