@@ -1630,7 +1630,15 @@ public sealed class TaskDetailScreen : Screen
     /// focusable pane persists (#3) — it's a transient overlay, like the composer itself.</summary>
     private void ShowMentionPicker(TextView hostEditor)
     {
+        // The picker needs the member pool, and only makes sense overlaid on a *visible* host editor.
+        // Both current callers are already focus-gated (so the host is visible), but guarding the host's
+        // own box here keeps that the sole precondition — a future caller can't open the overlay over a
+        // hidden editor.
         if (!MembersAvailable)
+            return;
+        if (hostEditor == _commentEditor && !_commentBox.Visible)
+            return;
+        if (hostEditor == _descriptionEditor && !_descriptionBox.Visible)
             return;
         _mentionHostEditor = hostEditor;
 
