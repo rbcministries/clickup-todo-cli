@@ -224,6 +224,32 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     // Off by default, so every existing check sees the empty field set (Save creates directly, as before).
     private static bool CustomFields => Environment.GetEnvironmentVariable("E2E_CUSTOM_FIELDS") == "1";
 
+    // #365 opt-in: the Quick Updates List-pane field-strand scenario. When set, the task is pre-seeded
+    // into one additional list ("list2" / Q3 Website Refresh) alongside its home list ("plist"), that
+    // additional list defines a *local* "Sprint Points" Custom Field the home list does not, and the task
+    // detail carries values for both "Sprint Points" (list-local) and "Notes" (shared). Removing the
+    // additional list therefore strands the Sprint Points value (arms a confirmation) but not Notes. Off
+    // by default, so GET /list/{id}/field stays keyed to the New Task flags and the detail carries no
+    // custom_fields — every other check is untouched.
+    private static bool QuLists => Environment.GetEnvironmentVariable("E2E_QU_LISTS") == "1";
+
+    // The one additional list the QU List-pane scenario (#365) pre-seeds; its GET /list/{id}/field defines
+    // a local field ("Sprint Points") the home list lacks, so removing it strands that value.
+    private const string QuListsSeededLocation = "list2"; // Q3 Website Refresh (Lists[1]/ListNames[1])
+
+    // Per-list Custom Field DEFINITIONS for the #365 strand scenario, keyed by list id: the additional
+    // "list2" defines the shared "Notes" plus a local "Sprint Points"; every other list (incl. the home
+    // "plist") defines only the shared "Notes". So a Sprint Points value strands on a list2 remove while a
+    // Notes value never does (the home list still defines it).
+    private static string QuListFieldsJson(string listId) => listId == "list2"
+        ? """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false},{"id":"cf_sprint","name":"Sprint Points","type":"number","required":false}]}"""
+        : """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false}]}""";
+
+    // The task's SET Custom Field values for the #365 strand scenario: Sprint Points (only list2 defines
+    // it → strands on a list2 remove) and Notes (the home list defines it too → never strands).
+    private const string QuListsCustomFieldValuesJson =
+        """[{"id":"cf_sprint","name":"Sprint Points","type":"number","value":8},{"id":"cf_notes","name":"Notes","type":"text","value":"triage"}]""";
+
     // #325 opt-in: when set, the POST /task/{id}/comment handler appends each request body (one per line)
     // to this file so mention_check.py can assert the structured @-mention tag block was actually sent.
     // Off by default, so every existing check's comment post is unaffected.
@@ -350,8 +376,10 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     // The task's current *additional* list memberships ("Tasks in Multiple Lists", #237), mutated by the
     // membership POST/DELETE (#242) so an add/remove from the Quick Updates List pane round-trips: a later
     // detail GET reflects the change via the detail's `locations` array. Ids index into Lists/ListNames.
-    // Starts empty (the common single-list case — the pane shows only the home "plist"). Guarded by _gate.
-    private readonly HashSet<string> _locations = [];
+    // Starts empty (the common single-list case — the pane shows only the home "plist"); the #365 QU
+    // List-pane scenario pre-seeds one additional location so the pane has a removable row. Guarded by _gate.
+    private readonly HashSet<string> _locations =
+        QuLists ? new HashSet<string>(StringComparer.Ordinal) { QuListsSeededLocation } : [];
     private readonly object _gate = new();
 
     // The task's current plain-text description, mutated by a description PUT (#217) so the write
@@ -510,10 +538,12 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
         else if (path.Contains("/list/") && path.EndsWith("/task"))
             body = """{"tasks":[],"last_page":true}""";
         else if (path.Contains("/list/") && path.EndsWith("/field"))
-            // Custom Field definitions (#249/#395): the tall set (#446) under E2E_CUSTOM_FIELDS_MANY, else
-            // the small seeded set under E2E_CUSTOM_FIELDS, else an empty set (so the New Task screen
+            // Custom Field definitions: the #365 QU List-pane scenario keys them per list id (so a remove
+            // can strand a list-local value); else the tall set (#446) under E2E_CUSTOM_FIELDS_MANY, the
+            // small seeded set (#249/#395) under E2E_CUSTOM_FIELDS, or an empty set (so the New Task screen
             // creates directly, as every other check expects).
-            body = CustomFieldsMany ? CustomFieldsManyJson
+            body = QuLists ? QuListFieldsJson(ListIdOfField(path))
+                : CustomFieldsMany ? CustomFieldsManyJson
                 : CustomFields ? CustomFieldsJson
                 : """{"fields":[]}""";
         else if (path.Contains("/list/"))
@@ -673,10 +703,14 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
             name = "Renamed on refresh";
         // C (#456): the seeded checklists array, or empty (the common case — no other check sees it).
         var checklists = _checklists ? ChecklistsJson : "[]";
+        // #365: the strand scenario adds a `custom_fields` array carrying the task's set values, so the
+        // List-pane remove preflight has values to strand-check. Spliced in only under E2E_QU_LISTS, so the
+        // default detail response stays byte-identical for every other check.
+        var customFields = QuLists ? $""","custom_fields":{QuListsCustomFieldValuesJson}""" : "";
         // `locations` are the task's additional list memberships (#242), mutated by the membership
         // POST/DELETE so an add/remove from the List pane round-trips; empty in the common single-list case.
         return $$"""
-        {"id":"{{id}}","name":"{{name}}","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"locations":[{{LocationsJson()}}],"checklists":{{checklists}},"description":{{description}}}
+        {"id":"{{id}}","name":"{{name}}","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"locations":[{{LocationsJson()}}]{{customFields}},"checklists":{{checklists}},"description":{{description}}}
         """;
     }
 
@@ -689,6 +723,16 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
             var name = idx >= 0 ? ListNames[idx] : lid;
             return $"{{\"id\":\"{lid}\",\"name\":\"{name}\"}}";
         }));
+
+    /// <summary>The list id from a <c>/v2/list/{listId}/field</c> definitions path (#365).</summary>
+    private static string ListIdOfField(string path)
+    {
+        const string listSeg = "/list/";
+        const string fieldSeg = "/field";
+        var start = path.IndexOf(listSeg, StringComparison.Ordinal) + listSeg.Length;
+        var end = path.IndexOf(fieldSeg, start, StringComparison.Ordinal);
+        return end > start ? path[start..end] : "";
+    }
 
     /// <summary>The list id from a <c>/v2/list/{listId}/task/{taskId}</c> membership path.</summary>
     private static string ListIdOfMembership(string path)
