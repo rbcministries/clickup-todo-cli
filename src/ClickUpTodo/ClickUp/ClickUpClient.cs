@@ -450,6 +450,26 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             _changeMarkers.Record(taskId, serverDateUpdatedMs: null, ListsFields);
         });
 
+    /// <summary>
+    /// Toggle (or set) a checklist item's <c>resolved</c> state (D, #457) via
+    /// <c>PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id}</c> with a <c>{ resolved }</c>
+    /// body. ClickUp echoes the whole parent checklist, so this returns the <b>server-confirmed</b>
+    /// <see cref="TaskChecklist"/> — mapped through the same <see cref="MapChecklist"/> as the read path,
+    /// so its items come back through <see cref="ChecklistReader"/> and no generated type escapes the
+    /// facade. Same return-the-truth contract as <see cref="SetTaskStatusAsync"/> /
+    /// <see cref="SetTaskDescriptionAsync"/>. (Multi-tab checklist nudge sync is left to a later slice —
+    /// another tab's 30 s auto-refresh still picks the change up.)
+    /// </summary>
+    public Task<TaskChecklist> SetChecklistItemResolvedAsync(string checklistId, string itemId, bool resolved, CancellationToken ct = default)
+        => Guard("UpdateChecklistItem", async () =>
+        {
+            var response = await _client.V2.Checklist[checklistId].Checklist_item[itemId]
+                .PutAsync(new UpdateChecklistItemRequest { Resolved = resolved }, cancellationToken: ct);
+            var checklist = response?.Checklist
+                ?? throw new InvalidOperationException($"ClickUp returned no checklist for item '{itemId}'.");
+            return MapChecklist(checklist);
+        });
+
     /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => Guard("GetTask", async () =>

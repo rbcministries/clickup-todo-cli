@@ -369,6 +369,50 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task SetChecklistItemResolved_TogglesState_AndReturnsConfirmedChecklist()
+    {
+        // The toggle write (D, #457): flip a real checklist item's `resolved` and confirm the returned
+        // parent checklist reflects it, then flip it back so the run is state-neutral. Gated on a task known
+        // to have a checklist item (same env var the read test uses) so the general suite needn't grow one.
+        var checklistTaskId = Environment.GetEnvironmentVariable("CLICKUP_CHECKLIST_TASK_ID");
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(checklistTaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_CHECKLIST_TASK_ID (a task that has a checklist item) to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var detail = await client.GetTaskDetailAsync(checklistTaskId!);
+        var checklist = detail.Checklists.FirstOrDefault(c => c.Items.Count > 0);
+        Skip.If(checklist is null, "CLICKUP_CHECKLIST_TASK_ID has a checklist but no items to toggle.");
+        var item = checklist!.Items[0];
+        var original = item.Resolved;
+
+        try
+        {
+            var flipped = await client.SetChecklistItemResolvedAsync(checklist.Id, item.Id, !original);
+            Assert.Equal(checklist.Id, flipped.Id);
+            Assert.Equal(!original, FindItem(flipped.Items, item.Id)?.Resolved);
+        }
+        finally
+        {
+            // Restore the original state so the test leaves the real task untouched.
+            var restored = await client.SetChecklistItemResolvedAsync(checklist.Id, item.Id, original);
+            Assert.Equal(original, FindItem(restored.Items, item.Id)?.Resolved);
+        }
+
+        static TaskChecklistItem? FindItem(IReadOnlyList<TaskChecklistItem> items, string id)
+        {
+            foreach (var i in items)
+            {
+                if (i.Id == id)
+                    return i;
+                var nested = FindItem(i.Children, id);
+                if (nested is not null)
+                    return nested;
+            }
+            return null;
+        }
+    }
+
+    [SkippableFact]
     public async Task GetTaskComments_ReturnsComments()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),

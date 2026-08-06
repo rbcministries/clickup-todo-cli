@@ -78,6 +78,13 @@ public interface IClickUpClient
     /// above; <see cref="ClickUpClient"/> overrides it.</summary>
     Task RemoveTaskFromListAsync(string taskId, string listId, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement task↔list membership writes.");
+
+    /// <summary>Toggle (or set) a checklist item's <c>resolved</c> state (D, #457) and return the
+    /// server-confirmed parent <see cref="TaskChecklist"/>. Default throwing implementation so read-only
+    /// fakes needn't implement a write they never call (mirroring the other writes);
+    /// <see cref="ClickUpClient"/> overrides it. See <see cref="ClickUpClient.SetChecklistItemResolvedAsync"/>.</summary>
+    Task<TaskChecklist> SetChecklistItemResolvedAsync(string checklistId, string itemId, bool resolved, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
 
     /// <summary>Full detail for a task addressed by its workspace <b>custom id</b> (#303, Ctrl+O

@@ -336,6 +336,26 @@
           }
         }
       }
+    },
+    "/v2/checklist/{checklist_id}/checklist_item/{checklist_item_id}": {
+      "put": {
+        "operationId": "UpdateChecklistItem",
+        "summary": "Update a checklist item (used here to toggle its `resolved` state — D, #457). ClickUp echoes the whole parent checklist wrapped as { \"checklist\": { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. Only `resolved` is modelled in the request; item rename / assignee / reparent land with the CRUD slices (E–G).",
+        "parameters": [
+          { "name": "checklist_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "checklist_item_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateChecklistItemRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated parent checklist under a `checklist` key, including its items array and resolved/unresolved counts.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChecklistItemResponse" } } }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -453,6 +473,20 @@
           "orderindex": { "type": "integer", "nullable": true },
           "resolved": { "type": "integer", "nullable": true },
           "unresolved": { "type": "integer", "nullable": true }
+        }
+      },
+      "UpdateChecklistItemRequest": {
+        "type": "object",
+        "description": "Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457). Only 'resolved' is modelled; rename/assignee/reparent land with E–G.",
+        "properties": {
+          "resolved": { "type": "boolean" }
+        }
+      },
+      "ChecklistItemResponse": {
+        "type": "object",
+        "description": "The checklist-item write response: ClickUp returns the whole parent checklist (the reconciled group with its items and progress counts) under a 'checklist' key. Its items ride on Kiota's AdditionalData and are read back with ChecklistReader, exactly like the GET /task read path.",
+        "properties": {
+          "checklist": { "$ref": "#/components/schemas/Checklist" }
         }
       },
       "Priority": {
