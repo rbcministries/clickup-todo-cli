@@ -2472,6 +2472,9 @@ public sealed class TodoApp
         if (!ReferenceEquals(ActiveScreen, detailOrigin))
             return;
 
+        // Fresh open ⇒ no armed stranding-remove carried over, so a first remove always re-warns (#365).
+        _armedListRemoval = null;
+
         // List pane (#242/#365): seed the home list (from the snapshot TaskItem, which always carries the
         // home list) and any additional "Tasks in Multiple Lists" locations. A detail-origin launch has
         // the full membership on hand (detailOrigin.Task.Lists); a list-origin launch has only the home
