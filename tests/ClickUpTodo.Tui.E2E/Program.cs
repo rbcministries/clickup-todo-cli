@@ -314,8 +314,17 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     // Ends with a ClickUp task link so the link-rendering check (#317) has a Task-kind link in the
     // Description pane to assert (the Comments pane already carries a Web-kind github URL). description_edit
     // only asserts the "Call Center training" substring, so the trailing URL is safe for it.
+    // #430 opt-in: append a markdown [text](url) link whose visible text is prose ("the runbook") and whose
+    // resolved target differs from it, so markdown_osc8_check.py can assert the OSC-8 hyperlink points at the
+    // RESOLVED url — not the visible text. Off by default, so every existing check sees the original body
+    // byte-for-byte. The visible text isn't a URL, so an OSC-8 open for MdLinkTarget can only come from the
+    // markdown resolution this exercises.
+    private static bool MdLink => Environment.GetEnvironmentVariable("E2E_MD_LINK") == "1";
+    public const string MdLinkTarget = "https://example.com/runbook-42";
+
     private string _description =
-        "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed\n\nParent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread";
+        "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed\n\nParent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread"
+        + (MdLink ? "\n\nSee [the runbook](" + MdLinkTarget + ") for steps" : "");
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
