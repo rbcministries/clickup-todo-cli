@@ -76,4 +76,15 @@ public static class DetailScrollModel
     /// </summary>
     public static int NextIndex(int currentIndex, int count, int delta) =>
         count <= 0 ? currentIndex : Math.Clamp(currentIndex + delta, 0, count - 1);
+
+    /// <summary>
+    /// How many rows a <c>PgUp</c>/<c>PgDn</c> pages a scrollable pane: one viewport page with a single
+    /// line of overlap for continuity — <c>max(1, viewportHeight − 1)</c>, the "keep one line of context"
+    /// convention of a terminal pager. A degenerate viewport (height ≤ 1) still advances one row. Fed as
+    /// the <paramref name="delta"/> magnitude to <see cref="NextTop"/> (#468), so a page is a viewport
+    /// write on the very same <c>viewport.Y</c> the bare ↑/↓ line-scroll clamps — the two gestures then
+    /// compose additively on one explicit scroll state, independent of Terminal.Gui's stock TextView
+    /// paging.
+    /// </summary>
+    public static int PageDelta(int viewportHeight) => Math.Max(1, viewportHeight - 1);
 }

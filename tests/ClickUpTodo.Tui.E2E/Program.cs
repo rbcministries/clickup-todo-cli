@@ -51,7 +51,27 @@ var tree = Environment.GetEnvironmentVariable("E2E_TREE") == "1";
 // content to render. Gated so no other check's GET /task/{id} response changes.
 var checklists = Environment.GetEnvironmentVariable("E2E_CHECKLISTS") == "1";
 
-var client = new ClickUpClient("fake-token", new HttpClient(new FakeClickUp(taskCount, foreign, tree, checklists)));
+// Two-instance nudge channel (#376 item 1): when E2E_MARKER_DB is set, wire a real shared-file
+// LiteDbChangeMarkerStore into BOTH the producer (ClickUpClient) and the consumer (TodoApp), so a Quick
+// Update committed in one app process nudges the other (nudge-then-fetch, #294/#295). LiteDB's shared
+// connection is the cross-process mutex, so two processes pointed at the same file coordinate safely.
+// Absent ⇒ both null ⇒ the facade's Null store and a disarmed marker poll — every single-instance check
+// is unchanged. E2E_INSTANCE_ID gives each process a distinct marker id (the consumer skips its own
+// writes by id); it defaults to a random id.
+LiteDbStateStore? markerStateStore = null;
+IChangeMarkerStore? changeMarkers = null;
+var markerDbPath = Environment.GetEnvironmentVariable("E2E_MARKER_DB");
+if (!string.IsNullOrWhiteSpace(markerDbPath))
+{
+    var instanceId = Environment.GetEnvironmentVariable("E2E_INSTANCE_ID");
+    if (string.IsNullOrWhiteSpace(instanceId))
+        instanceId = Guid.NewGuid().ToString("N");
+    markerStateStore = new LiteDbStateStore(markerDbPath);
+    changeMarkers = markerStateStore.CreateChangeMarkerStore(instanceId);
+}
+
+var client = new ClickUpClient(
+    "fake-token", new HttpClient(new FakeClickUp(taskCount, foreign, tree, checklists)), changeMarkers: changeMarkers);
 IStateStore stateStore = new JsonFileStateStore();
 var configStore = new ConfigStore(stateStore);
 var tasks = new TaskService(client, config, 1, userName: "Ben Seymour");
@@ -101,10 +121,12 @@ if (!string.IsNullOrWhiteSpace(singleTaskId))
     var launchTask = await tasks.GetTaskDetailAsync(singleTaskId);
     var launchComments = await tasks.GetTaskCommentsAsync(singleTaskId);
     new SingleTaskApp(tasks, config, configStore, launchTask, launchComments, browser).Run("ansi");
+    markerStateStore?.Dispose();
     return;
 }
 
-new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser).Run("ansi");
+new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser, changeMarkers).Run("ansi");
+markerStateStore?.Dispose();
 return;
 
 /// <summary>A browser launcher that succeeds without opening anything — the default under the PTY, where
@@ -170,10 +192,95 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     private const string CustomFieldsJson =
         """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false},{"id":"cf_estimate","name":"Estimate","type":"number","required":true},{"id":"cf_stage","name":"Stage","type":"drop_down","required":false,"type_config":{"options":[{"id":"opt_alpha","name":"Alpha","orderindex":0},{"id":"opt_beta","name":"Beta","orderindex":1}]}}]}""";
 
+    // #446 opt-in: serve a *tall* fillable set — nine single-line text fields plus a required tenth — so
+    // the New Task Custom fields page's widget stack (2 + 10×3 = 32 content rows) is taller than a short
+    // emulated terminal. This exercises the page's content-scroll: "Last Field" seeded below the fold is
+    // only reachable/visible once Tab (scroll-on-focus) or PgUp/PgDn scrolls it in. Off by default; takes
+    // precedence over E2E_CUSTOM_FIELDS when both are set. "Last Field" being required also drives the
+    // required-block path for a below-the-fold field. NATO-word names avoid substring collisions on the
+    // pyte screen.
+    private static bool CustomFieldsMany => Environment.GetEnvironmentVariable("E2E_CUSTOM_FIELDS_MANY") == "1";
+
+    private const string CustomFieldsManyJson =
+        """{"fields":[{"id":"cf_1","name":"Alpha","type":"text","required":false},{"id":"cf_2","name":"Bravo","type":"text","required":false},{"id":"cf_3","name":"Charlie","type":"text","required":false},{"id":"cf_4","name":"Delta","type":"text","required":false},{"id":"cf_5","name":"Echo","type":"text","required":false},{"id":"cf_6","name":"Foxtrot","type":"text","required":false},{"id":"cf_7","name":"Golf","type":"text","required":false},{"id":"cf_8","name":"Hotel","type":"text","required":false},{"id":"cf_9","name":"India","type":"text","required":false},{"id":"cf_last","name":"Last Field","type":"text","required":true}]}""";
+
     private static bool WarmClosed => Environment.GetEnvironmentVariable("E2E_WARM_CLOSED") == "1";
     private static readonly int ClosedStallMs =
         int.TryParse(Environment.GetEnvironmentVariable("E2E_STALL_CLOSED_MS"), out var ms) ? ms : 0;
     private static volatile bool _closedStallArmed;
+
+    // #376 (item 1) two-instance nudge scenario (E2E_NUDGE=1): a tiny cross-process task-status overlay so
+    // a Quick Update committed in one app process is visible to the OTHER process's per-task GET — the
+    // nudge re-fetch (#295). Off by default, so every single-instance check keeps the canned PUT/GET. The
+    // overlay lives in a shared JSON file (E2E_SHARED_STATE, the SAME path for both processes), keyed by
+    // task id; only the writer process mutates it (on a status PUT), the reader only GETs.
+    private static bool NudgeScenario => Environment.GetEnvironmentVariable("E2E_NUDGE") == "1";
+    private static string? SharedStatePath => Environment.GetEnvironmentVariable("E2E_SHARED_STATE");
+
+    // A date_updated newer than the seeded rows' "1700000000000", so a committed status is strictly newer
+    // than the version the other instance already holds. Without the bump the consumer's redundant-fetch
+    // guard (held >= server) would suppress the nudge fetch and nothing would propagate.
+    private const long NudgeUpdatedMs = 1800000000000L;
+
+    /// <summary>One task's overlaid status in the #376 two-instance scenario.</summary>
+    private sealed class StatusOverlay
+    {
+        public string Status { get; set; } = "";
+        public string Color { get; set; } = "";
+        public long Updated { get; set; }
+    }
+
+    /// <summary>Reads the shared status overlay (#376). A missing/empty/torn file yields an empty map, so
+    /// the reader falls back to each task's seeded default. Retries a transient IO race (a concurrent
+    /// writer's atomic replace) a few times.</summary>
+    private static Dictionary<string, StatusOverlay> ReadOverlay()
+    {
+        var path = SharedStatePath;
+        if (string.IsNullOrEmpty(path))
+            return new(StringComparer.Ordinal);
+        for (var attempt = 0; attempt < 5; attempt++)
+        {
+            try
+            {
+                if (!File.Exists(path))
+                    return new(StringComparer.Ordinal);
+                var json = File.ReadAllText(path);
+                if (string.IsNullOrWhiteSpace(json))
+                    return new(StringComparer.Ordinal);
+                return JsonSerializer.Deserialize<Dictionary<string, StatusOverlay>>(json)
+                       ?? new(StringComparer.Ordinal);
+            }
+            catch (IOException) { Thread.Sleep(10); }
+            catch (JsonException) { return new(StringComparer.Ordinal); }
+        }
+        return new(StringComparer.Ordinal);
+    }
+
+    /// <summary>Upserts one task's overlaid status (#376) via read-modify-write with an atomic replace
+    /// (unique temp file + <see cref="File.Move(string, string, bool)"/>, atomic on POSIX), so a concurrent
+    /// reader never sees a torn file. The RMW itself assumes a <b>single writer</b> — the scenario only ever
+    /// commits in one instance, so this is a status mirror, not the multi-writer channel (that's the marker
+    /// <i>store</i>). A unique temp name keeps overlapping writes within a process from clobbering each
+    /// other even though the scenario issues just one PUT.</summary>
+    private static void WriteOverlay(string taskId, StatusOverlay entry)
+    {
+        var path = SharedStatePath;
+        if (string.IsNullOrEmpty(path))
+            return;
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                var map = ReadOverlay();
+                map[taskId] = entry;
+                var tmp = $"{path}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(map));
+                File.Move(tmp, path, overwrite: true);
+                return;
+            }
+            catch (IOException) { Thread.Sleep(10); }
+        }
+    }
 
     /// <summary>Arms the include_closed refresh stall (#333). Called by <c>Program.cs</c> right before
     /// <c>Run()</c>, i.e. after any pre-boot warm prefetch — so the stall hits the authoritative F12→All
@@ -260,6 +367,8 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
             // assignees/description and echoes a canned detail).
             if (_foreign)
                 body = ForeignPut(path, reqBody);
+            else if (NudgeScenario)
+                body = NudgePut(path, reqBody);
             else
                 lock (_gate)
                 {
@@ -293,6 +402,8 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
                 body = TreeTaskGet(path, query);
             else if (_foreign)
                 body = ForeignTaskGet(path, query);
+            else if (NudgeScenario)
+                body = NudgeTaskGet(path);
             else
                 lock (_gate) body = DetailJson(path, _assignees);
         }
@@ -324,9 +435,12 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
         else if (path.Contains("/list/") && path.EndsWith("/task"))
             body = """{"tasks":[],"last_page":true}""";
         else if (path.Contains("/list/") && path.EndsWith("/field"))
-            // Custom Field definitions (#249/#395): the seeded fillable set under E2E_CUSTOM_FIELDS, else
-            // an empty set (so the New Task screen creates directly, as every other check expects).
-            body = CustomFields ? CustomFieldsJson : """{"fields":[]}""";
+            // Custom Field definitions (#249/#395): the tall set (#446) under E2E_CUSTOM_FIELDS_MANY, else
+            // the small seeded set under E2E_CUSTOM_FIELDS, else an empty set (so the New Task screen
+            // creates directly, as every other check expects).
+            body = CustomFieldsMany ? CustomFieldsManyJson
+                : CustomFields ? CustomFieldsJson
+                : """{"fields":[]}""";
         else if (path.Contains("/list/"))
             body = ListJson(path);
         else if (path.EndsWith("/team"))
@@ -389,6 +503,10 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
         var start = page * pageSize;
         var count = Math.Clamp(total - start, 0, pageSize);
         var lastPage = start + count >= total;
+        // #376: apply the two-instance status overlay to the list rows too, so a full resync (not just the
+        // per-task nudge re-fetch) reflects a committed cross-process change. Null/empty in every other
+        // scenario, so each task keeps its seeded status.
+        var overlay = NudgeScenario ? ReadOverlay() : null;
         var sb = new StringBuilder();
         sb.Append("{\"tasks\":[");
         for (var i = 0; i < count; i++)
@@ -404,8 +522,18 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
             var seeded = SeedQuAssignee
                 ? $",\"assignees\":[{{\"id\":{SeededAssigneeId},\"username\":\"{Members[0].Name}\"}}]"
                 : "";
+            // Seeded default status/date, overridden by a committed cross-process change (#376) when present.
+            var status = Statuses[k % 4];
+            var statusColor = StatusColors[k % 4];
+            var dateUpdated = "1700000000000";
+            if (overlay is not null && overlay.TryGetValue($"t{k}", out var ov))
+            {
+                status = ov.Status;
+                statusColor = ov.Color;
+                dateUpdated = ov.Updated.ToString();
+            }
             sb.Append($$"""
-            {"id":"t{{k}}","name":"Task {{k}} — follow up on the {{ListNames[li]}} item with a realistic title 📌","status":{"status":"{{Statuses[k % 4]}}","color":"{{StatusColors[k % 4]}}"},"list":{"id":"{{Lists[li]}}","name":"{{ListNames[li]}}"},"due_date":"{{DateTimeOffset.UtcNow.AddDays(k % 14).ToUnixTimeMilliseconds()}}","date_updated":"1700000000000","url":"https://app.clickup.com/t/t{{k}}"{{seeded}}{{parent}}{{(k % 3 == 0 ? ",\"priority\":{\"priority\":\"high\",\"color\":\"#f50000\"}" : "")}}}
+            {"id":"t{{k}}","name":"Task {{k}} — follow up on the {{ListNames[li]}} item with a realistic title 📌","status":{"status":"{{status}}","color":"{{statusColor}}"},"list":{"id":"{{Lists[li]}}","name":"{{ListNames[li]}}"},"due_date":"{{DateTimeOffset.UtcNow.AddDays(k % 14).ToUnixTimeMilliseconds()}}","date_updated":"{{dateUpdated}}","url":"https://app.clickup.com/t/t{{k}}"{{seeded}}{{parent}}{{(k % 3 == 0 ? ",\"priority\":{\"priority\":\"high\",\"color\":\"#f50000\"}" : "")}}}
             """);
         }
         // A completed (closed-type) task, returned only when the caller opts into closed tasks. The feed
@@ -670,6 +798,76 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
         return status == "complete" ? "#6bc950" : "#d3d3d3";
     }
 
+    // ── #376 (item 1) two-instance nudge scenario (E2E_NUDGE=1) ───────────────
+    // A Quick Update committed in one app process must be observable in the OTHER process's per-task
+    // GET (its nudge re-fetch, #295). Unlike the foreign scenario's in-memory maps, the state is shared
+    // via a file (E2E_SHARED_STATE) so it crosses the process boundary. Only the status is modelled — the
+    // one field this scenario drives — keyed by task id; the writer persists it on a status PUT and every
+    // GET reflects it.
+
+    /// <summary>#376 two-instance PUT: persist a committed status into the shared overlay (bumping
+    /// <c>date_updated</c> so it's strictly newer than the seed the other instance holds) and echo the task
+    /// reflecting it — so the writer's own optimistic reconcile settles on the committed value and the
+    /// change-marker it records carries the newer server <c>date_updated</c>.</summary>
+    private static string NudgePut(string path, string requestBody)
+    {
+        var id = path[(path.LastIndexOf('/') + 1)..];
+        var overlay = ReadOverlay();
+        string status, color;
+        if (overlay.TryGetValue(id, out var cur))
+            (status, color) = (cur.Status, cur.Color);
+        else
+            (status, color) = (DefaultStatus(id), ForeignStatusColor(DefaultStatus(id)));
+        try
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            if (doc.RootElement.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.String)
+            {
+                status = st.GetString()!;
+                color = ForeignStatusColor(status);
+            }
+        }
+        catch (JsonException)
+        {
+            // A non-JSON / unexpected body isn't this fake's concern — keep the prior/default status.
+        }
+        WriteOverlay(id, new StatusOverlay { Status = status, Color = color, Updated = NudgeUpdatedMs });
+        return NudgeTaskJson(id, status, color, NudgeUpdatedMs);
+    }
+
+    /// <summary>#376 two-instance per-task GET (the consumer's nudge re-fetch, #295): serve the overlaid
+    /// status when the writer has committed one, else the task's seeded default (with the original date).</summary>
+    private static string NudgeTaskGet(string path)
+    {
+        var id = path[(path.LastIndexOf('/') + 1)..];
+        var overlay = ReadOverlay();
+        return overlay.TryGetValue(id, out var o)
+            ? NudgeTaskJson(id, o.Status, o.Color, o.Updated)
+            : NudgeTaskJson(id, DefaultStatus(id), ForeignStatusColor(DefaultStatus(id)), 1700000000000L);
+    }
+
+    /// <summary>The seeded default status for a task id, matching <see cref="TasksJson"/> (<c>Statuses[k % 4]</c>).</summary>
+    private static string DefaultStatus(string id) => Statuses[TaskIndex(id) % 4];
+
+    /// <summary>The numeric index behind a <c>t{k}</c> id (0 when it doesn't parse).</summary>
+    private static int TaskIndex(string id) => int.TryParse(id.TrimStart('t'), out var k) ? k : 0;
+
+    /// <summary>A full task object (the shape <see cref="ClickUpClient.Map"/> reads) for the #376 scenario.
+    /// Name / list / due date / priority mirror <see cref="TasksJson"/> for the same id, so the wholesale
+    /// full-fidelity reconcile (#376 item 2) lands a row that differs from the seeded one only in the status
+    /// chip — otherwise the replace would strip the priority flag and due date the list row carried, which
+    /// would misrepresent the reconcile as lossy.</summary>
+    private static string NudgeTaskJson(string id, string status, string color, long updated)
+    {
+        var k = TaskIndex(id);
+        var li = k % 3;
+        var dueMs = DateTimeOffset.UtcNow.AddDays(k % 14).ToUnixTimeMilliseconds();
+        var priority = k % 3 == 0 ? ",\"priority\":{\"priority\":\"high\",\"color\":\"#f50000\"}" : "";
+        return $$"""
+        {"id":"{{id}}","name":"Task {{k}} — follow up on the {{ListNames[li]}} item with a realistic title 📌","status":{"status":"{{status}}","color":"{{color}}"},"list":{"id":"{{Lists[li]}}","name":"{{ListNames[li]}}"},"due_date":"{{dueMs}}","date_updated":"{{updated}}","assignees":[]{{priority}},"url":"https://app.clickup.com/t/{{id}}"}
+        """;
+    }
+
     /// <summary>Comments matching the field report that exposed sparse-flush artifacts: an emoji
     /// lead-in, em-dashes, curly quotes, and a URL (auto-hyperlinked cells) on the same lines.</summary>
     // Counts comment fetches so E2E_VARY_COMMENTS can make each successive fetch return more comments —
@@ -712,6 +910,16 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
             // the F3 mentions-only filter keeps. Newest date so it sorts to the top of the feed.
             new { id = "c3", comment_text = "@bench can you take a look when you get a chance?", user = new { username = "Alex Kim" }, date = "1751490000000", resolved = false },
         };
+        // Optional: a deterministic tall tail so the Stream overflows by well over a page — the geometry
+        // the #468 page-scroll composition check needs (detail_arrow_check.py). Fixed count + fixed text +
+        // fixed dates, so it's stable across refreshes; off by default, so every other scenario is
+        // unaffected. Distinct from E2E_VARY_COMMENTS, whose tail grows on each fetch.
+        if (Environment.GetEnvironmentVariable("E2E_LONG_STREAM") == "1")
+        {
+            for (var i = 1; i <= 40; i++)
+                comments.Add(new { id = $"ls{i}", comment_text = $"Filler stream line {i:D2} — deterministic content for the #468 page-scroll composition check.", user = new { username = "Filler Bot" }, date = $"{1751490100000L + i}", resolved = false });
+        }
+
         // Optional: append a growing tail of comments so each refresh changes content (scroll-preservation
         // check). Off by default, so every existing scenario sees the exact same three comments as before.
         if (Environment.GetEnvironmentVariable("E2E_VARY_COMMENTS") == "1")
