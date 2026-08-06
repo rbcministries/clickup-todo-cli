@@ -130,13 +130,21 @@ public sealed class HelpLineTests
     public void DetailFooter_CommentComposerOpen_ShowsComposerKeys()
         => Assert.Same(
             HelpItemSets.DetailCommentComposer,
-            HelpItemSets.DetailFooter(commentComposerVisible: true, descriptionEditorVisible: false, hasTaskTree: true));
+            HelpItemSets.DetailFooter(commentComposerVisible: true, descriptionEditorVisible: false, replyPickerVisible: false, hasTaskTree: true));
 
     [Fact]
     public void DetailFooter_DescriptionEditorOpen_ShowsEditorKeys()
         => Assert.Same(
             HelpItemSets.DetailDescriptionEditor,
-            HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: true, hasTaskTree: true));
+            HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: true, replyPickerVisible: false, hasTaskTree: true));
+
+    // #330 — while the reply-target picker (Ctrl+T) is open the footer shows only its keys, for the same
+    // #436 reason as the composer/editor overlays.
+    [Fact]
+    public void DetailFooter_ReplyPickerOpen_ShowsPickerKeys()
+        => Assert.Same(
+            HelpItemSets.DetailReplyPicker,
+            HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: false, replyPickerVisible: true, hasTaskTree: true));
 
     // The composer branch wins if both flags are somehow set — the overlays are mutually exclusive, but
     // the selector must be deterministic rather than depend on that invariant holding.
@@ -144,19 +152,27 @@ public sealed class HelpLineTests
     public void DetailFooter_ComposerTakesPrecedenceOverDescription()
         => Assert.Same(
             HelpItemSets.DetailCommentComposer,
-            HelpItemSets.DetailFooter(commentComposerVisible: true, descriptionEditorVisible: true, hasTaskTree: false));
+            HelpItemSets.DetailFooter(commentComposerVisible: true, descriptionEditorVisible: true, replyPickerVisible: false, hasTaskTree: false));
+
+    // The composer also wins over the reply picker (a picked target hides the picker before the composer
+    // opens, so both are never truly set at once — but the selector stays deterministic regardless).
+    [Fact]
+    public void DetailFooter_ComposerTakesPrecedenceOverReplyPicker()
+        => Assert.Same(
+            HelpItemSets.DetailCommentComposer,
+            HelpItemSets.DetailFooter(commentComposerVisible: true, descriptionEditorVisible: false, replyPickerVisible: true, hasTaskTree: false));
 
     [Fact]
     public void DetailFooter_NoOverlay_WithTaskTree_ShowsTaskTreeSet()
         => Assert.Same(
             HelpItemSets.DetailWithTaskTree,
-            HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: false, hasTaskTree: true));
+            HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: false, replyPickerVisible: false, hasTaskTree: true));
 
     [Fact]
     public void DetailFooter_NoOverlay_NoTaskTree_ShowsBaseDetailSet()
         => Assert.Same(
             HelpItemSets.Detail,
-            HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: false, hasTaskTree: false));
+            HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: false, replyPickerVisible: false, hasTaskTree: false));
 
     // The composer footer advertises only the composer's own keys (mirrors the description editor's set):
     // Ctrl+Enter/Tab→Post, Esc cancel, F1 Help — matching the composer FrameView title and OnCommentKey.
@@ -427,6 +443,7 @@ public sealed class HelpLineTests
         [
             HelpItemSets.MainList, HelpItemSets.Detail, HelpItemSets.DetailWithTaskTree,
             HelpItemSets.DetailDescriptionEditor, HelpItemSets.DetailCommentComposer,
+            HelpItemSets.DetailReplyPicker,
             HelpItemSets.Settings, HelpItemSets.FilterSortGroup, HelpItemSets.QuickUpdates,
             HelpItemSets.QuickOpen, HelpItemSets.NewTask, HelpItemSets.PromptTemplateEditor,
             HelpItemSets.NotificationsFeed, HelpItemSets.AgentRun, HelpItemSets.Help,
