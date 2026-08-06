@@ -2472,25 +2472,28 @@ public sealed class TodoApp
         if (!ReferenceEquals(ActiveScreen, detailOrigin))
             return;
 
-        // #242 (temporarily disabled — see QuickUpdatesScreen's summary): the List pane's seed. Changing a
-        // task's list can strand fields/statuses that don't exist on the target list; ClickUp's PWA has a
-        // guided migration for those cases and we don't yet. Re-enable this (and the ctor args + enrich
-        // call below, and ApplyListAsync/EnrichListMemberships/HomeListOf) once that migration is designed.
-        // var homeList = new NamedEntity(task.ListId!, task.ListName ?? task.ListId!);
-        // var additionalLists = (IReadOnlyList<NamedEntity>)(detailOrigin?.Task.Lists ?? [])
-        //     .Where(l => !string.Equals(l.Id, task.ListId, StringComparison.Ordinal))
-        //     .ToList();
+        // List pane (#242/#365): seed the home list (from the snapshot TaskItem, which always carries the
+        // home list) and any additional "Tasks in Multiple Lists" locations. A detail-origin launch has
+        // the full membership on hand (detailOrigin.Task.Lists); a list-origin launch has only the home
+        // list here and is enriched in the background below.
+        var homeList = string.IsNullOrWhiteSpace(task.ListId)
+            ? null
+            : new NamedEntity(task.ListId!, task.ListName ?? task.ListId!);
+        var additionalLists = (IReadOnlyList<NamedEntity>)(detailOrigin?.Task.Lists ?? [])
+            .Where(l => !string.Equals(l.Id, task.ListId, StringComparison.Ordinal))
+            .ToList();
 
         var screen = new QuickUpdatesScreen(
             task.Name, statuses, task.StatusName, task.PriorityLevel, task.Assignees,
             // Assignees pane (#158): candidate pool from the frequency cache (#155); add/remove apply
             // immediately via ApplyAssigneeAsync (the selector owns the optimistic update + revert).
             _assignees.Match, _assignees.TopMostFrequent,
-            (kind, person, ct) => ApplyAssigneeAsync(task.Id, kind, person, target, ct));
-        // #242 (disabled): the List pane's ctor args followed the assignee ones —
-        //     homeList, additionalLists,
-        //     _lists.Match, _lists.TopMostFrequent,
-        //     (kind, list, ct) => ApplyListAsync(task.Id, kind, list, ct));
+            (kind, person, ct) => ApplyAssigneeAsync(task.Id, kind, person, target, ct),
+            // List pane (#242/#365): candidate pool from the list frequency cache; add/remove apply
+            // immediately via ApplyListAsync, which runs the field-strand preflight + arm/confirm.
+            homeList, additionalLists,
+            _lists.Match, _lists.TopMostFrequent,
+            (kind, list, ct) => ApplyListAsync(task.Id, kind, list, ct));
         // Status/Priority apply on Enter and reconcile the screen's ✓ from the server-confirmed value.
         // The commit resolves against and writes back to `target` (#297) — the list snapshot in list mode,
         // the loaded task with no list in single-task mode — decoupling the write path from `_all`.
@@ -2500,75 +2503,150 @@ public sealed class TodoApp
         screen.PriorityCommitted += level => ApplyPriority(task.Id, level, screen, target, detailOrigin);
         ShowScreen(screen, static () => { });
 
-        // #242 (disabled): a list-origin launch enriched the List pane's additional locations here —
-        // if (detailOrigin is null)
-        //     EnrichListMemberships(task.Id, screen);
+        // A list-origin launch has only the home list from the snapshot; fetch the full membership in the
+        // background and enrich the pane's additional locations (#242). A detail-origin launch already
+        // seeded them above.
+        if (detailOrigin is null)
+            EnrichListMemberships(task.Id, screen);
     }
 
-    // #242 (temporarily disabled — see QuickUpdatesScreen's summary): the List-pane host helpers
-    // (EnrichListMemberships / ApplyListAsync / HomeListOf) are commented out with the pane. The reusable
-    // pieces they lean on — TaskService.Add/RemoveTaskFromListAsync (#237) and ListSelectorModel.Membership
-    // — stay in place. Re-enable these once the field/status migration is designed.
-    //
-    // /// <summary>
-    // /// Background-fetches a task's full membership and merges its additional "Tasks in Multiple Lists"
-    // /// locations into an open Quick Updates List pane (#242). Only runs for a list-origin launch, where
-    // /// the snapshot TaskItem carries only the home list. A failed/empty fetch leaves the pane seeded with
-    // /// the home list; the enrich no-ops if the screen has moved on or the user already began editing.
-    // /// </summary>
-    // private void EnrichListMemberships(string taskId, QuickUpdatesScreen screen)
-    // {
-    //     _ = Task.Run(async () =>
-    //     {
-    //         try
-    //         {
-    //             var detail = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
-    //             if (detail.Lists.Count == 0)
-    //                 return;
-    //             Application.Invoke(() =>
-    //             {
-    //                 if (ReferenceEquals(ActiveScreen, screen))
-    //                     screen.SeedListMemberships(detail.Lists);
-    //             });
-    //         }
-    //         catch
-    //         {
-    //             // Best-effort enrich: on failure the pane keeps the home-list seed and any user
-    //             // add/remove still reconciles from the server truth — not worth a flash.
-    //         }
-    //     });
-    // }
-    //
-    // /// <summary>
-    // /// Performs a Quick Updates List-pane add/remove (#242): writes the membership change to ClickUp off
-    // /// the UI thread over the #237 facade and returns the server-confirmed membership set so the embedded
-    // /// ListSelectorView can reconcile. The membership endpoints echo no body, so the confirmed set is read
-    // /// back from a fresh GetTaskDetailAsync — the home list (ListId/ListName) plus the additional locations
-    // /// (Lists). A disabled "Tasks in Multiple Lists" ClickApp throws a ClickUpApiException that the selector
-    // /// catches to revert + flash (non-fatal). The main-list row shows only the home list, so — unlike
-    // /// ApplyAssigneeAsync — there is no row to reconcile.
-    // /// </summary>
-    // private async Task<IReadOnlyList<NamedEntity>> ApplyListAsync(
-    //     string taskId, ToggleKind kind, NamedEntity list, CancellationToken ct)
-    // {
-    //     // Deliberately do NOT thread the selector's token into the write: it's cancelled when the screen
-    //     // is disposed (Esc), so forwarding it would drop an add/remove the user already saw applied. Same
-    //     // rationale as ApplyAssigneeAsync / ApplyStatus.
-    //     _ = ct;
-    //     if (kind == ToggleKind.Added)
-    //         await _tasks.AddTaskToListAsync(taskId, list.Id).ConfigureAwait(false);
-    //     else
-    //         await _tasks.RemoveTaskFromListAsync(taskId, list.Id).ConfigureAwait(false);
-    //     var detail = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
-    //     return ListSelectorModel.Membership(HomeListOf(detail), detail.Lists);
-    // }
-    //
-    // /// <summary>The home list of a task detail as a NamedEntity, or null when it has no list. Falls the
-    // /// display name back to the id if the detail carries none (the marker still shows).</summary>
-    // private static NamedEntity? HomeListOf(TaskDetail detail)
-    //     => string.IsNullOrWhiteSpace(detail.ListId)
-    //         ? null
-    //         : new NamedEntity(detail.ListId!, string.IsNullOrWhiteSpace(detail.ListName) ? detail.ListId! : detail.ListName!);
+    // The armed (taskId, listId) for a stranding List-pane remove awaiting a second-press confirmation
+    // (#365). A single field suffices: the pane is modal, one task at a time, and a fresh open re-seeds.
+    private (string TaskId, string ListId)? _armedListRemoval;
+
+    /// <summary>
+    /// Background-fetches a task's full membership and merges its additional "Tasks in Multiple Lists"
+    /// locations into an open Quick Updates List pane (#242). Only runs for a list-origin launch, where
+    /// the snapshot TaskItem carries only the home list. A failed/empty fetch leaves the pane seeded with
+    /// the home list; the enrich no-ops if the screen has moved on or the user already began editing.
+    /// </summary>
+    private void EnrichListMemberships(string taskId, QuickUpdatesScreen screen)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var detail = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
+                if (detail.Lists.Count == 0)
+                    return;
+                Application.Invoke(() =>
+                {
+                    if (ReferenceEquals(ActiveScreen, screen))
+                        screen.SeedListMemberships(detail.Lists);
+                });
+            }
+            catch
+            {
+                // Best-effort enrich: on failure the pane keeps the home-list seed and any user
+                // add/remove still reconciles from the server truth — not worth a flash.
+            }
+        });
+    }
+
+    /// <summary>
+    /// Performs a Quick Updates List-pane add/remove (#242) behind the field-strand handling (#365).
+    /// Runs off the UI thread inside the selector's immediate-apply callback and returns the
+    /// server-confirmed membership so the embedded <see cref="ListSelectorView"/> can reconcile. The
+    /// membership endpoints echo no body, so the confirmed set is read back from a fresh
+    /// <see cref="TaskService.GetTaskDetailAsync"/> — the home list plus the additional locations.
+    /// <para><b>Add</b> is always safe and writes immediately. <b>Removing the home list</b> is a
+    /// <i>move</i> (out of scope): it's blocked with a flash and the membership returned unchanged.
+    /// <b>Removing an additional list</b> runs a preflight — comparing the task's set Custom Field values
+    /// (from the detail) against each list's field definitions
+    /// (<see cref="TaskService.GetListCustomFieldsAsync"/>) via
+    /// <see cref="ListMembershipMigration.StrandedFieldsOnRemove"/>. When nothing would be stranded it
+    /// writes silently; when set values only the removed list defines would be hidden it flashes them and
+    /// <b>arms</b> a second-press confirmation, returning the membership unchanged so the row re-shows.
+    /// The confirming press writes. See <c>docs/plans/list-change-field-status-migration.md</c>.</para>
+    /// <para>Flashes (home-guard / arm) are marshalled to the UI thread; unlike
+    /// <see cref="ApplyAssigneeAsync"/> the main-list row shows only the home list, so there is no host
+    /// row to reconcile.</para>
+    /// </summary>
+    private async Task<IReadOnlyList<NamedEntity>> ApplyListAsync(
+        string taskId, ToggleKind kind, NamedEntity list, CancellationToken ct)
+    {
+        // Deliberately do NOT thread the selector's token into the write: it's cancelled when the screen
+        // is disposed (Esc), so forwarding it would drop an add/remove the user already saw applied. Same
+        // rationale as ApplyAssigneeAsync / ApplyStatus.
+        _ = ct;
+
+        // Current server truth, once: home list + additional locations + the task's set field values.
+        var detail = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
+        var home = HomeListOf(detail);
+        var currentMembership = ListSelectorModel.Membership(home, detail.Lists);
+
+        // Preflight the strand hazard only for a remove of a non-home list.
+        IReadOnlyList<string> stranded = [];
+        var removingHome = home is { } h && string.Equals(h.Id, list.Id, StringComparison.Ordinal);
+        if (kind == ToggleKind.Removed && !removingHome)
+        {
+            var remaining = currentMembership
+                .Select(l => l.Id)
+                .Where(id => !string.Equals(id, list.Id, StringComparison.Ordinal))
+                .ToList();
+            var perListDefs = await FetchPerListDefinitionsAsync([list.Id, .. remaining]).ConfigureAwait(false);
+            stranded = ListMembershipMigration.StrandedFieldsOnRemove(
+                detail.CustomFields, list.Id, perListDefs, remaining);
+        }
+
+        var armed = _armedListRemoval is { } a
+            && string.Equals(a.TaskId, taskId, StringComparison.Ordinal)
+            && string.Equals(a.ListId, list.Id, StringComparison.Ordinal);
+
+        var decision = ListMembershipApplyPlanner.Plan(kind, list, home?.Id, stranded, armed);
+        switch (decision.Action)
+        {
+            case ListApplyAction.BlockHomeRemove:
+                FlashOnUi(decision.Message!);
+                return currentMembership; // unchanged → selector re-shows the (home) row
+            case ListApplyAction.ArmRemoveConfirmation:
+                _armedListRemoval = (taskId, list.Id);
+                FlashOnUi(decision.Message!);
+                return currentMembership; // unchanged → row re-shows; a second remove confirms
+            case ListApplyAction.WriteAdd:
+                _armedListRemoval = null;
+                await _tasks.AddTaskToListAsync(taskId, list.Id).ConfigureAwait(false);
+                break;
+            default: // WriteRemove
+                _armedListRemoval = null;
+                await _tasks.RemoveTaskFromListAsync(taskId, list.Id).ConfigureAwait(false);
+                break;
+        }
+
+        var after = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
+        return ListSelectorModel.Membership(HomeListOf(after), after.Lists);
+    }
+
+    /// <summary>Fetches the Custom Field definitions of each list, keyed by list id (blank ids and
+    /// duplicates dropped). A list whose fetch fails is left absent so
+    /// <see cref="ListMembershipMigration.StrandedFieldsOnRemove"/> treats it conservatively.</summary>
+    private async Task<IReadOnlyDictionary<string, IReadOnlyList<CustomFieldDefinition>>> FetchPerListDefinitionsAsync(
+        IEnumerable<string> listIds)
+    {
+        var result = new Dictionary<string, IReadOnlyList<CustomFieldDefinition>>(StringComparer.Ordinal);
+        foreach (var id in listIds.Where(i => !string.IsNullOrWhiteSpace(i)).Distinct(StringComparer.Ordinal))
+        {
+            try
+            {
+                result[id] = await _tasks.GetListCustomFieldsAsync(id).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Absent key ⇒ conservative (potentially-stranding) treatment in the migration core.
+            }
+        }
+        return result;
+    }
+
+    /// <summary>Flashes a message from a background thread by marshalling to the UI thread.</summary>
+    private void FlashOnUi(string message) => Application.Invoke(() => Flash(message));
+
+    /// <summary>The home list of a task detail as a NamedEntity, or null when it has no list. Falls the
+    /// display name back to the id if the detail carries none (the marker still shows).</summary>
+    private static NamedEntity? HomeListOf(TaskDetail detail)
+        => string.IsNullOrWhiteSpace(detail.ListId)
+            ? null
+            : new NamedEntity(detail.ListId!, string.IsNullOrWhiteSpace(detail.ListName) ? detail.ListId! : detail.ListName!);
 
     /// <summary>
     /// Performs a Quick Updates Assignees-pane add/remove (#158): writes the change to ClickUp off the
