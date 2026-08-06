@@ -6,11 +6,32 @@
 > guided migration we didn't have. This plan designs that handling — **grounded in what ClickUp's API
 > actually supports** — and re-enables the List pane behind it, with no silent field/status loss.
 >
-> **Delivery status.** The first PR on this issue lands **Phase 1 (this design note)** and **Phase 2
-> (the id-precise, unit-tested `ListMembershipMigration` core + `CustomFieldItem.Id`)**. **Phase 3
-> (the actual pane re-enable + its confirmation UX + `tui-validate`) is deferred** and remains tracked
-> by #365 — see "Why Phase 3 is deferred" below. The design here is the reference the re-enable builds
-> on.
+> **Delivery status.** Phase 1 (this design note) and Phase 2 (the id-precise, unit-tested
+> `ListMembershipMigration` core + `CustomFieldItem.Id`) landed in an earlier PR (#400). **Phase 3 —
+> the pane re-enable + confirmation UX + `tui-validate` — is now in progress** (see "Phase 3 decisions
+> (this session)" below for the confirmation-UX choice and the concrete wiring).
+
+## Phase 3 decisions (this session)
+
+- **Confirmation UX: arm/confirm on the status line, not a modal.** Of the three candidate shapes below,
+  the re-enable uses the **two-step "press remove again to confirm"** arm/confirm. The TUI is
+  deliberately a single-screen, no-`MessageBox` model (notable outcomes surface through the
+  non-interactive `Flash` line, tied to the #3 single-focusable-pane constraint); introducing the app's
+  first modal in an unattended run is exactly what the original deferral cautioned against. Arm/confirm
+  keeps that model **and** composes cleanly with the selector's reconcile-from-server contract: the
+  arming turn returns the membership *unchanged*, so `SelectorView.Reconcile` re-shows the removed row
+  and nothing is written until the confirming turn. A stranding remove of an additional list therefore
+  flashes *"Removing '{list}' hides these Custom Field values: A, B. Press remove again to confirm."* and
+  re-shows the row; a second remove of the same list within the pane writes it. (Maintainer: if you'd
+  rather this be a real `MessageBox.Query`, say so on the PR — the decision is isolated in the pure
+  `ListMembershipApplyPlanner` + a single armed-state field in `TodoApp`, so swapping is a small change.)
+- **The decision is a pure, unit-tested planner.** `Tui/ListMembershipApplyPlanner.Plan(kind, list,
+  homeListId, strandedFieldNames, armed)` → `WriteAdd` / `WriteRemove` / `BlockHomeRemove` /
+  `ArmRemoveConfirmation`. The host computes `strandedFieldNames` via
+  `ListMembershipMigration.StrandedFieldsOnRemove` (a preflight of the task's values + each list's field
+  defs) and holds the `armed` (taskId, listId) state; the planner picks the action + flash text. Covered
+  by `ListMembershipApplyPlannerTests` (add-always-safe, home-guard-wins, strand→arm→confirm, ordinal id
+  match).
 
 ## The key distinction the issue conflates: **add-to-list** vs **move**
 
