@@ -180,7 +180,7 @@ try:
         fail(f"PgDn did not page the Stream back down ({pos_up}→{pos_down}, expected an increase):")
 
     # ── 2) Task Tree tab: bare ↓ moves the selection down one row, bare ↑ moves it back ───────────
-    for _ in range(4):               # Stream -> Description -> Comments -> Other -> Task Tree
+    for _ in range(5):               # Stream -> Description -> Comments -> Other -> Checklists -> Task Tree
         send(CTRL_RIGHT)
         pump(0.4)
     pump(3.0)                        # let the lazy tree load land

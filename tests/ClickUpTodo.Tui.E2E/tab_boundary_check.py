@@ -86,7 +86,7 @@ try:
     # The reliable reproduction path is the Task Tree tab: a bare arrow reaches the tab control
     # only after the focused view declines it, and its ListView declines ↑ the instant the
     # selection sits on the top row (no caret to walk, unlike the read-only TextView panes). So
-    # cycle to the Task Tree tab (last of 5: Stream/Description/Comments/Other/Task Tree) with the
+    # cycle to the Task Tree tab (last of 6: Stream/Description/Comments/Other/Checklists/Task Tree) with the
     # app's own Ctrl+→ and let its lazy load land — position-independent so it doesn't depend on
     # the tab we happen to be on.
     tree = ""

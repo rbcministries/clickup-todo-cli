@@ -112,10 +112,10 @@ F6 = b"\x1b[17~"
 
 
 def open_tree_tab():
-    """From the main list: open t0's detail and cycle to the Task Tree tab (5th)."""
+    """From the main list: open t0's detail and cycle to the Task Tree tab (6th)."""
     send(ENTER)          # open the focused task (t0) in Task Detail
     pump(3.0)
-    for _ in range(4):   # Stream -> Description -> Comments -> Other -> Task Tree
+    for _ in range(5):   # Stream -> Description -> Comments -> Other -> Checklists -> Task Tree
         send(CTRL_RIGHT)
         pump(0.4)
     pump(3.0)            # let the lazy tree load land
@@ -177,7 +177,7 @@ try:
     # Cycle to CHILDTWO's own Task Tree tab and F6 there (hidden -> icons). Because the host reflects the
     # cycle into every stacked detail — not just the front-most — t0's tree beneath must adopt it too, so
     # Esc-ing back below shows t0's tree in icons, not the stale hidden it was last rendered in.
-    for _ in range(4):   # CHILDTWO detail: Stream -> Description -> Comments -> Other -> Task Tree
+    for _ in range(5):   # CHILDTWO detail: Stream -> Description -> Comments -> Other -> Checklists -> Task Tree
         send(CTRL_RIGHT)
         pump(0.4)
     pump(2.0)            # let CHILDTWO's (ancestry-only) tree load
