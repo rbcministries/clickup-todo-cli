@@ -232,6 +232,13 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     private const string CustomFieldsJson =
         """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false},{"id":"cf_estimate","name":"Estimate","type":"number","required":true},{"id":"cf_stage","name":"Stage","type":"drop_down","required":false,"type_config":{"options":[{"id":"opt_alpha","name":"Alpha","orderindex":0},{"id":"opt_beta","name":"Beta","orderindex":1}]}}]}""";
 
+    // #425: when E2E_TITLE_REFRESH=1, the launch task is renamed after its first (boot) detail fetch, so a
+    // refresh (Ctrl+R / F5) must move the terminal tab title. The boot fetch keeps the original long name;
+    // every fetch after it returns a short renamed title the check can assert the window title changed to.
+    // Off by default, so every other scenario sees the fixed launch-task name.
+    private static bool TitleRefresh => Environment.GetEnvironmentVariable("E2E_TITLE_REFRESH") == "1";
+    private static int _detailFetches;
+
     // #446 opt-in: serve a *tall* fillable set — nine single-line text fields plus a required tenth — so
     // the New Task Custom fields page's widget stack (2 + 10×3 = 32 content rows) is taller than a short
     // emulated terminal. This exercises the page's content-scroll: "Last Field" seeded below the fold is
@@ -473,7 +480,7 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
             else if (NudgeScenario)
                 body = NudgeTaskGet(path);
             else
-                lock (_gate) body = DetailJson(path, _assignees);
+                lock (_gate) body = DetailJson(path, _assignees, countTitleFetch: true);
         }
         else if (path.Contains("/team/") && path.EndsWith("/task"))
         {
@@ -652,17 +659,24 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     ]
     """;
 
-    private string DetailJson(string path, HashSet<long> assignees)
+    private string DetailJson(string path, HashSet<long> assignees, bool countTitleFetch = false)
     {
         var id = path[(path.LastIndexOf('/') + 1)..];
         // JSON-encode the (mutable, possibly user-edited) description so quotes/newlines/emoji round-trip.
         var description = JsonSerializer.Serialize(_description);
+        // #425: under E2E_TITLE_REFRESH the launch task is renamed after the boot read, so a refresh moves
+        // the terminal title. The boot (first) read keeps the original long name; every read after it
+        // returns the short renamed name. Only detail READS (GET) advance the counter — a PUT echo passes
+        // countTitleFetch:false so a write can't inflate it. Off ⇒ the fixed name every other scenario expects.
+        var name = "My Account - Address display  (EA-7221)";
+        if (TitleRefresh && countTitleFetch && System.Threading.Interlocked.Increment(ref _detailFetches) > 1)
+            name = "Renamed on refresh";
         // C (#456): the seeded checklists array, or empty (the common case — no other check sees it).
         var checklists = _checklists ? ChecklistsJson : "[]";
         // `locations` are the task's additional list memberships (#242), mutated by the membership
         // POST/DELETE so an add/remove from the List pane round-trips; empty in the common single-list case.
         return $$"""
-        {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"locations":[{{LocationsJson()}}],"checklists":{{checklists}},"description":{{description}}}
+        {"id":"{{id}}","name":"{{name}}","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"locations":[{{LocationsJson()}}],"checklists":{{checklists}},"description":{{description}}}
         """;
     }
 

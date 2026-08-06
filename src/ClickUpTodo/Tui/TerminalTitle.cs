@@ -51,6 +51,22 @@ public static class TerminalTitle
         return composed.TrimEnd();
     }
 
+    /// <summary>
+    /// The refreshed title for a launch task, or <c>null</c> when it is unchanged from
+    /// <paramref name="currentTitle"/> — so the single-task host reassigns the window title on refresh
+    /// (#425) only when a rename or a newly-assigned custom id actually moved it. Returning <c>null</c> on
+    /// no-change lets the host skip the assignment entirely; Terminal.Gui also dedups on its own last
+    /// title, so this is belt-and-braces against churn while keeping the decision unit-testable without a
+    /// terminal (the <c>Window.Title</c> assignment itself is host code). Comparison is <b>ordinal</b>: a
+    /// title differing only in case is a real rename worth pushing to the terminal.
+    /// </summary>
+    public static string? Retitle(string? currentTitle, string id, string? customId, string name,
+        int maxLength = MaxLength)
+    {
+        var next = ForTask(id, customId, name, maxLength);
+        return string.Equals(next, currentTitle, StringComparison.Ordinal) ? null : next;
+    }
+
     // Collapse control characters (C0/C1, incl. newlines and tabs) to a single space each so a title can
     // never corrupt the terminal — neither the window-frame draw nor the OSC title escape Terminal.Gui
     // emits from the window Title. Sanitizing before the truncate keeps length predictable (control

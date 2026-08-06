@@ -303,6 +303,26 @@ Self-contained (sets its own `E2E_COMMENT_LOG`). Expected: `ok — plain comment
 @-mention → structured tag block for member 101 …`. Invisible to the text-only `detail_check.py` A/B
 (the composer/overlay are hidden until `Ctrl+N`), which stays identical.
 
+**16. Single-task terminal title on launch + refresh (#418/#425)** — `SingleTaskApp` titles its
+top-level `Window.Title` with the launched task (custom id preferred, `{id}: {name}` ≤40 chars), which
+Terminal.Gui emits to the host terminal as an OSC title escape (captured by pyte's `screen.title`), so
+several `--task` tabs stay distinguishable on the tab strip. Two checks, each self-contained:
+
+```bash
+# #418 — title is set at launch, truncated to 40 chars
+E2E_SINGLE_TASK=t5 timeout 60 python3 -u tests/ClickUpTodo.Tui.E2E/single_task_title_check.py $DLL
+# #425 — title UPDATES on refresh: E2E_TITLE_REFRESH renames the launch task after the boot read,
+#        Ctrl+R re-fetches, and screen.title must change to the renamed title
+timeout 60 python3 -u tests/ClickUpTodo.Tui.E2E/single_task_title_refresh_check.py $DLL
+```
+
+Expected: `single_task_title_check.py` → `ok (title='t5: My Account - Address display  (EA-72')`;
+`single_task_title_refresh_check.py` → `ok — title updated on refresh (… -> 't5: Renamed on refresh')`.
+The `E2E_TITLE_REFRESH=1` gate (set by the refresh check itself) is opt-in, so the launch check and
+every other scenario see the fixed launch-task name. `TerminalTitleTests` pins the pure
+`ForTask`/`Retitle` formatting + decision in CI; these checks are the proof the title reaches the
+terminal at launch and again on refresh.
+
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 
 - **Answer the terminal's queries or nothing ever renders.** Terminal.Gui's ANSI driver
