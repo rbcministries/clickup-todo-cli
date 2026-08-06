@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
 using ClickUpTodo.Focus;
@@ -45,6 +46,12 @@ if (foreign)
 // the detail view's Task Tree tab has real parents/children to render and navigate. Gated so no other
 // check's GET /task/{id} response changes.
 var tree = Environment.GetEnvironmentVariable("E2E_TREE") == "1";
+
+// #320: E2E_LINK_CTRL_DEST=tab sets the persisted task-link Ctrl+Click destination to a new terminal
+// tab, so the link-destination check can drive Ctrl+/Ctrl+Shift+click and observe the new-tab launch.
+// Default (unset) keeps the Browser destination, matching every other check's #318 behaviour.
+if (Environment.GetEnvironmentVariable("E2E_LINK_CTRL_DEST") == "tab")
+    config.DetailView.TaskLinkCtrlClick = TaskLinkCtrlClickDestination.NewTerminalTab;
 
 // Opt-in Checklists tab scenario (C, #456): serve the opened task with a seeded `checklists` array
 // (two groups, a nested item, mixed resolved state, one assigned item) so the Checklists tab has real
@@ -112,6 +119,13 @@ IBrowserLauncher browser = string.IsNullOrEmpty(browserLog)
     ? new NullBrowserLauncher()
     : new RecordingBrowserLauncher(browserLog);
 
+// #320: when E2E_TAB_LOG is set, record each new-terminal-tab launch (the Ctrl+Click new-tab
+// destination) to that file — one `clickup-todo --task <id>` display command per line — so a pyte
+// check asserts the launch from the recorder rather than the (failing, terminal-less) real launcher's
+// clipboard fallback. Null otherwise, so TodoApp uses the real TerminalLauncher as before.
+var tabLog = Environment.GetEnvironmentVariable("E2E_TAB_LOG");
+ITerminalLauncher? tabLauncher = string.IsNullOrEmpty(tabLog) ? null : new RecordingTerminalLauncher(tabLog);
+
 // Single-task launch mode (#296): E2E_SINGLE_TASK=<id> boots SingleTaskApp straight into that task's
 // detail view — the harness equivalent of `clickup-todo --task <id>` — instead of the dashboard. It
 // shares the same #304 browser launcher so a Ctrl+B host rewrite is observable in single-task mode too.
@@ -125,7 +139,8 @@ if (!string.IsNullOrWhiteSpace(singleTaskId))
     return;
 }
 
-new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser, changeMarkers).Run("ansi");
+new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser,
+    changeMarkers, tabLauncher).Run("ansi");
 markerStateStore?.Dispose();
 return;
 
@@ -144,6 +159,26 @@ sealed class RecordingBrowserLauncher(string path) : IBrowserLauncher
     {
         File.AppendAllText(path, url.ToString() + "\n");
         return true;
+    }
+}
+
+/// <summary>Records each new-terminal-tab app launch (#320's Ctrl+Click new-tab destination) to a file
+/// — one <c>clickup-todo --task &lt;id&gt;</c> display command per line — and reports success, so under
+/// the PTY the launch is observable from the recorder instead of failing to a clipboard fallback. Only
+/// <see cref="LaunchAppAsync"/> is exercised here; the prompt-file <c>LaunchAsync</c> (agent dispatch)
+/// runs through TodoApp's own real launcher, never this one.</summary>
+sealed class RecordingTerminalLauncher(string path) : ITerminalLauncher
+{
+    public Task<LaunchResult> LaunchAsync(
+        string promptFilePath, string? workingDir, TerminalLauncherOptions options,
+        bool oneOff = false, CancellationToken ct = default)
+        => throw new NotSupportedException("RecordingTerminalLauncher records only app-tab launches.");
+
+    public Task<LaunchResult> LaunchAppAsync(
+        AppLaunchCommand command, TerminalLauncherOptions options, CancellationToken ct = default)
+    {
+        File.AppendAllText(path, command.ToDisplayCommand() + "\n");
+        return Task.FromResult(new LaunchResult(true, "e2e-recorder", null));
     }
 }
 
