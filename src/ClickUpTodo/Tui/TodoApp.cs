@@ -2573,15 +2573,31 @@ public sealed class TodoApp
         // rationale as ApplyAssigneeAsync / ApplyStatus.
         _ = ct;
 
-        // Current server truth, once: home list + additional locations + the task's set field values.
+        // Add is always safe (it only exposes fields, never hides them) — no preflight, so skip the
+        // detail read the strand check would need and just write + read the confirmed set back.
+        if (kind == ToggleKind.Added)
+        {
+            _armedListRemoval = null;
+            await _tasks.AddTaskToListAsync(taskId, list.Id).ConfigureAwait(false);
+            return await ReadMembershipAsync(taskId).ConfigureAwait(false);
+        }
+
+        // A remove needs the current server truth (home + additional locations) to guard the home list
+        // and to return the membership unchanged on a block/arm; the task's set field values drive the
+        // strand preflight.
         var detail = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
         var home = HomeListOf(detail);
         var currentMembership = ListSelectorModel.Membership(home, detail.Lists);
 
-        // Preflight the strand hazard only for a remove of a non-home list.
-        IReadOnlyList<string> stranded = [];
+        var armed = _armedListRemoval is { } a
+            && string.Equals(a.TaskId, taskId, StringComparison.Ordinal)
+            && string.Equals(a.ListId, list.Id, StringComparison.Ordinal);
         var removingHome = home is { } h && string.Equals(h.Id, list.Id, StringComparison.Ordinal);
-        if (kind == ToggleKind.Removed && !removingHome)
+
+        // Preflight the strand hazard only when it can change the outcome: not for the home list (blocked
+        // regardless) and not once armed (the user already confirmed, so the planner ignores the set).
+        IReadOnlyList<string> stranded = [];
+        if (!removingHome && !armed)
         {
             var remaining = currentMembership
                 .Select(l => l.Id)
@@ -2591,10 +2607,6 @@ public sealed class TodoApp
             stranded = ListMembershipMigration.StrandedFieldsOnRemove(
                 detail.CustomFields, list.Id, perListDefs, remaining);
         }
-
-        var armed = _armedListRemoval is { } a
-            && string.Equals(a.TaskId, taskId, StringComparison.Ordinal)
-            && string.Equals(a.ListId, list.Id, StringComparison.Ordinal);
 
         var decision = ListMembershipApplyPlanner.Plan(kind, list, home?.Id, stranded, armed);
         switch (decision.Action)
@@ -2606,18 +2618,19 @@ public sealed class TodoApp
                 _armedListRemoval = (taskId, list.Id);
                 FlashOnUi(decision.Message!);
                 return currentMembership; // unchanged → row re-shows; a second remove confirms
-            case ListApplyAction.WriteAdd:
-                _armedListRemoval = null;
-                await _tasks.AddTaskToListAsync(taskId, list.Id).ConfigureAwait(false);
-                break;
-            default: // WriteRemove
+            default: // WriteRemove (strand-free, or the armed confirmation)
                 _armedListRemoval = null;
                 await _tasks.RemoveTaskFromListAsync(taskId, list.Id).ConfigureAwait(false);
-                break;
+                return await ReadMembershipAsync(taskId).ConfigureAwait(false);
         }
+    }
 
-        var after = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
-        return ListSelectorModel.Membership(HomeListOf(after), after.Lists);
+    /// <summary>Reads a task's server-confirmed list membership (home + additional locations) back from a
+    /// fresh detail fetch — the membership endpoints echo no body, so the confirmed set comes from here.</summary>
+    private async Task<IReadOnlyList<NamedEntity>> ReadMembershipAsync(string taskId)
+    {
+        var detail = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
+        return ListSelectorModel.Membership(HomeListOf(detail), detail.Lists);
     }
 
     /// <summary>Fetches the Custom Field definitions of each list, keyed by list id (blank ids and

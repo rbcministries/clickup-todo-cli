@@ -117,31 +117,34 @@ Supporting model change: `CustomFieldItem` gains `string? Id` (trailing optional
 existing constructor call sites stay source-compatible); `ClickUpClient.MapCustomField` passes
 `f.Id`. `HasValue` centralises "is this value actually set" using the existing `Value` `JsonElement?`.
 
-### UX (re-enabling the pane behind the handling)
+### UX — as shipped (arm/confirm on the status line)
 
 The List pane embeds a `ListSelectorView` in `ImmediateApply` mode; a toggle calls the host
-`ApplyListAsync(taskId, kind, list, ct)` which today just writes and reads back. New behaviour:
+`ApplyListAsync(taskId, kind, list, ct)`. As implemented (see "Phase 3 decisions (this session)"
+above for why arm/confirm over a modal), that method:
 
-- **kind == Added** → write immediately (unchanged; add is safe). Read back confirmed membership.
-- **kind == Removed & list is the home list** → do **not** write; `Flash` "Can't remove a task's home
-  list here (that's a move — not yet supported)"; return the unchanged membership so the selector
-  reconciles the row back.
-- **kind == Removed & additional list**:
-  1. Preflight: fetch `GetListCustomFieldsAsync` for the task's lists (home + additional), fetch
-     `TaskDetail` for the set values. Compute `StrandedFieldsOnRemove`.
-  2. If **empty** → write the remove silently (no prompt); read back.
-  3. If **non-empty** → `MessageBox.Query` (a transient modal, **not** a second focusable list — the
-     #3 single-pane rule is about the main list) listing the affected field names: *"Removing from
-     '{list}' will hide these Custom Field values: A, B. Remove anyway?"* On **No**, return the
-     unchanged membership (selector reverts the row); on **Yes**, write + read back.
+- **kind == Added** → write immediately (add is always safe); read the confirmed membership back. No
+  detail preflight is fetched on the add path.
+- **kind == Removed & the home list** → do **not** write; `Flash`
+  `ListMembershipApplyPlanner.HomeRemoveMessage`; return the unchanged membership so the selector's
+  reconcile re-shows the `(home)` row.
+- **kind == Removed & an additional list**:
+  1. Fetch the `TaskDetail` once (home + additional locations + set field values). When not already
+     armed, preflight `GetListCustomFieldsAsync` for the removed + remaining lists and compute
+     `StrandedFieldsOnRemove`.
+  2. **Nothing stranded** → write the remove; read back.
+  3. **Something stranded, not yet armed** → don't write: `Flash` the affected field names + "Press
+     remove again to confirm", **arm** `(taskId, listId)`, and return the membership *unchanged* so the
+     row re-shows (the selector's reconcile-from-server rebuilds the optimistically-removed row).
+  4. **Armed** (the confirming second press) → clear the arm, write the remove, read back.
 
-A failed preflight fetch degrades to the **safe** side: treat the remove as *potentially* stranding
-(show the generic confirmation) rather than writing blindly — never silently.
-
-The confirmation is driven from `ApplyListAsync` by marshalling to the UI thread
-(`Application.Invoke` + a `TaskCompletionSource`) so the async apply awaits the user's choice; the
-selector's existing revert-on-unchanged / reconcile-from-truth machinery does the rest. A disabled
-"Tasks in Multiple Lists" ClickApp still surfaces as a flashed `ClickUpApiException` (non-fatal).
+The arm state is a single `TodoApp._armedListRemoval` `(taskId, listId)?` field, cleared on any write
+and reset on each `ShowQuickUpdates` open (so a stale arm can't skip the warning). Flashes are
+marshalled to the UI thread (`FlashOnUi` → `Application.Invoke`). A failed preflight fetch degrades to
+the **safe** side inside `StrandedFieldsOnRemove` (a list whose defs are absent is treated
+conservatively), so the confirmation still fires rather than a blind silent write. A disabled "Tasks in
+Multiple Lists" ClickApp surfaces as a flashed `ClickUpApiException` via the selector's revert path
+(non-fatal).
 
 ## Phases
 
@@ -149,55 +152,25 @@ selector's existing revert-on-unchanged / reconcile-from-truth machinery does th
 2. **Model + pure service + tests.** `CustomFieldItem.Id`; `ListMembershipMigration` +
    `ListMembershipMigrationTests` (strand computation: space-level never flagged; unset never
    flagged; list-local with value flagged; multi-list remaining coverage; blank-id ignored; missing
-   definitions ⇒ conservative). Build + test green, push.
-3. **Re-enable the pane. — DEFERRED (see "Why Phase 3 is deferred").** Uncomment the #242 blocks
-   (`QuickUpdatesScreen`, `QuickUpdatesModel`, `HelpLine`, `TodoApp`; the `ListSelectorModel` /
-   `ListSelectorView` / `SelectorView` / `TaskService` / `ClickUpClient` pieces are already active);
-   wire `ApplyListAsync` to the preflight + confirmation + home-guard; restore the `qu_lists_check.py`
-   `tui-validate` scenario from PR #339's history and extend it for the confirm-on-strand and
-   home-guard cases. Finalize, mark ready.
+   definitions ⇒ conservative). Landed in PR #400.
+3. **Re-enable the pane (this session).** Added the pure `ListMembershipApplyPlanner` + tests;
+   re-enabled the `#242` blocks in `QuickUpdatesModel` (`Lists` + `PaneCount` 4), `QuickUpdatesScreen`
+   (field, ctor params, construction, `listsFrame`, `_panes`/`Add`, `SeedListMemberships`, geometry),
+   `HelpLine`, and `TodoApp.ShowQuickUpdates` (seed, ctor args, enrich); wired `ApplyListAsync` to the
+   preflight + planner + arm/confirm + home-guard; and rewrote `qu_lists_check.py` from the
+   disabled-state guard into the add/remove round-trip + confirm-on-strand + home-guard, teaching the
+   fake backend per-list field definitions + task field values (`E2E_QU_LISTS`-gated).
+   (`TaskService.GetListCustomFieldsAsync` already existed from the New Task custom-field work.)
 
 New Task multi-list create (#241) re-enable rides the same handling but is a **separate** screen and
 its own follow-up (tracked below) — this issue's AC is the **Quick Updates List pane**.
-
-### Why Phase 3 is deferred (and what it needs)
-
-Phase 3 is intentionally **not** in the first PR:
-
-- **It introduces the app's first confirmation UX.** The TUI today has **no** `MessageBox`/modal
-  anywhere — destructive/notable outcomes surface through the non-interactive `Flash` status line by
-  design (a deliberate single-screen, no-modal model, tied to the #3 single-focusable-pane constraint).
-  A "confirm before removing" step is therefore a genuinely new interaction pattern for this codebase.
-  Which shape it takes — a real modal (`MessageBox.Query`), a two-step "press remove again to confirm"
-  arm/confirm on the `Flash` line, or a non-blocking informational `Flash` after a reversible
-  hide — is a product decision worth landing in its own focused, reviewable PR rather than choosing
-  unilaterally in an unattended run. (The three candidates are recorded here so the follow-up can pick
-  one quickly.)
-- **It needs new fake-backend + `tui-validate` surface.** Restoring `qu_lists_check.py` from PR #339's
-  history and extending it for the confirm-on-strand and home-guard cases requires the fake ClickUp
-  backend to model **per-list Custom Field definitions** and **task field values** (it currently models
-  list `locations` only). That is a substantial, terminal-only chunk best validated on its own.
-- **The foundation it depends on is now in place and tested.** `ListMembershipMigration` +
-  `CustomFieldItem.Id` (Phase 2) give the re-enable an id-precise, unit-tested strand check to call, so
-  Phase 3 becomes wiring + UX + `tui-validate` — no new detection logic to design under a terminal.
-
-Re-enable checklist for the follow-up (all gated behind `ListMembershipMigration`):
-1. Uncomment the #242 blocks in `QuickUpdatesModel` (`Lists` value + `PaneCount` → 4), `QuickUpdatesScreen`
-   (field, ctor params, construction, `listsFrame`, `_panes`/`Add`, `SeedListMemberships`, frame geometry),
-   `HelpLine` ("Lists" in the Tab item), and `TodoApp.ShowQuickUpdates` (seed, ctor args, enrich).
-2. Add a `TaskService.GetListCustomFieldsAsync` passthrough (currently only on `ClickUpClient`).
-3. Wire `ApplyListAsync`: **add** → write directly; **remove of the home list** → block + `Flash`;
-   **remove of an additional list** → preflight (`GetTaskDetailAsync` for values + `GetListCustomFieldsAsync`
-   per list), call `ListMembershipMigration.StrandedFieldsOnRemove`, and apply the chosen confirmation UX
-   when it returns a non-empty set (proceed silently when empty).
-4. Restore + extend `qu_lists_check.py`; teach the fake backend per-list field defs + task field values.
 
 ## Invariants preserved
 
 - **No `Generated/` hand-edit, no curated-spec change.** Both writes (#237) and the field-definition
   read (#249) already exist. `CustomFieldItem.Id` is a facade-model change, not generated code.
 - **No second focusable pane (#3/#38).** The List selector is a single focusable composite; the
-  confirmation is a transient `MessageBox`, not a persistent pane.
+  confirmation is a status-line `Flash` (arm/confirm), not a persistent pane or a modal.
 - **Bare letters reserved for type-ahead (#12).** The selector owns its own search box.
 - Integration tests stay `SkippableFact`; the migration logic is carried by unit tests.
 - Personal-token raw `Authorization` header untouched.
