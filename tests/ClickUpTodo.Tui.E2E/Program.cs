@@ -321,8 +321,17 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     // Ends with a ClickUp task link so the link-rendering check (#317) has a Task-kind link in the
     // Description pane to assert (the Comments pane already carries a Web-kind github URL). description_edit
     // only asserts the "Call Center training" substring, so the trailing URL is safe for it.
+    // #430 opt-in: append a markdown [text](url) link whose visible text is prose ("the runbook") and whose
+    // resolved target differs from it, so markdown_osc8_check.py can assert the OSC-8 hyperlink points at the
+    // RESOLVED url — not the visible text. Off by default, so every existing check sees the original body
+    // byte-for-byte. The visible text isn't a URL, so an OSC-8 open for MdLinkTarget can only come from the
+    // markdown resolution this exercises.
+    private static bool MdLink => Environment.GetEnvironmentVariable("E2E_MD_LINK") == "1";
+    public const string MdLinkTarget = "https://example.com/runbook-42";
+
     private string _description =
-        "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed\n\nParent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread";
+        "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed\n\nParent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread"
+        + (MdLink ? "\n\nSee [the runbook](" + MdLinkTarget + ") for steps" : "");
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
@@ -357,6 +366,18 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
             body = """{"id":9014000000001,"hist_id":"h1","date":1751500000000}""";
         else if (path.Contains("/task/") && path.EndsWith("/comment"))
             body = CommentsJson(TaskIdOfComment(path));
+        // POST /comment/{comment_id}/reply (#330, threaded comments D): the create-reply write returns the
+        // same minimal created-comment shape as the top-level comment POST (id as a JSON number, hist_id,
+        // date), so a reply posted from the composer's reply mode round-trips truthfully. Records the target
+        // comment id + request body to E2E_REPLY_LOG so a reply-post check can assert the write reached the
+        // backend (keyed to the picked parent) rather than guess from the screen. Must precede the GET reply
+        // branch below (both match .EndsWith("/reply")).
+        else if (request.Method == HttpMethod.Post && path.Contains("/comment/") && path.EndsWith("/reply"))
+        {
+            var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
+            RecordReply(CommentIdOfReply(path), reqBody);
+            body = """{"id":9014000000002,"hist_id":"h2","date":1751500500000}""";
+        }
         // GET /comment/{comment_id}/reply (#329, threaded comments C): a comment's reply thread. Only the
         // seeded thread parent (c2) returns replies, and only under E2E_THREADS — so every other scenario,
         // which sees reply_count=0 on all comments, never reaches this branch. Same CommentsResponse wire
@@ -479,6 +500,18 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     {
         var trimmed = path.EndsWith("/comment") ? path[..^"/comment".Length] : path;
         return trimmed[(trimmed.LastIndexOf('/') + 1)..];
+    }
+
+    /// <summary>Records a posted reply (#330) — its target comment id and the raw request body — to the
+    /// file named by <c>E2E_REPLY_LOG</c>, one <c>{commentId}\t{body}</c> line per POST, so a reply-post
+    /// check can assert the write reached the backend keyed to the picked parent. No-op when unset.</summary>
+    private static void RecordReply(string commentId, string requestBody)
+    {
+        var logPath = Environment.GetEnvironmentVariable("E2E_REPLY_LOG");
+        if (string.IsNullOrEmpty(logPath))
+            return;
+        try { File.AppendAllText(logPath, commentId + "\t" + requestBody.Replace('\n', ' ').Replace('\r', ' ') + "\n"); }
+        catch { /* best-effort capture */ }
     }
 
     /// <summary>The comment id from a <c>/v2/comment/{id}/reply</c> path.</summary>
