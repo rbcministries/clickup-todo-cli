@@ -181,6 +181,58 @@ public sealed class ResolveForeignSubtasksTests
         Assert.False(result.Truncated);
     }
 
+    // --- #450: CompleteChildren (the Task Tree descendant-BFS seed) ---
+
+    [Fact]
+    public async Task CompleteChildren_RecordsEachPerParentBranchFetch()
+    {
+        // A successful per-parent GetSubtasksAsync returns a parent's COMPLETE child set, so each fetched
+        // parent — the seed P and the recursed child c — records its set (c's is a trusted empty).
+        var fake = new FakeClickUpClient();
+        fake.Subtasks["P"] = [Item("c", parent: "P")];
+
+        var result = await Service(fake).ResolveForeignSubtasksAsync([Item("P")]);
+
+        Assert.Equal(["c"], result.CompleteChildren["P"].Select(t => t.Id)); // P's complete direct children
+        Assert.True(result.CompleteChildren.ContainsKey("c"));               // c was recursed into (fetched)
+        Assert.Empty(result.CompleteChildren["c"]);                          // …and vouched to have none
+    }
+
+    [Fact]
+    public async Task CompleteChildren_ExcludesWholeListBranchParents()
+    {
+        // The whole-list branch pulls a LIST, not a parent's children, and a parent's children can span
+        // lists — so it can't vouch per-parent. Whole-list-routed parents must be absent from the index;
+        // only the sparse per-parent remainder is recorded.
+        var fake = new FakeClickUpClient();
+        TaskItem[] snapshot =
+        [
+            Item("a0", list: "A"), Item("a1", list: "A"), Item("a2", list: "A"), Item("a3", list: "A"), Item("a4", list: "A"),
+            Item("b", list: "B"), Item("c", list: "C"), Item("d", list: "D"), Item("e", list: "E"),
+        ];
+        fake.Lists["A"] = [.. snapshot.Where(t => t.ListId == "A"), Item("fa", parent: "a0", list: "A")];
+        fake.Subtasks["b"] = [Item("fb", parent: "b", list: "B")];
+
+        var result = await Service(fake).ResolveForeignSubtasksAsync(snapshot);
+
+        Assert.False(result.CompleteChildren.ContainsKey("a0"));             // whole-list branch → not recorded
+        Assert.DoesNotContain("fa", result.CompleteChildren.Keys);          // a whole-list child isn't recursed
+        Assert.Equal(["fb"], result.CompleteChildren["b"].Select(t => t.Id)); // per-parent → recorded
+    }
+
+    [Fact]
+    public async Task CompleteChildren_ExcludesFailedPerParentFetch()
+    {
+        // A throwing per-parent fetch returns null, so its parent is NEVER recorded as a (falsely-empty)
+        // complete set — the seam must not let an incomplete fetch masquerade as "this parent has no children".
+        var fake = new FakeClickUpClient();
+        fake.ThrowOnSubtask.Add("P");
+
+        var result = await Service(fake).ResolveForeignSubtasksAsync([Item("P")]);
+
+        Assert.False(result.CompleteChildren.ContainsKey("P"));
+    }
+
     [Fact]
     public async Task TotalRoundTripBudget_BoundsRecursion_AndFlagsTruncated()
     {

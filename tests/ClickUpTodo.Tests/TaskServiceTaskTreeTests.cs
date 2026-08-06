@@ -29,6 +29,17 @@ public sealed class TaskServiceTaskTreeTests
         return id => map.TryGetValue(id, out var v) ? v : null;
     }
 
+    /// <summary>A #450 descendant children index backed by the given per-parent entries — the lookup the TUI
+    /// passes into <see cref="TaskService.GetTaskTreeAsync"/> so a parent whose complete child set is already
+    /// in hand skips its <c>GetSubtasksAsync</c> round-trip. An absent parent returns <c>null</c> (a miss →
+    /// fetch); a present entry (including an empty one) is a vouched-for complete set.</summary>
+    private static Func<string, IReadOnlyList<TaskItem>?> Index(params (string Parent, TaskItem[] Children)[] entries)
+    {
+        var map = entries.ToDictionary(
+            e => e.Parent, e => (IReadOnlyList<TaskItem>)e.Children, StringComparer.Ordinal);
+        return id => map.TryGetValue(id, out var v) ? v : null;
+    }
+
     [Fact]
     public async Task LoneTask_NoAncestryNoSubtasks_SingleRow()
     {
@@ -340,6 +351,124 @@ public sealed class TaskServiceTaskTreeTests
 
         Assert.Equal([("p", 0, false), ("T", 1, true)], rows.Select(Row));
         Assert.Equal(["T"], fake.ItemCalls); // current fetched; "p" seeded; "T" is not re-walked
+    }
+
+    // --- #450: seeding the descendant BFS from a known-complete children index ---
+
+    [Fact]
+    public async Task IndexedParent_SkipsItsSubtaskFetch()
+    {
+        // T's children come from the index, so T is never probed; its children (misses) still fetch normally.
+        var fake = new FakeClient();
+        fake.Items["T"] = Item("T");
+
+        var rows = await Service(fake).GetTaskTreeAsync(
+            "T", childrenIndex: Index(("T", [Item("c1", "T"), Item("c2", "T")])));
+
+        Assert.Equal([("T", 0, true), ("c1", 1, false), ("c2", 1, false)], rows.Select(Row));
+        Assert.Equal(["c1", "c2"], fake.SubtaskCalls); // T seeded from the index (no probe); c1/c2 fetched
+    }
+
+    [Fact]
+    public async Task IndexedParent_ChildrenAreStillBfsd_PastTheSeededLevel()
+    {
+        // A seeded level doesn't end the walk: an index hit's children are themselves resolved (fetched or
+        // indexed), and FIFO order is preserved across the hit/miss mix (c1 seeded before c2 fetched).
+        var fake = new FakeClient();
+        fake.Items["T"] = Item("T");
+        fake.Subtasks["T"] = [Item("c1", "T"), Item("c2", "T")];
+
+        var rows = await Service(fake).GetTaskTreeAsync(
+            "T", childrenIndex: Index(("c1", [Item("gc", "c1")])));
+
+        Assert.Equal(
+            [("T", 0, true), ("c1", 1, false), ("gc", 2, false), ("c2", 1, false)],
+            rows.Select(Row));
+        // T fetched (miss), c1 seeded (skipped), c2 fetched (miss), then gc fetched (miss). c1 never probed.
+        Assert.Equal(["T", "c2", "gc"], fake.SubtaskCalls);
+    }
+
+    [Fact]
+    public async Task IndexMiss_FallsBackToFetch()
+    {
+        // A non-null index that doesn't contain a parent returns null for it → the BFS fetches exactly as if
+        // no index were supplied.
+        var fake = new FakeClient();
+        fake.Items["T"] = Item("T");
+        fake.Subtasks["T"] = [Item("c", "T")];
+
+        var rows = await Service(fake).GetTaskTreeAsync("T", childrenIndex: Index(("unrelated", [])));
+
+        Assert.Equal([("T", 0, true), ("c", 1, false)], rows.Select(Row));
+        Assert.Equal(["T", "c"], fake.SubtaskCalls); // neither T nor c is in the index → both fetched
+    }
+
+    [Fact]
+    public async Task FullyIndexedTree_ResolvesWithZeroFetches_EvenPastTheBudget()
+    {
+        // A chain deeper than MaxTreeSubtaskFetches, entirely in the index: an index hit spends no fetch
+        // budget ("only fetches the rest"), so the whole tree resolves with zero GetSubtasksAsync calls.
+        var fake = new FakeClient();
+        fake.Items["T"] = Item("T");
+        var chain = TaskService.MaxTreeSubtaskFetches + 10;
+        var entries = new List<(string, TaskItem[])> { ("T", [Item("n0", "T")]) };
+        for (var i = 0; i < chain; i++)
+            entries.Add(($"n{i}", i < chain - 1 ? [Item($"n{i + 1}", $"n{i}")] : []));
+
+        var rows = await Service(fake).GetTaskTreeAsync("T", childrenIndex: Index(entries.ToArray()));
+
+        Assert.Empty(fake.SubtaskCalls);            // nothing fetched — every level came from the index
+        Assert.Equal(chain + 1, rows.Count);        // T + n0..n(chain-1), none truncated by the fetch budget
+        Assert.True(rows[0].IsCurrent);
+    }
+
+    [Fact]
+    public async Task IndexedEmptySet_IsTrusted_SkipsFetch_AndAddsNoChildren()
+    {
+        // A present-but-empty entry is a parent VOUCHED to have no children: it skips the fetch and adds
+        // nothing — distinct from a miss (null), which would fetch and discover the fake's real subtask.
+        var fake = new FakeClient();
+        fake.Items["T"] = Item("T");
+        fake.Subtasks["T"] = [Item("c", "T")]; // present in the fake, but the index says T has no children
+
+        var rows = await Service(fake).GetTaskTreeAsync("T", childrenIndex: Index(("T", [])));
+
+        Assert.Equal([("T", 0, true)], rows.Select(Row)); // the vouched-for empty set is trusted
+        Assert.Empty(fake.SubtaskCalls);                   // T not probed, so its fake child "c" never surfaces
+    }
+
+    [Fact]
+    public async Task IndexedDescendantEchoingAncestor_IsNotReAddedOrRefetched()
+    {
+        // The de-dup (seeded with the ancestry ids) applies to indexed children too: an indexed set echoing
+        // an ancestor / the current task can't loop the tree, and the deduped ids are never probed.
+        var fake = new FakeClient();
+        fake.Items["anc"] = Item("anc");
+        fake.Items["T"] = Item("T", parent: "anc");
+
+        var rows = await Service(fake).GetTaskTreeAsync(
+            "T", childrenIndex: Index(("T", [Item("c", "T"), Item("anc"), Item("T", "anc")]), ("c", [])));
+
+        Assert.Equal([("anc", 0, false), ("T", 1, true), ("c", 2, false)], rows.Select(Row));
+        Assert.Equal(["T", "anc"], fake.ItemCalls); // ancestry unchanged
+        Assert.Empty(fake.SubtaskCalls);            // all children came from the index; anc/T deduped, not probed
+    }
+
+    [Fact]
+    public async Task AllMissIndex_ReproducesTheUnindexedBudgetCap()
+    {
+        // A non-null index that misses on everything must leave the budget-bounded fetch path byte-for-byte:
+        // a chain longer than the budget still stops at exactly MaxTreeSubtaskFetches fetches.
+        var fake = new FakeClient();
+        fake.Items["T"] = Item("T");
+        var chain = TaskService.MaxTreeSubtaskFetches + 10;
+        for (var i = 0; i < chain; i++)
+            fake.Subtasks[i == 0 ? "T" : $"n{i - 1}"] = [Item($"n{i}", parent: i == 0 ? "T" : $"n{i - 1}")];
+
+        var rows = await Service(fake).GetTaskTreeAsync("T", childrenIndex: Index()); // empty index → all miss
+
+        Assert.Equal(TaskService.MaxTreeSubtaskFetches, fake.SubtaskCalls.Count);
+        Assert.True(rows[0].IsCurrent);
     }
 
     /// <summary>In-memory <see cref="IClickUpClient"/> exposing only the two fetch paths the tree walk
