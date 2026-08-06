@@ -59,11 +59,18 @@ re-extraction is focus-agnostic — a focused bare link still emits its OSC-8 hy
 ## Scope boundary (deferred, already tracked)
 
 - **A markdown link whose `[text]` and `(url)` wrap onto different rendered rows.** Per-row
-  re-extraction can't see across the wrap boundary, so neither row's text matches the markdown
-  pattern and the cells get **no** OSC-8 (safe: never a wrong target). This is exactly the
-  `[text]`/`(url)`-split case already tracked by **#443** ("style link tokens that a word wrap
-  splits across two rendered rows"), whose fix needs the display→source-line mapping this issue
-  deliberately doesn't build. Noted in the PR as the shared-machinery follow-up.
+  re-extraction can't see across the wrap boundary: the visible-text fragment (`… [text`) holds no
+  complete markdown link and gets **no** OSC-8, while the trailing `(url)` fragment re-extracts as
+  an ordinary **bare** link to that URL itself (the `)` trimmed). So a split markdown link degrades
+  to *less-rich* linking (the visible text is left unlinked; the raw URL becomes self-linked) —
+  **never a wrong target**. Correctly hyperlinking the visible text across the wrap needs the
+  display→source-line mapping this issue deliberately doesn't build; it is exactly the
+  `[text]`/`(url)`-split case already tracked by **#443**. Noted in the PR as the shared-machinery
+  follow-up.
+- **A bare `http(s)` URL sitting inside a markdown link's visible `[text]`, when the link wraps.**
+  Pre-existing extraction behaviour (shared with #413 styling): the split visible-text fragment's
+  own bare URL is extracted and self-linked, rather than the markdown target. Still never a hidden
+  target (the emitted URL is the one the reader sees); folded into the #443 follow-up.
 - **A bare URL longer than the pane width, hard-wrapped mid-URL** — unchanged from #380/#413;
   also #443.
 
@@ -73,8 +80,9 @@ re-extraction is focus-agnostic — a focused bare link still emits its OSC-8 hy
   - New `RowLinkUrls`: the resolved target on every visible-text cell of a markdown link (first /
     middle / last), the URL on every cell of a bare web and task link, the correct per-link URL
     when a bare and a markdown link share a row, `null` for surrounding prose / a link-free row /
-    a separator line, and `null` on **both** fragments of a markdown link split across two rows
-    (the #443 safe-degradation, pinned here).
+    a separator line, and the #443 split-case safe-degradation pinned on **both** sides — `null` on
+    the `[text` visible-text fragment, and a plain bare-link target on the `(url)` fragment (a
+    correct URL, never a wrong target).
   - The two `LinkUrlForCell` markdown tests are **updated** to the #430 behaviour: the
     visible-prose case now returns the resolved target (renamed
     `…ReturnsTheResolvedTarget_ForAMarkdownLink`), and the visible-text-is-a-URL case now returns

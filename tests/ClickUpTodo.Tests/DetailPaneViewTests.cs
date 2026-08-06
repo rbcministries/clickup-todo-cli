@@ -388,6 +388,21 @@ public sealed class DetailPaneViewTests
         Assert.All(urls, Assert.Null);
     }
 
+    [Fact]
+    public void RowLinkUrls_LinksTheUrlFragmentOfASplitMarkdownLinkAsABareUrl()
+    {
+        // The other half of the #443 split case: when "(url)" wraps onto its own row, that fragment
+        // re-extracts as an ordinary BARE link to the URL itself (the trailing ')' trimmed) — the safe
+        // degradation (correct URL, never a wrong/hidden target), not the markdown resolution. Pinned so the
+        // behaviour is explicit rather than incidental.
+        const string target = "https://example.com/deep";
+        const string fragment = "(" + target + ")";   // the "See [click here]" wrapped to the previous row
+        var urls = DetailPaneView.RowLinkUrls(Line(fragment));
+        Assert.Equal(target, urls[fragment.IndexOf(target, StringComparison.Ordinal)]);
+        Assert.Null(urls[0]);    // the leading '(' is prose, outside the link span
+        Assert.Null(urls[^1]);   // the trailing ')' is trimmed off the URL, so it carries no target
+    }
+
     // Exercises the real SetBody → TextView.Load path (no driver needed to load the model) and inspects
     // the loaded cells. This is the reviewer's concern (PR #184): the terminal-default (Color.None)
     // background must stay on the separator line only, and must not carry forward to the comment/

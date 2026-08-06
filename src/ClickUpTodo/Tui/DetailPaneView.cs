@@ -134,9 +134,13 @@ public sealed class DetailPaneView : TextView
     /// the draw override (<see cref="OnDrawReadOnlyColor"/>) feeds the result to <see cref="IDriver.CurrentUrl"/>
     /// so the ANSI output wraps the run in an OSC-8 escape.
     /// <para>
-    /// A markdown link whose <c>[text]</c> and <c>(url)</c> wrap onto <em>different</em> rendered rows yields
-    /// <see langword="null"/> (neither row's text matches the markdown pattern) — never a wrong target;
-    /// that split case needs the display→source mapping and is tracked with #443.
+    /// When a markdown link's <c>[text]</c> and <c>(url)</c> wrap onto <em>different</em> rendered rows, the
+    /// visible-text fragment yields <see langword="null"/> (its row holds no complete markdown link) and the
+    /// trailing <c>(url)</c> fragment re-extracts as an ordinary <em>bare</em> link to that URL itself — so a
+    /// split markdown link never produces a <em>wrong</em> target, only a less-rich one (the visible text is
+    /// left unlinked). Hyperlinking the visible text across the wrap needs the display→source mapping and is
+    /// tracked with #443, together with the pre-existing edge where a bare URL sitting inside the visible
+    /// <c>[text]</c> is itself extracted when the link wraps.
     /// </para>
     /// </summary>
     public static string? LinkUrlForCell(IReadOnlyList<Cell> line, int idxCol)
@@ -657,7 +661,8 @@ public sealed class DetailPaneView : TextView
         // an OSC-8 escape. Additive to #317's styling below; parallel to how SetAttribute drives CurrentAttribute.
         // The target comes from the same per-row re-extraction as the underline (#413), so it is offset-correct
         // on wrapped rows and carries a markdown link's true destination on its visible-text cells (#430); a
-        // markdown link split across two rendered rows degrades to no target (#443).
+        // markdown link split across two rendered rows degrades gracefully — its (url) fragment becomes a plain
+        // bare link, never a wrong target — with the visible-text hyperlinking deferred to #443.
         SetCurrentUrl(LinkUrlAt(line, idxCol));
 
         if (idxCol >= 0 && idxCol < line.Count)
