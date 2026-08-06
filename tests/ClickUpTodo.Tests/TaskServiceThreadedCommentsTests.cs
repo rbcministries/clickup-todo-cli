@@ -26,6 +26,16 @@ public sealed class TaskServiceThreadedCommentsTests
             return Task.FromResult(Threads.TryGetValue(commentId, out var t) ? t : []);
         }
 
+        // #330 create-reply passthrough — records the (commentId, text) it was called with and echoes the
+        // posted text back the way the real facade does (minimal-response, blank author).
+        public List<(string CommentId, string Text)> ReplyPosts { get; } = [];
+
+        public Task<CommentItem> CreateThreadedCommentAsync(string commentId, string text, CancellationToken ct = default)
+        {
+            ReplyPosts.Add((commentId, text));
+            return Task.FromResult(new CommentItem(Id: "new-reply", Author: "", DateMs: 900, Text: text, Resolved: false));
+        }
+
         // Everything else is unused by GetTaskCommentsWithRepliesAsync.
         public Task<ClickUpUser> GetMeAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<IReadOnlyList<NamedEntity>> GetWorkspacesAsync(CancellationToken ct = default) => throw new NotImplementedException();
@@ -95,5 +105,20 @@ public sealed class TaskServiceThreadedCommentsTests
         Assert.Empty(client.ThreadFetches);
         Assert.Equal(["a", "b"], result.Select(c => c.Id));
         Assert.All(result, c => Assert.Empty(c.Replies));
+    }
+
+    [Fact]
+    public async Task CreateThreadedComment_passes_the_comment_id_and_text_through_to_the_client()
+    {
+        var client = new FakeClient
+        {
+            Comments = [],
+            Threads = new Dictionary<string, IReadOnlyList<CommentItem>>(),
+        };
+
+        var result = await Service(client).CreateThreadedCommentAsync("parent-1", "a threaded reply");
+
+        Assert.Equal([("parent-1", "a threaded reply")], client.ReplyPosts);
+        Assert.Equal("a threaded reply", result.Text); // facade's minimal-response echo
     }
 }
