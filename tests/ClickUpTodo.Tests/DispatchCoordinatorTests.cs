@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
@@ -181,6 +182,133 @@ public sealed class DispatchCoordinatorTests
         var cache = new Dictionary<string, string> { ["9xyz"] = "/old/pick" };
         Assert.True(DispatchCoordinator.ReconcileCache(cache, "9xyz", plan));
         Assert.False(cache.ContainsKey("9xyz"));
+    }
+
+    // ── #461 Repository sub-directory match ──────────────────────────────────
+
+    private static TaskDetail TaskWithRepo(string repoValue, string id = "9xyz", string? customId = "ABC-12")
+        => new()
+        {
+            Id = id,
+            Name = "A task",
+            CustomId = customId,
+            CustomFields = [new CustomFieldItem("Repository", "text", JsonDocument.Parse($"\"{repoValue}\"").RootElement.Clone())],
+        };
+
+    private static Func<string, bool> Exists(params string[] dirs)
+    {
+        var set = new HashSet<string>(dirs, StringComparer.Ordinal);
+        return set.Contains;
+    }
+
+    private static Func<string, IReadOnlyList<string>> Children(params string[] names) => _ => names;
+
+    [Fact]
+    public void Plan_TaskDerived_RepoMatch_LaunchesInCheckoutAndSuppressesOutputSubdir()
+    {
+        var settings = new AgentDispatchSettings();
+        var matched = Path.Combine(BaseDir, "proj");
+
+        var plan = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWithRepo("proj"), BaseDir, Home,
+            Exists(matched), Children("proj"));
+
+        Assert.Equal(matched, plan.WorkingDir);
+        // Owner decision: no ./{custom-id} instruction inside a real checkout.
+        Assert.Null(plan.OutputSubdir);
+        // The base-dir-creation / mode flag is unchanged by a match (the matched dir already exists).
+        Assert.True(plan.UseTaskDerived);
+        Assert.Equal(matched, plan.RepositoryDir);
+        // resolvedDefault reflects the match so an equal explicit pick still reverts the #96 cache.
+        Assert.Equal(matched, plan.ResolvedDefault);
+    }
+
+    [Fact]
+    public void Plan_TaskDerived_RepoValuePresentButNoMatchingDir_IsByteIdenticalToToday()
+    {
+        var settings = new AgentDispatchSettings();
+
+        var plan = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWithRepo("proj"), BaseDir, Home,
+            Exists(), Children());
+
+        Assert.Equal(BaseDir, plan.WorkingDir);
+        Assert.Equal("ABC-12", plan.OutputSubdir); // subdir emitted exactly as today
+        Assert.True(plan.UseTaskDerived);
+        Assert.Null(plan.RepositoryDir);
+        Assert.Equal(BaseDir, plan.ResolvedDefault);
+    }
+
+    [Fact]
+    public void Plan_TaskDerived_RepoMatch_CaseInsensitiveChildScan()
+    {
+        var settings = new AgentDispatchSettings();
+        var onDisk = Path.Combine(BaseDir, "My-Proj");
+
+        // Exact-case `/work/my-proj` is absent (case-sensitive FS), but a `My-Proj` child exists.
+        var plan = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWithRepo("my-proj"), BaseDir, Home,
+            Exists(onDisk), Children("My-Proj"));
+
+        Assert.Equal(onDisk, plan.WorkingDir);
+        Assert.Equal(onDisk, plan.RepositoryDir);
+    }
+
+    [Fact]
+    public void Plan_ExplicitPickEqualToMatchedDir_RevertsTheCache()
+    {
+        var settings = new AgentDispatchSettings();
+        var matched = Path.Combine(BaseDir, "proj");
+
+        var plan = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go", WorkingDirectory: matched), TaskWithRepo("proj"), BaseDir, Home,
+            Exists(matched), Children("proj"));
+
+        Assert.Equal(matched, plan.WorkingDir);
+        Assert.False(plan.UseTaskDerived);     // an explicit pick, not the mode
+        Assert.Null(plan.OutputSubdir);
+        Assert.Null(plan.RepositoryDir);       // the pick, not the match, drove the dir → nothing to report
+        Assert.Equal(matched, plan.ResolvedDefault);
+
+        // So a pick equal to the (repo-matched) default clears any stored entry rather than persisting it.
+        var cache = new Dictionary<string, string> { ["9xyz"] = "/old/pick" };
+        Assert.True(DispatchCoordinator.ReconcileCache(cache, "9xyz", plan));
+        Assert.False(cache.ContainsKey("9xyz"));
+    }
+
+    [Fact]
+    public void Plan_HomeMode_WithRepositoryField_IsUnaffectedAndNeverProbes()
+    {
+        var settings = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.Home };
+        var probed = false;
+
+        var plan = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWithRepo("proj"), BaseDir, Home,
+            _ => { probed = true; return true; },
+            _ => { probed = true; return []; });
+
+        Assert.Equal(Home, plan.WorkingDir);
+        Assert.Null(plan.RepositoryDir);
+        Assert.False(probed); // repo matching is task-derived-only
+    }
+
+    [Fact]
+    public void RepositoryMatchNote_NamesTheDirectory_OnlyWhenAMatchDroveTheWorkingDir()
+    {
+        var settings = new AgentDispatchSettings();
+        var matched = Path.Combine(BaseDir, "proj");
+
+        var withMatch = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWithRepo("proj"), BaseDir, Home,
+            Exists(matched), Children("proj"));
+        var note = DispatchCoordinator.RepositoryMatchNote(withMatch);
+        Assert.NotNull(note);
+        Assert.Contains(matched, note);
+        Assert.Contains("Repository", note);
+
+        var noMatch = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWithRepo("proj"), BaseDir, Home, Exists(), Children());
+        Assert.Null(DispatchCoordinator.RepositoryMatchNote(noMatch));
     }
 
     [Fact]

@@ -42,4 +42,49 @@ public static class DetailScrollModel
         var wantNewest = preference == StreamAutoScroll.Newest;
         return wantNewest == newestIsAtTop ? Edge.Top : Edge.Bottom;
     }
+
+    // ── Bare ↑/↓ line-scroll / row-move arithmetic (#452) ────────────────────────────────────────
+    //
+    // The glue (TaskDetailScreen.OnKey) claims a bare ↑/↓ on a front-most tab and calls these to
+    // compute the clamped destination. They are pure and edge-saturating: at the top/bottom the
+    // "next" value equals the input, so the glue can consume the key unconditionally and a boundary
+    // press is a no-op that never falls through to NavSafeTabs (which would otherwise swallow it via
+    // the crash-guard, or — pre-fix — let the ListView's Command bubble up and cancel its own move).
+
+    /// <summary>
+    /// The greatest top row a scrollable pane can show without wasting space below the content:
+    /// <c>max(0, lineCount − max(1, viewportHeight))</c>. Matches the existing <c>MaxTopRow</c> glue,
+    /// factored here so the one-line scroll and the refresh scroll-restore share it.
+    /// </summary>
+    public static int MaxTop(int lineCount, int viewportHeight) =>
+        Math.Max(0, lineCount - Math.Max(1, viewportHeight));
+
+    /// <summary>
+    /// The next top row after scrolling <paramref name="delta"/> lines (±1 for ↑/↓) from
+    /// <paramref name="currentTop"/>, clamped to <c>[0, <see cref="MaxTop"/>]</c>. Returns
+    /// <paramref name="currentTop"/> unchanged at either edge, so the caller can tell "scrolled" from
+    /// "already at the boundary" while still consuming the key.
+    /// </summary>
+    public static int NextTop(int currentTop, int viewportHeight, int lineCount, int delta) =>
+        Math.Clamp(currentTop + delta, 0, MaxTop(lineCount, viewportHeight));
+
+    /// <summary>
+    /// The next selected index after moving <paramref name="delta"/> rows (±1 for ↑/↓) from
+    /// <paramref name="currentIndex"/> in a list of <paramref name="count"/> items, clamped to
+    /// <c>[0, count − 1]</c>. Returns <paramref name="currentIndex"/> for an empty list and at either
+    /// end, so a boundary press is a no-op the caller still consumes.
+    /// </summary>
+    public static int NextIndex(int currentIndex, int count, int delta) =>
+        count <= 0 ? currentIndex : Math.Clamp(currentIndex + delta, 0, count - 1);
+
+    /// <summary>
+    /// How many rows a <c>PgUp</c>/<c>PgDn</c> pages a scrollable pane: one viewport page with a single
+    /// line of overlap for continuity — <c>max(1, viewportHeight − 1)</c>, the "keep one line of context"
+    /// convention of a terminal pager. A degenerate viewport (height ≤ 1) still advances one row. Fed as
+    /// the <paramref name="delta"/> magnitude to <see cref="NextTop"/> (#468), so a page is a viewport
+    /// write on the very same <c>viewport.Y</c> the bare ↑/↓ line-scroll clamps — the two gestures then
+    /// compose additively on one explicit scroll state, independent of Terminal.Gui's stock TextView
+    /// paging.
+    /// </summary>
+    public static int PageDelta(int viewportHeight) => Math.Max(1, viewportHeight - 1);
 }
