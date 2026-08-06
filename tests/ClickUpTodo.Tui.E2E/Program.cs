@@ -293,7 +293,7 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
             else if (_foreign)
                 body = ForeignTaskGet(path, query);
             else
-                lock (_gate) body = DetailJson(path, _assignees);
+                lock (_gate) body = DetailJson(path, _assignees, countTitleFetch: true);
         }
         else if (path.Contains("/team/") && path.EndsWith("/task"))
         {
@@ -425,16 +425,17 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false)
     /// <summary>Detail for the Enter → detail screen (and the echo for a task PUT). The description
     /// deliberately mixes plain prose with wide/multi-byte graphemes so per-cell rendering issues have
     /// something to bite; the assignees reflect the current mutable set so an assignee write round-trips.</summary>
-    private string DetailJson(string path, HashSet<long> assignees)
+    private string DetailJson(string path, HashSet<long> assignees, bool countTitleFetch = false)
     {
         var id = path[(path.LastIndexOf('/') + 1)..];
         // JSON-encode the (mutable, possibly user-edited) description so quotes/newlines/emoji round-trip.
         var description = JsonSerializer.Serialize(_description);
-        // #425: under E2E_TITLE_REFRESH the launch task is renamed after the boot fetch, so a refresh moves
-        // the terminal title. The boot (first) fetch keeps the original long name; every later fetch returns
-        // the short renamed name. Off ⇒ the fixed name every other scenario expects.
+        // #425: under E2E_TITLE_REFRESH the launch task is renamed after the boot read, so a refresh moves
+        // the terminal title. The boot (first) read keeps the original long name; every read after it
+        // returns the short renamed name. Only detail READS (GET) advance the counter — a PUT echo passes
+        // countTitleFetch:false so a write can't inflate it. Off ⇒ the fixed name every other scenario expects.
         var name = "My Account - Address display  (EA-7221)";
-        if (TitleRefresh && System.Threading.Interlocked.Increment(ref _detailFetches) > 1)
+        if (TitleRefresh && countTitleFetch && System.Threading.Interlocked.Increment(ref _detailFetches) > 1)
             name = "Renamed on refresh";
         // `locations` are the task's additional list memberships (#242), mutated by the membership
         // POST/DELETE so an add/remove from the List pane round-trips; empty in the common single-list case.
