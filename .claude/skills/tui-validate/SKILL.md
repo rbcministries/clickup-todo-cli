@@ -199,6 +199,23 @@ tracked with the wrapped-line rendering work, #413). Expected: `ok — task link
 (Comments) each wrapped in a bounded OSC-8 hyperlink`. Invisible to the text-only `detail_check.py` A/B
 and to `link_check.py`'s pyte styling assertions, which both stay green.
 
+**10b. OSC-8 hyperlinks for markdown `[text](url)` links (#430)** — the case check 10 defers. With
+`E2E_MD_LINK=1` the fake backend appends `See [the runbook](https://example.com/runbook-42) for steps`
+to the Description; this opens Task Detail and asserts, again on **raw bytes**, that the markdown link's
+*visible text* (`the runbook`) is wrapped in a bounded OSC-8 escape whose target is the **resolved** URL
+(`https://example.com/runbook-42`), not the visible prose — proving the target came from the markdown
+markup, not a reconstruction of the drawn cells:
+
+```bash
+timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/markdown_osc8_check.py $DLL
+```
+
+Self-contained (sets its own `E2E_MD_LINK=1`; fixed COLS=120 so the markup doesn't wrap — a markdown
+link split across two rendered rows is out of scope, #443). Expected: `ok — markdown link visible text
+'the runbook' wrapped in a bounded OSC-8 hyperlink to its resolved target https://example.com/runbook-42`.
+Because the seed is env-gated, every other check (which never sets `E2E_MD_LINK`) sees the original body
+byte-for-byte — `osc8_link_check.py`, `link_check.py`, and `detail_check.py` A/B all stay green.
+
 **11. Threaded comments render nested (#329)** — opens Task Detail, cycles to the Comments tab, and
 asserts on the pyte screen that a comment's reply thread renders **indented** under its parent, not
 flat. Two legs: with `E2E_THREADS=1` the fake backend marks comment `c2` with a two-reply thread and
