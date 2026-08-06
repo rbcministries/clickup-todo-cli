@@ -197,6 +197,7 @@ public static class HelpItemSets
         new("Ctrl+PgUp/PgDn", "▼▲", IsAction: false),
         new("Ctrl+A", "✨Dispatch"),
         new("Ctrl+N", "➕Comment"),
+        new("Ctrl+T", "↩Reply"),
         new("Ctrl+E", "✏Description"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+U", "quick update"),
@@ -219,6 +220,7 @@ public static class HelpItemSets
         new("Ctrl+PgUp/PgDn", "▼▲", IsAction: false),
         new("Ctrl+A", "✨Dispatch"),
         new("Ctrl+N", "➕Comment"),
+        new("Ctrl+T", "↩Reply"),
         new("Ctrl+E", "✏Description"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+U", "quick update"),
@@ -270,21 +272,34 @@ public static class HelpItemSets
         new("Esc", "back"),
     ];
 
+    /// <summary>The Task Detail reply-target picker overlay (Ctrl+T, #330): a list of the task's comments
+    /// whose own keys are ↑/↓ to choose, Enter to reply (opening the composer in reply mode) and Esc to
+    /// cancel. Mirrors <see cref="DetailCommentComposer"/> so the footer advertises only what the picker
+    /// does — otherwise a click on an inert command hint re-raises its chord (#436).</summary>
+    public static readonly IReadOnlyList<HelpItem> DetailReplyPicker =
+    [
+        new("↑/↓", "choose", IsAction: false),
+        new("Enter", "reply"),
+        new("Esc", "cancel"),
+    ];
+
     /// <summary>Picks the Task Detail footer set for the current overlay state (#436). Pure so the
     /// branch order is unit-testable — the <see cref="TaskDetailScreen.HelpItems"/> property that calls
-    /// it lives on a Terminal.Gui view and can't run in CI. The mention picker (#325), comment composer
-    /// and description editor overlays are checked in that order (the picker sits over the composer, so it
-    /// wins when both are up). When no overlay is open the set depends on whether the Task Tree tab is
-    /// present (its F6 badge cycle #415, and the Ctrl+Enter new-tab gesture #384/#435): present →
+    /// it lives on a Terminal.Gui view and can't run in CI. The mention picker (#325), comment composer,
+    /// reply-target picker (#330) and description editor overlays are checked in a fixed order: the mention
+    /// picker sits over the composer so it wins when both are up, then the composer, then the description
+    /// editor, then the reply picker. When no overlay is open the set depends on whether the Task Tree tab
+    /// is present (its F6 badge cycle #415, and the Ctrl+Enter new-tab gesture #384/#435): present →
     /// <see cref="DetailWithTaskTree"/>, absent → <see cref="Detail"/>. Both the dashboard and single-task
     /// launch mode (since #374) supply a tree loader, so both get <see cref="DetailWithTaskTree"/>;
     /// <see cref="Detail"/> is the no-tree-loader case.</summary>
     public static IReadOnlyList<HelpItem> DetailFooter(
-        bool commentComposerVisible, bool descriptionEditorVisible, bool hasTaskTree,
+        bool commentComposerVisible, bool descriptionEditorVisible, bool replyPickerVisible, bool hasTaskTree,
         bool mentionPickerVisible = false) =>
         mentionPickerVisible ? DetailMentionPicker
         : commentComposerVisible ? DetailCommentComposer
         : descriptionEditorVisible ? DetailDescriptionEditor
+        : replyPickerVisible ? DetailReplyPicker
         : hasTaskTree ? DetailWithTaskTree
         : Detail;
 
