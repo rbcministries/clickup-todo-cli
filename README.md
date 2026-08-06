@@ -184,15 +184,18 @@ Links in a task's **Description**, **Comments** and **Stream** panes are underli
 | Gesture | Task link (`app.clickup.com/t/…`) | Any other link |
 | --- | --- | --- |
 | Left-click | Opens that task's **Task Detail** here — `Esc` walks back to the one you came from | Opens in your **browser** |
-| `Ctrl+`Left-Click | Opens in your **browser** | Opens in your **browser** |
+| `Ctrl+`Left-Click | Opens in your **browser** (or a **new terminal tab** — see below) | Opens in your **browser** |
+| `Ctrl+Shift+`Left-Click | The **other** of browser / new terminal tab | Opens in your **browser** |
 | `Tab` / `Shift+Tab` then `Enter` | Same as left-click — steps a focus highlight across the pane's links and follows the focused one | Opens in your **browser** |
 
 `Tab`/`Shift+Tab` step a focus highlight over the links in the current pane (wrapping at the ends) and
 `Enter` follows the focused one — the keyboard equivalent of a left-click, for when you'd rather not reach
-for the mouse. `Ctrl+`Left-Click is Windows Terminal's own "open this link" gesture, so it always means *browser*
-whatever the link is. A task link works with either a plain ClickUp id or a **custom id**
-(`/t/{teamId}/{customId}`). In single-task mode (`--task`) every link opens in the browser, since that
-mode has no list to stack another task on top of.
+for the mouse. `Ctrl+`Left-Click on a **task** link has a configurable destination — **open in your
+browser** (the default, Windows Terminal's own "open this link" gesture) or **open the task in a new
+terminal tab** — set under **Settings → Detail view → Ctrl+Click task link** (`F2`); `Ctrl+Shift+`Left-Click
+does the other one. A **web** link always opens in the browser, whatever the modifiers. A task link works
+with either a plain ClickUp id or a **custom id** (`/t/{teamId}/{customId}`). In single-task mode
+(`--task`) every link opens in the browser, since that mode has no list to stack another task on top of.
 
 ### Open a task in a new terminal tab
 
