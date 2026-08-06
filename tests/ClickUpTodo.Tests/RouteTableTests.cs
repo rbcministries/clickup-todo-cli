@@ -156,4 +156,14 @@ public class RouteTableTests
     {
         Assert.Throws<ArgumentException>(() => new RouteTable<string>(new[] { R(HttpMethod.Get, "", "x") }));
     }
+
+    [Fact]
+    public void FakeClickUp_RealRouteTable_RegistersWithoutAmbiguity()
+    {
+        // The tests above pin the generic RouteTable invariants; this pins the *concrete* registration.
+        // Constructing FakeClickUp runs BuildRoutes(), whose RouteTable constructor throws on any
+        // same-method equal-specificity overlap — so a future scenario that adds an ambiguous route fails
+        // `dotnet test` here, not only at E2E harness boot. Only the table is built; no handler is invoked.
+        Assert.Null(Record.Exception(() => new global::FakeClickUp(taskCount: 1)));
+    }
 }
