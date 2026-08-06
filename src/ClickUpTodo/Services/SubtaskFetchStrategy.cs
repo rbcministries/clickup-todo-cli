@@ -42,8 +42,20 @@ public sealed record SubtaskFetchPlan(
 /// Result of <see cref="TaskService.ResolveForeignSubtasksAsync"/>: the foreign subtasks to nest, plus
 /// whether a fetch cap dropped work (<see cref="Truncated"/>) so the caller can tell the user some
 /// subtasks were omitted rather than truncating silently (#87).
+/// <para>
+/// <see cref="CompleteChildren"/> (#450) maps a parent id to its <b>complete</b> direct-children set, one
+/// entry per parent the <em>per-parent</em> branch actually fetched (a successful
+/// <see cref="IClickUpClient.GetSubtasksAsync"/> returns every child regardless of assignee, so it is a
+/// trustworthy complete set). It is the source the Task Tree tab seeds its descendant BFS from
+/// (<see cref="TaskService.BuildChildrenIndex"/>): parents resolved only by the whole-list branch — which
+/// can't vouch a parent's children per-parent — and parents whose fetch failed are deliberately
+/// <b>absent</b>, so a consumer never mistakes an incomplete set for a complete one.
+/// </para>
 /// </summary>
-public sealed record ForeignSubtaskResolution(IReadOnlyList<TaskItem> Subtasks, bool Truncated);
+public sealed record ForeignSubtaskResolution(
+    IReadOnlyList<TaskItem> Subtasks,
+    bool Truncated,
+    IReadOnlyDictionary<string, IReadOnlyList<TaskItem>> CompleteChildren);
 
 /// <summary>
 /// Pure, adaptive selector for <em>how</em> to fetch a parent's teammate-owned subtasks (#87). The pure

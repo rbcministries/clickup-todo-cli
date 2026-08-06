@@ -211,8 +211,9 @@ public sealed class TaskDetailScreen : Screen
 
     // ── Task Tree tab (#291) ───────────────────────────────────────────────────
     // The Task Tree tab's ListView (its own scroll target), or null when no tree loader was supplied
-    // (the tab is then absent — e.g. single-task launch mode, where "Esc returns to the list" has no
-    // meaning). Built from TaskRowRenderer rows exactly like the main list, so ancestry/children badge
+    // (the tab is then absent). Both hosts supply a loader today — the dashboard, and single-task launch
+    // mode since #374 — so this is non-null in both; the null case is the general no-loader fallback.
+    // Built from TaskRowRenderer rows exactly like the main list, so ancestry/children badge
     // identically. Loaded lazily the first time the user cycles to the tab.
     private readonly ListView? _treeList;
     // Fetches the tree (ancestry + task + descendants) off the UI thread; injected by the host so the
@@ -298,9 +299,10 @@ public sealed class TaskDetailScreen : Screen
     /// Raised when the user asks to open the current task in its own terminal tab (Ctrl+Enter, #384) —
     /// the detail-view counterpart of the main list's Ctrl+Enter / Ctrl+Left-Click gesture (#301). The
     /// host owns the cross-platform launch (and its copy-command fallback), reusing the exact launcher
-    /// the list gesture uses. Only wired/advertised on the dashboard-hosted detail (the one carrying the
-    /// Task Tree tab); it stays absent in single-task launch mode — see the <c>_treeList</c> guard in
-    /// <see cref="OnKey"/> and the <see cref="HelpItemSets.DetailWithTaskTree"/> footer set.
+    /// the list gesture uses. Raised (and advertised) wherever a tree loader was supplied — the
+    /// dashboard-hosted detail (#384) and, since #374 gave single-task launch mode the Task Tree tab, that
+    /// host too (its subscriber wired in #435) — see the <c>_treeList</c> guard in <see cref="OnKey"/> and
+    /// the <see cref="HelpItemSets.DetailWithTaskTree"/> footer set.
     /// </summary>
     public event EventHandler? OpenInNewTabRequested;
 
@@ -429,8 +431,8 @@ public sealed class TaskDetailScreen : Screen
 
         // The Task Tree tab (#291): a focusable ListView showing the task's ancestry + itself + its
         // descendants, indented and badged like the main list (via the shared TaskRowRenderer). Appended
-        // as a fifth tab only when the host supplied a loader — so single-task launch mode (whose Esc
-        // means "quit the tab", not "return to the list") stays a four-tab screen. It's its own scroll
+        // as a fifth tab whenever the host supplied a loader — both the dashboard and single-task launch
+        // mode do (the latter since #374), so it's present in both. It's its own scroll
         // target; CycleTab/FocusCurrentPane/ScrollActiveTab are array-length-driven and pick it up. Rows
         // load lazily on first cycle to the tab (EnsureTreeLoaded), so opening any detail isn't slowed.
         var tabContents = new List<View> { _streamPane, _descriptionPane, _commentsPane, _otherTab };
@@ -679,8 +681,9 @@ public sealed class TaskDetailScreen : Screen
     // While the comment composer (Ctrl+N) or description editor (Ctrl+E) overlay is open, the footer
     // shows only that overlay's keys — the command chords are inert to a keypress (OnKey returns early)
     // but their clickable footer hints would otherwise re-raise the chord into the composer (#436). The
-    // Task Tree tab's F6 badge cycle (#415) is only offered when that tab exists (a loader was supplied);
-    // single-task launch mode has no tree tab, so it keeps the F6-less Detail set.
+    // Task Tree tab's F6 badge cycle (#415) and the Ctrl+Enter new-tab gesture (#384/#435) are only
+    // offered when that tab exists (a loader was supplied) — true for both the dashboard and single-task
+    // launch mode (since #374); the F6-/Ctrl+Enter-less Detail set is the no-loader fallback.
     public override IReadOnlyList<HelpItem> HelpItems =>
         HelpItemSets.DetailFooter(_commentBox.Visible, _descriptionBox.Visible, _replyPickerBox.Visible, _treeList is not null);
 
@@ -898,6 +901,41 @@ public sealed class TaskDetailScreen : Screen
             }
         }
 
+        // Bare ↑/↓ scroll the front-most text pane one line, or move the Task Tree selection one row
+        // (#452). Claimed here — on the focused pane/list's own KeyDown, which fires before its bindings
+        // and before the arrow bubbles up to NavSafeTabs — because otherwise the arrow is swallowed:
+        // the read-only TextView moves an invisible caret (no viewport scroll), and the tree ListView's
+        // Command.Down bubbles up to NavSafeTabs' inert crash-guard, cancelling its own MoveDown. Inert
+        // while the Dispatch prompt is open (its dir-browser owns bare ↑/↓, like the command blocks
+        // below) and for any modified arrow (Ctrl+←/→ tab-cycle, Shift-extend). Always consumed, so a
+        // press at a content boundary is a no-op that stays on the tab — never a tab switch or crash.
+        if (!_promptBox.Visible && !key.IsCtrl && !key.IsShift && !key.IsAlt
+            && (key.KeyCode == KeyCode.CursorUp || key.KeyCode == KeyCode.CursorDown))
+        {
+            key.Handled = true;
+            MoveActiveTab(key.KeyCode == KeyCode.CursorDown ? 1 : -1);
+            return;
+        }
+
+        // Bare PgUp/PgDn page the front-most text pane via the same viewport write as ↑/↓ (#468), so the
+        // whole scroll vocabulary of the read-only panes lives in one explicit viewport model rather than
+        // split between our ↑/↓ code (#452) and Terminal.Gui's stock TextView paging. Owning it keeps the
+        // two gestures composing on one state (`viewport.Y`) regardless of what a given TG version or
+        // terminal driver does for Command.PageUp/PageDown — the cross-platform concern behind #468/#312.
+        // (On TG 2.4.10 the stock commands already page the viewport, so this is behaviour-preserving
+        // today; the value is the explicit, driver-independent ownership.) Text panes only — the Task Tree
+        // ListView keeps its stock page-selection (PageActiveTextPane returns false ⇒ the key falls
+        // through to it). Inert while the Dispatch prompt is open (its dir-browser owns paging) and for any
+        // modified key: Ctrl+PgUp/PgDn are the Stream-sort chords below, excluded here by !IsCtrl. NextTop
+        // clamps, so a page at the content boundary is a consumed no-op that stays on the tab.
+        if (!_promptBox.Visible && !key.IsCtrl && !key.IsShift && !key.IsAlt
+            && (key.KeyCode == KeyCode.PageUp || key.KeyCode == KeyCode.PageDown)
+            && PageActiveTextPane(key.KeyCode == KeyCode.PageDown ? 1 : -1))
+        {
+            key.Handled = true;
+            return;
+        }
+
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
         {
             key.Handled = true;
@@ -908,9 +946,10 @@ public sealed class TaskDetailScreen : Screen
 
         // Ctrl+Enter opens this task in its own terminal tab (#384) — the detail counterpart of the main
         // list's #301 gesture; the host owns the launch + copy-command fallback. Ctrl+Enter carries
-        // KeyCode.Enter | CtrlMask, so it never trips the bare-Enter tree-row navigation above. Scoped to
-        // the dashboard-hosted detail via _treeList (the same seam HelpItems uses to pick the footer set),
-        // so the footer hint and the key stay in lock-step and single-task mode carries neither. Inert
+        // KeyCode.Enter | CtrlMask, so it never trips the bare-Enter tree-row navigation above. Gated on
+        // _treeList (the same seam HelpItems uses to pick the footer set), so the footer hint and the key
+        // stay in lock-step — present wherever a loader was supplied: the dashboard, and single-task launch
+        // mode too since #374/#435 (subscriber in SingleTaskApp). Inert
         // while the Dispatch pane is open (like the other command chords), and unreachable while the
         // comment composer / description editor is open (they own the keyboard via the guard above, where
         // Ctrl+Enter means Save).
@@ -1265,7 +1304,62 @@ public sealed class TaskDetailScreen : Screen
         var current = Array.IndexOf(_tabContents, _tabs.Value);
         if (current < 0)
             current = 0;
-        _scrollTargets[current].InvokeCommand(command);
+        // A text pane pages via the shared viewport model (#468), so the composer's "scroll underlying"
+        // (PgUp/PgDn) uses the same explicit scroll state as the reading-path ↑/↓ and PgUp/PgDn rather than
+        // Terminal.Gui's stock TextView paging; the Task Tree ListView keeps its stock command
+        // (page-selection). Any other command still routes straight through.
+        if (_scrollTargets[current] is TextView
+            && (command == Command.PageUp || command == Command.PageDown))
+            PageActiveTextPane(command == Command.PageUp ? -1 : 1);
+        else
+            _scrollTargets[current].InvokeCommand(command);
+    }
+
+    /// <summary>Moves the front-most tab by <paramref name="delta"/> rows for a bare ↑/↓ (#452): a
+    /// text pane (or the Other tab's fields body) scrolls one line via its viewport; the Task Tree
+    /// <see cref="ListView"/> moves its selection one row (its setter calls
+    /// <c>EnsureSelectedItemVisible</c>, so the list scrolls to follow). The pure
+    /// <see cref="DetailScrollModel"/> clamps to the content edges, so at a boundary this is a no-op.</summary>
+    private void MoveActiveTab(int delta)
+    {
+        var current = Array.IndexOf(_tabContents, _tabs.Value);
+        if (current < 0)
+            current = 0;
+        switch (_scrollTargets[current])
+        {
+            case ListView list:
+                var count = list.Source?.Count ?? 0;
+                var selected = list.SelectedItem is int i && i >= 0 ? i : 0;
+                list.SelectedItem = DetailScrollModel.NextIndex(selected, count, delta);
+                break;
+            case TextView pane:
+                var vp = pane.Viewport;
+                var top = DetailScrollModel.NextTop(vp.Y, vp.Height, pane.Lines, delta);
+                pane.Viewport = new Rectangle(vp.X, top, vp.Width, vp.Height);
+                break;
+        }
+    }
+
+    /// <summary>Pages the front-most tab's text pane one viewport page in <paramref name="direction"/>
+    /// (−1 up, +1 down) for a bare PgUp/PgDn (#468) — the page counterpart of <see cref="MoveActiveTab"/>'s
+    /// one-line ↑/↓ branch, a viewport write on the same <c>viewport.Y</c> so the two gestures share one
+    /// explicit scroll state independent of Terminal.Gui's stock paging. The pure
+    /// <see cref="DetailScrollModel"/> supplies the page size (<see cref="DetailScrollModel.PageDelta"/>)
+    /// and clamps to the content edges, so a page at a boundary is a no-op. Returns <see langword="false"/>
+    /// when the front-most tab is not a text pane (the Task Tree <see cref="ListView"/>), so the caller
+    /// leaves the key to that list's stock page-selection.</summary>
+    private bool PageActiveTextPane(int direction)
+    {
+        var current = Array.IndexOf(_tabContents, _tabs.Value);
+        if (current < 0)
+            current = 0;
+        if (_scrollTargets[current] is not TextView pane)
+            return false;
+        var vp = pane.Viewport;
+        var delta = direction * DetailScrollModel.PageDelta(vp.Height);
+        var top = DetailScrollModel.NextTop(vp.Y, vp.Height, pane.Lines, delta);
+        pane.Viewport = new Rectangle(vp.X, top, vp.Width, vp.Height);
+        return true;
     }
 
     private void ShowPrompt()

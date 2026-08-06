@@ -8,8 +8,9 @@ namespace ClickUpTodo;
 /// Kept a distinct type (rather than reusing the inline <c>GetOption</c>) so "flag present but no
 /// value" is a first-class, testable state: a bare <c>--task</c> (or <c>--task=</c> / whitespace)
 /// must fail with a clear message instead of silently launching the dashboard or opening a blank id.
-/// Only the raw ClickUp API task id is accepted for now; URL / custom-id forms are a noted follow-up
-/// (they'll share the task-URL parser #316 adds).
+/// This type owns only that present/value distinction; the value's <em>shape</em> — a plain task id, a
+/// workspace custom id, or a ClickUp task URL — is classified by the shared <c>QuickOpenParser</c> in
+/// <c>Program</c> (#464), so <c>--task</c> and the in-app Ctrl+O quick-open can't drift.
 /// </para>
 /// </summary>
 internal readonly record struct TaskLaunchArg(bool Present, string? TaskId)

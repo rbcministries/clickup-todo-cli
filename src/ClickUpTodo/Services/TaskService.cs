@@ -538,6 +538,64 @@ public sealed class TaskService(
         }
     }
 
+    /// <summary>
+    /// Resolves a single-task launch reference (<c>--task</c>, #464) to full detail, in the same
+    /// cache-first order the in-app Ctrl+O quick-open uses (<c>TodoApp.ResolveAndOpen</c>) so the two
+    /// can't drift:
+    /// <list type="number">
+    /// <item>a <b>snapshot</b> hit (<see cref="QuickOpenParser.FindInCache"/>) already knows the task's
+    /// <b>plain</b> id, so it costs a single correct <c>GET /task/{id}</c> — no wrong-endpoint round-trip.
+    /// A <b>stale</b> mapping (task deleted / custom id reassigned) whose plain id 404s is <b>not fatal</b>
+    /// when a live retry could still resolve it — a custom id, or a hyphenless custom id matched by
+    /// <c>CustomId</c> — in which case it falls through rather than failing; a plain-id ref matched by its
+    /// own id surfaces the 404 directly, since re-fetching it would be identical;</item>
+    /// <item>otherwise a <b>live</b> lookup — a hyphenated <b>custom id</b> straight through
+    /// <see cref="GetTaskDetailByCustomIdAsync"/> (one correct request), and a <b>plain id</b> (including a
+    /// hyphenless custom id misclassified as one, #353) through
+    /// <see cref="GetTaskDetailWithCustomIdFallbackAsync"/> (plain first, custom-id retry only on a 404).</item>
+    /// </list>
+    /// The snapshot is passed in (not read here) so this stays free of a <c>TaskCache</c> dependency and
+    /// fully unit-testable through the <see cref="IClickUpClient"/> seam. A not-found reference surfaces the
+    /// underlying <see cref="ClickUpApiException"/> (404) for the caller to message.
+    /// </summary>
+    /// <param name="reference">A parsed, non-<see cref="QuickOpenKind.Invalid"/> reference; an invalid one
+    /// is a caller bug and throws.</param>
+    /// <param name="snapshot">The persisted working-set snapshot to match against; empty is a silent miss.</param>
+    /// <param name="teamId">The workspace/team id for a custom-id lookup — a URL-carried id in preference
+    /// to the configured one. When a custom id needs it but it is blank, the custom-id lookup fails; the
+    /// caller guards that case for a clearer message.</param>
+    public async Task<TaskDetail> ResolveLaunchTaskAsync(
+        QuickOpenRef reference, IReadOnlyList<TaskItem> snapshot, string? teamId, CancellationToken ct = default)
+    {
+        if (reference.Kind == QuickOpenKind.Invalid)
+            throw new ArgumentException("A launch reference must be a task id, custom id, or task URL.", nameof(reference));
+
+        // 1. Snapshot hit → we already hold the plain task id; one correct GET, no wrong-endpoint retry.
+        if (QuickOpenParser.FindInCache(snapshot, reference) is { } cached)
+        {
+            try
+            {
+                return await client.GetTaskDetailAsync(cached.Id, ct).ConfigureAwait(false);
+            }
+            // A stale mapping (task deleted / custom id reassigned) whose plain GET 404s falls through to a
+            // live lookup of the ORIGINAL reference — but only when that would try something new. A plain-id
+            // ref matched by Id (cached.Id == reference.Value) would re-issue the identical GET and then a
+            // spurious custom-id lookup of a known-plain id, so its 404 just surfaces (one request). A custom
+            // id, or a hyphenless custom id matched by CustomId (cached.Id differs), resolves against a
+            // different endpoint/id below and is worth the retry.
+            catch (ClickUpApiException ex) when (ex.StatusCode == 404
+                && !(reference.Kind == QuickOpenKind.TaskId && cached.Id == reference.Value))
+            {
+                // Fall through to the live path.
+            }
+        }
+
+        // 2. Live, mirroring ResolveAndOpen's kind branch.
+        return reference.Kind == QuickOpenKind.CustomId
+            ? await client.GetTaskDetailByCustomIdAsync(reference.Value, teamId!, ct).ConfigureAwait(false)
+            : await GetTaskDetailWithCustomIdFallbackAsync(reference.Value, teamId, ct).ConfigureAwait(false);
+    }
+
     /// <summary>The comments on a task, for the detail view's Comments tab (#17).</summary>
     public Task<IReadOnlyList<CommentItem>> GetTaskCommentsAsync(string taskId, CancellationToken ct = default)
         => client.GetTaskCommentsAsync(taskId, ct);
@@ -589,9 +647,22 @@ public sealed class TaskService(
     /// returns <c>null</c>) falls through to the identical fetch path, so passing <c>null</c> reproduces
     /// the pre-#419 behaviour byte-for-byte. Build one with <see cref="BuildSnapshotLookup"/>.
     /// </para>
+    /// <para>
+    /// <paramref name="childrenIndex"/> (#450) is the descendant sibling of <paramref name="snapshotLookup"/>:
+    /// it lets the caller resolve a parent's children from a source that already fetched them
+    /// (<see cref="ResolveForeignSubtasksAsync"/>'s per-parent branch) instead of a fresh
+    /// <see cref="GetSubtasksAsync"/> round-trip. Because the arranger relies on a parent's <em>complete</em>
+    /// child set, the index must return children <b>only when the entry is known complete</b>; a
+    /// <c>null</c> return (unknown / not-vouched-for) falls through to the fetch. Completeness is therefore
+    /// enforced at the boundary — there is no path where an incomplete set is trusted, so seeding can never
+    /// truncate a branch. An index hit is <b>free</b> (no round-trip, spends no <see cref="MaxTreeSubtaskFetches"/>
+    /// budget) — "only fetches the rest"; a miss fetches under the budget exactly as before. Passing
+    /// <c>null</c> reproduces the pre-#450 BFS byte-for-byte. Build one with <see cref="BuildChildrenIndex"/>.
+    /// </para>
     /// </summary>
     public async Task<IReadOnlyList<TaskTreeRow>> GetTaskTreeAsync(
-        string taskId, Func<string, TaskItem?>? snapshotLookup = null, CancellationToken ct = default)
+        string taskId, Func<string, TaskItem?>? snapshotLookup = null,
+        Func<string, IReadOnlyList<TaskItem>?>? childrenIndex = null, CancellationToken ct = default)
     {
         var current = await client.GetTaskItemAsync(taskId, ct);
 
@@ -641,20 +712,46 @@ public sealed class TaskService(
         var queue = new Queue<string>();
         queue.Enqueue(taskId);
         var fetches = 0;
-        while (queue.Count > 0 && fetches < MaxTreeSubtaskFetches)
+        while (queue.Count > 0)
         {
-            // Take the next batch from the front, never exceeding the remaining fetch budget. Counting the
-            // whole batch up front (before the fetch) mirrors the serial code's fetches++-before-try: a
-            // branch that fails still spends its budget slot. The batch is awaited whole before the next
-            // starts (a straggler stalls its batch) — accepted so the fold-back below stays FIFO and the
-            // fetch order / de-dup match the serial walk exactly.
-            var batchSize = Math.Min(Math.Min(MaxTreeSubtaskConcurrency, MaxTreeSubtaskFetches - fetches), queue.Count);
-            var batch = new string[batchSize];
-            for (var i = 0; i < batchSize; i++)
-                batch[i] = queue.Dequeue();
-            fetches += batchSize;
+            // Assemble the next FIFO batch. Each parent resolves either from the #450 children index — a
+            // known-complete set, so free (no round-trip, no budget) — or by a GetSubtasksAsync fetch, which
+            // spends one MaxTreeSubtaskFetches slot. Peeking keeps the dequeue strictly front-to-back so the
+            // fold-back below stays FIFO (breadth-first order + first-occurrence de-dup match the serial
+            // walk). A miss is admitted only while the fetch budget still affords a round-trip; the batch's
+            // fetch legs are capped at MaxTreeSubtaskConcurrency (index hits occupy no concurrency slot).
+            var batch = new List<(string ParentId, IReadOnlyList<TaskItem>? Seeded)>();
+            var misses = 0;
+            while (queue.Count > 0 && batch.Count < MaxTreeSubtaskConcurrency)
+            {
+                var nodeId = queue.Peek();
+                var seeded = childrenIndex?.Invoke(nodeId);
+                if (seeded is null)
+                {
+                    // A miss needs a fetch. Stop assembling at the first unaffordable miss (rather than
+                    // skipping past it to a later hit) so the walk stays FIFO — the same frontier a strictly
+                    // serial budget-bounded walk would stop at.
+                    if (fetches + misses >= MaxTreeSubtaskFetches)
+                        break;
+                    misses++;
+                }
+                queue.Dequeue();
+                batch.Add((nodeId, seeded));
+            }
+            if (batch.Count == 0)
+                break; // only unaffordable misses remain — the fetch budget is spent (pre-#450 stop point)
 
-            var childLists = await Task.WhenAll(batch.Select(parent => FetchSubtreeChildrenAsync(parent, ct)));
+            // Count the misses up front (before the fetch) mirroring the serial fetches++-before-try: a
+            // branch that fails still spends its slot. Index hits spent nothing, so they aren't counted.
+            fetches += misses;
+
+            // Fetch the misses concurrently; an index hit resolves to its seeded (complete) list with no
+            // round-trip. The batch is awaited whole before the next starts (a straggler stalls its batch) so
+            // the fold-back stays FIFO and the fetch order / de-dup match the serial walk exactly.
+            var childLists = await Task.WhenAll(batch.Select(b =>
+                b.Seeded is not null
+                    ? Task.FromResult<IReadOnlyList<TaskItem>?>(b.Seeded)
+                    : FetchSubtreeChildrenAsync(b.ParentId, ct)));
 
             // Fold results back in the batch's FIFO order so de-dup (first-occurrence-wins) and sibling
             // order match a strictly serial BFS regardless of which fetch completed first.
@@ -793,6 +890,26 @@ public sealed class TaskService(
             if (!string.IsNullOrEmpty(t.Id))
                 byId[t.Id] = t;
         return id => byId.TryGetValue(id, out var v) ? v : null;
+    }
+
+    /// <summary>
+    /// Freezes a per-parent <b>complete</b>-children map into the <c>childrenIndex</c> delegate
+    /// <see cref="GetTaskTreeAsync"/> consults for its descendant BFS (#450) — the descendant sibling of
+    /// <see cref="BuildSnapshotLookup"/>. Each entry must be a parent's <em>complete</em> direct-children
+    /// set (the only source that can vouch for that today is a per-parent <see cref="GetSubtasksAsync"/>
+    /// call, surfaced by <see cref="ResolveForeignSubtasksAsync"/>'s <c>CompleteChildren</c>): a present key
+    /// yields that set and skips the parent's round-trip; an <b>absent</b> key returns <c>null</c> so the
+    /// BFS fetches it, so a parent whose completeness can't be vouched for is simply never in the map. A
+    /// present entry with an <b>empty</b> list is a parent known to have no children — trusted (skips the
+    /// fetch, adds nothing), distinct from an absent key. Snapshotting into a fresh dictionary (rather than
+    /// closing over the caller's map) mirrors <see cref="BuildSnapshotLookup"/>: the tree load runs off the
+    /// UI thread, so the returned delegate reads only the frozen copy and never races a mutating source.
+    /// </summary>
+    public static Func<string, IReadOnlyList<TaskItem>?> BuildChildrenIndex(
+        IReadOnlyDictionary<string, IReadOnlyList<TaskItem>> completeChildren)
+    {
+        var byParent = new Dictionary<string, IReadOnlyList<TaskItem>>(completeChildren, StringComparer.Ordinal);
+        return parentId => byParent.TryGetValue(parentId, out var v) ? v : null;
     }
 
     /// <summary>
@@ -1145,6 +1262,11 @@ public sealed class TaskService(
         // concurrent write and the next frontier is deterministic.
         var budget = opts.MaxPerParentFetches;
         var spent = 0;
+        // #450: each successful per-parent GetSubtasksAsync returns a parent's COMPLETE child set, so record
+        // it here (keyed by parent id) to seed the Task Tree tab's descendant BFS. Only the per-parent branch
+        // populates this — the whole-list branch above can't vouch for a parent's children per-parent — and a
+        // failed fetch is never recorded (below), so no incomplete set is ever exposed as complete.
+        var completeChildren = new Dictionary<string, IReadOnlyList<TaskItem>>(StringComparer.Ordinal);
         var expanded = new HashSet<string>(StringComparer.Ordinal);
         using var gate = new SemaphoreSlim(MaxFanOutConcurrency);
         // plan.PerParentIds is already distinct (SubtaskFetchStrategy dedups parents); the per-level
@@ -1181,7 +1303,8 @@ public sealed class TaskService(
             spent += level.Count;
 
             // Fetch the level concurrently, bounded by the gate, preserving order so the merge below is
-            // deterministic. Best-effort: a parent whose fetch throws contributes no children.
+            // deterministic. Best-effort: a parent whose fetch throws returns null so it contributes no
+            // children AND isn't recorded as a (falsely-empty) complete set — distinct from a genuine empty.
             var childLists = await Task.WhenAll(level.Select(async id =>
             {
                 await gate.WaitAsync(ct);
@@ -1191,7 +1314,7 @@ public sealed class TaskService(
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    return (IReadOnlyList<TaskItem>)[];
+                    return null;
                 }
                 finally
                 {
@@ -1200,10 +1323,15 @@ public sealed class TaskService(
             }));
 
             // Merge single-threaded in level order; newly-pooled children become the next frontier
-            // (their own subtasks may be foreign too).
+            // (their own subtasks may be foreign too). Indexed against `level` so each result pairs with its
+            // parent id for the #450 complete-children record.
             var next = new List<string>();
-            foreach (var children in childLists)
+            for (var i = 0; i < level.Count; i++)
             {
+                var children = childLists[i];
+                if (children is null)
+                    continue; // fetch failed: no children, and not vouched complete
+                completeChildren[level[i]] = children; // a successful per-parent fetch is a complete child set
                 foreach (var child in children)
                 {
                     if (string.IsNullOrEmpty(child.Id) || !fetched.TryAdd(child.Id, child))
@@ -1214,7 +1342,8 @@ public sealed class TaskService(
             frontier = next;
         }
 
-        return new ForeignSubtaskResolution(ForeignDescendants(snapshot, fetched.Values.ToList()), truncated);
+        return new ForeignSubtaskResolution(
+            ForeignDescendants(snapshot, fetched.Values.ToList()), truncated, completeChildren);
     }
 
     /// <summary>Stable ordering: by due date (soonest first, undated last), then by name.</summary>

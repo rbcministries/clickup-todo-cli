@@ -178,6 +178,13 @@ public sealed class TodoApp
     // _contextParents. They render as not-mine rows nested under their parent and aren't my work
     // (status/pin are blocked on them).
     private volatile IReadOnlyDictionary<string, TaskItem> _foreignSubtasks = EmptyParents;
+    // Per-parent COMPLETE children sets resolved by the last foreign-subtask fetch (F4, #450), keyed by
+    // parent id — the trusted source the Task Tree tab seeds its descendant BFS from (a per-parent
+    // GetSubtasksAsync returns a complete child set). Resolved off the UI thread (FetchAsync) and read on the
+    // UI thread when a detail opens, so volatile like _foreignSubtasks. Empty when F4 is off / nothing fetched.
+    private volatile IReadOnlyDictionary<string, IReadOnlyList<TaskItem>> _treeChildrenIndex = EmptyChildren;
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<TaskItem>> EmptyChildren =
+        new Dictionary<string, IReadOnlyList<TaskItem>>();
     // Set when the adaptive foreign-subtask fetch hit a round-trip cap (#87) and omitted some subtasks;
     // surfaced as a note on the post-refresh status line so the truncation isn't silent. Written in
     // FetchAsync (off-thread) and read on the UI thread in OnTasksLoaded, so volatile like _foreignSubtasks.
@@ -401,6 +408,8 @@ public sealed class TodoApp
         _foreignSubtasks = foreign.Subtasks.Count == 0
             ? EmptyParents
             : foreign.Subtasks.ToDictionary(t => t.Id, StringComparer.Ordinal);
+        // #450: the per-parent complete-children sets this fetch resolved (F4), for the Task Tree BFS seed.
+        _treeChildrenIndex = foreign.CompleteChildren.Count == 0 ? EmptyChildren : foreign.CompleteChildren;
         _foreignSubtasksTruncated = foreign.Truncated;
         _listColors = await colorsFetch;
         if (await walkFetch)
@@ -471,7 +480,7 @@ public sealed class TodoApp
     }
 
     // Shared "feature off / nothing found" result for the foreign-subtask resolver above.
-    private static readonly ForeignSubtaskResolution NoForeignSubtasks = new([], false);
+    private static readonly ForeignSubtaskResolution NoForeignSubtasks = new([], false, EmptyChildren);
 
     private void Build()
     {
@@ -718,16 +727,14 @@ public sealed class TodoApp
         // throw (a blank id), and doing it first means such a throw can't leave _launchingTab stuck true.
         var command = AppLaunchCommand.ForTask(taskId);
         // A new tab of the current terminal where the host supports it (#255's LaunchLocation), honouring
-        // the user's preferred-terminal setting on Windows. ClaudeExecutable/ExtraArgs don't apply to an
-        // app launch, so a purpose-built options value (not AgentDispatch.ToLauncherOptions) is used.
-        var options = new TerminalLauncherOptions
-        {
-            LaunchLocation = LaunchLocation.NewTab,
-            Preferred = _config.AgentDispatch.PreferredTerminal,
-            CustomTerminalCommand = TerminalCommandParser.Parse(_config.AgentDispatch.CustomTerminalCommand),
-        };
+        // the user's preferred-terminal setting on Windows. The options + status strings are shared with
+        // single-task mode's Ctrl+Enter (#435) via AppTabLaunch so the two hosts can't drift; the helper
+        // deliberately doesn't use AgentDispatch.ToLauncherOptions (ClaudeExecutable/ExtraArgs are a
+        // dispatch concern that doesn't apply to relaunching this app).
+        var options = AppTabLaunch.Options(
+            _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
         _launchingTab = true;
-        Flash($"Opening '{name}' in a new terminal tab…");
+        Flash(AppTabLaunch.Opening(name));
         _ = Task.Run(async () =>
         {
             try
@@ -741,8 +748,7 @@ public sealed class TodoApp
                         FlashLaunchFallback(command);
                         return;
                     }
-                    var message = $"Opened '{name}' in a new tab ({result.LaunchedWith}).";
-                    Flash(string.IsNullOrWhiteSpace(result.Note) ? message : $"{message} {result.Note}");
+                    Flash(AppTabLaunch.Opened(name, result));
                 });
             }
             catch (Exception ex)
@@ -756,13 +762,7 @@ public sealed class TodoApp
     /// the user can open the task tab themselves. <paramref name="reason"/> names the failure when the
     /// launch threw (vs. simply finding no emulator).</summary>
     private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
-    {
-        var cmd = command.ToDisplayCommand();
-        var lead = reason is null ? "Couldn't open a terminal tab." : $"Couldn't open a terminal tab ({reason}).";
-        Flash(TryCopyToClipboard(cmd)
-            ? $"{lead} Command copied to clipboard: {cmd}"
-            : $"{lead} Run: {cmd}");
-    }
+        => Flash(AppTabLaunch.Fallback(command, TryCopyToClipboard(command.ToDisplayCommand()), reason));
 
     /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard just yields
     /// false so the caller shows the run-it-yourself form instead.</summary>
@@ -1069,6 +1069,7 @@ public sealed class TodoApp
         {
             _contextParents = EmptyParents;
             _foreignSubtasks = EmptyParents;
+            _treeChildrenIndex = EmptyChildren;
             _foreignSubtasksTruncated = false;
         }
         Render(keepTaskId: CurrentTask()?.Id);
@@ -2001,6 +2002,10 @@ public sealed class TodoApp
                     // at worst misplace/mislabel a level (never truncate the tree or drop the initial-fetch
                     // error); F5 re-fetches the tree fresh.
                     var treeSnapshot = TaskService.BuildSnapshotLookup(_all, _rows);
+                    // #450: freeze the F4 per-parent complete-children sets (same UI-thread capture as the
+                    // ancestry snapshot) so the off-thread descendant BFS resolves an already-fetched parent's
+                    // children without a round-trip. Empty when F4 is off → the BFS fetches exactly as before.
+                    var treeChildren = TaskService.BuildChildrenIndex(_treeChildrenIndex);
                     var screen = new TaskDetailScreen(
                         detail, comments, browserRoot,
                         settings: _config.DetailView,
@@ -2030,7 +2035,7 @@ public sealed class TodoApp
                         // RESOLVED id (identical to taskId for a real id; correct for a custom-id fallback).
                         currentUserId: _tasks.UserId,
                         treeBadgeDisplay: _config.BadgeDisplay,
-                        loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(resolvedId, treeSnapshot, ct));
+                        loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(resolvedId, treeSnapshot, treeChildren, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the

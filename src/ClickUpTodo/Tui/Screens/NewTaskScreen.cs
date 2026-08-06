@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Drawing;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Services;
 using Terminal.Gui.App;
@@ -75,6 +76,9 @@ public sealed class NewTaskScreen : Screen
     private readonly List<(CustomFieldDefinition Def, Func<CustomFieldEntry> Read)> _fieldReaders = [];
 
     private bool _onFieldsPage;
+    // The stacked height of the built field widgets (the final layout `y`), used as the Custom fields
+    // page's scroll content height (#446). 0 until BuildFieldWidgets runs.
+    private int _fieldsContentHeight;
     private NewTaskRequest? _pendingRequest;
     private NamedEntity? _pendingPrimary;
 
@@ -213,6 +217,12 @@ public sealed class NewTaskScreen : Screen
         // until Save advances to it. Its widgets are built on demand from the primary list's fields.
         _fieldsTitle = new Label { X = 1, Y = 0, Text = "Custom fields" };
         _fieldsPage = new View { X = 0, Y = 0, Width = Dim.Fill(), Height = Dim.Fill(2), Visible = false, CanFocus = true };
+        // Make the page a scroll viewport (#446): when the fillable-field stack is taller than the page on
+        // a short terminal, the built-in vertical scrollbar (Auto mode) shows and the widgets scroll. The
+        // scrollbar auto-hides while the content fits, so short field lists render exactly as before. The
+        // scroll content height is set from the built widgets (see ApplyFieldsContentSize); scroll-on-focus
+        // and PgUp/PgDn (below) keep every widget reachable.
+        _fieldsPage.ViewportSettings |= ViewportSettingsFlags.HasVerticalScrollBar;
         _fieldsPage.Add(_fieldsTitle);
 
         // Esc cancels (or, on the Custom fields page, steps back), F1 opens Help (#103). Wire the handler to
@@ -238,6 +248,16 @@ public sealed class NewTaskScreen : Screen
 
     public override void OnShown() => _name.SetFocus();
 
+    /// <inheritdoc/>
+    protected override void OnSubViewLayout(LayoutEventArgs args)
+    {
+        // Keep the Custom fields page's scroll content sized to its widgets as the layout settles or the
+        // terminal resizes (#446). Cheap and idempotent — ApplyFieldsContentSize only re-sets on a change.
+        if (_onFieldsPage)
+            ApplyFieldsContentSize();
+        base.OnSubViewLayout(args);
+    }
+
     private void OnKey(object? sender, Key key)
     {
         switch (key.KeyCode)
@@ -249,6 +269,16 @@ public sealed class NewTaskScreen : Screen
             case KeyCode.F1:
                 key.Handled = true;
                 RequestHelp();
+                break;
+            case KeyCode.PageDown:
+                // Scan the Custom fields page a viewport at a time without moving focus (#446). Skip when
+                // the key came from a drop-down ListView so it keeps its own page-selection behaviour.
+                if (_onFieldsPage && sender is not ListView && ScrollFieldsPage(1))
+                    key.Handled = true;
+                break;
+            case KeyCode.PageUp:
+                if (_onFieldsPage && sender is not ListView && ScrollFieldsPage(-1))
+                    key.Handled = true;
                 break;
         }
     }
@@ -433,6 +463,12 @@ public sealed class NewTaskScreen : Screen
         foreach (var c in _baseMiddleControls)
             c.Visible = false;
         _fieldsPage.Visible = true;
+        // Start at the top of the stack and size the scroll content to the built widgets (#446). The size
+        // is re-applied on layout too (OnSubViewLayout), so it's correct even if the viewport width isn't
+        // final yet here or the terminal is resized.
+        var vp = _fieldsPage.Viewport;
+        _fieldsPage.Viewport = new Rectangle(0, 0, vp.Width, vp.Height);
+        ApplyFieldsContentSize();
         FocusFirstFieldWidget();
     }
 
@@ -463,6 +499,7 @@ public sealed class NewTaskScreen : Screen
                 case "checkbox":
                     var check = new CheckBox { X = 1, Y = y, Text = label };
                     check.KeyDown += OnKey;
+                    WireScrollOnFocus(check);
                     _fieldsPage.Add(check);
                     _fieldReaders.Add((field, () => new CustomFieldEntry
                     {
@@ -483,6 +520,7 @@ public sealed class NewTaskScreen : Screen
                     dd.SetSource(rows);
                     dd.SelectedItem = 0;
                     dd.KeyDown += OnKey;
+                    WireScrollOnFocus(dd, labelRowsAbove: 1);
                     _fieldsPage.Add(dd);
                     _fieldReaders.Add((field, () =>
                     {
@@ -505,6 +543,7 @@ public sealed class NewTaskScreen : Screen
                     {
                         var box = new CheckBox { X = 3, Y = oy, Text = opt.Name ?? opt.Id! };
                         box.KeyDown += OnKey;
+                        WireScrollOnFocus(box);
                         _fieldsPage.Add(box);
                         boxes.Add((opt.Id!, box));
                         oy++;
@@ -525,13 +564,66 @@ public sealed class NewTaskScreen : Screen
                     _fieldsPage.Add(new Label { X = 1, Y = y, Text = FieldPromptLabel(field, label) });
                     var tf = new TextField { X = 1, Y = y + 1, Width = Dim.Fill(2), Height = 1 };
                     tf.KeyDown += OnKey;
+                    WireScrollOnFocus(tf, labelRowsAbove: 1);
                     _fieldsPage.Add(tf);
                     _fieldReaders.Add((field, () => new CustomFieldEntry { Text = tf.Text?.ToString() }));
                     y += 3;
                     break;
             }
         }
+
+        // The stacked height, used as the scroll content height for the page (#446).
+        _fieldsContentHeight = y;
     }
+
+    // Size the Custom fields page's scroll content to the built widgets so the taller-than-viewport stack
+    // scrolls (#446). Width tracks the current viewport width (the widgets Fill to it), height is the built
+    // stack height. Called on show and on every layout so a not-yet-final viewport width or a terminal
+    // resize is reconciled. A no-op until widgets are built (_fieldsContentHeight == 0).
+    private void ApplyFieldsContentSize()
+    {
+        if (_fieldsContentHeight <= 0)
+            return;
+        var width = Math.Max(1, _fieldsPage.Viewport.Width);
+        var current = _fieldsPage.GetContentSize();
+        if (current.Width != width || current.Height != _fieldsContentHeight)
+            _fieldsPage.SetContentSize(new Size(width, _fieldsContentHeight));
+    }
+
+    // Scroll the Custom fields page one viewport-height in `direction` (+1 down / -1 up) without moving
+    // focus. Returns true when the viewport top actually moved (so the key is marked handled only then).
+    private bool ScrollFieldsPage(int direction)
+    {
+        var vp = _fieldsPage.Viewport;
+        var content = _fieldsPage.GetContentSize();
+        var newTop = NewTaskFieldsScrollModel.ClampTop(
+            vp.Y + direction * Math.Max(1, vp.Height), content.Height, vp.Height);
+        if (newTop == vp.Y)
+            return false;
+        _fieldsPage.Viewport = new Rectangle(vp.X, newTop, vp.Width, vp.Height);
+        return true;
+    }
+
+    // Scroll the page so a widget that Tab moved focus to is visible (#446) — the reachability guarantee
+    // for fields below the fold. Reads the widget's content-space Frame (stable under scrolling) and asks
+    // the pure model for the minimal viewport top; assigns only on a real move. <paramref name="labelRowsAbove"/>
+    // extends the revealed range upward to also show a field's prompt label (which sits that many rows
+    // above the input, e.g. a text field or drop-down); 0 when the widget carries its own label (a
+    // checkbox) or is one of several rows under a shared label (a labels option), where revealing the
+    // focused widget itself is what's wanted.
+    private void WireScrollOnFocus(View widget, int labelRowsAbove = 0)
+        => widget.HasFocusChanged += (_, _) =>
+        {
+            if (!widget.HasFocus)
+                return;
+            var vp = _fieldsPage.Viewport;
+            var content = _fieldsPage.GetContentSize();
+            var top = Math.Max(0, widget.Frame.Y - labelRowsAbove);
+            var height = widget.Frame.Height + (widget.Frame.Y - top);
+            var newTop = NewTaskFieldsScrollModel.ScrollToShow(vp.Y, top, height, vp.Height, content.Height);
+            if (newTop != vp.Y)
+                _fieldsPage.Viewport = new Rectangle(vp.X, newTop, vp.Width, vp.Height);
+        };
 
     private static string FieldPromptLabel(CustomFieldDefinition field, string label)
         => field.Type!.Trim().ToLowerInvariant() == "date" ? label + " (yyyy-MM-dd):" : label + ":";
