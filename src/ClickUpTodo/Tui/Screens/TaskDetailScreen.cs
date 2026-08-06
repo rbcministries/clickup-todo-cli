@@ -2388,13 +2388,17 @@ public sealed class TaskDetailScreen : Screen
     private void RenderChecklist(ChecklistProjection projection)
     {
         _checklistSignature = ChecklistTabModel.Signature(projection);
-        _checklistList.Title = ChecklistTabModel.TabTitle(projection);
-        // The tab-strip header reads the hosted view's Title, but changing Title mid-session doesn't itself
-        // repaint the strip (only the pane body is marked dirty when the ListView Source changes) — so an
-        // optimistic toggle (D, #457) would leave a stale "Checklists (r/t)" on the strip. Invalidate the
-        // tab control so the aggregate progress in the tab title updates in place with the rows.
-        _tabs.SetNeedsLayout();
-        _tabs.SetNeedsDraw();
+        var title = ChecklistTabModel.TabTitle(projection);
+        if (!string.Equals(_checklistList.Title, title, StringComparison.Ordinal))
+        {
+            _checklistList.Title = title;
+            // The tab-strip header caches each tab's Title and only re-reads it on a relayout (TG 2.4.10),
+            // so an in-place title change (the live "Checklists (r/t)" aggregate, #457) needs an explicit
+            // layout invalidation to repaint the strip. Scoped to an actual title change so a refresh that
+            // moved rows but not the aggregate doesn't mark a redundant relayout.
+            _tabs.SetNeedsLayout();
+            _tabs.SetNeedsDraw();
+        }
 
         if (projection.IsEmpty)
         {
