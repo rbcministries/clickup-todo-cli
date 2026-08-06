@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
@@ -191,6 +192,10 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     // C (#456): when set, DetailJson embeds a seeded `checklists` array so the Checklists tab renders
     // real groups/items. Off by default, so every other check's task-detail response is untouched.
     private readonly bool _checklists = checklists;
+    // D (#457): the mutable checklist state, so a Space-toggle PUT persists across later detail GETs.
+    // Parsed once from the ChecklistsJson seed into a JsonNode DOM; the toggle write flips an item's
+    // `resolved` in place and the detail GET serves the current DOM. Mutated/read under _gate.
+    private readonly JsonArray _checklistsDom = (JsonArray)JsonNode.Parse(ChecklistsJson)!;
 
     private static readonly string[] Statuses = ["to do", "in progress", "blocked", "in review"];
     private static readonly string[] StatusColors = ["#d3d3d3", "#4194f6", "#e50000", "#a875ff"];
@@ -431,6 +436,19 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
         // shape as the flat comment list, which GetThreadedCommentsAsync reads.
         else if (request.Method == HttpMethod.Get && path.Contains("/comment/") && path.EndsWith("/reply"))
             body = RepliesJson(CommentIdOfReply(path));
+        // PUT /v2/checklist/{checklist_id}/checklist_item/{checklist_item_id} (D, #457): the toggle-resolved
+        // write. Parse {"resolved":bool}, flip that item in the mutable checklist DOM so a later detail GET
+        // reflects it, recompute the parent checklist's resolved/unresolved counts, and echo
+        // { "checklist": … } exactly as ClickUp does. Its path shares no segment with the /task/ branches, so
+        // ordering vs. them doesn't matter; kept with the other write branches.
+        else if (request.Method == HttpMethod.Put && path.Contains("/checklist_item/"))
+        {
+            var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
+            var resolved = ParseResolved(reqBody);
+            var (checklistId, itemId) = ChecklistItemIds(path);
+            lock (_gate)
+                body = ToggleChecklistItemResponse(checklistId, itemId, resolved);
+        }
         else if (path.Contains("/task/") && request.Method == HttpMethod.Put)
         {
             // Status/priority PUTs carry no assignees (the set is untouched); an assignee add/remove
@@ -671,8 +689,9 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
         var name = "My Account - Address display  (EA-7221)";
         if (TitleRefresh && countTitleFetch && System.Threading.Interlocked.Increment(ref _detailFetches) > 1)
             name = "Renamed on refresh";
-        // C (#456): the seeded checklists array, or empty (the common case — no other check sees it).
-        var checklists = _checklists ? ChecklistsJson : "[]";
+        // C (#456): the seeded checklists array (from the mutable DOM so a D-toggle #457 persists), or
+        // empty (the common case — no other check sees it).
+        var checklists = _checklists ? _checklistsDom.ToJsonString() : "[]";
         // `locations` are the task's additional list memberships (#242), mutated by the membership
         // POST/DELETE so an add/remove from the List pane round-trips; empty in the common single-list case.
         return $$"""
@@ -717,6 +736,106 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
         {
             // A non-JSON / unexpected body is not this fake's concern — leave the description untouched.
         }
+    }
+
+    /// <summary>Reads the <c>resolved</c> boolean from a checklist-item PUT body (<c>{"resolved":bool}</c>),
+    /// defaulting to false on a missing/odd body (D, #457).</summary>
+    private static bool ParseResolved(string requestBody)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            return doc.RootElement.TryGetProperty("resolved", out var r)
+                   && r.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Splits <c>/v2/checklist/{checklist_id}/checklist_item/{checklist_item_id}</c> into its two
+    /// ids (D, #457).</summary>
+    private static (string ChecklistId, string ItemId) ChecklistItemIds(string path)
+    {
+        var itemId = path[(path.LastIndexOf('/') + 1)..];
+        const string listSeg = "/checklist/";
+        const string itemSeg = "/checklist_item/";
+        var start = path.IndexOf(listSeg, StringComparison.Ordinal) + listSeg.Length;
+        var end = path.IndexOf(itemSeg, StringComparison.Ordinal);
+        return (end > start ? path[start..end] : "", itemId);
+    }
+
+    /// <summary>Flips <paramref name="itemId"/>'s <c>resolved</c> flag (searching items + nested children) in
+    /// checklist <paramref name="checklistId"/> within the mutable DOM, recomputes that checklist's
+    /// resolved/unresolved counts, and returns the ClickUp-shaped <c>{ "checklist": … }</c> echo of the
+    /// updated group (D, #457). Called under <c>_gate</c>.</summary>
+    private string ToggleChecklistItemResponse(string checklistId, string itemId, bool resolved)
+    {
+        JsonObject? target = null;
+        foreach (var node in _checklistsDom)
+        {
+            if (node is JsonObject checklist && checklist["id"]?.GetValue<string>() == checklistId)
+            {
+                target = checklist;
+                SetItemResolved(checklist["items"] as JsonArray, itemId, resolved);
+                RecomputeCounts(checklist);
+                break;
+            }
+        }
+
+        // Echo the whole parent checklist under a `checklist` key (ClickUp's shape); a deep clone so the
+        // returned node isn't parented in the DOM.
+        var echoed = target is null ? new JsonObject() : (JsonObject)target.DeepClone();
+        return new JsonObject { ["checklist"] = echoed }.ToJsonString();
+    }
+
+    /// <summary>Sets the <c>resolved</c> flag of the item with <paramref name="itemId"/>, recursing into
+    /// each item's <c>children</c>; returns true once found (D, #457).</summary>
+    private static bool SetItemResolved(JsonArray? items, string itemId, bool resolved)
+    {
+        if (items is null)
+            return false;
+        foreach (var node in items)
+        {
+            if (node is not JsonObject item)
+                continue;
+            if (item["id"]?.GetValue<string>() == itemId)
+            {
+                item["resolved"] = resolved;
+                return true;
+            }
+            if (SetItemResolved(item["children"] as JsonArray, itemId, resolved))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Recomputes a checklist's <c>resolved</c>/<c>unresolved</c> counts from its (possibly nested)
+    /// items so the echoed group matches what the app projects (D, #457).</summary>
+    private static void RecomputeCounts(JsonObject checklist)
+    {
+        var (resolved, total) = CountItems(checklist["items"] as JsonArray);
+        checklist["resolved"] = resolved;
+        checklist["unresolved"] = total - resolved;
+    }
+
+    private static (int Resolved, int Total) CountItems(JsonArray? items)
+    {
+        var resolved = 0;
+        var total = 0;
+        if (items is not null)
+            foreach (var node in items)
+                if (node is JsonObject item)
+                {
+                    total++;
+                    if (item["resolved"]?.GetValue<bool>() == true)
+                        resolved++;
+                    var (childResolved, childTotal) = CountItems(item["children"] as JsonArray);
+                    resolved += childResolved;
+                    total += childTotal;
+                }
+        return (resolved, total);
     }
 
     /// <summary>The workspace <c>members</c> array (each wrapped as <c>{ user }</c>) from <see cref="Members"/>.</summary>

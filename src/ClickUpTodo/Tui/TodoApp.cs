@@ -2055,7 +2055,10 @@ public sealed class TodoApp
                         memberMatch: (query, exclude) =>
                             _assignees.Match(query, exclude).Select(a => new WorkspaceMember(a.Id, a.Name, null)).ToList(),
                         memberTopFrequent: (n, exclude) =>
-                            _assignees.TopMostFrequent(n, exclude).Select(a => new WorkspaceMember(a.Id, a.Name, null)).ToList());
+                            _assignees.TopMostFrequent(n, exclude).Select(a => new WorkspaceMember(a.Id, a.Name, null)).ToList(),
+                        // Space on the Checklists tab (D, #457): toggle the item's resolved state on ClickUp.
+                        setChecklistResolvedAsync: (checklistId, itemId, resolved, ct) =>
+                            _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the

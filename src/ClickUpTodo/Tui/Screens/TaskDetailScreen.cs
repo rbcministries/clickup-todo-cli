@@ -272,6 +272,16 @@ public sealed class TaskDetailScreen : Screen
     // Content fingerprint of the last-rendered projection, so an unchanged refresh leaves the selection
     // and scroll untouched (the OtherTabSignature discipline, applied to the checklist rows).
     private string _checklistSignature = "";
+    // The checklist-item resolved write (D, #457): Space on an item row toggles it. The host owns the
+    // ClickUp write via this callback (the screen never reaches for the client); null ⇒ toggling is inert.
+    private readonly Func<string, string, bool, CancellationToken, Task>? _setChecklistResolvedAsync;
+    // Guards against a second toggle while one is in flight (the _savingDescription discipline), so a key
+    // mash can't stack writes.
+    private bool _togglingChecklistItem;
+    // The in-flight optimistic toggle (checklist id, item id, desired resolved). While set, UpdateData
+    // overlays it onto any incoming refresh so a poll that lands mid-write can neither resurrect the stale
+    // server value nor double-apply the toggle; cleared when the write settles.
+    private (string ChecklistId, string ItemId, bool Resolved)? _pendingChecklistToggle;
 
     /// <summary>Raised when the user activates a tree row (Enter or double-click) for a task other than
     /// the one being shown (#291). The host opens that task's detail stacked over this one, so Esc walks
@@ -403,7 +413,8 @@ public sealed class TaskDetailScreen : Screen
         Func<CancellationToken, Task<IReadOnlyList<TaskTreeRow>>>? loadTaskTreeAsync = null,
         Func<IReadOnlyList<CommentRun>, CancellationToken, Task<CommentItem>>? postStructuredCommentAsync = null,
         Func<string, ISet<long>, IReadOnlyList<WorkspaceMember>>? memberMatch = null,
-        Func<int, ISet<long>, IReadOnlyList<WorkspaceMember>>? memberTopFrequent = null)
+        Func<int, ISet<long>, IReadOnlyList<WorkspaceMember>>? memberTopFrequent = null,
+        Func<string, string, bool, CancellationToken, Task>? setChecklistResolvedAsync = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
@@ -418,6 +429,7 @@ public sealed class TaskDetailScreen : Screen
         _postStructuredCommentAsync = postStructuredCommentAsync;
         _memberMatch = memberMatch;
         _memberTopFrequent = memberTopFrequent;
+        _setChecklistResolvedAsync = setChecklistResolvedAsync;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
@@ -788,6 +800,18 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     public void UpdateData(TaskDetail task, IReadOnlyList<CommentItem> comments)
     {
+        // While a checklist toggle is in flight (D, #457), keep its optimistic resolved value authoritative
+        // over any refresh landing mid-write — a poll returning the pre-write server state must neither
+        // resurrect the stale value nor appear to double-apply the toggle. Overlaying here (before _task is
+        // set) means every derived view, including the checklist re-projection below, sees the pending
+        // value; it's cleared when the write settles, so the next refresh then carries the server truth.
+        if (_pendingChecklistToggle is { } pending)
+            task = task with
+            {
+                Checklists = ChecklistToggle.SetResolved(
+                    task.Checklists, pending.ChecklistId, pending.ItemId, pending.Resolved),
+            };
+
         _task = task;
         _comments = comments;
 
@@ -954,6 +978,18 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             CycleBadgeDisplayRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        // Space on the Checklists tab (D, #457) toggles the selected item's resolved state, optimistically.
+        // Guarded on the checklist ListView being front-most (claimed here, before the ListView's own
+        // bindings, like the bare ↑/↓ block below), so Space on the read-only text panes (which ignore it)
+        // and every other tab is undisturbed. A header/empty-state row is inert-but-flashed, not a silent
+        // no-op.
+        if (key.KeyCode == KeyCode.Space && ReferenceEquals(_tabs.Value, _checklistList))
+        {
+            key.Handled = true;
+            ToggleSelectedChecklistItem();
             return;
         }
 
@@ -2093,6 +2129,80 @@ public sealed class TaskDetailScreen : Screen
         });
     }
 
+    /// <summary>
+    /// Toggle the selected checklist item's <c>resolved</c> state (D, #457): optimistic flip → re-render →
+    /// off-thread write → revert-on-failure + flash, mirroring <see cref="SaveDescription"/>'s in-flight
+    /// guard and <see cref="Application"/>.<c>Invoke</c> discipline. A header/empty-state row (no item id) is
+    /// inert but flashed rather than a silent no-op; while a toggle is in flight a second press is ignored
+    /// with feedback. The immediate glyph + progress flip is the success feedback (no confirming flash), so
+    /// only the guard, the header-inert case, and a failure flash reach the status line.
+    /// </summary>
+    private void ToggleSelectedChecklistItem()
+    {
+        if (_setChecklistResolvedAsync is null)
+            return;
+        if (_togglingChecklistItem)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (_checklistList.SelectedItem is not int i || i < 0 || i >= _checklistRows.Count)
+            return;
+        var row = _checklistRows[i];
+        if (row.IsHeader || string.IsNullOrEmpty(row.ItemId))
+        {
+            RequestFlash("Select a checklist item to toggle — headers can't be ticked.");
+            return;
+        }
+
+        var checklistId = row.ChecklistId;
+        var itemId = row.ItemId!;
+        var desired = !row.Resolved;
+        var previous = row.Resolved;
+
+        _togglingChecklistItem = true;
+        _pendingChecklistToggle = (checklistId, itemId, desired);
+        // Optimistic: flip the item in the working task and re-render — the [ ]/[x] glyph, the group's
+        // (resolved/total) and the tab-title aggregate all move now, before the request. The pending overlay
+        // in UpdateData keeps this value authoritative against a refresh landing mid-write.
+        UpdateData(
+            _task with { Checklists = ChecklistToggle.SetResolved(_task.Checklists, checklistId, itemId, desired) },
+            _comments);
+
+        // Fully-qualified Task (this screen exposes a `Task` property that would otherwise shadow it), as in
+        // SaveDescription.
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await _setChecklistResolvedAsync(checklistId, itemId, desired, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _togglingChecklistItem = false;
+                    _pendingChecklistToggle = null;
+                    // The optimistic state already matches the confirmed write; the next refresh reconciles
+                    // the authoritative server checklist. Nothing to re-render on success.
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _togglingChecklistItem = false;
+                    _pendingChecklistToggle = null;
+                    if (_disposed)
+                        return;
+                    // Revert the optimistic flip (pending is cleared first so the overlay doesn't re-apply
+                    // it) and flash — nothing is left visually wrong.
+                    UpdateData(
+                        _task with { Checklists = ChecklistToggle.SetResolved(_task.Checklists, checklistId, itemId, previous) },
+                        _comments);
+                    RequestFlash($"Could not update item: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
     /// <summary>Sets the activity sort direction and re-renders <em>both</em> the Stream and Comments
     /// bodies in place (#106), so the one order applies to both tabs regardless of which is currently
     /// shown. No-op if unchanged. Re-arms the Stream auto-scroll edge (#107) so, e.g., "scroll to newest"
@@ -2279,6 +2389,12 @@ public sealed class TaskDetailScreen : Screen
     {
         _checklistSignature = ChecklistTabModel.Signature(projection);
         _checklistList.Title = ChecklistTabModel.TabTitle(projection);
+        // The tab-strip header reads the hosted view's Title, but changing Title mid-session doesn't itself
+        // repaint the strip (only the pane body is marked dirty when the ListView Source changes) — so an
+        // optimistic toggle (D, #457) would leave a stale "Checklists (r/t)" on the strip. Invalidate the
+        // tab control so the aggregate progress in the tab title updates in place with the rows.
+        _tabs.SetNeedsLayout();
+        _tabs.SetNeedsDraw();
 
         if (projection.IsEmpty)
         {

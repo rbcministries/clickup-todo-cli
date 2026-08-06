@@ -266,7 +266,11 @@ public sealed class SingleTaskApp
             // that vouches for complete child sets is a dashboard concern, absent in single-task mode.
             currentUserId: _tasks.UserId,
             treeBadgeDisplay: _config.BadgeDisplay,
-            loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(id, snapshotLookup: null, childrenIndex: null, ct: ct));
+            loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(id, snapshotLookup: null, childrenIndex: null, ct: ct),
+            // Space on the Checklists tab (D, #457): the Checklists tab is present in single-task mode too,
+            // so wire the toggle write here as well, keyed to this tab's task id.
+            setChecklistResolvedAsync: (checklistId, itemId, resolved, ct) =>
+                _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct));
 
         var tab = new DetailTab(screen, id, task, comments);
 

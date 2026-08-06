@@ -34,6 +34,8 @@ CTRL_RIGHT = b"\x1b[1;5C"
 DOWN = b"\x1b[B"
 UP = b"\x1b[A"
 ENTER = b"\r"
+SPACE = b" "
+CTRL_R = b"\x12"          # refresh (alias of F5) — re-fetches detail from the fake backend
 
 
 class Session:
@@ -164,5 +166,67 @@ def run_empty():
         s.kill()
 
 
+def run_toggle():
+    """D (#457): Space on an item row toggles resolved (optimistic + persisted); Space on a header is inert.
+
+    Row layout on the Checklists tab (E2E_CHECKLISTS=1):
+        0  Release steps  (1/3)          ← header
+        1  [x] Cut the tag
+        2  [ ] Draft release notes — Ada Lovelace
+        3    [ ] Verify the changelog    ← nested under row 2
+        4  QA signoff  (1/2)             ← header
+        5  [x] Smoke test on staging
+        6  [ ] Cross-browser check
+    """
+    s = Session({"E2E_CHECKLISTS": "1"})
+    try:
+        s.pump(8.0)
+        assert "Task 0" in s.visible(), "list boot failed:\n" + s.visible()
+        s.open_checklists_tab()
+
+        # Normalise the selection to the top row (row 0 = the "Release steps" header). Bare ↑ past the top
+        # is a boundary no-op that stays on the tab.
+        for _ in range(8):
+            s.send(UP)
+            s.pump(0.1)
+        s.pump(0.3)
+
+        # ── Header row is inert: Space on "Release steps" changes no glyph and no progress ────────────
+        before = s.visible()
+        assert "Checklists (2/5)" in before, "precondition: aggregate should start at (2/5):\n" + before
+        s.send(SPACE)
+        s.pump(0.8)
+        v = s.visible()
+        assert s.proc.poll() is None, "Space on a header crashed the process"
+        assert "Checklists (2/5)" in v, "Space on a header row wrongly changed the aggregate:\n" + v
+        assert "[ ] Cross-browser check" in v, "Space on a header wrongly toggled an item:\n" + v
+
+        # ── Toggle an item: move to "[ ] Cross-browser check" (row 6) and press Space ────────────────
+        for _ in range(6):        # row 0 (header) → … → row 6 (Cross-browser check)
+            s.send(DOWN)
+            s.pump(0.15)
+        s.send(SPACE)
+        s.pump(1.2)
+        v = s.visible()
+        assert "[x] Cross-browser check" in v, "Space did not tick the item ([ ]→[x]):\n" + v
+        assert "(2/2)" in v, "'QA signoff' group progress did not update to (2/2):\n" + v
+        assert "Checklists (3/5)" in v, "tab-title aggregate did not update to (3/5):\n" + v
+        assert "[x] Smoke test on staging" in v, "a sibling item wrongly changed:\n" + v
+
+        # ── Persists across a refresh: the fake persisted the toggle, so Ctrl+R must not resurrect the
+        #    stale [ ] / (2/5) state (the in-flight overlay + the mutated backend agree). ───────────────
+        s.send(CTRL_R)
+        s.pump(2.5)
+        v = s.visible()
+        assert "[x] Cross-browser check" in v and "Checklists (3/5)" in v, \
+            "a refresh after the toggle resurrected the stale resolved state:\n" + v
+
+        print("ok — toggle: Space on a header is inert; Space on an item flips [ ]→[x], "
+              "updates group (2/2) + title (3/5), and survives a refresh")
+    finally:
+        s.kill()
+
+
 run_populated()
 run_empty()
+run_toggle()
