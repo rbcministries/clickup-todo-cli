@@ -96,14 +96,22 @@ def main():
         pump(3.0)
         assert "Description" in "\n".join(lines()), "detail did not open:\n" + "\n".join(lines())
 
-        # Stream(0) → Description(1) → Comments(2): two Ctrl+→ lands on the Comments tab.
+        # Cycle to the Comments tab (Ctrl+→). The exact hop count doesn't matter for Ctrl+T (it works on
+        # any tab) — this just puts the comment thread in view for the post-render check below.
         os.write(master, CTRL_RIGHT); pump(0.6)
         os.write(master, CTRL_RIGHT); pump(0.8)
 
         # ── Ctrl+T opens the reply-target picker ───────────────────────────────────
-        os.write(master, CTRL_T)
-        pump(1.2)
-        picker = "\n".join(lines())
+        # Retry: on a cold/loaded boot the comments-with-replies load can still be in flight when the
+        # first Ctrl+T fires (empty comment set ⇒ "No comments to reply to" no-op), so poll until the
+        # picker is up rather than assuming one press lands.
+        picker = ""
+        for _ in range(10):
+            os.write(master, CTRL_T)
+            pump(1.0)
+            picker = "\n".join(lines())
+            if "Enter reply" in picker or "choose" in picker:
+                break
         assert "Enter reply" in picker or "choose" in picker, \
             "reply picker did not open on Ctrl+T:\n" + picker
 
