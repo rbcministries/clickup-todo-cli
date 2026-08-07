@@ -1288,9 +1288,9 @@ public sealed class TodoApp
         {
             // Land the next refresh on the new task, then kick that refresh directly (RequestRefresh's
             // own "Refreshing…" flash would clobber this confirmation). The task always exists here (#241);
-            // when an additional-list add failed, name the lists so the outcome is unambiguous. (While
-            // multi-list create is disabled pending #365, no adds fire, so the partial-failure branch is
-            // dormant — kept wired for when the NewTaskScreen re-enables the additional-list adds.)
+            // when an additional-list add failed, name the lists so the outcome is unambiguous. (Multi-list
+            // create is enabled #524; when only the home list is selected NewTaskCreator issues no adds, so
+            // AllListsSucceeded and the happy-path flash still cover the common single-list case.)
             var created = result.Created;
             _pendingSelectId = created.Id;
             Flash(result.AllListsSucceeded
