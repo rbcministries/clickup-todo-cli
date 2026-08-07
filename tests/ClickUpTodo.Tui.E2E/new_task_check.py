@@ -141,9 +141,12 @@ try:
     print("SAVE ok — task created (round-tripped) and returned to the list")
 
     # #241 enabled (#524): two lists were selected, so Save created the task in its primary list (Q3) and
-    # added it to the additional list (Ministry Ops) via the membership write. Open the cursor task's detail
-    # and cycle to the Other tab (Ctrl+→, #315), where a *multi*-list membership renders as a "Lists:" line
-    # (home unioned with the task's `locations`) — assert it appears and includes the applied extra list.
+    # added it to the additional list (Ministry Ops) via the membership write. The fake doesn't persist the
+    # created "tnew" into the team feed, so the detail we open below is the *cursor* task, not tnew itself;
+    # but the fake's `locations` set (mutated by the membership POST) is process-global, so the app's
+    # POST /list/list3/task/tnew is what any later detail GET reflects. Opening a detail and cycling to the
+    # Other tab (Ctrl+→, #315) therefore proves an add fired for Ministry Ops — a *multi*-list membership
+    # renders as a "Lists:" line (home unioned with `locations`); assert it appears and names the extra list.
     send(b"\r", 3.0)         # Enter → open detail (async fetch + screen swap)
     assert "Description" in visible(), f"detail screen did not open:\n{visible()}"
     # The tab the detail opens on comes from persisted view settings (Stream/Description/Comments/Other),
