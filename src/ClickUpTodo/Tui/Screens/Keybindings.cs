@@ -60,6 +60,7 @@ public enum KeyAction
     AddComment,
     ReplyToComment,
     EditDescription,
+    ToggleChecklistItem,
 
     // Quick Updates.
     Apply,
@@ -112,6 +113,7 @@ public static class Keybindings
             [(ScreenContext.Detail, KeyAction.AddComment)] = "Ctrl+N",
             [(ScreenContext.Detail, KeyAction.ReplyToComment)] = "Ctrl+T",
             [(ScreenContext.Detail, KeyAction.EditDescription)] = "Ctrl+E",
+            [(ScreenContext.Detail, KeyAction.ToggleChecklistItem)] = "Space",
             [(ScreenContext.Detail, KeyAction.OpenInBrowser)] = "Ctrl+B",
             [(ScreenContext.Detail, KeyAction.QuickUpdate)] = "Ctrl+U",
             [(ScreenContext.Detail, KeyAction.Refresh)] = "F5",
