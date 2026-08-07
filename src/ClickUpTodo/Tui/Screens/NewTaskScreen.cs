@@ -26,6 +26,9 @@ namespace ClickUpTodo.Tui.Screens;
 /// <see cref="NewTaskRequest"/> via the pure <see cref="NewTaskForm"/> and creates the task through the
 /// injected <paramref name="createAsync"/> callback (the create facade #209) against the List selector's
 /// primary list (#240) — a new task must have at least one list, so Save is blocked when none is selected.
+/// When more than one list is selected, the task is created in the primary/home list and then added to each
+/// additional list via <paramref name="addToListAsync"/> (#241/#524, orchestrated by
+/// <see cref="NewTaskCreator"/>); every such membership write is an add, so no confirmation is needed.
 /// <para>
 /// <b>Custom fields (#395/§2 of #368).</b> When Save is pressed and the chosen primary list has
 /// <em>fillable</em> Custom Fields (fetched via the injected <paramref name="fetchListFieldsAsync"/>), the
@@ -81,19 +84,17 @@ public sealed class NewTaskScreen : Screen
     private int _fieldsContentHeight;
     private NewTaskRequest? _pendingRequest;
     private NamedEntity? _pendingPrimary;
+    // The full list selection snapshotted on the UI thread at Save time (#241/#524): the create's
+    // additional-list adds read this rather than touching `_lists.Selection` (a live Terminal.Gui view
+    // read) from the off-UI-thread create task. `NewTaskCreator` drops the primary and de-dupes, so the
+    // single-list case (only the home list selected) still issues no add calls.
+    private IReadOnlyList<NamedEntity> _pendingSelection = [];
 
     /// <summary>Raised on a successful create with the create outcome (#241) — the server-mapped task plus
     /// any additional lists that couldn't be added — so the host can refresh the list, select the new task,
     /// and report a partial multi-list failure. The task always exists once this fires; the screen closes
     /// itself immediately after.</summary>
     public event EventHandler<NewTaskCreateResult>? Created;
-
-    /// <summary>Flashed when the List selector takes focus while multi-list create is disabled (#241,
-    /// pending the list-change migration #365): a new task is filed into its single home list only, so any
-    /// additional list the user picks here is ignored on Save. Public so the tui-validate check can assert
-    /// the disabled-state note.</summary>
-    public const string MultiListDisabledNote =
-        "Pick a single list — setting multiple lists isn't supported here yet (the task is created in one list).";
 
     /// <param name="match">Substring match over the candidate pool, excluding the given ids — i.e.
     /// <c>AssigneeFrequencyCache.Match</c>.</param>
@@ -189,17 +190,6 @@ public sealed class NewTaskScreen : Screen
             Height = 6,
         };
         _lists.Flash += (_, message) => RequestFlash(message);
-        // #241 multi-list create is implemented + unit-tested (NewTaskCreator) but shipped DISABLED
-        // pending the list-change field/status migration (#365), mirroring the Quick Updates List pane
-        // (#242/#339). While disabled, Save files the task into its single home list only; flag that on the
-        // status line the moment the List selector takes focus so a user who adds a second list understands
-        // it won't be applied. HasFocus reflects the post-change state, so this fires once on focus-in and
-        // not on internal search↔list moves. Remove this when re-enabling multi-list (see OnSave).
-        _lists.HasFocusChanged += (_, _) =>
-        {
-            if (_lists.HasFocus)
-                RequestFlash(MultiListDisabledNote);
-        };
 
         // ── Optional fields (#215): Priority + Due date, sitting just above the button line. Positioned
         // relative to Save so the block lands on fixed rows regardless of window height (rows Save-6…Save-2
@@ -336,6 +326,10 @@ public sealed class NewTaskScreen : Screen
 
         _pendingRequest = request;
         _pendingPrimary = primary;
+        // Snapshot the full selection on the UI thread; StartCreate (off-thread) reads this materialised
+        // list, never the live selector. Captured here (not read at create time) so it's a consistent
+        // snapshot even though the Custom fields page may sit between Save and the actual create.
+        _pendingSelection = _lists.Selection;
 
         // Fetch the primary list's Custom Fields; re-fetched on every Save so changing the list re-fetches
         // for the new target (#395: "re-fetch when the selected list changes").
@@ -414,19 +408,22 @@ public sealed class NewTaskScreen : Screen
         RequestFlash("Creating task…");
 
         var primary = _pendingPrimary;
+        var selection = _pendingSelection;
         var token = _cts.Token;
         _ = Task.Run(async () =>
         {
             try
             {
-                // Multi-list create (#241) is DISABLED pending the list-change migration (#365): file the
-                // task into its single home list only by passing just the primary — no additional-list
-                // adds fire. The orchestrator, its facade delegate, and the partial-failure result stay
-                // wired so re-enabling is a one-line change: pass `_lists.Selection` here instead of
-                // `[primary!]` (and drop the MultiListDisabledNote focus flash above). A primary-create
-                // failure still throws out (task not created), keeping the form open to retry.
+                // Multi-list create (#241, re-enabled in #524): file the task into its primary/home list,
+                // then add it to each additional selected list. `NewTaskCreator` computes the additional
+                // lists as the selection minus the primary (de-duped), so the single-list case issues no
+                // add calls; every membership write is an *add*, which is always safe (it only exposes the
+                // target list's fields to the task, never strands a value — hence no confirmation, unlike
+                // the Quick Updates List pane #365). A primary-create failure still throws out (task not
+                // created), keeping the form open to retry; a failed additional add is recorded on the
+                // result without discarding the created task.
                 var result = await NewTaskCreator.CreateAsync(
-                    primary!, [primary!], request, _createAsync, _addToListAsync, token).ConfigureAwait(false);
+                    primary!, selection, request, _createAsync, _addToListAsync, token).ConfigureAwait(false);
                 Application.Invoke(() =>
                 {
                     if (token.IsCancellationRequested)

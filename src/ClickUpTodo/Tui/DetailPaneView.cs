@@ -236,6 +236,9 @@ public sealed class DetailPaneView : TextView
         _body = body;
         _paneLinks = ExtractPaneLinks(body, separator);
         _focusedLinkIndex = LinkFocus.None;
+        // A new body re-wraps into fresh row lists, so the reference-keyed source map (#443) is stale — drop
+        // it so it doesn't retain the previous body's rows (the draw path rebuilds it on the next miss).
+        _rowSourceMap = null;
         // Home the caret before re-loading. Terminal.Gui 2.4.10's TextView.Load raises OnContentsChanged
         // (via its history-clear) with InheritsPreviousAttribute already turned on but *before* it resets
         // the caret, so it runs ProcessInheritsPreviousScheme against the stale CurrentRow/CurrentColumn
@@ -501,21 +504,196 @@ public sealed class DetailPaneView : TextView
         return (styles, urls);
     }
 
+    /// <summary>
+    /// The source-line origin of one rendered (word-wrapped) display row: which source line it came from
+    /// (<see cref="SourceLineIndex"/>, indexing the body split on <c>'\n'</c>) and the char offset within
+    /// that line where the row's first cell begins (<see cref="StartOffset"/>). <see cref="SourceLineIndex"/>
+    /// is <c>-1</c> for a row that could not be reconciled (the draw path then falls back to the per-row
+    /// re-extraction, so nothing regresses). Produced by <see cref="BuildRowSourceMap"/>.
+    /// </summary>
+    public readonly record struct RowSource(int SourceLineIndex, int StartOffset);
+
+    /// <summary>
+    /// The display→source-line mapping for #443: one <see cref="RowSource"/> per rendered
+    /// <paramref name="wrappedRows"/> row, recovered by <b>reconciling Terminal.Gui's published wrap output
+    /// against the source lines</b> — not by reaching into its <c>internal WordWrapManager</c> and not by
+    /// reimplementing word wrap. Word wrap only ever splits a source line into consecutive display rows in
+    /// order (never merging or reordering), so each wrapped row's reconstructed text is located in the
+    /// current source line with <see cref="string.IndexOf(string, int, StringComparison)"/> from a running
+    /// cursor; a soft-wrap dropping the break whitespace is handled for free (the next row's text is simply
+    /// found <em>after</em> the gap), and a URL hard-wrapped mid-token drops no char so its fragments are
+    /// found contiguously. With this mapping, link styling can be driven from the <em>source line's</em>
+    /// <see cref="LinkSpan"/>s (which see the whole, unsplit link) via <see cref="ClassifyRowFromSource"/>,
+    /// closing the wrap-split gap #413/#430 left. Pure — no Terminal.Gui draw surface — and, because a real
+    /// <see cref="DetailPaneView"/> wraps headlessly, unit-tested against genuine <see cref="GetAllLines"/>
+    /// output. Separator lines are ordinary source lines here (their short rule never wraps, so it maps
+    /// one-to-one); the draw path still styles them from the tag, unchanged.
+    /// </summary>
+    public static IReadOnlyList<RowSource> BuildRowSourceMap(
+        IReadOnlyList<string> sourceLines, IReadOnlyList<IReadOnlyList<Cell>> wrappedRows)
+    {
+        var result = new RowSource[wrappedRows.Count];
+        var srcIdx = 0;
+        var cursor = 0;
+        for (var r = 0; r < wrappedRows.Count; r++)
+        {
+            var rowText = RowText(wrappedRows[r]);
+            var matched = false;
+            while (srcIdx < sourceLines.Count)
+            {
+                var line = sourceLines[srcIdx];
+                var start = Math.Min(cursor, line.Length);
+                if (rowText.Length == 0)
+                {
+                    // An empty display row only ever comes from an empty (or fully consumed) source line —
+                    // word wrap never emits a blank row mid-content. Match it there and move to the next line.
+                    if (start >= line.Length)
+                    {
+                        result[r] = new RowSource(srcIdx, start);
+                        srcIdx++;
+                        cursor = 0;
+                        matched = true;
+                    }
+                    break;
+                }
+
+                var at = start <= line.Length ? line.IndexOf(rowText, start, StringComparison.Ordinal) : -1;
+                if (at >= 0)
+                {
+                    result[r] = new RowSource(srcIdx, at);
+                    cursor = at + rowText.Length;
+                    // When the source line is fully consumed, the next display row begins a new source line.
+                    if (cursor >= line.Length)
+                    {
+                        srcIdx++;
+                        cursor = 0;
+                    }
+                    matched = true;
+                    break;
+                }
+
+                // This source line can't hold the row's text at/after the cursor → it belongs to a later one.
+                srcIdx++;
+                cursor = 0;
+            }
+
+            if (!matched)
+                result[r] = new RowSource(-1, 0);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Classifies each cell of one rendered (possibly word-wrapped) <paramref name="row"/> from the
+    /// <em>source line</em> it came from (<paramref name="sourceLine"/>) and the char
+    /// <paramref name="startOffset"/> at which the row begins in it (both from <see cref="BuildRowSourceMap"/>).
+    /// Because the <see cref="LinkSpan"/>s come from the whole source line rather than the row's own
+    /// graphemes, a link that word wrap splits across two rows is classified <b>contiguously on every row it
+    /// touches</b> (#443) — the head and tail of an over-long bare URL both carry that URL, and a markdown
+    /// link's visible-text cells carry its <b>resolved</b> target no matter which row they land on, while the
+    /// <c>[</c>/<c>]</c>/<c>(url)</c> markup outside the span stays <see cref="DetailCellStyle.Normal"/> /
+    /// <see langword="null"/>. Each cell's source offset is <paramref name="startOffset"/> plus the row's own
+    /// accumulated grapheme length (a cell is one grapheme, which may be several UTF-16 chars), the same
+    /// accounting <see cref="ClassifyRow"/> uses. Pure and Terminal.Gui-draw-free, so it is unit-tested.
+    /// </summary>
+    public static (DetailCellStyle[] Styles, string?[] Urls) ClassifyRowFromSource(
+        IReadOnlyList<Cell> row, string sourceLine, int startOffset)
+    {
+        var styles = new DetailCellStyle[row.Count];
+        var urls = new string?[row.Count];
+        if (row.Count == 0)
+            return (styles, urls);
+
+        // Cheap bail-out mirroring ClassifyRow: every link (bare or markdown) carries an http(s) scheme, so
+        // a source line without one has no links and skips the regex entirely — the common case for body
+        // text, and a source line can wrap into several rows that each hit this path.
+        if (sourceLine.IndexOf("http", StringComparison.OrdinalIgnoreCase) < 0)
+            return (styles, urls);
+
+        var links = TaskLinkExtractor.Extract(sourceLine);
+        if (links.Count == 0)
+            return (styles, urls);
+
+        // Walk cells and links together in one pass, tracking each cell's char offset within the source line.
+        var charPos = startOffset;
+        var li = 0;
+        for (var i = 0; i < row.Count; i++)
+        {
+            var off = charPos;
+            charPos += row[i].Grapheme?.Length ?? 0;
+            while (li < links.Count && off >= links[li].End)
+                li++;
+            if (li >= links.Count)
+                break;
+            if (off >= links[li].Start && off < links[li].End)
+            {
+                styles[i] = links[li].Kind == LinkKind.Task ? DetailCellStyle.TaskLink : DetailCellStyle.WebLink;
+                urls[i] = links[li].Url;
+            }
+        }
+
+        return (styles, urls);
+    }
+
+    // Reconstructs a rendered row's text from its cells' graphemes — the string BuildRowSourceMap locates in
+    // the source line and ClassifyRow re-extracts from. A cell is one grapheme (possibly multi-char), so this
+    // is the row's exact character content.
+    private static string RowText(IReadOnlyList<Cell> row)
+    {
+        var text = new StringBuilder(row.Count);
+        foreach (var cell in row)
+            text.Append(cell.Grapheme ?? string.Empty);
+        return text.ToString();
+    }
+
     // Per-row cache for the draw path: OnDrawReadOnlyColor is invoked once per cell, but the row's link
     // classification (both the kind style #413 and the OSC-8 URL #380/#430) only needs computing once per
-    // row, from a single ClassifyRow re-extraction. Keyed on the row list reference (Terminal.Gui's wrap
-    // model holds a distinct list per rendered row), so a new row triggers a recompute.
+    // row. Preferably from the source-line mapping (#443, via _rowSourceMap) so a wrap-split link is styled
+    // contiguously; falling back to a single per-row ClassifyRow re-extraction for any row that doesn't
+    // reconcile. Keyed on the row list reference (Terminal.Gui's wrap model holds a distinct list per
+    // rendered row), so a new row triggers a recompute.
     private List<Cell>? _linkRow;
     private DetailCellStyle[]? _linkRowStyles;
     private string?[]? _linkRowUrls;
+
+    // The reference-keyed display→source mapping (#443), built once from GetAllLines() and rebuilt when a
+    // drawn row isn't found in it (i.e. the wrap changed — a resize or a re-render). A row that reconciles
+    // is styled from its source line's spans; a row that doesn't falls back to per-row re-extraction.
+    private Dictionary<List<Cell>, RowSource>? _rowSourceMap;
 
     private void EnsureRowLinkCache(List<Cell> line)
     {
         if (ReferenceEquals(_linkRow, line) && _linkRowStyles is { } s && s.Length == line.Count && _linkRowUrls is not null)
             return;
 
-        (_linkRowStyles, _linkRowUrls) = ClassifyRow(line);
+        // Prefer the source-line mapping (#443) so a link word wrap split across rows is styled contiguously;
+        // fall back to the per-row re-extraction (#413/#430) for any row that doesn't reconcile — that is
+        // exactly today's behaviour, so a reconciliation miss never regresses.
+        if (TryGetRowSource(line) is { SourceLineIndex: >= 0 } src && src.SourceLineIndex < _lines.Length)
+            (_linkRowStyles, _linkRowUrls) = ClassifyRowFromSource(line, _lines[src.SourceLineIndex], src.StartOffset);
+        else
+            (_linkRowStyles, _linkRowUrls) = ClassifyRow(line);
         _linkRow = line;
+    }
+
+    // The source-line origin of a drawn row, from the reference-keyed map (built once from GetAllLines()).
+    // A drawn row is one of GetLine()'s lists, and Terminal.Gui hands the draw path that same reference, so a
+    // hit is the common case; a miss (first draw of a new wrap generation) rebuilds the map from the current
+    // wrapped lines and retries. Returns null only if the row still isn't found (defensive) — the caller
+    // then falls back to per-row re-extraction.
+    private RowSource? TryGetRowSource(List<Cell> line)
+    {
+        if (_rowSourceMap is { } map && map.TryGetValue(line, out var found))
+            return found;
+
+        var wrapped = GetAllLines();
+        var sources = BuildRowSourceMap(_lines, wrapped);
+        var rebuilt = new Dictionary<List<Cell>, RowSource>(wrapped.Count, ReferenceEqualityComparer.Instance);
+        for (var i = 0; i < wrapped.Count; i++)
+            rebuilt[wrapped[i]] = sources[i];
+        _rowSourceMap = rebuilt;
+        return rebuilt.TryGetValue(line, out var value) ? value : null;
     }
 
     // The OSC-8 target for the cell about to be drawn (null outside the row / on a non-link cell), from the

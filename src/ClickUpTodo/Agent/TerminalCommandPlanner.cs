@@ -61,10 +61,14 @@ public static class TerminalCommandPlanner
         TerminalLauncherOptions options)
     {
         ArgumentNullException.ThrowIfNull(command);
+        // A WT-profile match (#462) keys off the dispatch working directory; the "open this app in a new
+        // tab" gesture (#301) has none, so profile matching is meaningless here. Strip any profile so the
+        // shared PlanWindows never emits `-p` for an app launch, regardless of what the caller passed.
+        var appOptions = options.WindowsTerminalProfile is null ? options : options with { WindowsTerminalProfile = null };
         return PlanFor(
             os, exists, getEnv,
             new InnerCommand(PwshAppCommand(command), PosixAppCommand(command), WorkingDir: null, OneOff: false),
-            options);
+            appOptions);
     }
 
     /// <summary>
@@ -212,9 +216,9 @@ public static class TerminalCommandPlanner
             {
                 PreferredTerminal.WindowsTerminal when exists("wt") => wtTab
                     ? new LaunchSpec(
-                        "wt", ["-w", "0", "new-tab", "pwsh", "-NoExit", "-Command", command], cwd, "Windows Terminal (new tab)")
+                        "wt", WtArgs(["-w", "0", "new-tab"], options.WindowsTerminalProfile, command), cwd, "Windows Terminal (new tab)")
                     : new LaunchSpec(
-                        "wt", ["new-tab", "pwsh", "-NoExit", "-Command", command], cwd, "Windows Terminal"),
+                        "wt", WtArgs(["new-tab"], options.WindowsTerminalProfile, command), cwd, "Windows Terminal"),
                 PreferredTerminal.Pwsh when exists("pwsh") => new LaunchSpec(
                     "pwsh", ["-NoExit", "-Command", command], cwd, "PowerShell (pwsh)"),
                 PreferredTerminal.PowerShell when exists("powershell") => new LaunchSpec(
@@ -231,6 +235,19 @@ public static class TerminalCommandPlanner
         }
         return specs;
     }
+
+    /// <summary>
+    /// The <c>wt</c> subcommand argv for a dispatch launch: the subcommand <paramref name="prefix"/>
+    /// (<c>new-tab</c>, or <c>-w 0 new-tab</c> for a current-window tab), an optional
+    /// <c>-p &lt;profile&gt;</c> (#462) when a Windows Terminal profile matched this dispatch's directory,
+    /// then the trailing <c>pwsh -NoExit -Command &lt;command&gt;</c> that WT runs <b>instead of</b> the
+    /// profile's own commandline. A blank/null <paramref name="profile"/> omits <c>-p</c> entirely, so
+    /// the argv is byte-identical to the pre-#462 launch.
+    /// </summary>
+    private static string[] WtArgs(IReadOnlyList<string> prefix, string? profile, string command)
+        => string.IsNullOrWhiteSpace(profile)
+            ? [.. prefix, "pwsh", "-NoExit", "-Command", command]
+            : [.. prefix, "-p", profile, "pwsh", "-NoExit", "-Command", command];
 
     /// <summary>The PowerShell host to run inside the cmd window — pwsh preferred, else powershell; null if neither.</summary>
     private static string? PwshHost(Func<string, bool> exists) =>
