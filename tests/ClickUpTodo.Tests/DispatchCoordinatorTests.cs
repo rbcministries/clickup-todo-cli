@@ -392,7 +392,7 @@ public sealed class DispatchCoordinatorTests
     }
 
     [Fact]
-    public void WindowsTerminalProfileNote_NamesTheProfile_OnlyWhenMatched()
+    public void WindowsTerminalProfileNote_NamesTheProfile_OnlyWhenMatchedAndWtActuallyLaunched()
     {
         var settings = new AgentDispatchSettings { TryUseWindowsTerminalProfiles = true };
 
@@ -400,16 +400,27 @@ public sealed class DispatchCoordinatorTests
             settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
             directoryExists: Exists(), childDirectoryNames: Children(),
             loadWindowsTerminalSettings: () => WtSettings(BaseDir), expandEnvironment: s => s);
-        var note = DispatchCoordinator.WindowsTerminalProfileNote(matched);
+
+        // Only when the launch actually used a Windows Terminal host is the profile note emitted.
+        var note = DispatchCoordinator.WindowsTerminalProfileNote(matched, "Windows Terminal");
         Assert.NotNull(note);
         Assert.Contains("{proj}", note);
         Assert.Contains("Windows Terminal profile", note);
+        Assert.NotNull(DispatchCoordinator.WindowsTerminalProfileNote(matched, "Windows Terminal (new tab)"));
 
+        // A profile matched on directory, but the launch used a non-WT host (an explicit PreferredTerminal,
+        // a custom command, or wt absent) — the profile never applied, so no misleading note.
+        Assert.Null(DispatchCoordinator.WindowsTerminalProfileNote(matched, "PowerShell (pwsh)"));
+        Assert.Null(DispatchCoordinator.WindowsTerminalProfileNote(matched, "Windows PowerShell"));
+        // A failed launch (null LaunchedWith) never claims a profile.
+        Assert.Null(DispatchCoordinator.WindowsTerminalProfileNote(matched, null));
+
+        // No profile matched → never a note, whatever launched.
         var noMatch = DispatchCoordinator.Plan(
             settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
             directoryExists: Exists(), childDirectoryNames: Children(),
             loadWindowsTerminalSettings: () => null, expandEnvironment: s => s);
-        Assert.Null(DispatchCoordinator.WindowsTerminalProfileNote(noMatch));
+        Assert.Null(DispatchCoordinator.WindowsTerminalProfileNote(noMatch, "Windows Terminal"));
     }
 
     [Fact]

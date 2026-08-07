@@ -63,8 +63,15 @@ public static class WindowsTerminalSettings
             {
                 return readAllText(path);
             }
-            catch (IOException) { return null; }
-            catch (UnauthorizedAccessException) { return null; }
+            // "Never fail a dispatch": every realistic read failure — locked/unreadable file, an ACL
+            // denial, or a pathological path — degrades to "no settings" rather than throwing out of the
+            // inline loader in DispatchCoordinator.Plan and aborting the whole dispatch.
+            catch (Exception ex) when (
+                ex is IOException or UnauthorizedAccessException or System.Security.SecurityException
+                    or ArgumentException or NotSupportedException)
+            {
+                return null;
+            }
         }
         return null;
     }

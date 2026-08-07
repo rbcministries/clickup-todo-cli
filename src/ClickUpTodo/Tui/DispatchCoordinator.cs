@@ -150,11 +150,17 @@ public static class DispatchCoordinator
     /// <summary>
     /// A status-line suffix naming the Windows Terminal profile (#462) a dispatch launched under, or
     /// <c>null</c> when none matched — so a session that opened under a different profile (font, colours,
-    /// tab title) than the user's default isn't unexplained. Pure/testable; the interactive host appends
-    /// it to <see cref="AgentDispatchResult.StatusMessage"/>.
+    /// tab title) than the user's default isn't unexplained. Gated on <paramref name="launchedWith"/>
+    /// actually being a Windows Terminal host: a profile matches on directory alone, but the launch may
+    /// have used a non-WT terminal (an explicit <c>PreferredTerminal</c>, a <c>CustomTerminalCommand</c>,
+    /// or <c>wt</c> absent) or failed outright (<paramref name="launchedWith"/> null) — in which case
+    /// the profile never applied and claiming it would mislead. Pure/testable; the interactive host
+    /// passes <see cref="AgentDispatchResult.LaunchedWith"/>.
     /// </summary>
-    public static string? WindowsTerminalProfileNote(ResolvedDispatch plan)
+    public static string? WindowsTerminalProfileNote(ResolvedDispatch plan, string? launchedWith)
         => plan.WindowsTerminalProfile is { } profile
+            && launchedWith is { } host
+            && host.StartsWith("Windows Terminal", StringComparison.Ordinal)
             ? $" (Windows Terminal profile '{profile}'.)"
             : null;
 
@@ -226,7 +232,7 @@ public static class DispatchCoordinator
                 // Tell the user when a #461 Repository match opened the session in a checkout sub-dir, or a
                 // #462 WT profile match launched it under a non-default profile — otherwise a launch that
                 // landed somewhere / looked different than expected is unexplained.
-                var status = result.StatusMessage + (RepositoryMatchNote(plan) ?? "") + (WindowsTerminalProfileNote(plan) ?? "");
+                var status = result.StatusMessage + (RepositoryMatchNote(plan) ?? "") + (WindowsTerminalProfileNote(plan, result.LaunchedWith) ?? "");
                 Application.Invoke(() => report(status));
             }
             catch (Exception ex)

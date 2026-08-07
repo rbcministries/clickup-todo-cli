@@ -57,10 +57,19 @@ public sealed class WindowsTerminalSettingsTests
     public void Load_ReturnsNull_WhenLocalAppDataUnset()
         => Assert.Null(WindowsTerminalSettings.Load(Env(null), fileExists: _ => true, readAllText: _ => "x"));
 
-    [Fact]
-    public void Load_ReturnsNull_WhenReadThrows()
+    public static TheoryData<Exception> ReadFailures => new()
+    {
+        new UnauthorizedAccessException(),
+        new IOException(),
+        new System.Security.SecurityException(),
+        new NotSupportedException(),
+    };
+
+    [Theory]
+    [MemberData(nameof(ReadFailures))]
+    public void Load_ReturnsNull_WhenReadThrows(Exception failure)
         => Assert.Null(WindowsTerminalSettings.Load(
             Env(LocalAppData),
             fileExists: _ => true,
-            readAllText: _ => throw new UnauthorizedAccessException()));
+            readAllText: _ => throw failure));
 }

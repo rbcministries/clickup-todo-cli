@@ -76,7 +76,7 @@ public sealed class AgentDispatcher
         if (!string.IsNullOrWhiteSpace(windowsTerminalProfile))
             options = options with { WindowsTerminalProfile = windowsTerminalProfile };
         var result = await _launcher.LaunchAsync(promptFile, workingDir, options, oneOff, ct).ConfigureAwait(false);
-        return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile);
+        return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile, result.LaunchedWith);
     }
 
     /// <summary>
@@ -145,6 +145,8 @@ public sealed class AgentDispatcher
     }
 }
 
-/// <summary>The outcome of an agent dispatch: whether it launched, the status-line text, and the temp
-/// prompt-file path (retained for the launched session to read).</summary>
-public sealed record AgentDispatchResult(bool Success, string StatusMessage, string PromptFilePath);
+/// <summary>The outcome of an agent dispatch: whether it launched, the status-line text, the temp
+/// prompt-file path (retained for the launched session to read), and the terminal it actually launched
+/// with (<see cref="LaunchResult.LaunchedWith"/>, null on failure) — so a caller can tell whether a
+/// specific host (e.g. Windows Terminal, for the #462 profile note) was really used.</summary>
+public sealed record AgentDispatchResult(bool Success, string StatusMessage, string PromptFilePath, string? LaunchedWith = null);
