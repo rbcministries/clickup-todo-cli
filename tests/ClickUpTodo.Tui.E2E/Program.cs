@@ -369,9 +369,21 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     private static bool MdLink => Environment.GetEnvironmentVariable("E2E_MD_LINK") == "1";
     public const string MdLinkTarget = "https://example.com/runbook-42";
 
+    // #443: two links positioned to be SPLIT by word wrap at a narrow COLS — a bare URL longer than the
+    // detail pane's inner width (Terminal.Gui hard-wraps it mid-URL) and a markdown link whose visible text
+    // wraps across rows. Off by default so every other check sees the body byte-for-byte; link_wrap_check.py
+    // sets the gate and asserts both are underlined *contiguously across the wrap*. The visible text carries
+    // a unique ENDVIS token near its end so the check can pin an underlined visible-text cell on a
+    // continuation row.
+    private static bool WrapSplit => Environment.GetEnvironmentVariable("E2E_WRAP_SPLIT") == "1";
+    public const string WrapSplitUrl = "https://ex.io/wrap/aa/bb/cc/dd/ee/ff/gg/hh/ii/jj/ENDURL";
+    public const string WrapSplitMdTarget = "https://ex.io/rb42";
+    public const string WrapSplitMdVisible = "the operations runbook and deployment procedure ENDVIS";
+
     private string _description =
         "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed\n\nParent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread"
-        + (MdLink ? "\n\nSee [the runbook](" + MdLinkTarget + ") for steps" : "");
+        + (MdLink ? "\n\nSee [the runbook](" + MdLinkTarget + ") for steps" : "")
+        + (WrapSplit ? "\n\nSplit URL: " + WrapSplitUrl + " done\n\nMD: [" + WrapSplitMdVisible + "](" + WrapSplitMdTarget + ") fin" : "");
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {

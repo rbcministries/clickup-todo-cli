@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
-"""Regression guard for #413 — the wrapped-line variant of the #317 link styling that
+"""Regression guard for #413 **and #443** — the wrapped-line variants of the #317 link styling that
 `link_check.py` deliberately does not cover (it fixes COLS=120 "so the seeded URLs don't wrap").
+
+#413 (below): a URL that fits whole on one continuation row is underlined on exactly its own cells.
+#443 (below, behind the `E2E_WRAP_SPLIT` seed gate): a link *token* that word wrap splits across two
+rendered rows is underlined **contiguously across the wrap** — the case per-row re-extraction can't
+reach. Two seeded links exercise it: a bare URL longer than the pane inner width (hard-wrapped mid-URL,
+so its tail starts a continuation row) and a markdown `[text](url)` link whose visible text wraps.
 
 Runs at a **narrow** COLS so the seeded Description line
 
@@ -36,7 +42,7 @@ screen = pyte.Screen(COLS, ROWS)
 stream = pyte.ByteStream(screen)
 master, slave = pty.openpty()
 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-env = dict(os.environ, TERM="xterm-256color", DOTNET_ROOT="/usr/local/dotnet")
+env = dict(os.environ, TERM="xterm-256color", DOTNET_ROOT="/usr/local/dotnet", E2E_WRAP_SPLIT="1")
 proc = subprocess.Popen(["dotnet", DLL], stdin=slave, stdout=slave, stderr=slave,
                         env=env, close_fds=True, preexec_fn=os.setsid)
 os.close(slave)
@@ -79,6 +85,21 @@ def find_text(needle):
         if col >= 0:
             return y, col
     return None
+
+
+def scroll_to(needle, presses=25):
+    """Scroll the detail pane down (↓) until `needle` is on screen (a no-op if already visible). The
+    #443 split content sits further down the Description than the 'Parent ticket:' line asserted above."""
+    for _ in range(presses):
+        if find_text(needle):
+            return
+        os.write(master, b"\x1b[B")   # ↓ scrolls the detail pane
+        pump(0.4)
+
+
+def underlined(y, x, n):
+    """True when all n cells from (y, x) are underlined."""
+    return all(screen.buffer[y][x + i].underscore for i in range(n))
 
 
 try:
@@ -127,7 +148,42 @@ try:
     assert all(c.fg == trailing.fg for c in url_cells), \
         f"wrapped task URL fg {sorted({c.fg for c in url_cells})} != normal body fg {trailing.fg!r}"
 
-    print("ok — wrapped task URL underlined exactly (no shift into trailing prose), COLS=%d" % COLS)
+    # ── #443: a link token that word wrap SPLITS across two rendered rows is underlined contiguously ──
+    # These follow the existing #413 assertions (which needed the URL whole on one continuation row); here
+    # the token itself straddles the wrap boundary, which per-row re-extraction (#413/#430) cannot style.
+
+    # Case 1 — a bare URL longer than the pane inner width, hard-wrapped mid-URL. The head fragment already
+    # parsed as a URL pre-#443 (so it underlined), but the tail on the continuation row did not. Assert both.
+    scroll_to("ENDURL")
+    head = find_text("https://ex.io/wrap")
+    endurl = find_text("ENDURL")
+    assert head and endurl, "seeded split URL head/tail not on screen (widen ROWS or check the seed):\n" + visible()
+    assert endurl[0] > head[0], \
+        f"the long URL did not wrap (head row {head[0]}, tail row {endurl[0]}) — retune COLS={COLS}:\n" + visible()
+    assert underlined(head[0], head[1], len("https://ex.io/wrap")), \
+        "the split URL's head is not underlined — link styling missing entirely:\n" + visible()
+    assert underlined(endurl[0], endurl[1], len("ENDURL")), \
+        "the hard-wrapped URL tail on the continuation row is NOT underlined (#443 case 1 — the exact gap " \
+        "per-row re-extraction leaves: the tail fragment has no scheme at its row start):\n" + visible()
+
+    # Case 2 — a markdown [text](url) link whose visible text wraps across rows. The visible text on the
+    # continuation row must be underlined too (pre-#443 the continuation row held no complete markdown link),
+    # while the '(url)' markup — outside the visible-text span — stays un-underlined.
+    scroll_to("ENDVIS")
+    vstart = find_text("the operations")
+    endvis = find_text("ENDVIS")
+    assert vstart and endvis, "seeded markdown visible-text start/tail not on screen:\n" + visible()
+    assert endvis[0] > vstart[0], \
+        f"markdown visible text did not wrap (start row {vstart[0]}, tail row {endvis[0]}) — retune COLS={COLS}:\n" + visible()
+    assert underlined(endvis[0], endvis[1], len("ENDVIS")), \
+        "the wrapped markdown visible text on the continuation row is NOT underlined (#443 case 2):\n" + visible()
+    mdurl = find_text("ex.io/rb42")
+    if mdurl:
+        assert not screen.buffer[mdurl[0]][mdurl[1]].underscore, \
+            "the markdown (url) markup is underlined but is outside the visible-text span:\n" + visible()
+
+    print("ok — wrapped task URL underlined exactly (no shift into trailing prose); a hard-wrapped bare URL "
+          "and a wrapped markdown link's visible text both underlined contiguously across the wrap (#443), COLS=%d" % COLS)
 finally:
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
