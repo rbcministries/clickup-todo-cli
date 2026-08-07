@@ -535,10 +535,18 @@ public class SelectorView : View
         _debounceTimer = null;
     }
 
+    // Idempotent teardown (#483): a SelectorView can be disposed twice — an explicit Dispose() followed
+    // by a still-attached parent view re-disposing it through base.Dispose(disposing). Without this guard
+    // the second pass calls _cts.Cancel() on an already-disposed CancellationTokenSource, which throws
+    // ObjectDisposedException during teardown. The _disposed flag makes the managed cleanup run exactly
+    // once so a double-dispose is a no-op instead.
+    private bool _disposed;
+
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && !_disposed)
         {
+            _disposed = true;
             _cts.Cancel();
             DisposeTimer();
             _cts.Dispose();

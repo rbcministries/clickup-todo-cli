@@ -21,8 +21,8 @@ namespace ClickUpTodo.Tui.Screens;
 /// a tabbed, scrollable pane — Stream / Description / Comments / Other attributes. Built on the shared
 /// screen seam (#38) — swapped into the dashboard's single toplevel, not a nested modal <c>Dialog</c>.
 /// <para>
-/// Esc returns to the list; Ctrl+B requests opening the task in the browser (the host reads
-/// <see cref="OpenBrowserRequested"/> in its close handler and owns the launch). Tab cycles tabs;
+/// Esc returns to the list; Ctrl+B raises <see cref="OpenBrowserRequested"/> and the host owns the
+/// launch (and, per the #518 setting, whether the view also closes — a root view never does). Tab cycles tabs;
 /// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. The Stream tab (#106) is the out-of-the-box
 /// default (the opening tab is configurable via #108); it opens
 /// auto-scrolled to the newest (or oldest) entry per the <see cref="StreamAutoScroll"/> preference
@@ -127,6 +127,14 @@ public sealed class TaskDetailScreen : Screen
     // timer + CancellationTokenSource that RemoveAll alone wouldn't release.
     private MentionPickerView? _mentionPicker;
     private readonly List<CommentComposerModel.MentionToken> _mentionTokens = [];
+    // The editor the mention picker is currently serving — the comment composer (#325, structured runs)
+    // or the description editor (#326, plain "@Name" text). Set on ShowMentionPicker, cleared on Hide, so
+    // the pick/Esc/teardown paths route to the right editor. The one overlay is retargeted, never forked.
+    private TextView? _mentionHostEditor;
+    // Enough seams to open the picker at all: just the member pool. The comment composer additionally
+    // needs the structured-write seam to *post* a mention (MentionEnabled), but a description mention is
+    // plain literal text (#321/#326) so the description trigger gates on this member-only availability.
+    private bool MembersAvailable => _memberMatch is not null && _memberTopFrequent is not null;
     private bool MentionEnabled => _postStructuredCommentAsync is not null && _memberMatch is not null && _memberTopFrequent is not null;
     // The composer's ideal height: the multi-line editor rows + the Post/Cancel button row + the
     // top/bottom frame border. Clamped on show so it degrades gracefully on a short terminal.
@@ -272,6 +280,16 @@ public sealed class TaskDetailScreen : Screen
     // Content fingerprint of the last-rendered projection, so an unchanged refresh leaves the selection
     // and scroll untouched (the OtherTabSignature discipline, applied to the checklist rows).
     private string _checklistSignature = "";
+    // The checklist-item resolved write (D, #457): Space on an item row toggles it. The host owns the
+    // ClickUp write via this callback (the screen never reaches for the client); null ⇒ toggling is inert.
+    private readonly Func<string, string, bool, CancellationToken, Task>? _setChecklistResolvedAsync;
+    // Guards against a second toggle while one is in flight (the _savingDescription discipline), so a key
+    // mash can't stack writes.
+    private bool _togglingChecklistItem;
+    // The in-flight optimistic toggle (checklist id, item id, desired resolved). While set, UpdateData
+    // overlays it onto any incoming refresh so a poll that lands mid-write can neither resurrect the stale
+    // server value nor double-apply the toggle; cleared when the write settles.
+    private (string ChecklistId, string ItemId, bool Resolved)? _pendingChecklistToggle;
 
     /// <summary>Raised when the user activates a tree row (Enter or double-click) for a task other than
     /// the one being shown (#291). The host opens that task's detail stacked over this one, so Esc walks
@@ -296,8 +314,23 @@ public sealed class TaskDetailScreen : Screen
     /// tree stay in step. Only meaningful when the tree tab exists (a loader was supplied).</summary>
     public event EventHandler? CycleBadgeDisplayRequested;
 
-    /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>
-    public bool OpenBrowserRequested { get; private set; }
+    /// <summary>
+    /// Raised when the user presses Ctrl+B to open the task in the browser (#518). Like its sibling
+    /// command events (<see cref="OpenInNewTabRequested"/>, <see cref="QuickUpdatesRequested"/>, …), the
+    /// host owns the outcome: it launches the browser (flashing success/failure on this still-live view)
+    /// and — for a non-root view, per the <see cref="OpenBrowserBehavior"/> setting — may also close it.
+    /// The screen no longer closes itself; a root view therefore never exits on Ctrl+B (the invariant).
+    /// </summary>
+    public event EventHandler? OpenBrowserRequested;
+
+    /// <summary>
+    /// Lets the host close this detail view (#518). Ctrl+B's "open browser + close" mode is a host
+    /// decision (it reads the <see cref="OpenBrowserBehavior"/> setting and the view's root-ness), so —
+    /// unlike Esc, where the screen closes itself — the host triggers the close, via the same
+    /// <c>Closed</c> path. The host's mount handler defers teardown a loop iteration, so calling this
+    /// from within the <see cref="OpenBrowserRequested"/> handler is safe mid-keypress.
+    /// </summary>
+    public void RequestClose() => Close();
 
     /// <summary>The task currently shown, reflecting any refresh since the screen opened (#159 reads it to
     /// launch Quick Updates for the up-to-date task).</summary>
@@ -403,7 +436,8 @@ public sealed class TaskDetailScreen : Screen
         Func<CancellationToken, Task<IReadOnlyList<TaskTreeRow>>>? loadTaskTreeAsync = null,
         Func<IReadOnlyList<CommentRun>, CancellationToken, Task<CommentItem>>? postStructuredCommentAsync = null,
         Func<string, ISet<long>, IReadOnlyList<WorkspaceMember>>? memberMatch = null,
-        Func<int, ISet<long>, IReadOnlyList<WorkspaceMember>>? memberTopFrequent = null)
+        Func<int, ISet<long>, IReadOnlyList<WorkspaceMember>>? memberTopFrequent = null,
+        Func<string, string, bool, CancellationToken, Task>? setChecklistResolvedAsync = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
@@ -418,6 +452,7 @@ public sealed class TaskDetailScreen : Screen
         _postStructuredCommentAsync = postStructuredCommentAsync;
         _memberMatch = memberMatch;
         _memberTopFrequent = memberTopFrequent;
+        _setChecklistResolvedAsync = setChecklistResolvedAsync;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
@@ -788,6 +823,18 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     public void UpdateData(TaskDetail task, IReadOnlyList<CommentItem> comments)
     {
+        // While a checklist toggle is in flight (D, #457), keep its optimistic resolved value authoritative
+        // over any refresh landing mid-write — a poll returning the pre-write server state must neither
+        // resurrect the stale value nor appear to double-apply the toggle. Overlaying here (before _task is
+        // set) means every derived view, including the checklist re-projection below, sees the pending
+        // value; it's cleared when the write settles, so the next refresh then carries the server truth.
+        if (_pendingChecklistToggle is { } pending)
+            task = task with
+            {
+                Checklists = ChecklistToggle.SetResolved(
+                    task.Checklists, pending.ChecklistId, pending.ItemId, pending.Resolved),
+            };
+
         _task = task;
         _comments = comments;
 
@@ -957,6 +1004,18 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // Space on the Checklists tab (D, #457) toggles the selected item's resolved state, optimistically.
+        // Guarded on the checklist ListView being front-most (claimed here, before the ListView's own
+        // bindings, like the bare ↑/↓ block below), so Space on the read-only text panes (which ignore it)
+        // and every other tab is undisturbed. A header/empty-state row is inert-but-flashed, not a silent
+        // no-op.
+        if (key.KeyCode == KeyCode.Space && ReferenceEquals(_tabs.Value, _checklistList))
+        {
+            key.Handled = true;
+            ToggleSelectedChecklistItem();
+            return;
+        }
+
         // #319 (E): on a text pane, bare Tab/Shift+Tab step keyboard focus across the in-pane links and
         // Enter activates the focused one — the keyboard equivalent of the #318 click. Routed here (not in
         // the pane) because OnKey already owns the screen's key vocabulary and fires before Terminal.Gui's
@@ -1017,11 +1076,14 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // Ctrl+B asks the host to open the task in the browser (#518). It is an event like its siblings
+        // below — the host launches the browser and decides whether to navigate back — so, unlike the
+        // old flag-and-Close() pair, the screen never closes itself here: a root view (the --task launch
+        // task) stays open, which is the invariant that Ctrl+B must never exit the application.
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
         {
             key.Handled = true;
-            OpenBrowserRequested = true;
-            Close();
+            OpenBrowserRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 
@@ -1537,7 +1599,7 @@ public sealed class TaskDetailScreen : Screen
         if (MentionEnabled && _commentEditor.HasFocus && key.AsRune.Value == '@')
         {
             key.Handled = true;
-            ShowMentionPicker();
+            ShowMentionPicker(_commentEditor);
             return;
         }
 
@@ -1615,15 +1677,24 @@ public sealed class TaskDetailScreen : Screen
         FocusCurrentPane();
     }
 
-    /// <summary>Opens the @-mention picker (#325) as a transient overlay over the composer: builds a
-    /// fresh <see cref="MentionPickerView"/> (so no stale query/selection carries between opens), sizes
-    /// and anchors it like the composer, shows it and focuses it. The box is built lazily on first use
-    /// and added to the screen then. No second focusable pane persists (#3) — it's a transient overlay,
-    /// like the composer itself.</summary>
-    private void ShowMentionPicker()
+    /// <summary>Opens the @-mention picker (#325/#326) as a transient overlay over the given host editor
+    /// (the comment composer or the description editor): builds a fresh <see cref="MentionPickerView"/>
+    /// (so no stale query/selection carries between opens), sizes and anchors it like the composer, shows
+    /// it and focuses it. The box is built lazily on first use and added to the screen then. No second
+    /// focusable pane persists (#3) — it's a transient overlay, like the composer itself.</summary>
+    private void ShowMentionPicker(TextView hostEditor)
     {
-        if (!MentionEnabled || !_commentBox.Visible)
+        // The picker needs the member pool, and only makes sense overlaid on a *visible* host editor.
+        // Both current callers are already focus-gated (so the host is visible), but guarding the host's
+        // own box here keeps that the sole precondition — a future caller can't open the overlay over a
+        // hidden editor.
+        if (!MembersAvailable)
             return;
+        if (hostEditor == _commentEditor && !_commentBox.Visible)
+            return;
+        if (hostEditor == _descriptionEditor && !_descriptionBox.Visible)
+            return;
+        _mentionHostEditor = hostEditor;
 
         // Detach and dispose any prior picker before hosting a fresh one. Disposing here (on the next
         // open) rather than in HideMentionPicker keeps us off the stack of the outgoing picker's own
@@ -1671,29 +1742,44 @@ public sealed class TaskDetailScreen : Screen
         picker.SetFocus();
     }
 
-    /// <summary>Closes the mention picker and returns focus to the composer editor, leaving the composer
-    /// and its draft intact.</summary>
+    /// <summary>Closes the mention picker and returns focus to the host editor it opened over (the comment
+    /// composer or the description editor, whichever is still visible), leaving that editor and its draft
+    /// intact.</summary>
     private void HideMentionPicker()
     {
         if (_mentionBox is null || !_mentionBox.Visible)
             return;
         _mentionBox.Visible = false;
         _mentionBox.RemoveAll();
-        if (_commentBox.Visible)
+        if (_mentionHostEditor == _commentEditor && _commentBox.Visible)
             _commentEditor.SetFocus();
+        else if (_mentionHostEditor == _descriptionEditor && _descriptionBox.Visible)
+            _descriptionEditor.SetFocus();
+        _mentionHostEditor = null;
     }
 
-    /// <summary>A member was picked in the mention overlay: close the picker (refocusing the editor),
-    /// insert its <c>@{DisplayName}</c> token (plus a trailing space) at the caret via the editor's own
-    /// <see cref="TextView.InsertText"/> — which handles the caret/word-wrap model internally — and record
-    /// the <see cref="CommentComposerModel.MentionToken"/> so <see cref="PostComment"/> re-derives the
-    /// structured runs from the final text.</summary>
+    /// <summary>A member was picked in the mention overlay: close the picker (refocusing the host editor,
+    /// whose caret is where the <c>@</c> was consumed) and splice the <c>@{DisplayName} </c> literal at the
+    /// caret via the editor's own <see cref="TextView.InsertText"/> — which handles the caret/word-wrap
+    /// model internally. For the <b>comment composer</b> (#325) it also records a
+    /// <see cref="CommentComposerModel.MentionToken"/> so <see cref="PostComment"/> re-derives the
+    /// structured runs from the final text. For the <b>description editor</b> (#326) it records nothing:
+    /// ClickUp descriptions carry no structured mention payload (the #321 spike), so the token is plain
+    /// literal text that the unchanged plain-string save path sends verbatim.</summary>
     private void OnMentionPicked(object? sender, MentionTarget target)
     {
-        var token = new CommentComposerModel.MentionToken(target.UserId, target.DisplayName);
-        HideMentionPicker(); // returns focus to the editor, whose caret is where the '@' was consumed
-        _commentEditor.InsertText(token.Token + " ");
-        _mentionTokens.Add(token);
+        var host = _mentionHostEditor; // capture before Hide clears it
+        HideMentionPicker();           // returns focus to the host editor
+        if (host == _commentEditor)
+        {
+            var token = new CommentComposerModel.MentionToken(target.UserId, target.DisplayName);
+            _commentEditor.InsertText(token.Token + " ");
+            _mentionTokens.Add(token);
+        }
+        else if (host == _descriptionEditor)
+        {
+            _descriptionEditor.InsertText(DescriptionEditorModel.MentionInsertion(target.DisplayName));
+        }
     }
 
     /// <summary>
@@ -1946,6 +2032,19 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // @ opens the mention picker (#326) when the member pool is available and the editor (not a
+        // button) has focus — the literal @ is consumed here (the picker inserts the full "@Name" token on
+        // pick). Unlike the composer (#325), a description mention is plain literal text: ClickUp
+        // descriptions carry no structured mention payload (#321 spike), so the saved @Name is a textual
+        // reference, not a live/notifying mention. Member pool absent (e.g. single-task mode) ⇒ @ falls
+        // through and types a literal @, exactly as before.
+        if (MembersAvailable && _descriptionEditor.HasFocus && key.AsRune.Value == '@')
+        {
+            key.Handled = true;
+            ShowMentionPicker(_descriptionEditor);
+            return;
+        }
+
         var action = DescriptionEditorModel.Route(ClassifyDescription(key));
         if (action == DescriptionEditorModel.EditorAction.PassThrough)
             return;
@@ -2005,11 +2104,13 @@ public sealed class TaskDetailScreen : Screen
     }
 
     /// <summary>Closes the editor and returns focus to the front-most tab (mirrors HidePrompt), clearing
-    /// any pending discard confirm.</summary>
+    /// any pending discard confirm. Also dismisses the mention picker (#326) if it was left open over the
+    /// editor, so a picker can never outlive its host editor.</summary>
     private void HideDescriptionEditor()
     {
         if (!_descriptionBox.Visible)
             return;
+        HideMentionPicker();
         _descriptionBox.Visible = false;
         _descriptionPendingDiscard = false;
         _descriptionConfirm.Text = "";
@@ -2088,6 +2189,80 @@ public sealed class TaskDetailScreen : Screen
                         return;
                     // Keep the editor open with the draft intact so the user can retry or copy it out.
                     RequestFlash($"Could not save description: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>
+    /// Toggle the selected checklist item's <c>resolved</c> state (D, #457): optimistic flip → re-render →
+    /// off-thread write → revert-on-failure + flash, mirroring <see cref="SaveDescription"/>'s in-flight
+    /// guard and <see cref="Application"/>.<c>Invoke</c> discipline. A header/empty-state row (no item id) is
+    /// inert but flashed rather than a silent no-op; while a toggle is in flight a second press is ignored
+    /// with feedback. The immediate glyph + progress flip is the success feedback (no confirming flash), so
+    /// only the guard, the header-inert case, and a failure flash reach the status line.
+    /// </summary>
+    private void ToggleSelectedChecklistItem()
+    {
+        if (_setChecklistResolvedAsync is null)
+            return;
+        if (_togglingChecklistItem)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (_checklistList.SelectedItem is not int i || i < 0 || i >= _checklistRows.Count)
+            return;
+        var row = _checklistRows[i];
+        if (row.IsHeader || string.IsNullOrEmpty(row.ItemId))
+        {
+            RequestFlash("Select a checklist item to toggle — headers can't be ticked.");
+            return;
+        }
+
+        var checklistId = row.ChecklistId;
+        var itemId = row.ItemId!;
+        var desired = !row.Resolved;
+        var previous = row.Resolved;
+
+        _togglingChecklistItem = true;
+        _pendingChecklistToggle = (checklistId, itemId, desired);
+        // Optimistic: flip the item in the working task and re-render — the [ ]/[x] glyph, the group's
+        // (resolved/total) and the tab-title aggregate all move now, before the request. The pending overlay
+        // in UpdateData keeps this value authoritative against a refresh landing mid-write.
+        UpdateData(
+            _task with { Checklists = ChecklistToggle.SetResolved(_task.Checklists, checklistId, itemId, desired) },
+            _comments);
+
+        // Fully-qualified Task (this screen exposes a `Task` property that would otherwise shadow it), as in
+        // SaveDescription.
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await _setChecklistResolvedAsync(checklistId, itemId, desired, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _togglingChecklistItem = false;
+                    _pendingChecklistToggle = null;
+                    // The optimistic state already matches the confirmed write; the next refresh reconciles
+                    // the authoritative server checklist. Nothing to re-render on success.
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _togglingChecklistItem = false;
+                    _pendingChecklistToggle = null;
+                    if (_disposed)
+                        return;
+                    // Revert the optimistic flip (pending is cleared first so the overlay doesn't re-apply
+                    // it) and flash — nothing is left visually wrong.
+                    UpdateData(
+                        _task with { Checklists = ChecklistToggle.SetResolved(_task.Checklists, checklistId, itemId, previous) },
+                        _comments);
+                    RequestFlash($"Could not update item: {ShortError(ex)}");
                 });
             }
         });
@@ -2278,7 +2453,17 @@ public sealed class TaskDetailScreen : Screen
     private void RenderChecklist(ChecklistProjection projection)
     {
         _checklistSignature = ChecklistTabModel.Signature(projection);
-        _checklistList.Title = ChecklistTabModel.TabTitle(projection);
+        var title = ChecklistTabModel.TabTitle(projection);
+        if (!string.Equals(_checklistList.Title, title, StringComparison.Ordinal))
+        {
+            _checklistList.Title = title;
+            // The tab-strip header caches each tab's Title and only re-reads it on a relayout (TG 2.4.10),
+            // so an in-place title change (the live "Checklists (r/t)" aggregate, #457) needs an explicit
+            // layout invalidation to repaint the strip. Scoped to an actual title change so a refresh that
+            // moved rows but not the aggregate doesn't mark a redundant relayout.
+            _tabs.SetNeedsLayout();
+            _tabs.SetNeedsDraw();
+        }
 
         if (projection.IsEmpty)
         {

@@ -202,6 +202,7 @@ public static class HelpItemSets
         new("Ctrl+B", "🌐"),
         new("Ctrl+U", "quick update"),
         new("Ctrl+O", "🗁 by ID"),
+        new("␣", "☑ toggle", Chord: "Space"),
         new("F5", "↻"),
         new("F1", "ℹ"),
         new("Esc", "back"),
@@ -226,6 +227,7 @@ public static class HelpItemSets
         new("Ctrl+U", "quick update"),
         new("Ctrl+O", "🗁 by ID"),
         new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
+        new("␣", "☑ toggle", Chord: "Space"),
         new("F5", "↻"),
         new("F6", "badges"),
         new("F1", "ℹ"),
@@ -234,10 +236,14 @@ public static class HelpItemSets
 
     /// <summary>The Task Detail description editor overlay (Ctrl+E, #217): a multi-line editor with
     /// Save/Cancel; Ctrl+Enter (or Tab→Save) saves, Esc cancels (confirming if there are unsaved edits),
-    /// F1 opens Help.</summary>
+    /// F1 opens Help. The @ trigger (#326) opens the mention picker to splice a plain <c>@Name</c>
+    /// reference (a description mention is literal text, not a live mention — the #321 verdict).</summary>
     public static readonly IReadOnlyList<HelpItem> DetailDescriptionEditor =
     [
         new("Tab", "editor/Save/Cancel"),
+        // The @ trigger (#326) is a character the user types, not a clickable chord — IsAction:false, like
+        // the composer's, so it isn't re-raised on a footer click.
+        new("@", "mention", IsAction: false),
         new("Ctrl+Enter", "save"),
         new("F1", "ℹ"),
         new("Esc", "cancel"),
@@ -259,11 +265,11 @@ public static class HelpItemSets
         new("Esc", "cancel"),
     ];
 
-    /// <summary>The @-mention picker overlaid over the composer (#325): a search field over a candidate
-    /// list — type to search, ↑/↓ to move, Enter to insert the mention, Esc to go back to the composer.
-    /// Shown while the picker is open so the footer reflects only what it does (the composer's own keys
-    /// resume when it closes). Search/move are informational; Enter/Esc are clickable actions (they
-    /// re-raise into the focused picker).</summary>
+    /// <summary>The @-mention picker overlaid over the comment composer (#325) or the description editor
+    /// (#326): a search field over a candidate list — type to search, ↑/↓ to move, Enter to insert the
+    /// mention, Esc to go back to the editor it opened over. Shown while the picker is open so the footer
+    /// reflects only what it does (the host editor's own keys resume when it closes). Search/move are
+    /// informational; Enter/Esc are clickable actions (they re-raise into the focused picker).</summary>
     public static readonly IReadOnlyList<HelpItem> DetailMentionPicker =
     [
         new("type", "search", IsAction: false),
@@ -323,12 +329,11 @@ public static class HelpItemSets
     ];
 
     /// <summary>The Quick Updates screen (Ctrl+U from both the main list and Task Detail, #156/#290):
-    /// Tab cycles Status → Priority → Assignees, ↑/↓ move within a pane, Enter applies the highlighted
-    /// status/priority (#157; assignee apply is #158). A fourth Lists pane (#242) is implemented but
-    /// temporarily disabled — when re-enabled, restore "Lists" to the Tab item below.</summary>
+    /// Tab cycles Status → Priority → Assignees → Lists, ↑/↓ move within a pane, Enter applies the
+    /// highlighted status/priority (#157; assignee apply is #158; list add/remove is #242/#365).</summary>
     public static readonly IReadOnlyList<HelpItem> QuickUpdates =
     [
-        new("Tab", "Status/Priority/Assignees"),
+        new("Tab", "Status/Priority/Assignees/Lists"),
         new("↑/↓", "move", IsAction: false),
         new("Enter", "apply status/priority"),
         new("F1", "ℹ"),

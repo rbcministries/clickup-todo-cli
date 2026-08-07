@@ -59,6 +59,13 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal(TaskLinkCtrlClickDestination.Browser, TaskLinkCtrlClickDestination.NewTerminalTab.Next());
     }
 
+    [Fact]
+    public void OpenBrowserBehavior_Next_TogglesAndBack()
+    {
+        Assert.Equal(OpenBrowserBehavior.CloseView, OpenBrowserBehavior.KeepOpen.Next());
+        Assert.Equal(OpenBrowserBehavior.KeepOpen, OpenBrowserBehavior.CloseView.Next());
+    }
+
     // ── defaults ────────────────────────────────────────────────────────────
 
     [Fact]
@@ -70,6 +77,9 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal(StreamAutoScroll.Newest, d.AutoScroll);
         // #320: the Ctrl+Click destination defaults to Browser (byte-identical to #318).
         Assert.Equal(TaskLinkCtrlClickDestination.Browser, d.TaskLinkCtrlClick);
+        // #518: Ctrl+B keeps the view open by default (a deliberate departure from the "prior-shipped
+        // behaviour" default convention — the prior behaviour caused the --task-host exit bug).
+        Assert.Equal(OpenBrowserBehavior.KeepOpen, d.OpenBrowser);
     }
 
     [Fact]
@@ -81,6 +91,7 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal(StreamSort.Ascending, d.StreamSort);
         Assert.Equal(StreamAutoScroll.Newest, d.AutoScroll);
         Assert.Equal(TaskLinkCtrlClickDestination.Browser, d.TaskLinkCtrlClick);
+        Assert.Equal(OpenBrowserBehavior.KeepOpen, d.OpenBrowser);
     }
 
     // ── persistence ─────────────────────────────────────────────────────────
@@ -99,6 +110,7 @@ public sealed class DetailViewSettingsTests : IDisposable
                 StreamSort = StreamSort.Descending,
                 AutoScroll = StreamAutoScroll.Oldest,
                 TaskLinkCtrlClick = TaskLinkCtrlClickDestination.NewTerminalTab,
+                OpenBrowser = OpenBrowserBehavior.CloseView,
             },
         });
 
@@ -107,6 +119,7 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal(StreamSort.Descending, d.StreamSort);
         Assert.Equal(StreamAutoScroll.Oldest, d.AutoScroll);
         Assert.Equal(TaskLinkCtrlClickDestination.NewTerminalTab, d.TaskLinkCtrlClick);
+        Assert.Equal(OpenBrowserBehavior.CloseView, d.OpenBrowser);
     }
 
     [Fact]
@@ -121,6 +134,7 @@ public sealed class DetailViewSettingsTests : IDisposable
                 StreamSort = StreamSort.Descending,
                 AutoScroll = StreamAutoScroll.Oldest,
                 TaskLinkCtrlClick = TaskLinkCtrlClickDestination.NewTerminalTab,
+                OpenBrowser = OpenBrowserBehavior.CloseView,
             },
         });
 
@@ -131,6 +145,7 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal("Descending", detail.GetProperty("streamSort").GetString());
         Assert.Equal("Oldest", detail.GetProperty("autoScroll").GetString());
         Assert.Equal("NewTerminalTab", detail.GetProperty("taskLinkCtrlClick").GetString());
+        Assert.Equal("CloseView", detail.GetProperty("openBrowser").GetString());
         // Never ordinals.
         Assert.DoesNotContain("\"defaultTab\":3", json);
     }
@@ -148,6 +163,8 @@ public sealed class DetailViewSettingsTests : IDisposable
         Assert.Equal(StreamSort.Ascending, d.StreamSort);
         Assert.Equal(StreamAutoScroll.Newest, d.AutoScroll);
         Assert.Equal(TaskLinkCtrlClickDestination.Browser, d.TaskLinkCtrlClick);
+        // #518: an older config with no openBrowser key loads as the keep-open default (no migration).
+        Assert.Equal(OpenBrowserBehavior.KeepOpen, d.OpenBrowser);
     }
 
     public void Dispose()

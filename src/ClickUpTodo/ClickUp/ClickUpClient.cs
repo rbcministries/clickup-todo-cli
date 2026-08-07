@@ -288,7 +288,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 DueDate = task.DueDateMs,
             };
             // Custom-field values (#368) are loosely typed, so they ride on AdditionalData as a Kiota
-            // UntypedNode tree (no spec change / no regen — see docs/plans/new-task-custom-field-values.md)
+            // UntypedNode tree (no spec change / no regen — see docs/plans/completed/new-task-custom-field-values.md)
             // rather than a rigid generated property. Empty ⇒ no key, leaving today's create body untouched.
             if (task.CustomFields is { Count: > 0 } customFields)
             {
@@ -448,6 +448,26 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             // Inverse of AddTaskToListAsync — nudge on the confirmed removal too (#348). Empty body ⇒
             // null server date (consumer always re-fetches on a lists nudge).
             _changeMarkers.Record(taskId, serverDateUpdatedMs: null, ListsFields);
+        });
+
+    /// <summary>
+    /// Toggle (or set) a checklist item's <c>resolved</c> state (D, #457) via
+    /// <c>PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id}</c> with a <c>{ resolved }</c>
+    /// body. ClickUp echoes the whole parent checklist, so this returns the <b>server-confirmed</b>
+    /// <see cref="TaskChecklist"/> — mapped through the same <see cref="MapChecklist"/> as the read path,
+    /// so its items come back through <see cref="ChecklistReader"/> and no generated type escapes the
+    /// facade. Same return-the-truth contract as <see cref="SetTaskStatusAsync"/> /
+    /// <see cref="SetTaskDescriptionAsync"/>. (Multi-tab checklist nudge sync is left to a later slice —
+    /// another tab's 30 s auto-refresh still picks the change up.)
+    /// </summary>
+    public Task<TaskChecklist> SetChecklistItemResolvedAsync(string checklistId, string itemId, bool resolved, CancellationToken ct = default)
+        => Guard("UpdateChecklistItem", async () =>
+        {
+            var response = await _client.V2.Checklist[checklistId].Checklist_item[itemId]
+                .PutAsync(new UpdateChecklistItemRequest { Resolved = resolved }, cancellationToken: ct);
+            var checklist = response?.Checklist
+                ?? throw new InvalidOperationException($"ClickUp returned no checklist for item '{itemId}'.");
+            return MapChecklist(checklist);
         });
 
     /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>

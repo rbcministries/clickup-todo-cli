@@ -199,6 +199,15 @@ public sealed class HelpLineTests
             "Tab editor/Post/Cancel · @ mention · Ctrl+Enter post · F1 ℹ · Esc cancel",
             HelpLine.Format(HelpItemSets.DetailCommentComposer));
 
+    // #326 — the description editor footer mirrors the composer's, carrying the same @ mention-trigger
+    // hint (IsAction:false — a typed character, not a re-raisable chord); a description mention is plain
+    // literal text (#321), so the footer wording is identical to the composer's aside from Save vs Post.
+    [Fact]
+    public void Format_DetailDescriptionEditor_RendersEditorKeys()
+        => Assert.Equal(
+            "Tab editor/Save/Cancel · @ mention · Ctrl+Enter save · F1 ℹ · Esc cancel",
+            HelpLine.Format(HelpItemSets.DetailDescriptionEditor));
+
     // #290 — refresh is standardized on F5 (icon ↻) across every screen that can refresh, so the footer
     // never drifts. (Ctrl+R remains an undisplayed alias in each handler.)
     [Theory]
