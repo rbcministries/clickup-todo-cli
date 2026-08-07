@@ -9,6 +9,7 @@ using ClickUpTodo.Focus;
 using ClickUpTodo.Services;
 using ClickUpTodo.Setup;
 using ClickUpTodo.Tui;
+using ClickUpTodo.Tui.E2E;
 
 // Boots the REAL TodoApp against a canned in-process ClickUp backend so the TUI can be
 // driven under a PTY and its keypress latency measured end-to-end. No network.
@@ -213,20 +214,37 @@ sealed class HarnessContext
     public bool Checklists { get; init; }
 }
 
-sealed class FakeClickUp(HarnessContext ctx) : HttpMessageHandler
+sealed class FakeClickUp : HttpMessageHandler
 {
     // #232 opt-in scenario flag: serve the small not-mine-rows snapshot + a modelled Status/Priority
     // write instead of the default generated list. Off by default so every existing check is untouched.
-    private readonly bool _foreign = ctx.Foreign;
-    private readonly bool _tree = ctx.Tree;
+    private readonly bool _foreign;
+    private readonly bool _tree;
     // C (#456): when set, DetailJson embeds a seeded `checklists` array so the Checklists tab renders
     // real groups/items. Off by default, so every other check's task-detail response is untouched.
-    private readonly bool _checklists = ctx.Checklists;
-    private readonly int _taskCount = ctx.TaskCount;
+    private readonly bool _checklists;
+    private readonly int _taskCount;
     // D (#457): the mutable checklist state, so a Space-toggle PUT persists across later detail GETs.
     // Parsed once from the ChecklistsJson seed into a JsonNode DOM; the toggle write flips an item's
     // `resolved` in place and the detail GET serves the current DOM. Mutated/read under _gate.
     private readonly JsonArray _checklistsDom = (JsonArray)JsonNode.Parse(ChecklistsJson)!;
+
+    // The request dispatch table (#488), replacing the old hand-ordered if/else chain in SendAsync: routes
+    // resolve by specificity, not by source order, so appending an endpoint can't silently reorder another,
+    // and the generic /task/{id} route can no longer swallow a longer /task/{id}/comment path. Built once at
+    // construction — which is where a duplicate/ambiguous registration fails loudly (see Routing.cs).
+    // An explicit constructor (rather than the #487 primary constructor) so the table is built eagerly,
+    // which is what lets a unit test assert the concrete registration is ambiguity-free at `dotnet test`.
+    private readonly RouteTable<RouteHandler> _routes;
+
+    public FakeClickUp(HarnessContext ctx)
+    {
+        _foreign = ctx.Foreign;
+        _tree = ctx.Tree;
+        _checklists = ctx.Checklists;
+        _taskCount = ctx.TaskCount;
+        _routes = BuildRoutes();
+    }
 
     private static readonly string[] Statuses = ["to do", "in progress", "blocked", "in review"];
     private static readonly string[] StatusColors = ["#d3d3d3", "#4194f6", "#e50000", "#a875ff"];
@@ -469,172 +487,207 @@ sealed class FakeClickUp(HarnessContext ctx) : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
         var path = request.RequestUri!.AbsolutePath;
-        var query = request.RequestUri.Query;
-        string body;
+        var handler = _routes.Resolve(request.Method, path);
+        // No route ⇒ the old trailing `else`: an empty JSON object.
+        return handler is null ? Ok("{}") : await handler(request, path, request.RequestUri.Query, ct);
+    }
 
-        if (path.EndsWith("/user"))
-            body = """{"user":{"id":1,"username":"bench","email":"bench@example.com"}}""";
-        // POST/DELETE /v2/list/{listId}/task/{taskId} (#237): task↔list membership writes, consumed by
-        // the Quick Updates List pane (#242). Mutate the shared additional-locations set so a later detail
-        // GET reflects the change; ClickUp echoes an empty body. Must precede the /task/ branches below,
-        // since this path also contains "/task/". Create-task is POST .../task (no trailing id) and stays
-        // on its own branch further down.
-        else if (path.Contains("/list/") && path.Contains("/task/")
-                 && (request.Method == HttpMethod.Post || request.Method == HttpMethod.Delete))
+    /// <summary>A route handler: everything a former <c>SendAsync</c> branch needs — the request (for its
+    /// body/method), the <paramref name="path"/> and <paramref name="query"/>, and the token — returning
+    /// the full response so the 404 branches (<c>tmissing</c> / hyphenless <c>PROJ123</c>) keep their
+    /// status code, not just a body.</summary>
+    private delegate Task<HttpResponseMessage> RouteHandler(
+        HttpRequestMessage request, string path, string query, CancellationToken ct);
+
+    private static HttpResponseMessage Ok(string body) =>
+        new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    private static Task<HttpResponseMessage> OkAsync(string body) => Task.FromResult(Ok(body));
+
+    /// <summary>ClickUp's task-not-found shape (#303/#353): a 404 with the ITEM_100 error body.</summary>
+    private static HttpResponseMessage TaskNotFound() =>
+        new(HttpStatusCode.NotFound)
         {
-            var listId = ListIdOfMembership(path);
-            lock (_gate)
-            {
-                if (request.Method == HttpMethod.Post) _locations.Add(listId);
-                else _locations.Remove(listId);
-            }
-            body = "{}";
-        }
-        // POST /task/{id}/comment (#216): the create-comment write returns the minimal created-comment
-        // shape (id + date + hist_id) the CreateCommentResponse deserializer reads, so a comment posted
-        // from the detail composer round-trips truthfully. The id comes back as a JSON *number* on create
-        // (the GET read path returns it as a string) — mirror that so the fake matches the real API (#144).
-        // Must precede the GET /comment branch below.
-        else if (request.Method == HttpMethod.Post && path.Contains("/task/") && path.EndsWith("/comment"))
-        {
-            // #325: when E2E_COMMENT_LOG is set, record the raw request body (one per line) so a check can
-            // assert the structured `comment` blocks array — an @-mention tag, {"type":"tag","user":{"id":…}}
-            // — was actually sent. Otherwise the body is ignored (the canned response covers the round-trip).
-            if (!string.IsNullOrEmpty(CommentLog) && request.Content is { } commentContent)
-                File.AppendAllText(CommentLog, await commentContent.ReadAsStringAsync(ct) + "\n");
-            body = """{"id":9014000000001,"hist_id":"h1","date":1751500000000}""";
-        }
-        else if (path.Contains("/task/") && path.EndsWith("/comment"))
-            body = CommentsJson(TaskIdOfComment(path));
-        // POST /comment/{comment_id}/reply (#330, threaded comments D): the create-reply write returns the
-        // same minimal created-comment shape as the top-level comment POST (id as a JSON number, hist_id,
-        // date), so a reply posted from the composer's reply mode round-trips truthfully. Records the target
-        // comment id + request body to E2E_REPLY_LOG so a reply-post check can assert the write reached the
-        // backend (keyed to the picked parent) rather than guess from the screen. Must precede the GET reply
-        // branch below (both match .EndsWith("/reply")).
-        else if (request.Method == HttpMethod.Post && path.Contains("/comment/") && path.EndsWith("/reply"))
-        {
-            var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
-            RecordReply(CommentIdOfReply(path), reqBody);
-            body = """{"id":9014000000002,"hist_id":"h2","date":1751500500000}""";
-        }
+            Content = new StringContent(
+                """{"err":"Task not found","ECODE":"ITEM_100"}""", Encoding.UTF8, "application/json"),
+        };
+
+    /// <summary>The dispatch table: one route per former <c>SendAsync</c> branch, preserving today's
+    /// behaviour exactly. Registration order is irrelevant — routes resolve by specificity — so the old
+    /// "membership/comment/put branches must precede the generic /task/ catch-all" ordering is no longer
+    /// load-bearing. The two branches that were method-agnostic (<c>/user</c>, the <c>/task/{id}</c>
+    /// catch-all) pin <c>GET</c>, the only method the harness sends them, so every real request resolves
+    /// to exactly one route.</summary>
+    private RouteTable<RouteHandler> BuildRoutes() => new(new[]
+    {
+        new Route<RouteHandler>(HttpMethod.Get, "user", (_, _, _, _) =>
+            OkAsync("""{"user":{"id":1,"username":"bench","email":"bench@example.com"}}""")),
+
+        // POST/DELETE /v2/list/{listId}/task/{taskId} (#237): task↔list membership writes, consumed by the
+        // Quick Updates List pane (#242). Suffix-anchored matching keeps this distinct from create-task
+        // (POST .../list/{id}/task, no trailing id) with no ordering dependence.
+        new Route<RouteHandler>(HttpMethod.Post, "list/{listId}/task/{taskId}", Membership),
+        new Route<RouteHandler>(HttpMethod.Delete, "list/{listId}/task/{taskId}", Membership),
+
+        // POST /task/{id}/comment (#216): create-comment echo returning the minimal created-comment shape
+        // (id + date + hist_id) the CreateCommentResponse deserializer reads. The id comes back as a JSON
+        // *number* on create (the GET read path returns it as a string) — mirror that (#144).
+        new Route<RouteHandler>(HttpMethod.Post, "task/{id}/comment", CreateComment),
+        new Route<RouteHandler>(HttpMethod.Get, "task/{id}/comment", (_, p, _, _) =>
+            OkAsync(CommentsJson(TaskIdOfComment(p)))),
+
+        // POST /comment/{comment_id}/reply (#330, threaded comments D): create-reply echo (same minimal
+        // shape); records the target comment id + body to E2E_REPLY_LOG.
+        new Route<RouteHandler>(HttpMethod.Post, "comment/{id}/reply", CreateReply),
         // GET /comment/{comment_id}/reply (#329, threaded comments C): a comment's reply thread. Only the
-        // seeded thread parent (c2) returns replies, and only under E2E_THREADS — so every other scenario,
-        // which sees reply_count=0 on all comments, never reaches this branch. Same CommentsResponse wire
-        // shape as the flat comment list, which GetThreadedCommentsAsync reads.
-        else if (request.Method == HttpMethod.Get && path.Contains("/comment/") && path.EndsWith("/reply"))
-            body = RepliesJson(CommentIdOfReply(path));
+        // seeded parent (c2) returns replies, and only under E2E_THREADS. Same CommentsResponse wire shape.
+        new Route<RouteHandler>(HttpMethod.Get, "comment/{id}/reply", (_, p, _, _) =>
+            OkAsync(RepliesJson(CommentIdOfReply(p)))),
+
         // PUT /v2/checklist/{checklist_id}/checklist_item/{checklist_item_id} (D, #457): the toggle-resolved
-        // write. Parse {"resolved":bool}, flip that item in the mutable checklist DOM so a later detail GET
-        // reflects it, recompute the parent checklist's resolved/unresolved counts, and echo
-        // { "checklist": … } exactly as ClickUp does. Its path shares no segment with the /task/ branches, so
-        // ordering vs. them doesn't matter; kept with the other write branches.
-        else if (request.Method == HttpMethod.Put && path.Contains("/checklist_item/"))
-        {
-            var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
-            var resolved = ParseResolved(reqBody);
-            var (checklistId, itemId) = ChecklistItemIds(path);
-            lock (_gate)
-                body = ToggleChecklistItemResponse(checklistId, itemId, resolved);
-        }
-        else if (path.Contains("/task/") && request.Method == HttpMethod.Put)
-        {
-            // Status/priority PUTs carry no assignees (the set is untouched); an assignee add/remove
-            // mutates the shared set. Either way echo the task with the current assignees so the write
-            // response reconciles correctly. Read the body before taking the lock (can't await under it).
-            var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
-            // #232: in the foreign scenario a Status/Priority PUT is modelled distinctly — parsed,
-            // persisted, and echoed — so a committed value round-trips (the default path only reconciles
-            // assignees/description and echoes a canned detail).
-            if (_foreign)
-                body = ForeignPut(path, reqBody);
-            else if (NudgeScenario)
-                body = NudgePut(path, reqBody);
-            else
-                lock (_gate)
-                {
-                    ApplyAssigneeMutation(reqBody);
-                    ApplyDescriptionMutation(reqBody);
-                    body = DetailJson(path, _assignees);
-                }
-        }
-        else if (path.Contains("/task/"))
-        {
-            // #303 quick-open not-found path: a GET for the sentinel id "tmissing" returns a 404 so the
-            // Ctrl+O resolve can flash an error and leave the list unchanged. Off every other scenario's
-            // path (no check opens "tmissing").
-            var idSeg = path[(path.LastIndexOf('/') + 1)..];
-            if (idSeg == "tmissing")
-                return new HttpResponseMessage(HttpStatusCode.NotFound)
-                {
-                    Content = new StringContent(
-                        """{"err":"Task not found","ECODE":"ITEM_100"}""", Encoding.UTF8, "application/json"),
-                };
-            // #353 hyphenless-custom-id fallback: the sentinel id "PROJ123" (a hyphenless custom id that
-            // parses as a plain id) 404s on the plain GET but resolves once retried with
-            // custom_task_ids=true — proving the plain-id→custom-id 404 fallback end-to-end.
-            if (idSeg == "PROJ123" && !query.Contains("custom_task_ids=true", StringComparison.OrdinalIgnoreCase))
-                return new HttpResponseMessage(HttpStatusCode.NotFound)
-                {
-                    Content = new StringContent(
-                        """{"err":"Task not found","ECODE":"ITEM_100"}""", Encoding.UTF8, "application/json"),
-                };
-            if (_tree)
-                body = TreeTaskGet(path, query);
-            else if (_foreign)
-                body = ForeignTaskGet(path, query);
-            else if (NudgeScenario)
-                body = NudgeTaskGet(path);
-            else
-                lock (_gate) body = DetailJson(path, _assignees, countTitleFetch: true);
-        }
-        else if (path.Contains("/team/") && path.EndsWith("/task"))
-        {
-            // #333: stall the authoritative F12→All include_closed=true refresh (once armed) so the
-            // pre-refresh bridge frame is observable before this superset replaces it. The pre-boot warm
-            // prefetch's include_closed fetch runs unarmed, so it is never delayed; the default
-            // include_closed=false boot/poll fetches never match this gate.
-            if (!_foreign && ClosedStallMs > 0 && _closedStallArmed && IncludeClosed(query))
-                await Task.Delay(ClosedStallMs, ct);
-            body = _foreign ? ForeignTeamTasks() : TasksJson(page: PageOf(query), _taskCount, IncludeClosed(query));
-        }
-        else if (request.Method == HttpMethod.Post && path.Contains("/list/") && path.EndsWith("/task"))
-        {
-            // Create-task (#209/#213): echo a created task so the New Task screen's Save round-trips
-            // through the facade and closes back to the list. (Not persisted into the team-tasks list.)
-            // #395: when E2E_CAPTURE_FILE is set, write the outgoing request body to that file so a check
-            // can assert the custom_fields array actually reached the POST (a regression that dropped it
-            // would leave the file without the values). Off by default, so no other check is affected.
-            if (request.Content is not null
-                && Environment.GetEnvironmentVariable("E2E_CAPTURE_FILE") is { Length: > 0 } capturePath)
-            {
-                var requestBody = await request.Content.ReadAsStringAsync(ct);
-                try { File.WriteAllText(capturePath, requestBody); } catch { /* best-effort capture */ }
-            }
-            body = """{"id":"tnew","name":"New task from Ctrl+N","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/tnew"}""";
-        }
-        else if (path.Contains("/list/") && path.EndsWith("/task"))
-            body = """{"tasks":[],"last_page":true}""";
-        else if (path.Contains("/list/") && path.EndsWith("/field"))
-            // Custom Field definitions: the #365 QU List-pane scenario keys them per list id (so a remove
-            // can strand a list-local value); else the tall set (#446) under E2E_CUSTOM_FIELDS_MANY, the
-            // small seeded set (#249/#395) under E2E_CUSTOM_FIELDS, or an empty set (so the New Task screen
-            // creates directly, as every other check expects).
-            body = QuLists ? QuListFieldsJson(ListIdOfField(path))
+        // write — flips an item's `resolved` in the mutable DOM and echoes { checklist: … }.
+        new Route<RouteHandler>(HttpMethod.Put, "checklist/{checklistId}/checklist_item/{itemId}", ToggleChecklistItem),
+
+        new Route<RouteHandler>(HttpMethod.Put, "task/{id}", TaskPut),
+        new Route<RouteHandler>(HttpMethod.Get, "task/{id}", TaskGet),
+
+        // GET /team/{id}/task: the list snapshot (+ the #333 closed-refresh stall).
+        new Route<RouteHandler>(HttpMethod.Get, "team/{id}/task", TeamTasks),
+
+        // POST /list/{id}/task (#209/#213): create-task echo (+ the #395 E2E_CAPTURE_FILE body capture).
+        new Route<RouteHandler>(HttpMethod.Post, "list/{id}/task", CreateTask),
+        new Route<RouteHandler>(HttpMethod.Get, "list/{id}/task", (_, _, _, _) =>
+            OkAsync("""{"tasks":[],"last_page":true}""")),
+        // GET /list/{id}/field: Custom Field definitions — the #365 QU List-pane scenario keys them per
+        // list id (so a remove can strand a list-local value); else the tall set (#446) under
+        // E2E_CUSTOM_FIELDS_MANY, the small seeded set (#249/#395) under E2E_CUSTOM_FIELDS, or an empty set
+        // (so the New Task screen creates directly, as every other check expects).
+        new Route<RouteHandler>(HttpMethod.Get, "list/{id}/field", (_, p, _, _) =>
+            OkAsync(QuLists ? QuListFieldsJson(ListIdOfField(p))
                 : CustomFieldsMany ? CustomFieldsManyJson
                 : CustomFields ? CustomFieldsJson
-                : """{"fields":[]}""";
-        else if (path.Contains("/list/"))
-            body = ListJson(path);
-        else if (path.EndsWith("/team"))
-            body = $$"""{"teams":[{"id":"ws1","name":"Bench","members":[{{MembersJson()}}]}]}""";
-        else
-            body = "{}";
+                : """{"fields":[]}""")),
+        new Route<RouteHandler>(HttpMethod.Get, "list/{id}", (_, p, _, _) => OkAsync(ListJson(p))),
 
-        return new HttpResponseMessage(HttpStatusCode.OK)
+        new Route<RouteHandler>(HttpMethod.Get, "team", (_, _, _, _) =>
+            OkAsync($$"""{"teams":[{"id":"ws1","name":"Bench","members":[{{MembersJson()}}]}]}""")),
+    });
+
+    /// <summary>Task↔list membership write (#242): POST adds, DELETE removes the additional location so a
+    /// later detail GET reflects it; ClickUp echoes an empty body.</summary>
+    private Task<HttpResponseMessage> Membership(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        var listId = ListIdOfMembership(path);
+        lock (_gate)
         {
-            Content = new StringContent(body, Encoding.UTF8, "application/json"),
-        };
+            if (request.Method == HttpMethod.Post) _locations.Add(listId);
+            else _locations.Remove(listId);
+        }
+        return OkAsync("{}");
+    }
+
+    private async Task<HttpResponseMessage> CreateComment(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        // #325: when E2E_COMMENT_LOG is set, record the raw request body (one per line) so a check can
+        // assert the structured `comment` blocks array — an @-mention tag, {"type":"tag","user":{"id":…}} —
+        // was actually sent. Otherwise the body is ignored (the canned response covers the round-trip).
+        if (!string.IsNullOrEmpty(CommentLog) && request.Content is { } commentContent)
+            File.AppendAllText(CommentLog, await commentContent.ReadAsStringAsync(ct) + "\n");
+        return Ok("""{"id":9014000000001,"hist_id":"h1","date":1751500000000}""");
+    }
+
+    private async Task<HttpResponseMessage> CreateReply(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
+        RecordReply(CommentIdOfReply(path), reqBody);
+        return Ok("""{"id":9014000000002,"hist_id":"h2","date":1751500500000}""");
+    }
+
+    /// <summary>PUT /checklist/{id}/checklist_item/{id} (D, #457): parse <c>{"resolved":bool}</c>, flip that
+    /// item in the mutable checklist DOM so a later detail GET reflects it, and echo <c>{ "checklist": … }</c>
+    /// exactly as ClickUp does. Its path shares no segment with the /task/ routes, so specificity resolves it
+    /// unambiguously regardless of registration order.</summary>
+    private async Task<HttpResponseMessage> ToggleChecklistItem(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
+        var resolved = ParseResolved(reqBody);
+        var (checklistId, itemId) = ChecklistItemIds(path);
+        string body;
+        lock (_gate)
+            body = ToggleChecklistItemResponse(checklistId, itemId, resolved);
+        return Ok(body);
+    }
+
+    /// <summary>A /task/{id} PUT (#217): status/priority PUTs carry no assignees; an assignee add/remove or
+    /// a description edit mutates the shared state. Either way echo the task reflecting the current state so
+    /// the write response reconciles correctly. Foreign (#232) and nudge (#376) scenarios model it distinctly.</summary>
+    private async Task<HttpResponseMessage> TaskPut(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        // Read the body before taking the lock (can't await under it).
+        var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
+        string body;
+        if (_foreign)
+            body = ForeignPut(path, reqBody);
+        else if (NudgeScenario)
+            body = NudgePut(path, reqBody);
+        else
+            lock (_gate)
+            {
+                ApplyAssigneeMutation(reqBody);
+                ApplyDescriptionMutation(reqBody);
+                body = DetailJson(path, _assignees);
+            }
+        return Ok(body);
+    }
+
+    /// <summary>A /task/{id} GET: the detail read (tree #291 / foreign #232 / nudge #376 scenarios
+    /// substitute their own), with the two sentinel 404 paths — quick-open not-found (<c>tmissing</c>,
+    /// #303) and the hyphenless custom-id fallback (<c>PROJ123</c> without <c>custom_task_ids=true</c>,
+    /// #353). Suffix-anchored matching means this never sees a longer <c>/task/{id}/comment</c> path.</summary>
+    private Task<HttpResponseMessage> TaskGet(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        var idSeg = path[(path.LastIndexOf('/') + 1)..];
+        if (idSeg == "tmissing")
+            return Task.FromResult(TaskNotFound());
+        if (idSeg == "PROJ123" && !query.Contains("custom_task_ids=true", StringComparison.OrdinalIgnoreCase))
+            return Task.FromResult(TaskNotFound());
+        string body;
+        if (_tree)
+            body = TreeTaskGet(path, query);
+        else if (_foreign)
+            body = ForeignTaskGet(path, query);
+        else if (NudgeScenario)
+            body = NudgeTaskGet(path);
+        else
+            lock (_gate) body = DetailJson(path, _assignees, countTitleFetch: true);
+        return Task.FromResult(Ok(body));
+    }
+
+    private async Task<HttpResponseMessage> TeamTasks(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        // #333: stall the authoritative F12→All include_closed=true refresh (once armed) so the pre-refresh
+        // bridge frame is observable before this superset replaces it. The pre-boot warm prefetch's
+        // include_closed fetch runs unarmed, so it is never delayed; the default include_closed=false
+        // boot/poll fetches never match this gate.
+        if (!_foreign && ClosedStallMs > 0 && _closedStallArmed && IncludeClosed(query))
+            await Task.Delay(ClosedStallMs, ct);
+        return Ok(_foreign ? ForeignTeamTasks() : TasksJson(page: PageOf(query), _taskCount, IncludeClosed(query)));
+    }
+
+    private async Task<HttpResponseMessage> CreateTask(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        // Create-task (#209/#213): echo a created task so the New Task screen's Save round-trips through the
+        // facade and closes back to the list. (Not persisted into the team-tasks list.)
+        // #395: when E2E_CAPTURE_FILE is set, write the outgoing request body to that file so a check can
+        // assert the custom_fields array actually reached the POST (a regression that dropped it would leave
+        // the file without the values). Off by default, so no other check is affected.
+        if (request.Content is not null
+            && Environment.GetEnvironmentVariable("E2E_CAPTURE_FILE") is { Length: > 0 } capturePath)
+        {
+            var requestBody = await request.Content.ReadAsStringAsync(ct);
+            try { File.WriteAllText(capturePath, requestBody); } catch { /* best-effort capture */ }
+        }
+        return Ok("""{"id":"tnew","name":"New task from Ctrl+N","status":{"status":"to do","color":"#d3d3d3"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/tnew"}""");
     }
 
     private static int PageOf(string query)

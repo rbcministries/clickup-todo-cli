@@ -21,6 +21,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ClickUpTodo\ClickUpTodo.csproj" />
+    <!-- #488: the E2E harness owns the specificity-ranked RouteTable; reference it so its ambiguity
+         assertion and specificity ranking can be unit-tested here (RouteTableTests). -->
+    <ProjectReference Include="..\ClickUpTodo.Tui.E2E\ClickUpTodo.Tui.E2E.csproj" />
   </ItemGroup>
 
 </Project>
