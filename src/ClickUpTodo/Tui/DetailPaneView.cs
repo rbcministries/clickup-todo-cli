@@ -530,9 +530,8 @@ public sealed class DetailPaneView : TextView
     /// one-to-one); the draw path still styles them from the tag, unchanged.
     /// </summary>
     public static IReadOnlyList<RowSource> BuildRowSourceMap(
-        IReadOnlyList<string> sourceLines, string separator, IReadOnlyList<IReadOnlyList<Cell>> wrappedRows)
+        IReadOnlyList<string> sourceLines, IReadOnlyList<IReadOnlyList<Cell>> wrappedRows)
     {
-        _ = separator; // Separators reconcile like any other source line; kept in the signature for intent.
         var result = new RowSource[wrappedRows.Count];
         var srcIdx = 0;
         var cursor = 0;
@@ -604,6 +603,12 @@ public sealed class DetailPaneView : TextView
         var styles = new DetailCellStyle[row.Count];
         var urls = new string?[row.Count];
         if (row.Count == 0)
+            return (styles, urls);
+
+        // Cheap bail-out mirroring ClassifyRow: every link (bare or markdown) carries an http(s) scheme, so
+        // a source line without one has no links and skips the regex entirely — the common case for body
+        // text, and a source line can wrap into several rows that each hit this path.
+        if (sourceLine.IndexOf("http", StringComparison.OrdinalIgnoreCase) < 0)
             return (styles, urls);
 
         var links = TaskLinkExtractor.Extract(sourceLine);
@@ -683,7 +688,7 @@ public sealed class DetailPaneView : TextView
             return found;
 
         var wrapped = GetAllLines();
-        var sources = BuildRowSourceMap(_lines, _separator, wrapped);
+        var sources = BuildRowSourceMap(_lines, wrapped);
         var rebuilt = new Dictionary<List<Cell>, RowSource>(wrapped.Count, ReferenceEqualityComparer.Instance);
         for (var i = 0; i < wrapped.Count; i++)
             rebuilt[wrapped[i]] = sources[i];

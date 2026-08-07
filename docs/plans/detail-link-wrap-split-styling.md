@@ -56,7 +56,7 @@ statics (`ClassifyRow` / `ClassifyRowLinkCells` / `RowLinkUrls` / `LinkUrlForCel
 #430 tests, including the split-fragment safe-degradation pins) and become the **fallback**
 when a row can't be reconciled, so the change is strictly better-or-equal to today.
 
-1. **`BuildRowSourceMap(IReadOnlyList<string> sourceLines, string separator,
+1. **`BuildRowSourceMap(IReadOnlyList<string> sourceLines,
    IReadOnlyList<IReadOnlyList<Cell>> wrappedRows) → IReadOnlyList<RowSource>`** — the pure
    reconciliation above. `RowSource` is `(int SourceLineIndex, int StartOffset)`
    (`StartOffset` = the char offset within the source line where the row begins). Order of
