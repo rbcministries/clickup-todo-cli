@@ -1,0 +1,18 @@
+{
+  "fields": [
+    { "id": "cf_notes", "name": "Notes", "type": "text", "required": false },
+    { "id": "cf_estimate", "name": "Estimate", "type": "number", "required": true },
+    {
+      "id": "cf_stage",
+      "name": "Stage",
+      "type": "drop_down",
+      "required": false,
+      "type_config": {
+        "options": [
+          { "id": "opt_alpha", "name": "Alpha", "orderindex": 0 },
+          { "id": "opt_beta", "name": "Beta", "orderindex": 1 }
+        ]
+      }
+    }
+  ]
+}

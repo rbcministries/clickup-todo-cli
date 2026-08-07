@@ -1,0 +1,14 @@
+{
+  "fields": [
+    { "id": "cf_1", "name": "Alpha", "type": "text", "required": false },
+    { "id": "cf_2", "name": "Bravo", "type": "text", "required": false },
+    { "id": "cf_3", "name": "Charlie", "type": "text", "required": false },
+    { "id": "cf_4", "name": "Delta", "type": "text", "required": false },
+    { "id": "cf_5", "name": "Echo", "type": "text", "required": false },
+    { "id": "cf_6", "name": "Foxtrot", "type": "text", "required": false },
+    { "id": "cf_7", "name": "Golf", "type": "text", "required": false },
+    { "id": "cf_8", "name": "Hotel", "type": "text", "required": false },
+    { "id": "cf_9", "name": "India", "type": "text", "required": false },
+    { "id": "cf_last", "name": "Last Field", "type": "text", "required": true }
+  ]
+}

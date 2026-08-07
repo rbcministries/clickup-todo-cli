@@ -229,8 +229,7 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     // Off by default, so every existing check's comment post is unaffected.
     private static readonly string? CommentLog = Environment.GetEnvironmentVariable("E2E_COMMENT_LOG");
 
-    private const string CustomFieldsJson =
-        """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false},{"id":"cf_estimate","name":"Estimate","type":"number","required":true},{"id":"cf_stage","name":"Stage","type":"drop_down","required":false,"type_config":{"options":[{"id":"opt_alpha","name":"Alpha","orderindex":0},{"id":"opt_beta","name":"Beta","orderindex":1}]}}]}""";
+    private static readonly string CustomFieldsJson = Fixture("custom_fields");
 
     // #425: when E2E_TITLE_REFRESH=1, the launch task is renamed after its first (boot) detail fetch, so a
     // refresh (Ctrl+R / F5) must move the terminal tab title. The boot fetch keeps the original long name;
@@ -248,8 +247,7 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     // pyte screen.
     private static bool CustomFieldsMany => Environment.GetEnvironmentVariable("E2E_CUSTOM_FIELDS_MANY") == "1";
 
-    private const string CustomFieldsManyJson =
-        """{"fields":[{"id":"cf_1","name":"Alpha","type":"text","required":false},{"id":"cf_2","name":"Bravo","type":"text","required":false},{"id":"cf_3","name":"Charlie","type":"text","required":false},{"id":"cf_4","name":"Delta","type":"text","required":false},{"id":"cf_5","name":"Echo","type":"text","required":false},{"id":"cf_6","name":"Foxtrot","type":"text","required":false},{"id":"cf_7","name":"Golf","type":"text","required":false},{"id":"cf_8","name":"Hotel","type":"text","required":false},{"id":"cf_9","name":"India","type":"text","required":false},{"id":"cf_last","name":"Last Field","type":"text","required":true}]}""";
+    private static readonly string CustomFieldsManyJson = Fixture("custom_fields_many");
 
     private static bool WarmClosed => Environment.GetEnvironmentVariable("E2E_WARM_CLOSED") == "1";
     private static readonly int ClosedStallMs =
@@ -372,6 +370,25 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     private string _description =
         "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed\n\nParent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread"
         + (MdLink ? "\n\nSee [the runbook](" + MdLinkTarget + ") for steps" : "");
+
+    /// <summary>Reads a canned response payload from the embedded <c>Fixtures/{name}.json</c> (#486).
+    /// Adding a fixture is one new file — the <c>.csproj</c> globs <c>Fixtures\*.json</c> in and this
+    /// resolves the manifest name by suffix, so there is no shared append point. On a miss it throws with
+    /// the available resource names, so a rename (or a RootNamespace surprise) fails loudly at first use
+    /// instead of serving a null body.</summary>
+    private static string Fixture(string name)
+    {
+        var asm = typeof(FakeClickUp).Assembly;
+        var suffix = $".Fixtures.{name}.json";
+        var resource = Array.Find(asm.GetManifestResourceNames(),
+                           n => n.EndsWith(suffix, StringComparison.Ordinal))
+                       ?? throw new InvalidOperationException(
+                           $"Embedded fixture '{name}' not found (looked for a resource ending '{suffix}'). "
+                           + "Available: " + string.Join(", ", asm.GetManifestResourceNames()));
+        using var stream = asm.GetManifestResourceStream(resource)!;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
@@ -644,20 +661,7 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
     // C (#456): a seeded checklists payload — two groups, mixed resolved state, one nested item, one
     // assigned item — mirroring the ClickUp GET /task shape the read model (#454) maps. Aggregate: 2 of 5
     // items resolved ⇒ the tab title reads "Checklists (2/5)".
-    private const string ChecklistsJson = """
-    [
-      {"id":"c1","name":"Release steps","orderindex":0,"resolved":1,"unresolved":2,
-       "items":[
-         {"id":"i1","name":"Cut the tag","resolved":true,"orderindex":0,"assignee":null},
-         {"id":"i2","name":"Draft release notes","resolved":false,"orderindex":1,
-          "assignee":{"id":101,"username":"Ada Lovelace"},
-          "children":[{"id":"i2a","name":"Verify the changelog","resolved":false,"orderindex":0}]}]},
-      {"id":"c2","name":"QA signoff","orderindex":1,"resolved":1,"unresolved":1,
-       "items":[
-         {"id":"i3","name":"Smoke test on staging","resolved":true,"orderindex":0,"assignee":null},
-         {"id":"i4","name":"Cross-browser check","resolved":false,"orderindex":1,"assignee":null}]}
-    ]
-    """;
+    private static readonly string ChecklistsJson = Fixture("checklists");
 
     private string DetailJson(string path, HashSet<long> assignees, bool countTitleFetch = false)
     {
