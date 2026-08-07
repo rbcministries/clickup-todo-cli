@@ -288,7 +288,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                 DueDate = task.DueDateMs,
             };
             // Custom-field values (#368) are loosely typed, so they ride on AdditionalData as a Kiota
-            // UntypedNode tree (no spec change / no regen — see docs/plans/new-task-custom-field-values.md)
+            // UntypedNode tree (no spec change / no regen — see docs/plans/completed/new-task-custom-field-values.md)
             // rather than a rigid generated property. Empty ⇒ no key, leaving today's create body untouched.
             if (task.CustomFields is { Count: > 0 } customFields)
             {
