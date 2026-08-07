@@ -260,6 +260,17 @@ public sealed class SettingsScreen : Screen
             launchLocationButton.Text = LaunchLocationText(launchLocation);
         };
 
+        // Windows-only (#462): on a match, launch under the Windows Terminal profile whose
+        // startingDirectory equals the resolved dispatch dir, so the session inherits its
+        // appearance/environment. Off by default; a strict no-op off Windows or on no match.
+        var tryWtProfiles = dispatch.TryUseWindowsTerminalProfiles;
+        var tryWtProfilesButton = new Button { X = rightX, Y = 18, Text = TryWtProfilesText(tryWtProfiles) };
+        tryWtProfilesButton.Accepting += (_, _) =>
+        {
+            tryWtProfiles = !tryWtProfiles;
+            tryWtProfilesButton.Text = TryWtProfilesText(tryWtProfiles);
+        };
+
         var save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var cancel = new Button { X = Pos.Right(save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         save.Accepting += (_, _) =>
@@ -281,6 +292,7 @@ public sealed class SettingsScreen : Screen
                     DefaultSessionMode = sessionMode,
                     DefaultPostResultsToComments = postToComments,
                     LaunchLocation = launchLocation,
+                    TryUseWindowsTerminalProfiles = tryWtProfiles,
                     PromptTemplate = _promptTemplate,
                 },
                 new DetailViewSettings
@@ -320,7 +332,7 @@ public sealed class SettingsScreen : Screen
             generalHeader, confirmOnExitButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, templateButton, customTermLabel, customTermField,
-            sessionModeButton, postToCommentsButton, launchLocationButton,
+            sessionModeButton, postToCommentsButton, launchLocationButton, tryWtProfilesButton,
             save, cancel,
         ]);
     }
@@ -360,6 +372,8 @@ public sealed class SettingsScreen : Screen
         LaunchLocation.NewTab => "New tab (where supported)",
         _ => "New window",
     };
+
+    private static string TryWtProfilesText(bool on) => "Try WT profiles (Windows): " + (on ? "On" : "Off");
 
     private static string DefaultTabText(DetailTab t) => "Default tab: " + t switch
     {
