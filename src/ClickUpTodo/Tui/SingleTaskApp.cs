@@ -46,6 +46,11 @@ public sealed class SingleTaskApp
     // single-task view predicates. UI-thread-only, mirroring TodoApp.
     private static readonly TimeSpan MarkerPollInterval = TimeSpan.FromSeconds(4);
 
+    // How many mention candidates the pool should hold before the deferred workspace-members top-up
+    // stops fetching (#155/#473) — mirrors TodoApp.AssigneeCandidateTarget so both hosts warm to the
+    // same depth.
+    private const int AssigneeCandidateTarget = 10;
+
     private readonly TaskService _tasks;
     private readonly AppConfig _config;
     private readonly ConfigStore _configStore;
@@ -53,6 +58,15 @@ public sealed class SingleTaskApp
     private readonly IChangeMarkerStore _changeMarkers;
     private readonly ChangeMarkerConsumer _markerConsumer;
     private readonly SingleTaskNudgePolicy _nudgePolicy;
+
+    // The @-mention candidate pool for the Ctrl+N comment composer (#473), the same
+    // AssigneeFrequencyCache the dashboard projects into the picker (#325). Null when no host supplied
+    // one, which leaves the composer's mention seams unwired so `@` stays a literal `@` (byte-identical
+    // to pre-#473 single-task mode). Single-task mode has no working set to tally, so the pool is warmed
+    // once from the workspace members via TopUpAsync (raw roster; a persisted dashboard pool loads warm).
+    private readonly AssigneeFrequencyCache? _assignees;
+    // One-shot guard so the deferred members top-up is kicked at most once (mirrors TodoApp). UI-thread-only.
+    private bool _assigneeTopUpKicked;
 
     // The launch task's initially-fetched detail/comments, used once in Build() to construct the root
     // detail tab. After boot the live per-tab state lives on DetailTab (_root and any stacked child).
@@ -93,12 +107,13 @@ public sealed class SingleTaskApp
 
     public SingleTaskApp(TaskService tasks, AppConfig config, ConfigStore configStore, TaskDetail task,
         IReadOnlyList<CommentItem> comments, IBrowserLauncher? browserLauncher = null,
-        IChangeMarkerStore? changeMarkers = null)
+        IChangeMarkerStore? changeMarkers = null, AssigneeFrequencyCache? assignees = null)
     {
         _tasks = tasks;
         _config = config;
         _configStore = configStore;
         _browser = browserLauncher ?? new SystemBrowserLauncher();
+        _assignees = assignees;
         _seedTask = task;
         _seedComments = comments;
         _status = $"Loaded: {task.Name}";
@@ -147,6 +162,7 @@ public sealed class SingleTaskApp
             _status = $"{_status} (driver: {driverName ?? "default (ansi)"}{(diffing ? ", diffed output" : "")})";
             Build();
             ArmMarkerPoll();
+            WarmMentionPool();
             Application.Run(_window);
         }
         finally
@@ -266,7 +282,23 @@ public sealed class SingleTaskApp
             // that vouches for complete child sets is a dashboard concern, absent in single-task mode.
             currentUserId: _tasks.UserId,
             treeBadgeDisplay: _config.BadgeDisplay,
-            loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(id, snapshotLookup: null, childrenIndex: null, ct: ct));
+            loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(id, snapshotLookup: null, childrenIndex: null, ct: ct),
+            // #473: @-mention authoring in the Ctrl+N composer, the single-task counterpart of the
+            // dashboard's #325 wiring. Wired only when a host supplied the mention pool (_assignees); when
+            // it didn't, all three seams stay null and the composer's `@` is a literal `@` (byte-identical
+            // to pre-#473 single-task mode — TaskDetailScreen.MentionEnabled requires all three). The
+            // structured write goes through the same #322 facade, keyed to *this* tab's task so a child
+            // opened by walking the Task Tree tab (#374) mentions into its own task. The candidate pool is
+            // the same TaskAssignee→WorkspaceMember projection the dashboard uses (MentionMemberProjection).
+            postStructuredCommentAsync: _assignees is null
+                ? null
+                : (runs, ct) => _tasks.CreateTaskCommentAsync(id, runs, ct),
+            memberMatch: _assignees is null
+                ? null
+                : (query, exclude) => MentionMemberProjection.ToMembers(_assignees.Match(query, exclude)),
+            memberTopFrequent: _assignees is null
+                ? null
+                : (n, exclude) => MentionMemberProjection.ToMembers(_assignees.TopMostFrequent(n, exclude)));
 
         var tab = new DetailTab(screen, id, task, comments);
 
@@ -395,6 +427,23 @@ public sealed class SingleTaskApp
                 Application.Invoke(() => Flash($"Could not load task detail: {ErrorText.Short(ex)}"));
             }
         });
+    }
+
+    /// <summary>
+    /// Kicks the one-shot workspace-members top-up (#473) that fills the @-mention pool for the Ctrl+N
+    /// composer. Single-task mode tallies no working set, so — unlike the dashboard, which warms the pool
+    /// from the loaded tasks (<c>RecordFromTasks</c>) — the pool starts from whatever a prior dashboard
+    /// session persisted (loaded warm in the cache's constructor) and is topped up from the workspace
+    /// members here, mirroring <c>TodoApp.OnTasksLoaded</c>'s deferred kick. Best-effort and non-blocking:
+    /// <see cref="AssigneeFrequencyCache.TopUpAsync"/> yields to the network off the UI thread and swallows
+    /// failures. A no-op when no cache was supplied. Runs once on boot, before the run loop pumps.
+    /// </summary>
+    private void WarmMentionPool()
+    {
+        if (_assignees is null || _assigneeTopUpKicked)
+            return;
+        _assigneeTopUpKicked = true;
+        _ = _assignees.TopUpAsync(AssigneeCandidateTarget);
     }
 
     // ── Cross-process nudge channel — consumer (#377) ─────────────────────────

@@ -2051,11 +2051,10 @@ public sealed class TodoApp
                         // warmed, frequency-ranked assignee cache the assignee selectors use — a
                         // TaskAssignee(Id, Name) maps to WorkspaceMember(Id, Name, null) (DisplayName ⇐
                         // Name), exactly the shape the picker renders/keys on, so no new fetch is needed.
+                        // The projection is shared with SingleTaskApp (#473) via MentionMemberProjection.
                         postStructuredCommentAsync: (runs, ct) => _tasks.CreateTaskCommentAsync(resolvedId, runs, ct),
-                        memberMatch: (query, exclude) =>
-                            _assignees.Match(query, exclude).Select(a => new WorkspaceMember(a.Id, a.Name, null)).ToList(),
-                        memberTopFrequent: (n, exclude) =>
-                            _assignees.TopMostFrequent(n, exclude).Select(a => new WorkspaceMember(a.Id, a.Name, null)).ToList());
+                        memberMatch: (query, exclude) => MentionMemberProjection.ToMembers(_assignees.Match(query, exclude)),
+                        memberTopFrequent: (n, exclude) => MentionMemberProjection.ToMembers(_assignees.TopMostFrequent(n, exclude)));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the
