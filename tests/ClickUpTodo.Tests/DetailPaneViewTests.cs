@@ -404,6 +404,226 @@ public sealed class DetailPaneViewTests
         Assert.Null(urls[^1]);   // the trailing ')' is trimmed off the URL, so it carries no target
     }
 
+    // ── Wrap-split link styling (#443): BuildRowSourceMap + ClassifyRowFromSource ────────────────────
+    // The per-row re-extraction above (#413/#430) is blind across a wrap boundary, so a link token word
+    // wrap splits across two rendered rows is styled on only the fragment(s) that still parse in isolation.
+    // BuildRowSourceMap reconciles Terminal.Gui's published wrapped output (GetAllLines) against the source
+    // lines, and ClassifyRowFromSource styles each row from its SOURCE line's spans — so a split link is
+    // styled contiguously on every row it touches. These drive a REAL headless pane (SetBody + Rewrap, as
+    // the click tests do) so the reconciliation is exercised against genuine wrap output, not hand-built rows.
+
+    // Wraps `body` in a real pane at `width` and returns its wrapped rows plus the display→source map.
+    private static (List<List<Cell>> Rows, IReadOnlyList<DetailPaneView.RowSource> Map) WrapAndMap(
+        string body, int width, string separator = Sep)
+    {
+        var pane = new DetailPaneView { Frame = new Rectangle(0, 0, width, 40) };
+        pane.SetBody(body, separator);
+        Rewrap(pane);
+        var rows = pane.GetAllLines();
+        return (rows, DetailPaneView.BuildRowSourceMap(body.Split('\n'), rows));
+    }
+
+    private static string GraphemeText(IReadOnlyList<Cell> row) => string.Concat(row.Select(c => c.Grapheme ?? ""));
+
+    // The graphemes ClassifyRowFromSource styles as a link across all rows (in row/cell order), the distinct
+    // resolved targets it assigns them, and how many distinct rows carried a styled cell (so a test can prove
+    // the link actually spanned >1 row). Asserts every row reconciled — a -1 would mean the map failed.
+    private static (string Styled, HashSet<string?> Targets, int RowsWithStyle) StyledAcrossRows(
+        IReadOnlyList<List<Cell>> rows, IReadOnlyList<DetailPaneView.RowSource> map, string[] sourceLines)
+    {
+        var styled = new List<string>();
+        var targets = new HashSet<string?>();
+        var rowsWithStyle = 0;
+        for (var r = 0; r < rows.Count; r++)
+        {
+            var src = map[r];
+            Assert.True(src.SourceLineIndex >= 0, $"row {r} '{GraphemeText(rows[r])}' did not reconcile to a source line");
+            var (styles, urls) = DetailPaneView.ClassifyRowFromSource(rows[r], sourceLines[src.SourceLineIndex], src.StartOffset);
+            var any = false;
+            for (var i = 0; i < rows[r].Count; i++)
+                if (styles[i] is DetailPaneView.DetailCellStyle.TaskLink or DetailPaneView.DetailCellStyle.WebLink)
+                {
+                    styled.Add(rows[r][i].Grapheme ?? "");
+                    targets.Add(urls[i]);
+                    any = true;
+                }
+            if (any)
+                rowsWithStyle++;
+        }
+        return (string.Concat(styled), targets, rowsWithStyle);
+    }
+
+    [Fact]
+    public void BuildRowSourceMap_EveryRowReconstructsExactlyItsSourceSubstring()
+    {
+        // A hard-wrapping URL, a blank line, a wrapping separator rule, and a short line — every wrapped row
+        // must map to a (source line, offset) whose substring is byte-for-byte the row's own text.
+        const string longUrl = "https://example.com/a/very/long/path/that/hard/wraps/xyz";
+        var body = string.Join('\n',
+            "Parent ticket: " + TaskUrl + " for the full thread",
+            "",
+            Sep,
+            "See " + longUrl + " tail",
+            "plain line");
+        var (rows, map) = WrapAndMap(body, width: 22);
+        var sourceLines = body.Split('\n');
+
+        Assert.Equal(rows.Count, map.Count);
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var src = map[i];
+            var rowText = GraphemeText(rows[i]);
+            Assert.True(src.SourceLineIndex >= 0, $"row {i} '{rowText}' did not reconcile");
+            var line = sourceLines[src.SourceLineIndex];
+            Assert.True(src.StartOffset + rowText.Length <= line.Length,
+                $"row {i} '{rowText}' offset {src.StartOffset} overruns source line {src.SourceLineIndex} (len {line.Length})");
+            Assert.Equal(rowText, line.Substring(src.StartOffset, rowText.Length));
+        }
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_UnderlinesABareUrlContiguouslyAcrossAHardWrap()
+    {
+        // Case 1 of #443: a URL longer than the pane inner width hard-wraps mid-URL. Per-row re-extraction
+        // styles only the fragments that still parse; the source-driven path styles the WHOLE url on every
+        // row it lands on, and nothing else.
+        const string url = "https://example.com/a/very/long/path/that/hard/wraps/across/rows";
+        var body = "See " + url + " end";
+        var (rows, map) = WrapAndMap(body, width: 20);
+
+        var (styled, targets, rowsWithStyle) = StyledAcrossRows(rows, map, body.Split('\n'));
+        Assert.True(rowsWithStyle >= 2, $"the URL should span >= 2 rows at this width (spanned {rowsWithStyle})");
+        Assert.Equal(url, styled);                 // exactly the URL cells, contiguously, across the wrap
+        Assert.Equal(url, Assert.Single(targets)); // one resolved target — the whole URL — on every cell
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_UnderlinesMarkdownVisibleTextAcrossAWrap_ButNotTheMarkup()
+    {
+        // Case 2 of #443: a markdown link whose visible text wraps across rows. Every visible-text cell is
+        // styled with the RESOLVED target on whichever row it lands on; the [ ] ( url ) markup stays unstyled.
+        const string target = "https://example.com/runbook";
+        const string visible = "the operations runbook and deploy guide";
+        var body = "See [" + visible + "](" + target + ") now";
+        var (rows, map) = WrapAndMap(body, width: 18);
+
+        var (styled, targets, rowsWithStyle) = StyledAcrossRows(rows, map, body.Split('\n'));
+        Assert.True(rowsWithStyle >= 2, $"the visible text should span >= 2 rows at this width (spanned {rowsWithStyle})");
+        Assert.Equal(visible, styled);                // exactly the visible text — not the '[', ']', or (url)
+        Assert.Equal(target, Assert.Single(targets)); // the resolved target, not the visible prose
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_StylesOnlyTheSourceSpan_NotTrailingProseOnTheRow()
+    {
+        // A continuation fragment that starts mid-URL and runs into trailing prose: the URL tail is styled
+        // with the whole URL as target; the prose past the span is not.
+        const string url = "https://example.com/some/deep/path";
+        var source = "ref " + url + " end";
+        const int startOffset = 4 + 15;                       // a row starting 15 chars into the URL (offset 4)
+        var rowText = url[15..] + " end";
+        var row = DetailPaneView.BuildCells(rowText, Sep).Single();
+
+        var (styles, urls) = DetailPaneView.ClassifyRowFromSource(row, source, startOffset);
+
+        var styled = string.Concat(Enumerable.Range(0, row.Count)
+            .Where(i => styles[i] == DetailPaneView.DetailCellStyle.WebLink)
+            .Select(i => row[i].Grapheme ?? ""));
+        Assert.Equal(url[15..], styled);
+        Assert.All(Enumerable.Range(0, row.Count).Where(i => styles[i] == DetailPaneView.DetailCellStyle.WebLink),
+            i => Assert.Equal(url, urls[i]));
+        Assert.All(Enumerable.Range(0, row.Count).Where(i => styles[i] == DetailPaneView.DetailCellStyle.Normal),
+            i => Assert.Null(urls[i]));
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_LeavesLinkFreeAndSeparatorRowsUnstyled()
+    {
+        var (s1, u1) = DetailPaneView.ClassifyRowFromSource(
+            DetailPaneView.BuildCells("no links here at all", Sep).Single(), "no links here at all", 0);
+        Assert.All(s1, s => Assert.Equal(DetailPaneView.DetailCellStyle.Normal, s));
+        Assert.All(u1, Assert.Null);
+
+        var (s2, u2) = DetailPaneView.ClassifyRowFromSource(
+            DetailPaneView.BuildCells(Sep, Sep).Single(), Sep, 0);
+        Assert.All(s2, s => Assert.Equal(DetailPaneView.DetailCellStyle.Normal, s));
+        Assert.All(u2, Assert.Null);
+    }
+
+    [Fact]
+    public void BuildRowSourceMap_ResolvesTheCorrectOccurrence_WhenTheSourceLineRepeatsAFragment()
+    {
+        // The source line repeats "dup " (so a wrapped row's text also appears earlier in the same line)
+        // before a unique URL. Reconciliation must map the URL's continuation row to the CORRECT (later)
+        // occurrence via the running cursor; a mis-map to an earlier "dup" offset would slide the URL off
+        // its source span and it would not come back styled — so `styled == url` proves the right occurrence.
+        const string url = "https://ex.io/uniqpath/aaaa/bbbb/cccc/dddd";
+        var body = "dup dup dup dup dup dup dup dup " + url + " end";
+        var (rows, map) = WrapAndMap(body, width: 18);
+
+        var (styled, targets, rowsWithStyle) = StyledAcrossRows(rows, map, body.Split('\n'));
+        Assert.True(rowsWithStyle >= 2, $"the URL should span >= 2 rows at this width (spanned {rowsWithStyle})");
+        Assert.Equal(url, styled);
+        Assert.Equal(url, Assert.Single(targets));
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_UnderlinesATaskUrlContiguouslyAcrossAHardWrap()
+    {
+        // The Task-vs-Web branch on the split path: a long ClickUp task URL hard-wraps; every row it lands
+        // on must be styled TaskLink (not WebLink) with the whole URL as target.
+        const string taskUrl = "https://app.clickup.com/t/86a1b2c3dabcdefghij1234567890";
+        var body = "See " + taskUrl + " end";
+        var (rows, map) = WrapAndMap(body, width: 20);
+        var sourceLines = body.Split('\n');
+
+        var styled = new List<string>();
+        var kinds = new HashSet<DetailPaneView.DetailCellStyle>();
+        var targets = new HashSet<string?>();
+        var rowsWithStyle = 0;
+        for (var r = 0; r < rows.Count; r++)
+        {
+            var src = map[r];
+            Assert.True(src.SourceLineIndex >= 0, $"row {r} did not reconcile");
+            var (styles, urls) = DetailPaneView.ClassifyRowFromSource(rows[r], sourceLines[src.SourceLineIndex], src.StartOffset);
+            var any = false;
+            for (var i = 0; i < rows[r].Count; i++)
+                if (styles[i] is DetailPaneView.DetailCellStyle.TaskLink or DetailPaneView.DetailCellStyle.WebLink)
+                {
+                    styled.Add(rows[r][i].Grapheme ?? "");
+                    kinds.Add(styles[i]);
+                    targets.Add(urls[i]);
+                    any = true;
+                }
+            if (any)
+                rowsWithStyle++;
+        }
+        Assert.True(rowsWithStyle >= 2, $"the task URL should span >= 2 rows at this width (spanned {rowsWithStyle})");
+        Assert.Equal(taskUrl, string.Concat(styled));
+        Assert.Equal(taskUrl, Assert.Single(targets));
+        Assert.Equal(DetailPaneView.DetailCellStyle.TaskLink, Assert.Single(kinds));
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_AccountsForAWideGraphemeBeforeTheUrl()
+    {
+        // A multi-UTF-16 grapheme (🛠️ — a surrogate pair + VS16) before the URL: each cell's source offset
+        // must advance by the grapheme's char length, not by 1 (cell index), or the URL cells would map to
+        // the wrong source offsets and miss the span.
+        const string url = "https://ex.io/path";
+        var source = "🛠️ " + url;
+        var row = DetailPaneView.BuildCells(source, Sep).Single();
+
+        var (styles, urls) = DetailPaneView.ClassifyRowFromSource(row, source, 0);
+
+        var styled = string.Concat(Enumerable.Range(0, row.Count)
+            .Where(i => styles[i] == DetailPaneView.DetailCellStyle.WebLink)
+            .Select(i => row[i].Grapheme ?? ""));
+        Assert.Equal(url, styled);
+        Assert.All(Enumerable.Range(0, row.Count).Where(i => styles[i] == DetailPaneView.DetailCellStyle.WebLink),
+            i => Assert.Equal(url, urls[i]));
+    }
+
     // Exercises the real SetBody → TextView.Load path (no driver needed to load the model) and inspects
     // the loaded cells. This is the reviewer's concern (PR #184): the terminal-default (Color.None)
     // background must stay on the separator line only, and must not carry forward to the comment/

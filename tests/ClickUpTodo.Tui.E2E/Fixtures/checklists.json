@@ -1,0 +1,33 @@
+[
+  {
+    "id": "c1",
+    "name": "Release steps",
+    "orderindex": 0,
+    "resolved": 1,
+    "unresolved": 2,
+    "items": [
+      { "id": "i1", "name": "Cut the tag", "resolved": true, "orderindex": 0, "assignee": null },
+      {
+        "id": "i2",
+        "name": "Draft release notes",
+        "resolved": false,
+        "orderindex": 1,
+        "assignee": { "id": 101, "username": "Ada Lovelace" },
+        "children": [
+          { "id": "i2a", "name": "Verify the changelog", "resolved": false, "orderindex": 0 }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "c2",
+    "name": "QA signoff",
+    "orderindex": 1,
+    "resolved": 1,
+    "unresolved": 1,
+    "items": [
+      { "id": "i3", "name": "Smoke test on staging", "resolved": true, "orderindex": 0, "assignee": null },
+      { "id": "i4", "name": "Cross-browser check", "resolved": false, "orderindex": 1, "assignee": null }
+    ]
+  }
+]

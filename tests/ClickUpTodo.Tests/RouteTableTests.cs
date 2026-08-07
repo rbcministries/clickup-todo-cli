@@ -164,6 +164,6 @@ public class RouteTableTests
         // Constructing FakeClickUp runs BuildRoutes(), whose RouteTable constructor throws on any
         // same-method equal-specificity overlap — so a future scenario that adds an ambiguous route fails
         // `dotnet test` here, not only at E2E harness boot. Only the table is built; no handler is invoked.
-        Assert.Null(Record.Exception(() => new global::FakeClickUp(taskCount: 1)));
+        Assert.Null(Record.Exception(() => new global::FakeClickUp(new global::HarnessContext { TaskCount = 1 })));
     }
 }

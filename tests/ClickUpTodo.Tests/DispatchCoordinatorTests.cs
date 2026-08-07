@@ -311,6 +311,118 @@ public sealed class DispatchCoordinatorTests
         Assert.Null(DispatchCoordinator.RepositoryMatchNote(noMatch));
     }
 
+    // ── #462 Windows Terminal profile match ──────────────────────────────────
+
+    // A settings.json whose only profile's startingDirectory is the base dir the task-derived launch
+    // resolves to, so the match keys off plan.WorkingDir.
+    private static string WtSettings(string startingDir) => $$"""
+        { "profiles": { "list": [ { "guid": "{proj}", "name": "Project", "startingDirectory": "{{startingDir}}" } ] } }
+        """;
+
+    // A loader that fails the test if it is ever called — proves the settings.json is not read on the
+    // no-op paths (toggle off, one-off).
+    private static Func<string?> NeverLoad => () => throw new InvalidOperationException("settings.json must not be read here");
+
+    [Fact]
+    public void Plan_WtProfilesOn_Match_SetsWindowsTerminalProfile()
+    {
+        var settings = new AgentDispatchSettings { TryUseWindowsTerminalProfiles = true };
+
+        var plan = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
+            directoryExists: Exists(), childDirectoryNames: Children(),
+            loadWindowsTerminalSettings: () => WtSettings(BaseDir), expandEnvironment: s => s);
+
+        Assert.Equal(BaseDir, plan.WorkingDir);
+        Assert.Equal("{proj}", plan.WindowsTerminalProfile);
+    }
+
+    [Fact]
+    public void Plan_WtProfilesOff_DoesNotReadSettings_AndLeavesProfileNull()
+    {
+        var settings = new AgentDispatchSettings(); // toggle off (default)
+
+        var plan = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
+            directoryExists: Exists(), childDirectoryNames: Children(),
+            loadWindowsTerminalSettings: NeverLoad, expandEnvironment: s => s);
+
+        Assert.Null(plan.WindowsTerminalProfile);
+    }
+
+    [Fact]
+    public void Plan_WtProfilesOn_NoMatchingProfile_LeavesProfileNull()
+    {
+        var settings = new AgentDispatchSettings { TryUseWindowsTerminalProfiles = true };
+
+        var plan = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
+            directoryExists: Exists(), childDirectoryNames: Children(),
+            loadWindowsTerminalSettings: () => WtSettings("/somewhere/else"), expandEnvironment: s => s);
+
+        Assert.Null(plan.WindowsTerminalProfile);
+    }
+
+    [Fact]
+    public void Plan_WtProfilesOn_OneOff_DoesNotReadSettings()
+    {
+        // A one-off (claude -p) has no terminal, so no profile applies and settings.json is never read.
+        var settings = new AgentDispatchSettings { TryUseWindowsTerminalProfiles = true };
+
+        var plan = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go", SessionMode: AgentSessionMode.OneOff), TaskWith(), BaseDir, Home,
+            directoryExists: Exists(), childDirectoryNames: Children(),
+            loadWindowsTerminalSettings: NeverLoad, expandEnvironment: s => s);
+
+        Assert.True(plan.OneOff);
+        Assert.Null(plan.WindowsTerminalProfile);
+    }
+
+    [Fact]
+    public void Plan_WtProfilesOn_NoSettingsFile_LeavesProfileNull()
+    {
+        var settings = new AgentDispatchSettings { TryUseWindowsTerminalProfiles = true };
+
+        var plan = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
+            directoryExists: Exists(), childDirectoryNames: Children(),
+            loadWindowsTerminalSettings: () => null, expandEnvironment: s => s);
+
+        Assert.Null(plan.WindowsTerminalProfile);
+    }
+
+    [Fact]
+    public void WindowsTerminalProfileNote_NamesTheProfile_OnlyWhenMatchedAndWtActuallyLaunched()
+    {
+        var settings = new AgentDispatchSettings { TryUseWindowsTerminalProfiles = true };
+
+        var matched = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
+            directoryExists: Exists(), childDirectoryNames: Children(),
+            loadWindowsTerminalSettings: () => WtSettings(BaseDir), expandEnvironment: s => s);
+
+        // Only when the launch actually used a Windows Terminal host is the profile note emitted.
+        var note = DispatchCoordinator.WindowsTerminalProfileNote(matched, "Windows Terminal");
+        Assert.NotNull(note);
+        Assert.Contains("{proj}", note);
+        Assert.Contains("Windows Terminal profile", note);
+        Assert.NotNull(DispatchCoordinator.WindowsTerminalProfileNote(matched, "Windows Terminal (new tab)"));
+
+        // A profile matched on directory, but the launch used a non-WT host (an explicit PreferredTerminal,
+        // a custom command, or wt absent) — the profile never applied, so no misleading note.
+        Assert.Null(DispatchCoordinator.WindowsTerminalProfileNote(matched, "PowerShell (pwsh)"));
+        Assert.Null(DispatchCoordinator.WindowsTerminalProfileNote(matched, "Windows PowerShell"));
+        // A failed launch (null LaunchedWith) never claims a profile.
+        Assert.Null(DispatchCoordinator.WindowsTerminalProfileNote(matched, null));
+
+        // No profile matched → never a note, whatever launched.
+        var noMatch = DispatchCoordinator.Plan(
+            settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
+            directoryExists: Exists(), childDirectoryNames: Children(),
+            loadWindowsTerminalSettings: () => null, expandEnvironment: s => s);
+        Assert.Null(DispatchCoordinator.WindowsTerminalProfileNote(noMatch, "Windows Terminal"));
+    }
+
     [Fact]
     public void ReconcileCache_StoresAnExplicitPick_ThenClearsOnRevertToDefault()
     {

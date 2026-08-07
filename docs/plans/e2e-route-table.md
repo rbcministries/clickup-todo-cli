@@ -64,12 +64,13 @@ are rejected.
 | GET | `task/{id}/comment` | `CommentsJson` |
 | POST | `comment/{id}/reply` | create-reply echo (+ `E2E_REPLY_LOG`) |
 | GET | `comment/{id}/reply` | `RepliesJson` |
+| PUT | `checklist/{checklistId}/checklist_item/{itemId}` | toggle-resolved write (#457) → `{ checklist: … }` |
 | PUT | `task/{id}` | foreign / nudge / assignee+description PUT echo |
 | GET | `task/{id}` | detail (tmissing/PROJ123 404s; tree/foreign/nudge) |
 | GET | `team/{id}/task` | team tasks (+ #333 closed-stall) |
 | POST | `list/{id}/task` | create-task echo (+ `E2E_CAPTURE_FILE`) |
 | GET | `list/{id}/task` | empty task list |
-| GET | `list/{id}/field` | custom-field definitions (#249/#395/#446) |
+| GET | `list/{id}/field` | custom-field definitions — per-list QU set (#365) / #249/#395/#446 |
 | GET | `list/{id}` | `ListJson` |
 | GET | `team` | teams + members |
 | *(no match)* | — | `{}` (the old trailing `else`) |

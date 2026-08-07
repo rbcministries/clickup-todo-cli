@@ -37,7 +37,10 @@ public static class DispatchCoordinator
     /// needs to reconcile. Pure data — no I/O, no UI. <see cref="RepositoryDir"/> is the
     /// <c>{base}/{Repository}</c> checkout sub-dir a task-derived launch matched into (#461), non-null
     /// only when the match actually drove <see cref="WorkingDir"/> (task-derived mode, no explicit pick);
-    /// it is surfaced to the user via <see cref="RepositoryMatchNote"/>.
+    /// it is surfaced to the user via <see cref="RepositoryMatchNote"/>. <see cref="WindowsTerminalProfile"/>
+    /// is the Windows Terminal profile (#462) whose <c>startingDirectory</c> matched
+    /// <see cref="WorkingDir"/> when the "Try to use WT profiles" toggle is on — non-null only for an
+    /// interactive launch that matched; surfaced via <see cref="WindowsTerminalProfileNote"/>.
     /// </summary>
     public readonly record struct ResolvedDispatch(
         string Prompt,
@@ -50,7 +53,8 @@ public static class DispatchCoordinator
         LaunchLocation LaunchLocation,
         string? ChosenDir,
         string? ResolvedDefault,
-        string? RepositoryDir = null);
+        string? RepositoryDir = null,
+        string? WindowsTerminalProfile = null);
 
     /// <summary>
     /// Resolves everything a dispatch needs from the settings + the pane's <paramref name="request"/> —
@@ -76,13 +80,17 @@ public static class DispatchCoordinator
         string? defaultWorkingDirectory,
         string home,
         Func<string, bool>? directoryExists = null,
-        Func<string, IReadOnlyList<string>>? childDirectoryNames = null)
+        Func<string, IReadOnlyList<string>>? childDirectoryNames = null,
+        Func<string?>? loadWindowsTerminalSettings = null,
+        Func<string, string>? expandEnvironment = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(detail);
         directoryExists ??= Directory.Exists;
         childDirectoryNames ??= SystemChildDirectoryNames;
+        loadWindowsTerminalSettings ??= SystemLoadWindowsTerminalSettings;
+        expandEnvironment ??= Environment.ExpandEnvironmentVariables;
 
         var oneOff = request.SessionMode == AgentSessionMode.OneOff;
 
@@ -113,9 +121,19 @@ public static class DispatchCoordinator
         // explicit pick overrode it.
         var repositoryDir = repoMatch is { } m && chosenDir is null ? m.Directory : null;
 
+        // Windows Terminal profile match (#462): only when the toggle is on and this is an interactive
+        // launch (a one-off has no terminal) with a resolved directory. The settings.json read happens
+        // here (the one I/O seam, via the injected loader) and only under the guard, so every other
+        // dispatch reads nothing and behaves byte-identically. Off Windows the default loader finds no
+        // settings.json (no %LOCALAPPDATA%) ⇒ null, so the feature is inert without a platform check.
+        var wtProfile = settings.TryUseWindowsTerminalProfiles && !oneOff && !string.IsNullOrWhiteSpace(workingDir)
+            && loadWindowsTerminalSettings() is { } wtJson
+            ? WindowsTerminalProfileMatcher.Match(wtJson, workingDir, expandEnvironment)
+            : null;
+
         return new ResolvedDispatch(
             request.Prompt, workingDir, outputSubdir, template, useTaskDerived, oneOff,
-            request.PostToComments, request.LaunchLocation, chosenDir, resolvedDefault, repositoryDir);
+            request.PostToComments, request.LaunchLocation, chosenDir, resolvedDefault, repositoryDir, wtProfile);
     }
 
     /// <summary>
@@ -128,6 +146,29 @@ public static class DispatchCoordinator
         => plan.RepositoryDir is { } dir
             ? $" (Working in {dir} — matched by the task's {RepositoryWorkingDirectory.FieldName} field.)"
             : null;
+
+    /// <summary>
+    /// A status-line suffix naming the Windows Terminal profile (#462) a dispatch launched under, or
+    /// <c>null</c> when none matched — so a session that opened under a different profile (font, colours,
+    /// tab title) than the user's default isn't unexplained. Gated on <paramref name="launchedWith"/>
+    /// actually being a Windows Terminal host: a profile matches on directory alone, but the launch may
+    /// have used a non-WT terminal (an explicit <c>PreferredTerminal</c>, a <c>CustomTerminalCommand</c>,
+    /// or <c>wt</c> absent) or failed outright (<paramref name="launchedWith"/> null) — in which case
+    /// the profile never applied and claiming it would mislead. Pure/testable; the interactive host
+    /// passes <see cref="AgentDispatchResult.LaunchedWith"/>.
+    /// </summary>
+    public static string? WindowsTerminalProfileNote(ResolvedDispatch plan, string? launchedWith)
+        => plan.WindowsTerminalProfile is { } profile
+            && launchedWith is { } host
+            && host.StartsWith("Windows Terminal", StringComparison.Ordinal)
+            ? $" (Windows Terminal profile '{profile}'.)"
+            : null;
+
+    /// <summary>The real-filesystem default for <see cref="Plan"/>'s #462 WT-profile match: reads the
+    /// first existing Windows Terminal <c>settings.json</c>, or <c>null</c> (no file, off Windows, or an
+    /// unreadable file) so a missing/broken settings degrades to "no profile", never a thrown dispatch.</summary>
+    private static string? SystemLoadWindowsTerminalSettings()
+        => WindowsTerminalSettings.Load(Environment.GetEnvironmentVariable, File.Exists, File.ReadAllText);
 
     /// <summary>The immediate child <b>directory</b> names of <paramref name="dir"/> (the real-filesystem
     /// default for <see cref="Plan"/>'s case-insensitive repo scan); empty when the dir is missing or
@@ -186,10 +227,12 @@ public static class DispatchCoordinator
 
                 var result = await agent.DispatchAsync(
                     detail, comments, plan.Prompt, plan.WorkingDir, plan.Template, plan.OutputSubdir,
-                    plan.OneOff, plan.PostToComments, launchLocation: plan.LaunchLocation);
-                // Tell the user when a #461 Repository match opened the session in a checkout sub-dir —
-                // otherwise a launch that landed somewhere other than the base dir looks unexplained.
-                var status = result.StatusMessage + (RepositoryMatchNote(plan) ?? "");
+                    plan.OneOff, plan.PostToComments, launchLocation: plan.LaunchLocation,
+                    windowsTerminalProfile: plan.WindowsTerminalProfile);
+                // Tell the user when a #461 Repository match opened the session in a checkout sub-dir, or a
+                // #462 WT profile match launched it under a non-default profile — otherwise a launch that
+                // landed somewhere / looked different than expected is unexplained.
+                var status = result.StatusMessage + (RepositoryMatchNote(plan) ?? "") + (WindowsTerminalProfileNote(plan, result.LaunchedWith) ?? "");
                 Application.Invoke(() => report(status));
             }
             catch (Exception ex)

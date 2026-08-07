@@ -178,12 +178,23 @@ public sealed class SettingsScreen : Screen
             taskLinkCtrlClickButton.Text = TaskLinkCtrlClickText(taskLinkCtrlClick);
         };
 
+        // What Ctrl+B does to a non-root detail view (#518): keep the view open (default) or close it
+        // back to the list / parent. A root view (the --task launch task) always stays regardless — the
+        // invariant is structural in the hosts, not a value here.
+        var openBrowser = detailView.OpenBrowser;
+        var openBrowserButton = new Button { X = 1, Y = 14, Text = OpenBrowserText(openBrowser) };
+        openBrowserButton.Accepting += (_, _) =>
+        {
+            openBrowser = openBrowser.Next();
+            openBrowserButton.Text = OpenBrowserText(openBrowser);
+        };
+
         // ── General (#407): opt out of the exit-confirmation modal ──────────────
         // A cycle toggle mirroring the Dispatch section's On/Off buttons. On by default; Off restores the
         // pre-#299 one-key quit. Both hosts' RequestExit read the persisted value live.
-        var generalHeader = new Label { X = 1, Y = 14, Text = "─ General ─" };
+        var generalHeader = new Label { X = 1, Y = 15, Text = "─ General ─" };
         var confirmExit = confirmOnExit;
-        var confirmOnExitButton = new Button { X = 1, Y = 15, Text = ConfirmOnExitText(confirmExit) };
+        var confirmOnExitButton = new Button { X = 1, Y = 16, Text = ConfirmOnExitText(confirmExit) };
         confirmOnExitButton.Accepting += (_, _) =>
         {
             confirmExit = !confirmExit;
@@ -260,6 +271,17 @@ public sealed class SettingsScreen : Screen
             launchLocationButton.Text = LaunchLocationText(launchLocation);
         };
 
+        // Windows-only (#462): on a match, launch under the Windows Terminal profile whose
+        // startingDirectory equals the resolved dispatch dir, so the session inherits its
+        // appearance/environment. Off by default; a strict no-op off Windows or on no match.
+        var tryWtProfiles = dispatch.TryUseWindowsTerminalProfiles;
+        var tryWtProfilesButton = new Button { X = rightX, Y = 18, Text = TryWtProfilesText(tryWtProfiles) };
+        tryWtProfilesButton.Accepting += (_, _) =>
+        {
+            tryWtProfiles = !tryWtProfiles;
+            tryWtProfilesButton.Text = TryWtProfilesText(tryWtProfiles);
+        };
+
         var save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var cancel = new Button { X = Pos.Right(save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         save.Accepting += (_, _) =>
@@ -281,6 +303,7 @@ public sealed class SettingsScreen : Screen
                     DefaultSessionMode = sessionMode,
                     DefaultPostResultsToComments = postToComments,
                     LaunchLocation = launchLocation,
+                    TryUseWindowsTerminalProfiles = tryWtProfiles,
                     PromptTemplate = _promptTemplate,
                 },
                 new DetailViewSettings
@@ -289,6 +312,7 @@ public sealed class SettingsScreen : Screen
                     StreamSort = activityOrder,
                     AutoScroll = autoScroll,
                     TaskLinkCtrlClick = taskLinkCtrlClick,
+                    OpenBrowser = openBrowser,
                 },
                 confirmExit);
             Close();
@@ -317,10 +341,11 @@ public sealed class SettingsScreen : Screen
             workingDirLabel, workingDirField, workingDirNote,
             subdomainLabel, subdomainField,
             detailHeader, defaultTabButton, activityOrderButton, autoScrollButton, taskLinkCtrlClickButton,
+            openBrowserButton,
             generalHeader, confirmOnExitButton,
             dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, templateButton, customTermLabel, customTermField,
-            sessionModeButton, postToCommentsButton, launchLocationButton,
+            sessionModeButton, postToCommentsButton, launchLocationButton, tryWtProfilesButton,
             save, cancel,
         ]);
     }
@@ -361,6 +386,8 @@ public sealed class SettingsScreen : Screen
         _ => "New window",
     };
 
+    private static string TryWtProfilesText(bool on) => "Try WT profiles (Windows): " + (on ? "On" : "Off");
+
     private static string DefaultTabText(DetailTab t) => "Default tab: " + t switch
     {
         DetailTab.Description => "Description",
@@ -389,5 +416,13 @@ public sealed class SettingsScreen : Screen
     {
         TaskLinkCtrlClickDestination.NewTerminalTab => "New tab",
         _ => "Browser",
+    };
+
+    // #518: what Ctrl+B does to a non-root detail view — keep it open (default) or close back to the
+    // list/parent. A root (--task) view always stays; the invariant lives in the hosts, not here.
+    private static string OpenBrowserText(OpenBrowserBehavior b) => "Ctrl+B: " + b switch
+    {
+        OpenBrowserBehavior.CloseView => "Open browser + close",
+        _ => "Open browser, stay",
     };
 }

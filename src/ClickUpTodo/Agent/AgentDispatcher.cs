@@ -47,6 +47,9 @@ public sealed class AgentDispatcher
     /// this one interactive session opens — a new window or a new tab of the current terminal — on top
     /// of the constructor <see cref="TerminalLauncherOptions.LaunchLocation"/> default; null keeps that
     /// default. It only affects interactive launches (a one-off run has no terminal).
+    /// <paramref name="windowsTerminalProfile"/> (the #462 match) launches this session under that
+    /// Windows Terminal profile (<c>wt … -p</c>) so it inherits the profile's appearance/environment;
+    /// blank/null leaves the launch unchanged.
     /// </summary>
     public async Task<AgentDispatchResult> DispatchAsync(
         TaskDetail task,
@@ -58,16 +61,22 @@ public sealed class AgentDispatcher
         bool oneOff = false,
         bool postToComments = false,
         LaunchLocation? launchLocation = null,
+        string? windowsTerminalProfile = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
 
         var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, outputSubdirectory, postToComments);
-        // A per-dispatch override (#275) replaces only the launch location on this launch's options;
-        // null leaves the settings-derived _options (incl. its LaunchLocation) untouched.
-        var options = launchLocation is { } loc ? _options with { LaunchLocation = loc } : _options;
+        // Per-dispatch overrides on this launch's options; each null/blank leaves the settings-derived
+        // _options untouched. #275: the launch location. #462: the matched Windows Terminal profile
+        // (computed from the resolved directory, so it can't live on the directory-agnostic _options).
+        var options = _options;
+        if (launchLocation is { } loc)
+            options = options with { LaunchLocation = loc };
+        if (!string.IsNullOrWhiteSpace(windowsTerminalProfile))
+            options = options with { WindowsTerminalProfile = windowsTerminalProfile };
         var result = await _launcher.LaunchAsync(promptFile, workingDir, options, oneOff, ct).ConfigureAwait(false);
-        return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile);
+        return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile, result.LaunchedWith);
     }
 
     /// <summary>
@@ -136,6 +145,8 @@ public sealed class AgentDispatcher
     }
 }
 
-/// <summary>The outcome of an agent dispatch: whether it launched, the status-line text, and the temp
-/// prompt-file path (retained for the launched session to read).</summary>
-public sealed record AgentDispatchResult(bool Success, string StatusMessage, string PromptFilePath);
+/// <summary>The outcome of an agent dispatch: whether it launched, the status-line text, the temp
+/// prompt-file path (retained for the launched session to read), and the terminal it actually launched
+/// with (<see cref="LaunchResult.LaunchedWith"/>, null on failure) — so a caller can tell whether a
+/// specific host (e.g. Windows Terminal, for the #462 profile note) was really used.</summary>
+public sealed record AgentDispatchResult(bool Success, string StatusMessage, string PromptFilePath, string? LaunchedWith = null);

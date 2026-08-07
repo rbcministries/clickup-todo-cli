@@ -5,10 +5,10 @@ default → the List selector is seeded with the cursor's list as the ✓ (home)
 (#240) → the locked default assignee refuses removal → the optional Priority selector
 (four canonical priorities + "(no priority)") and Due-date field (#215) render and
 accept input → typing a name + setting priority/due + Save creates in the primary/home list and
-returns to the list. Multi-list create (#241) is shipped DISABLED pending the
-list-change migration (#365): focusing the List selector flashes the disabled note,
-and a second list the user adds is ignored on Save — a subsequent detail fetch shows
-the home list only. Asserts each step on the pyte screen."""
+returns to the list. Multi-list create (#241) is now ENABLED (#524): a second list the
+user adds is applied on Save — the task is created in its primary/home list and added to
+each additional selected list, so a subsequent detail fetch shows a multi-list "Lists:"
+membership line including the extra list. Asserts each step on the pyte screen."""
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess
 import pyte
 
@@ -101,11 +101,6 @@ try:
     # -> Due date -> Save (#215/#240).
     send(b"\x1b[A", 0.6)  # Up: Assignees list -> its search box
     send(b"\t", 0.6)      # Assignees search box -> List selector search box (Tab bubbles out of composite)
-    # #241 is shipped disabled pending #365: the moment the List selector takes focus, the disabled-state
-    # note flashes so a user who tries to add a second list knows it won't be applied.
-    assert "multiple lists" in visible().lower(), \
-        f"disabled-multi-list note not flashed when the List selector took focus (#241/#365):\n{visible()}"
-    print("LIST-NOTE ok — focusing the List selector flashes the disabled-multi-list note (#241/#365)")
 
     # Changing the single target list must still work: de-select the seeded "Personal Tasks (home)" and
     # pick a DIFFERENT list. Drop into the list (row 0 = the ✓ seeded home) and remove it; its "(home)"
@@ -123,15 +118,15 @@ try:
     assert "✓ Q3 Website Refresh" in v, f"couldn't pick a different list after de-selecting the seed (#241):\n{v}"
     print("CHANGE-LIST ok — de-selected the seeded home and chose a different list as the create target")
 
-    # The UI still lets the user add a further list; type-ahead-add "Ministry Ops" so two lists are
-    # selected at Save (Q3 is the create target as the first selection). Save must ignore the extra while
-    # multi-list is disabled — proven below by the subsequent detail fetch showing no multi-list membership.
+    # Add a further list; type-ahead-add "Ministry Ops" so two lists are selected at Save (Q3 is the create
+    # target as the first selection). Multi-list create is enabled (#524), so Save applies the extra —
+    # proven below by the subsequent detail fetch showing the multi-list membership.
     send(b"Ministry", 1.8)  # search cleared after the previous add, so this starts fresh
     send(b"\r", 1.2)
     v = visible()
     assert "✓ Ministry Ops" in v and "✓ Q3 Website Refresh" in v, \
         f"expected both lists selected before Save (Q3 as the create target):\n{v}"
-    print("LIST ok — a second list can be added in the UI; it will be ignored on Save while disabled")
+    print("LIST ok — a second list is added in the UI; it will be applied on Save (#524)")
     send(b"\t", 0.6)      # List selector search box -> Priority list
     send(b"\x1b[A", 0.6)  # Up: move off "(no priority)" onto a real priority (Low)
     send(b"\t", 0.6)      # Priority -> Due date field
@@ -145,10 +140,13 @@ try:
     assert "Task" in v, f"did not return to the task list after Save:\n{v}"
     print("SAVE ok — task created (round-tripped) and returned to the list")
 
-    # #241 disabled (#365): two lists were selected, but Save created the task in its single primary list
-    # (Q3) only — the extra list (Ministry Ops) was ignored, so no membership write fired. Open the cursor
-    # task's detail and cycle to the Other tab (Ctrl+→, #315), where a *multi*-list membership would render
-    # as a "Lists:" line — assert it does not, and that the ignored extra list is absent.
+    # #241 enabled (#524): two lists were selected, so Save created the task in its primary list (Q3) and
+    # added it to the additional list (Ministry Ops) via the membership write. The fake doesn't persist the
+    # created "tnew" into the team feed, so the detail we open below is the *cursor* task, not tnew itself;
+    # but the fake's `locations` set (mutated by the membership POST) is process-global, so the app's
+    # POST /list/list3/task/tnew is what any later detail GET reflects. Opening a detail and cycling to the
+    # Other tab (Ctrl+→, #315) therefore proves an add fired for Ministry Ops — a *multi*-list membership
+    # renders as a "Lists:" line (home unioned with `locations`); assert it appears and names the extra list.
     send(b"\r", 3.0)         # Enter → open detail (async fetch + screen swap)
     assert "Description" in visible(), f"detail screen did not open:\n{visible()}"
     # The tab the detail opens on comes from persisted view settings (Stream/Description/Comments/Other),
@@ -163,11 +161,11 @@ try:
         send(b"\x1b[1;5C", 1.2)  # Ctrl+→ → next tab
     assert "Priority:" in other and "Status:" in other, \
         f"could not reach the Other tab after cycling:\n{visible()}"
-    assert "Lists:" not in other, \
-        f"a multi-list membership line rendered — multi-list should be disabled (#241/#365):\n{other}"
-    assert "Ministry Ops" not in other, \
-        f"the ignored second list leaked into the created task's membership (#241/#365):\n{other}"
-    print("MEMBERSHIP ok — the ignored second list did not persist; task filed in its home list only (#241 disabled)")
+    assert "Lists:" in other, \
+        f"expected a multi-list membership line — multi-list create is enabled (#524):\n{other}"
+    assert "Ministry Ops" in other, \
+        f"the applied second list did not persist into the created task's membership (#241/#524):\n{other}"
+    print("MEMBERSHIP ok — the second list was applied on Save; task filed in both lists (#241/#524 enabled)")
     print("NEW TASK E2E: PASS")
 finally:
     try: os.killpg(os.getpgid(proc.pid), signal.SIGKILL)

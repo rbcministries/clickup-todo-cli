@@ -14,4 +14,10 @@
     <!-- Relative to this file: repo root is two levels up (tests/ClickUpTodo.Tui.E2E). -->
     <ProjectReference Include="../../src/ClickUpTodo/ClickUpTodo.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Canned FakeClickUp response payloads (#486). A glob, not a per-file entry, so adding a
+         fixture is one new file and no .csproj edit — the project file must not become a shared
+         append point. Read at runtime by FakeClickUp.Fixture(name). -->
+    <EmbeddedResource Include="Fixtures\*.json" />
+  </ItemGroup>
 </Project>

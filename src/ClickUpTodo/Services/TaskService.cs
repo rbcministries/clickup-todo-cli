@@ -831,6 +831,12 @@ public sealed class TaskService(
     public Task<string?> SetTaskDescriptionAsync(string taskId, string description, CancellationToken ct = default)
         => client.SetTaskDescriptionAsync(taskId, description, ct);
 
+    /// <summary>Toggles (or sets) a checklist item's <c>resolved</c> state (D, #457, over the facade write)
+    /// and returns the server-confirmed parent <see cref="TaskChecklist"/> so the detail view can reconcile
+    /// it. A thin passthrough, mirroring <see cref="SetTaskDescriptionAsync"/>.</summary>
+    public Task<TaskChecklist> SetChecklistItemResolvedAsync(string checklistId, string itemId, bool resolved, CancellationToken ct = default)
+        => client.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct);
+
     /// <summary>
     /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying
     /// <paramref name="newStatus"/>, leaving every other task and the overall order untouched. Pure

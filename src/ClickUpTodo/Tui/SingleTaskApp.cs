@@ -178,26 +178,18 @@ public sealed class SingleTaskApp
         _agent = new AgentDispatcher(new TerminalLauncher(), _config.AgentDispatch.ToLauncherOptions());
 
         // Build the launch task's detail tab (the stack root) with the shared wiring, then add its
-        // root-only Closed behaviour. Ctrl+B sets OpenBrowserRequested then closes; Esc closes directly.
-        // The root detail is the launch-task root (#298), so its close is back-at-root: a plain Esc hands
-        // off to the exit seam (RequestExit), which asks for confirmation (#299) before quitting the tab.
-        // Ctrl+B is deliberately *not* confirmed: "open this task in the browser and close the tab" is an
-        // explicit, unambiguous request, not the ambiguous Esc that #290 flagged and #299 guards. Only
-        // fires while the root detail is front-most; with an overlay up (incl. that confirmation, or a
-        // stacked child detail from the tree tab), Esc goes to the top layer instead. Child tabs opened
-        // from the Task Tree tab (#374) pop back on close rather than quit — wired in OpenTaskDetail.
+        // root-only Closed behaviour. The root detail is the launch-task root (#298), so its close is
+        // back-at-root: it only ever happens on a plain Esc, which hands off to the exit seam
+        // (RequestExit) and its #299 confirmation before quitting the tab. Only fires while the root
+        // detail is front-most; with an overlay up (incl. that confirmation, or a stacked child detail
+        // from the tree tab), Esc goes to the top layer instead. Child tabs opened from the Task Tree tab
+        // (#374) pop back on close rather than quit — wired in OpenTaskDetail.
         _root = BuildDetailTab(_seedTask, _seedComments);
-        _root.Screen.Closed += (_, _) =>
-        {
-            if (_root.Screen.OpenBrowserRequested)
-            {
-                LaunchBrowser(_root.Task.Url);
-                Application.RequestStop();
-                return;
-            }
-
-            RequestExit();
-        };
+        _root.Screen.Closed += (_, _) => RequestExit();
+        // Ctrl+B (#518) opens the task in the browser. The root has no back to navigate to, so it never
+        // closes on Ctrl+B — the invariant that Ctrl+B never exits. The root now stays live, so unlike the
+        // old flag-and-close path there *is* a footer to report onto: LaunchBrowser flashes success/failure.
+        _root.Screen.OpenBrowserRequested += (_, _) => LaunchBrowser(_root.Task.Url);
         // The root detail is added straight to the window (not through ShowScreen), so — unlike a stacked
         // child, whose flashes ShowScreen routes — it wires its own flash relay to the shared footer.
         _root.Screen.FlashRequested += (_, message) => Flash(message);
@@ -266,7 +258,11 @@ public sealed class SingleTaskApp
             // that vouches for complete child sets is a dashboard concern, absent in single-task mode.
             currentUserId: _tasks.UserId,
             treeBadgeDisplay: _config.BadgeDisplay,
-            loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(id, snapshotLookup: null, childrenIndex: null, ct: ct));
+            loadTaskTreeAsync: ct => _tasks.GetTaskTreeAsync(id, snapshotLookup: null, childrenIndex: null, ct: ct),
+            // Space on the Checklists tab (D, #457): the Checklists tab is present in single-task mode too,
+            // so wire the toggle write here as well, keyed to this tab's task id.
+            setChecklistResolvedAsync: (checklistId, itemId, resolved, ct) =>
+                _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct));
 
         var tab = new DetailTab(screen, id, task, comments);
 
@@ -383,11 +379,16 @@ public sealed class SingleTaskApp
                     if (!ReferenceEquals(ActiveScreen, requester))
                         return;
                     var tab = BuildDetailTab(detail, comments);
-                    ShowScreen(tab.Screen, () =>
+                    // Ctrl+B (#518): a stacked child (from the Task Tree tab, #374) is not a root, so it
+                    // honours the OpenBrowser setting — launch + flash, and close back to its parent only
+                    // in CloseView mode. The launch flashes on the live view either way.
+                    tab.Screen.OpenBrowserRequested += (_, _) =>
                     {
-                        if (tab.Screen.OpenBrowserRequested)
-                            LaunchBrowser(tab.Task.Url);
-                    });
+                        LaunchBrowser(tab.Task.Url);
+                        if (OpenBrowserAction.ShouldCloseView(_config.DetailView.OpenBrowser, isRoot: false))
+                            tab.Screen.RequestClose();
+                    };
+                    ShowScreen(tab.Screen);
                 });
             }
             catch (Exception ex)
@@ -755,9 +756,10 @@ public sealed class SingleTaskApp
     }
 
     /// <summary>
-    /// Opens a link activated in a detail pane (#318) in the browser. Unlike <see cref="LaunchBrowser"/>'s
-    /// Ctrl+B path this doesn't close the tab, so there <em>is</em> a live footer to report onto — the
-    /// dashboard flashes the same three outcomes. Shares the rewrite/parse/launch core (#304/#346).
+    /// Opens a link activated in a detail pane (#318) in the browser. Like the Ctrl+B
+    /// <see cref="LaunchBrowser"/> path (since #518 it too leaves the view open), there <em>is</em> a live
+    /// footer to report onto, so it flashes the same three outcomes. Shares the rewrite/parse/launch core
+    /// (#304/#346).
     /// </summary>
     private void OpenLink(string url)
     {
@@ -779,20 +781,27 @@ public sealed class SingleTaskApp
         }
     }
 
-    // Ctrl+B launches the browser and immediately closes the tab (the detail screen sets
-    // OpenBrowserRequested then Close()s), so — unlike TodoApp's LaunchBrowser — there is no live view
-    // left to flash success/failure onto; a launch failure is only debug-logged. Shares the
-    // IBrowserLauncher seam + app.clickup.com → workspace-subdomain rewrite the dashboard uses (#304/#346).
+    // Ctrl+B (#518) opens the task in the browser and leaves the view open (the invariant: it never
+    // exits, and by default never closes), so — like the dashboard's LaunchBrowser and unlike the old
+    // flag-and-Close() path — there *is* a live footer to flash success/failure onto. Shares the
+    // IBrowserLauncher seam + app.clickup.com → workspace-subdomain rewrite the dashboard uses (#304/#346),
+    // and reports the same outcomes as OpenLink's in-pane link path.
     private void LaunchBrowser(string? url)
     {
         var (result, target) = ClickUpTaskBrowser.Open(_browser, url, _config.WorkspaceSubdomain);
         switch (result)
         {
-            case ClickUpTaskBrowser.Result.InvalidUrl:
-                Debug.WriteLine($"Not a valid URL to open: {target}");
+            case ClickUpTaskBrowser.Result.Opened:
+                Flash($"Opened: {target}");
                 break;
             case ClickUpTaskBrowser.Result.LaunchFailed:
-                Debug.WriteLine($"Could not open a browser for: {target}");
+                var hint = BrowserLaunchPlanner.OpenerHint(BrowserLaunchPlanner.CurrentOS());
+                Flash(hint is null
+                    ? $"Couldn't open a browser — copy the URL: {target}"
+                    : $"Couldn't open a browser ({hint}) — copy the URL: {target}");
+                break;
+            default:
+                Flash($"Not a valid URL: {target}");
                 break;
         }
     }

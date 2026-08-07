@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
@@ -78,8 +79,15 @@ if (!string.IsNullOrWhiteSpace(markerDbPath))
     changeMarkers = markerStateStore.CreateChangeMarkerStore(instanceId);
 }
 
+var harness = new HarnessContext
+{
+    TaskCount = taskCount,
+    Foreign = foreign,
+    Tree = tree,
+    Checklists = checklists,
+};
 var client = new ClickUpClient(
-    "fake-token", new HttpClient(new FakeClickUp(taskCount, foreign, tree, checklists)), changeMarkers: changeMarkers);
+    "fake-token", new HttpClient(new FakeClickUp(harness)), changeMarkers: changeMarkers);
 IStateStore stateStore = new JsonFileStateStore();
 var configStore = new ConfigStore(stateStore);
 var tasks = new TaskService(client, config, 1, userName: "Ben Seymour");
@@ -183,6 +191,27 @@ sealed class RecordingTerminalLauncher(string path) : ITerminalLauncher
     }
 }
 
+/// <summary>Boot-time scenario state for the harness backend (#487). New scenario state lands here as a
+/// new property — an <em>additive</em> surface, not a positional constructor list, so two PRs adding
+/// properties merge cleanly (a property block still shares an anchor, so this is "usually merges", not
+/// "never conflicts" — E (#489) finishes the job by moving scenario state out of the shared type
+/// entirely). It exists so <see cref="FakeClickUp"/>'s constructor and its sole construction site are no
+/// longer the two single-line append points every scenario had to edit.</summary>
+sealed class HarnessContext
+{
+    /// <summary>Task count for the generated backend (E2E_TASKS; paging is exercised above 100).</summary>
+    public int TaskCount { get; init; } = 200;
+
+    /// <summary>#232 not-mine-rows scenario (E2E_FOREIGN).</summary>
+    public bool Foreign { get; init; }
+
+    /// <summary>#291 Task Tree tab scenario (E2E_TREE).</summary>
+    public bool Tree { get; init; }
+
+    /// <summary>#456 Checklists tab scenario (E2E_CHECKLISTS).</summary>
+    public bool Checklists { get; init; }
+}
+
 sealed class FakeClickUp : HttpMessageHandler
 {
     // #232 opt-in scenario flag: serve the small not-mine-rows snapshot + a modelled Status/Priority
@@ -193,19 +222,25 @@ sealed class FakeClickUp : HttpMessageHandler
     // real groups/items. Off by default, so every other check's task-detail response is untouched.
     private readonly bool _checklists;
     private readonly int _taskCount;
+    // D (#457): the mutable checklist state, so a Space-toggle PUT persists across later detail GETs.
+    // Parsed once from the ChecklistsJson seed into a JsonNode DOM; the toggle write flips an item's
+    // `resolved` in place and the detail GET serves the current DOM. Mutated/read under _gate.
+    private readonly JsonArray _checklistsDom = (JsonArray)JsonNode.Parse(ChecklistsJson)!;
 
     // The request dispatch table (#488), replacing the old hand-ordered if/else chain in SendAsync: routes
     // resolve by specificity, not by source order, so appending an endpoint can't silently reorder another,
     // and the generic /task/{id} route can no longer swallow a longer /task/{id}/comment path. Built once at
     // construction — which is where a duplicate/ambiguous registration fails loudly (see Routing.cs).
+    // An explicit constructor (rather than the #487 primary constructor) so the table is built eagerly,
+    // which is what lets a unit test assert the concrete registration is ambiguity-free at `dotnet test`.
     private readonly RouteTable<RouteHandler> _routes;
 
-    public FakeClickUp(int taskCount, bool foreign = false, bool tree = false, bool checklists = false)
+    public FakeClickUp(HarnessContext ctx)
     {
-        _taskCount = taskCount;
-        _foreign = foreign;
-        _tree = tree;
-        _checklists = checklists;
+        _foreign = ctx.Foreign;
+        _tree = ctx.Tree;
+        _checklists = ctx.Checklists;
+        _taskCount = ctx.TaskCount;
         _routes = BuildRoutes();
     }
 
@@ -241,13 +276,38 @@ sealed class FakeClickUp : HttpMessageHandler
     // Off by default, so every existing check sees the empty field set (Save creates directly, as before).
     private static bool CustomFields => Environment.GetEnvironmentVariable("E2E_CUSTOM_FIELDS") == "1";
 
+    // #365 opt-in: the Quick Updates List-pane field-strand scenario. When set, the task is pre-seeded
+    // into one additional list ("list2" / Q3 Website Refresh) alongside its home list ("plist"), that
+    // additional list defines a *local* "Sprint Points" Custom Field the home list does not, and the task
+    // detail carries values for both "Sprint Points" (list-local) and "Notes" (shared). Removing the
+    // additional list therefore strands the Sprint Points value (arms a confirmation) but not Notes. Off
+    // by default, so GET /list/{id}/field stays keyed to the New Task flags and the detail carries no
+    // custom_fields — every other check is untouched.
+    private static bool QuLists => Environment.GetEnvironmentVariable("E2E_QU_LISTS") == "1";
+
+    // The one additional list the QU List-pane scenario (#365) pre-seeds; its GET /list/{id}/field defines
+    // a local field ("Sprint Points") the home list lacks, so removing it strands that value.
+    private const string QuListsSeededLocation = "list2"; // Q3 Website Refresh (Lists[1]/ListNames[1])
+
+    // Per-list Custom Field DEFINITIONS for the #365 strand scenario, keyed by list id: the additional
+    // "list2" defines the shared "Notes" plus a local "Sprint Points"; every other list (incl. the home
+    // "plist") defines only the shared "Notes". So a Sprint Points value strands on a list2 remove while a
+    // Notes value never does (the home list still defines it).
+    private static string QuListFieldsJson(string listId) => listId == "list2"
+        ? """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false},{"id":"cf_sprint","name":"Sprint Points","type":"number","required":false}]}"""
+        : """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false}]}""";
+
+    // The task's SET Custom Field values for the #365 strand scenario: Sprint Points (only list2 defines
+    // it → strands on a list2 remove) and Notes (the home list defines it too → never strands).
+    private const string QuListsCustomFieldValuesJson =
+        """[{"id":"cf_sprint","name":"Sprint Points","type":"number","value":8},{"id":"cf_notes","name":"Notes","type":"text","value":"triage"}]""";
+
     // #325 opt-in: when set, the POST /task/{id}/comment handler appends each request body (one per line)
     // to this file so mention_check.py can assert the structured @-mention tag block was actually sent.
     // Off by default, so every existing check's comment post is unaffected.
     private static readonly string? CommentLog = Environment.GetEnvironmentVariable("E2E_COMMENT_LOG");
 
-    private const string CustomFieldsJson =
-        """{"fields":[{"id":"cf_notes","name":"Notes","type":"text","required":false},{"id":"cf_estimate","name":"Estimate","type":"number","required":true},{"id":"cf_stage","name":"Stage","type":"drop_down","required":false,"type_config":{"options":[{"id":"opt_alpha","name":"Alpha","orderindex":0},{"id":"opt_beta","name":"Beta","orderindex":1}]}}]}""";
+    private static readonly string CustomFieldsJson = Fixture("custom_fields");
 
     // #425: when E2E_TITLE_REFRESH=1, the launch task is renamed after its first (boot) detail fetch, so a
     // refresh (Ctrl+R / F5) must move the terminal tab title. The boot fetch keeps the original long name;
@@ -265,8 +325,7 @@ sealed class FakeClickUp : HttpMessageHandler
     // pyte screen.
     private static bool CustomFieldsMany => Environment.GetEnvironmentVariable("E2E_CUSTOM_FIELDS_MANY") == "1";
 
-    private const string CustomFieldsManyJson =
-        """{"fields":[{"id":"cf_1","name":"Alpha","type":"text","required":false},{"id":"cf_2","name":"Bravo","type":"text","required":false},{"id":"cf_3","name":"Charlie","type":"text","required":false},{"id":"cf_4","name":"Delta","type":"text","required":false},{"id":"cf_5","name":"Echo","type":"text","required":false},{"id":"cf_6","name":"Foxtrot","type":"text","required":false},{"id":"cf_7","name":"Golf","type":"text","required":false},{"id":"cf_8","name":"Hotel","type":"text","required":false},{"id":"cf_9","name":"India","type":"text","required":false},{"id":"cf_last","name":"Last Field","type":"text","required":true}]}""";
+    private static readonly string CustomFieldsManyJson = Fixture("custom_fields_many");
 
     private static bool WarmClosed => Environment.GetEnvironmentVariable("E2E_WARM_CLOSED") == "1";
     private static readonly int ClosedStallMs =
@@ -367,8 +426,10 @@ sealed class FakeClickUp : HttpMessageHandler
     // The task's current *additional* list memberships ("Tasks in Multiple Lists", #237), mutated by the
     // membership POST/DELETE (#242) so an add/remove from the Quick Updates List pane round-trips: a later
     // detail GET reflects the change via the detail's `locations` array. Ids index into Lists/ListNames.
-    // Starts empty (the common single-list case — the pane shows only the home "plist"). Guarded by _gate.
-    private readonly HashSet<string> _locations = [];
+    // Starts empty (the common single-list case — the pane shows only the home "plist"); the #365 QU
+    // List-pane scenario pre-seeds one additional location so the pane has a removable row. Guarded by _gate.
+    private readonly HashSet<string> _locations =
+        QuLists ? new HashSet<string>(StringComparer.Ordinal) { QuListsSeededLocation } : [];
     private readonly object _gate = new();
 
     // The task's current plain-text description, mutated by a description PUT (#217) so the write
@@ -386,9 +447,40 @@ sealed class FakeClickUp : HttpMessageHandler
     private static bool MdLink => Environment.GetEnvironmentVariable("E2E_MD_LINK") == "1";
     public const string MdLinkTarget = "https://example.com/runbook-42";
 
+    // #443: two links positioned to be SPLIT by word wrap at a narrow COLS — a bare URL longer than the
+    // detail pane's inner width (Terminal.Gui hard-wraps it mid-URL) and a markdown link whose visible text
+    // wraps across rows. Off by default so every other check sees the body byte-for-byte; link_wrap_check.py
+    // sets the gate and asserts both are underlined *contiguously across the wrap*. The visible text carries
+    // a unique ENDVIS token near its end so the check can pin an underlined visible-text cell on a
+    // continuation row.
+    private static bool WrapSplit => Environment.GetEnvironmentVariable("E2E_WRAP_SPLIT") == "1";
+    public const string WrapSplitUrl = "https://ex.io/wrap/aa/bb/cc/dd/ee/ff/gg/hh/ii/jj/ENDURL";
+    public const string WrapSplitMdTarget = "https://ex.io/rb42";
+    public const string WrapSplitMdVisible = "the operations runbook and deployment procedure ENDVIS";
+
     private string _description =
         "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed\n\nParent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread"
-        + (MdLink ? "\n\nSee [the runbook](" + MdLinkTarget + ") for steps" : "");
+        + (MdLink ? "\n\nSee [the runbook](" + MdLinkTarget + ") for steps" : "")
+        + (WrapSplit ? "\n\nSplit URL: " + WrapSplitUrl + " done\n\nMD: [" + WrapSplitMdVisible + "](" + WrapSplitMdTarget + ") fin" : "");
+
+    /// <summary>Reads a canned response payload from the embedded <c>Fixtures/{name}.json</c> (#486).
+    /// Adding a fixture is one new file — the <c>.csproj</c> globs <c>Fixtures\*.json</c> in and this
+    /// resolves the manifest name by suffix, so there is no shared append point. On a miss it throws with
+    /// the available resource names, so a rename (or a RootNamespace surprise) fails loudly at first use
+    /// instead of serving a null body.</summary>
+    private static string Fixture(string name)
+    {
+        var asm = typeof(FakeClickUp).Assembly;
+        var suffix = $".Fixtures.{name}.json";
+        var resource = Array.Find(asm.GetManifestResourceNames(),
+                           n => n.EndsWith(suffix, StringComparison.Ordinal))
+                       ?? throw new InvalidOperationException(
+                           $"Embedded fixture '{name}' not found (looked for a resource ending '{suffix}'). "
+                           + "Available: " + string.Join(", ", asm.GetManifestResourceNames()));
+        using var stream = asm.GetManifestResourceStream(resource)!;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
     {
@@ -450,6 +542,10 @@ sealed class FakeClickUp : HttpMessageHandler
         new Route<RouteHandler>(HttpMethod.Get, "comment/{id}/reply", (_, p, _, _) =>
             OkAsync(RepliesJson(CommentIdOfReply(p)))),
 
+        // PUT /v2/checklist/{checklist_id}/checklist_item/{checklist_item_id} (D, #457): the toggle-resolved
+        // write — flips an item's `resolved` in the mutable DOM and echoes { checklist: … }.
+        new Route<RouteHandler>(HttpMethod.Put, "checklist/{checklistId}/checklist_item/{itemId}", ToggleChecklistItem),
+
         new Route<RouteHandler>(HttpMethod.Put, "task/{id}", TaskPut),
         new Route<RouteHandler>(HttpMethod.Get, "task/{id}", TaskGet),
 
@@ -460,11 +556,13 @@ sealed class FakeClickUp : HttpMessageHandler
         new Route<RouteHandler>(HttpMethod.Post, "list/{id}/task", CreateTask),
         new Route<RouteHandler>(HttpMethod.Get, "list/{id}/task", (_, _, _, _) =>
             OkAsync("""{"tasks":[],"last_page":true}""")),
-        // GET /list/{id}/field: Custom Field definitions (#249/#395) — the tall set (#446) under
-        // E2E_CUSTOM_FIELDS_MANY, else the small seeded set under E2E_CUSTOM_FIELDS, else an empty set (so
-        // the New Task screen creates directly, as every other check expects).
-        new Route<RouteHandler>(HttpMethod.Get, "list/{id}/field", (_, _, _, _) =>
-            OkAsync(CustomFieldsMany ? CustomFieldsManyJson
+        // GET /list/{id}/field: Custom Field definitions — the #365 QU List-pane scenario keys them per
+        // list id (so a remove can strand a list-local value); else the tall set (#446) under
+        // E2E_CUSTOM_FIELDS_MANY, the small seeded set (#249/#395) under E2E_CUSTOM_FIELDS, or an empty set
+        // (so the New Task screen creates directly, as every other check expects).
+        new Route<RouteHandler>(HttpMethod.Get, "list/{id}/field", (_, p, _, _) =>
+            OkAsync(QuLists ? QuListFieldsJson(ListIdOfField(p))
+                : CustomFieldsMany ? CustomFieldsManyJson
                 : CustomFields ? CustomFieldsJson
                 : """{"fields":[]}""")),
         new Route<RouteHandler>(HttpMethod.Get, "list/{id}", (_, p, _, _) => OkAsync(ListJson(p))),
@@ -501,6 +599,21 @@ sealed class FakeClickUp : HttpMessageHandler
         var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
         RecordReply(CommentIdOfReply(path), reqBody);
         return Ok("""{"id":9014000000002,"hist_id":"h2","date":1751500500000}""");
+    }
+
+    /// <summary>PUT /checklist/{id}/checklist_item/{id} (D, #457): parse <c>{"resolved":bool}</c>, flip that
+    /// item in the mutable checklist DOM so a later detail GET reflects it, and echo <c>{ "checklist": … }</c>
+    /// exactly as ClickUp does. Its path shares no segment with the /task/ routes, so specificity resolves it
+    /// unambiguously regardless of registration order.</summary>
+    private async Task<HttpResponseMessage> ToggleChecklistItem(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
+        var resolved = ParseResolved(reqBody);
+        var (checklistId, itemId) = ChecklistItemIds(path);
+        string body;
+        lock (_gate)
+            body = ToggleChecklistItemResponse(checklistId, itemId, resolved);
+        return Ok(body);
     }
 
     /// <summary>A /task/{id} PUT (#217): status/priority PUTs carry no assignees; an assignee add/remove or
@@ -690,20 +803,7 @@ sealed class FakeClickUp : HttpMessageHandler
     // C (#456): a seeded checklists payload — two groups, mixed resolved state, one nested item, one
     // assigned item — mirroring the ClickUp GET /task shape the read model (#454) maps. Aggregate: 2 of 5
     // items resolved ⇒ the tab title reads "Checklists (2/5)".
-    private const string ChecklistsJson = """
-    [
-      {"id":"c1","name":"Release steps","orderindex":0,"resolved":1,"unresolved":2,
-       "items":[
-         {"id":"i1","name":"Cut the tag","resolved":true,"orderindex":0,"assignee":null},
-         {"id":"i2","name":"Draft release notes","resolved":false,"orderindex":1,
-          "assignee":{"id":101,"username":"Ada Lovelace"},
-          "children":[{"id":"i2a","name":"Verify the changelog","resolved":false,"orderindex":0}]}]},
-      {"id":"c2","name":"QA signoff","orderindex":1,"resolved":1,"unresolved":1,
-       "items":[
-         {"id":"i3","name":"Smoke test on staging","resolved":true,"orderindex":0,"assignee":null},
-         {"id":"i4","name":"Cross-browser check","resolved":false,"orderindex":1,"assignee":null}]}
-    ]
-    """;
+    private static readonly string ChecklistsJson = Fixture("checklists");
 
     private string DetailJson(string path, HashSet<long> assignees, bool countTitleFetch = false)
     {
@@ -717,12 +817,17 @@ sealed class FakeClickUp : HttpMessageHandler
         var name = "My Account - Address display  (EA-7221)";
         if (TitleRefresh && countTitleFetch && System.Threading.Interlocked.Increment(ref _detailFetches) > 1)
             name = "Renamed on refresh";
-        // C (#456): the seeded checklists array, or empty (the common case — no other check sees it).
-        var checklists = _checklists ? ChecklistsJson : "[]";
+        // C (#456): the seeded checklists array (from the mutable DOM so a D-toggle #457 persists), or
+        // empty (the common case — no other check sees it).
+        var checklists = _checklists ? _checklistsDom.ToJsonString() : "[]";
+        // #365: the strand scenario adds a `custom_fields` array carrying the task's set values, so the
+        // List-pane remove preflight has values to strand-check. Spliced in only under E2E_QU_LISTS, so the
+        // default detail response stays byte-identical for every other check.
+        var customFields = QuLists ? $""","custom_fields":{QuListsCustomFieldValuesJson}""" : "";
         // `locations` are the task's additional list memberships (#242), mutated by the membership
         // POST/DELETE so an add/remove from the List pane round-trips; empty in the common single-list case.
         return $$"""
-        {"id":"{{id}}","name":"{{name}}","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"locations":[{{LocationsJson()}}],"checklists":{{checklists}},"description":{{description}}}
+        {"id":"{{id}}","name":"{{name}}","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(assignees)}}],"locations":[{{LocationsJson()}}]{{customFields}},"checklists":{{checklists}},"description":{{description}}}
         """;
     }
 
@@ -735,6 +840,16 @@ sealed class FakeClickUp : HttpMessageHandler
             var name = idx >= 0 ? ListNames[idx] : lid;
             return $"{{\"id\":\"{lid}\",\"name\":\"{name}\"}}";
         }));
+
+    /// <summary>The list id from a <c>/v2/list/{listId}/field</c> definitions path (#365).</summary>
+    private static string ListIdOfField(string path)
+    {
+        const string listSeg = "/list/";
+        const string fieldSeg = "/field";
+        var start = path.IndexOf(listSeg, StringComparison.Ordinal) + listSeg.Length;
+        var end = path.IndexOf(fieldSeg, start, StringComparison.Ordinal);
+        return end > start ? path[start..end] : "";
+    }
 
     /// <summary>The list id from a <c>/v2/list/{listId}/task/{taskId}</c> membership path.</summary>
     private static string ListIdOfMembership(string path)
@@ -763,6 +878,106 @@ sealed class FakeClickUp : HttpMessageHandler
         {
             // A non-JSON / unexpected body is not this fake's concern — leave the description untouched.
         }
+    }
+
+    /// <summary>Reads the <c>resolved</c> boolean from a checklist-item PUT body (<c>{"resolved":bool}</c>),
+    /// defaulting to false on a missing/odd body (D, #457).</summary>
+    private static bool ParseResolved(string requestBody)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            return doc.RootElement.TryGetProperty("resolved", out var r)
+                   && r.ValueKind == JsonValueKind.True;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Splits <c>/v2/checklist/{checklist_id}/checklist_item/{checklist_item_id}</c> into its two
+    /// ids (D, #457).</summary>
+    private static (string ChecklistId, string ItemId) ChecklistItemIds(string path)
+    {
+        var itemId = path[(path.LastIndexOf('/') + 1)..];
+        const string listSeg = "/checklist/";
+        const string itemSeg = "/checklist_item/";
+        var start = path.IndexOf(listSeg, StringComparison.Ordinal) + listSeg.Length;
+        var end = path.IndexOf(itemSeg, StringComparison.Ordinal);
+        return (end > start ? path[start..end] : "", itemId);
+    }
+
+    /// <summary>Flips <paramref name="itemId"/>'s <c>resolved</c> flag (searching items + nested children) in
+    /// checklist <paramref name="checklistId"/> within the mutable DOM, recomputes that checklist's
+    /// resolved/unresolved counts, and returns the ClickUp-shaped <c>{ "checklist": … }</c> echo of the
+    /// updated group (D, #457). Called under <c>_gate</c>.</summary>
+    private string ToggleChecklistItemResponse(string checklistId, string itemId, bool resolved)
+    {
+        JsonObject? target = null;
+        foreach (var node in _checklistsDom)
+        {
+            if (node is JsonObject checklist && checklist["id"]?.GetValue<string>() == checklistId)
+            {
+                target = checklist;
+                SetItemResolved(checklist["items"] as JsonArray, itemId, resolved);
+                RecomputeCounts(checklist);
+                break;
+            }
+        }
+
+        // Echo the whole parent checklist under a `checklist` key (ClickUp's shape); a deep clone so the
+        // returned node isn't parented in the DOM.
+        var echoed = target is null ? new JsonObject() : (JsonObject)target.DeepClone();
+        return new JsonObject { ["checklist"] = echoed }.ToJsonString();
+    }
+
+    /// <summary>Sets the <c>resolved</c> flag of the item with <paramref name="itemId"/>, recursing into
+    /// each item's <c>children</c>; returns true once found (D, #457).</summary>
+    private static bool SetItemResolved(JsonArray? items, string itemId, bool resolved)
+    {
+        if (items is null)
+            return false;
+        foreach (var node in items)
+        {
+            if (node is not JsonObject item)
+                continue;
+            if (item["id"]?.GetValue<string>() == itemId)
+            {
+                item["resolved"] = resolved;
+                return true;
+            }
+            if (SetItemResolved(item["children"] as JsonArray, itemId, resolved))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Recomputes a checklist's <c>resolved</c>/<c>unresolved</c> counts from its (possibly nested)
+    /// items so the echoed group matches what the app projects (D, #457).</summary>
+    private static void RecomputeCounts(JsonObject checklist)
+    {
+        var (resolved, total) = CountItems(checklist["items"] as JsonArray);
+        checklist["resolved"] = resolved;
+        checklist["unresolved"] = total - resolved;
+    }
+
+    private static (int Resolved, int Total) CountItems(JsonArray? items)
+    {
+        var resolved = 0;
+        var total = 0;
+        if (items is not null)
+            foreach (var node in items)
+                if (node is JsonObject item)
+                {
+                    total++;
+                    if (item["resolved"]?.GetValue<bool>() == true)
+                        resolved++;
+                    var (childResolved, childTotal) = CountItems(item["children"] as JsonArray);
+                    resolved += childResolved;
+                    total += childTotal;
+                }
+        return (resolved, total);
     }
 
     /// <summary>The workspace <c>members</c> array (each wrapped as <c>{ user }</c>) from <see cref="Members"/>.</summary>
