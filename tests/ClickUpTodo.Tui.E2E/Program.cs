@@ -143,7 +143,9 @@ if (!string.IsNullOrWhiteSpace(singleTaskId))
 {
     var launchTask = await tasks.GetTaskDetailAsync(singleTaskId);
     var launchComments = await tasks.GetTaskCommentsAsync(singleTaskId);
-    new SingleTaskApp(tasks, config, configStore, launchTask, launchComments, browser).Run("ansi");
+    // #473: hand the single-task tab the same assignee-frequency pool the dashboard gets, so the Ctrl+N
+    // composer's @-mention picker has candidates (topped up from the fake /team members on boot).
+    new SingleTaskApp(tasks, config, configStore, launchTask, launchComments, browser, assignees: assignees).Run("ansi");
     markerStateStore?.Dispose();
     return;
 }

@@ -2064,11 +2064,10 @@ public sealed class TodoApp
                         // warmed, frequency-ranked assignee cache the assignee selectors use — a
                         // TaskAssignee(Id, Name) maps to WorkspaceMember(Id, Name, null) (DisplayName ⇐
                         // Name), exactly the shape the picker renders/keys on, so no new fetch is needed.
+                        // The projection is shared with SingleTaskApp (#473) via MentionMemberProjection.
                         postStructuredCommentAsync: (runs, ct) => _tasks.CreateTaskCommentAsync(resolvedId, runs, ct),
-                        memberMatch: (query, exclude) =>
-                            _assignees.Match(query, exclude).Select(a => new WorkspaceMember(a.Id, a.Name, null)).ToList(),
-                        memberTopFrequent: (n, exclude) =>
-                            _assignees.TopMostFrequent(n, exclude).Select(a => new WorkspaceMember(a.Id, a.Name, null)).ToList(),
+                        memberMatch: (query, exclude) => MentionMemberProjection.ToMembers(_assignees.Match(query, exclude)),
+                        memberTopFrequent: (n, exclude) => MentionMemberProjection.ToMembers(_assignees.TopMostFrequent(n, exclude)),
                         // Space on the Checklists tab (D, #457): toggle the item's resolved state on ClickUp.
                         setChecklistResolvedAsync: (checklistId, itemId, resolved, ct) =>
                             _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct));

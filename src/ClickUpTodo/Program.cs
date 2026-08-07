@@ -172,10 +172,17 @@ if (launch.HasId)
         return 1;
     }
 
+    // The assignee-frequency candidate pool (#155) — same type the dashboard uses — powers @-mention
+    // authoring in the single-task tab's Ctrl+N composer (#473). Its constructor loads any pool a prior
+    // dashboard session persisted for this workspace (warm, frequency-ranked); single-task mode tallies no
+    // working set, so absent a persisted pool it warms from the workspace members via TopUpAsync on boot.
+    var singleTaskAssignees = new AssigneeFrequencyCache(
+        stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
+
     // Hand the single-task tab the same cross-process nudge channel the dashboard gets (#377), so an
     // edit to the launched task in another tab surfaces here promptly rather than only on the 30s tick.
     new SingleTaskApp(taskService, config, configStore, launchTask, launchComments,
-        changeMarkers: changeMarkers).Run(driverName);
+        changeMarkers: changeMarkers, assignees: singleTaskAssignees).Run(driverName);
     return 0;
 }
 
