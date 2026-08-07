@@ -156,7 +156,7 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `Ctrl+A`              | ✨   | Dispatch a Claude session for this task                |
 | `Ctrl+N`              | ➕   | Add a comment                                          |
 | `Ctrl+E`              | ✏    | Edit the description                                   |
-| `Ctrl+B`              | 🌐   | Open the task in your browser                          |
+| `Ctrl+B`              | 🌐   | Open the task in your browser (keeps the view open — see below) |
 | `Tab` / `Shift+Tab`   |      | Move the focus highlight to the next / previous link in the pane |
 | `Enter`               |      | Follow the focused link (task link → Task Detail, other → browser) |
 | Left-click a link     |      | Follow it — see [Follow links in a task's text](#follow-links-in-a-tasks-text) |
@@ -172,6 +172,14 @@ destructive — leaving the app — is guarded: `Esc` (or `Ctrl+Q`) from the mai
 task in a single-task tab (`--task`), shows a confirmation. `Y`/`Enter` exits; `N`/`Esc` returns you to
 exactly where you were, with your cursor and tab unchanged. `Esc` anywhere else still just goes back.
 The guard is on by default; turn it off in Settings (`F2` → *Confirm on exit*) to restore a one-key quit.
+
+**`Ctrl+B` in Task Detail now keeps the task on screen.** Opening a task in the browser never leaves
+the app, and by default it no longer closes the detail view either — you stay exactly where you were
+(matching the `Ctrl`+click-a-task-link gesture, and making the dashboard and single-task `--task` tab
+behave the same). This is a change from earlier builds, where `Ctrl+B` also returned you to the list —
+and where, in a `--task` tab, it *quit the program*. For the old close-on-`Ctrl+B` behaviour, set
+**Settings (`F2`) → Detail view → `Ctrl+B` → "Open browser + close"**; a `--task` launch task always
+stays open regardless, since there is nothing to go back to.
 
 Quick Updates opens with `Ctrl+U` from both the main list and Task Detail. Pinned tasks persist
 across restarts. The list refreshes in the background on your configured interval, and your cursor

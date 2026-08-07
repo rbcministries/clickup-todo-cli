@@ -64,4 +64,15 @@ public sealed record TerminalLauncherOptions
     /// terminal where the host supports it. Ignored for one-off runs (which have no terminal).
     /// </summary>
     public LaunchLocation LaunchLocation { get; init; } = LaunchLocation.NewWindow;
+
+    /// <summary>
+    /// The Windows Terminal profile (a <c>guid</c> or <c>name</c>) to launch under when the "Try to use
+    /// WT profiles" feature (#462) matched one for this dispatch's resolved directory — passed as
+    /// <c>wt … -p &lt;profile&gt;</c> so the session inherits that profile's appearance / environment /
+    /// tab title while still running Dispatch's own command. Blank/null ⇒ no profile: the <c>wt</c>
+    /// candidates are byte-identical to today. Set per-dispatch (the match depends on the runtime
+    /// directory), not by <see cref="Configuration.AgentDispatchSettings.ToLauncherOptions"/>; only the
+    /// Windows <c>wt</c> candidate reads it, and never the app-launch (#301) path.
+    /// </summary>
+    public string? WindowsTerminalProfile { get; init; }
 }

@@ -121,22 +121,34 @@ Self-contained (fixed COLS=120 so the seeded URLs don't wrap). Expected: `ok —
 underlined+default-fg (Description), web link underlined+recoloured (Comments)`. The colour/underline
 change is invisible to the text-only `detail_check.py` A/B, which stays identical.
 
-**`link_wrap_check.py`** — in-text link styling on WRAPPED lines (#413): the wrapped-line case `link_check.py` deliberately
-avoids (it fixes `COLS=120` so URLs don't wrap). Runs at a narrow `COLS=50` where the seeded Description
-line (`Parent ticket: https://app.clickup.com/t/86a1b2c3d …`) word-wraps so the task URL lands on a
-continuation row, then asserts the underline covers **exactly** the URL cells and never the trailing
-prose. Terminal.Gui 2.4.10's word wrap keeps a wrapped row's graphemes but rebuilds its attributes from
-source index 0, so the pre-#413 underline was painted `len("Parent ticket: ")` columns too far right;
-the app now recomputes link cells per rendered row from the row's own graphemes. This is the **only**
-check that exercises the true wrapped-render draw path (the unit tests cover the pure helper on
-unwrapped lines), so run it whenever the detail-pane link styling or wrapping changes:
+**`link_wrap_check.py`** — in-text link styling on WRAPPED lines (#413 + #443): the wrapped-line case
+`link_check.py` deliberately avoids (it fixes `COLS=120` so URLs don't wrap). Runs at a narrow `COLS=50`
+and covers two wrap cases:
+
+- **#413 — a link whole on a continuation row.** The seeded Description line
+  (`Parent ticket: https://app.clickup.com/t/86a1b2c3d …`) word-wraps so the task URL lands on a
+  continuation row; asserts the underline covers **exactly** the URL cells and never the trailing prose.
+  Terminal.Gui 2.4.10's word wrap keeps a wrapped row's graphemes but rebuilds its attributes from source
+  index 0, so the pre-#413 underline was painted `len("Parent ticket: ")` columns too far right; the app
+  now recomputes link cells per rendered row from the row's own graphemes.
+- **#443 — a link token SPLIT across two rows** (behind the `E2E_WRAP_SPLIT` seed gate the check sets, so
+  every other check sees the body byte-for-byte). A seeded bare URL longer than the pane inner width
+  hard-wraps mid-URL, and a seeded markdown `[text](url)` link's visible text wraps; asserts both are
+  underlined **contiguously across the wrap** — the tail on the continuation row is underlined too, which
+  per-row re-extraction can't do. The app maps each rendered row back to its source line (by reconciling
+  `GetAllLines()` against the source lines) and styles from the source line's spans.
+
+This is the **only** check that exercises the true wrapped-render draw path (the unit tests cover the pure
+helpers on the model), so run it whenever the detail-pane link styling or wrapping changes:
 
 ```bash
 E2E_TASKS=20 timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/link_wrap_check.py $DLL
 ```
 
-Self-contained (fixed `COLS=50`). Expected: `ok — wrapped task URL underlined exactly (no shift into
-trailing prose), COLS=50`. Fails on the pre-#413 code (underline shifted right off the URL).
+Self-contained (fixed `COLS=50`; sets its own `E2E_WRAP_SPLIT=1`). Expected: `ok — wrapped task URL
+underlined exactly …; a hard-wrapped bare URL and a wrapped markdown link's visible text both underlined
+contiguously across the wrap (#443), COLS=50`. Fails on the pre-#413 code (underline shifted right off the
+URL) and on the pre-#443 code (the split tail / continuation-row visible text left un-underlined).
 
 **`tab_boundary_check.py`** — Task Detail tab-boundary crash guard: Terminal.Gui 2.4.10's stock `Tabs` control crashes
 (`InvalidOperationException: FocusChanging was not cancelled …` in `Tabs.SelectNextTab`/

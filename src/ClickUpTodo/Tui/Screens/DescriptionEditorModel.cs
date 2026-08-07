@@ -55,4 +55,14 @@ public static class DescriptionEditorModel
     /// </summary>
     public static bool IsDirty(string? original, string? current)
         => !string.Equals(Normalize(original), Normalize(current), StringComparison.Ordinal);
+
+    /// <summary>
+    /// The literal text spliced into the editor when a member is @-mentioned (#326): <c>@</c> + the
+    /// display name + a trailing space (the same <c>@{name} </c> literal the comment composer inserts, so
+    /// both authoring surfaces read identically). Unlike the comment composer (#325), a description
+    /// mention is <b>only</b> this literal text: ClickUp descriptions carry no structured mention payload
+    /// (the #321 spike, Finding 2), so the saved <c>@name</c> is a plain textual reference — never a
+    /// live/notifying mention — and travels the unchanged plain-string write path (<see cref="Normalize"/>).
+    /// </summary>
+    public static string MentionInsertion(string? displayName) => "@" + (displayName ?? string.Empty) + " ";
 }

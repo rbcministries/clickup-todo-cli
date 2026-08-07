@@ -8,9 +8,7 @@ public enum QuickUpdatesPane
     Status = 0,
     Priority = 1,
     Assignees = 2,
-    // #242 (temporarily disabled — see QuickUpdatesScreen's summary): the List pane. Re-add this value
-    // and bump PaneCount back to 4 when re-enabling.
-    // Lists = 3,
+    Lists = 3,
 }
 
 /// <summary>
@@ -19,14 +17,14 @@ public enum QuickUpdatesPane
 /// the pane cycle order + wrap and the Status/Priority rows with their leading <c>✓</c> current-value
 /// marker + preselection (#157). The Assignees pane's own row/search/toggle logic lives in
 /// <see cref="AssigneeSelectorModel"/> (#212), embedded by the screen as an
-/// <see cref="AssigneeSelectorView"/> in immediate-apply mode (#158). (A fourth Lists pane — #242, backed
-/// by <see cref="ListSelectorModel"/> — is implemented but temporarily disabled; see QuickUpdatesScreen.)
+/// <see cref="AssigneeSelectorView"/> in immediate-apply mode (#158). The fourth Lists pane (#242/#365),
+/// backed by <see cref="ListSelectorModel"/>, is an embedded <see cref="ListSelectorView"/> in the same
+/// immediate-apply mode; see QuickUpdatesScreen.)
 /// </summary>
 public static class QuickUpdatesModel
 {
-    /// <summary>The number of panes (Status, Priority, Assignees). Bump to 4 when the List pane (#242) is
-    /// re-enabled.</summary>
-    public const int PaneCount = 3;
+    /// <summary>The number of panes: Status, Priority, Assignees, Lists (#242/#365).</summary>
+    public const int PaneCount = 4;
 
     /// <summary>The 2-column prefix on the currently-effective row: a check mark then a space.</summary>
     public const string CurrentMarker = "✓ ";
@@ -39,8 +37,8 @@ public static class QuickUpdatesModel
 
     /// <summary>
     /// The pane focus lands on when Tab (<paramref name="forward"/> = true) or Shift+Tab
-    /// (<paramref name="forward"/> = false) is pressed, cycling Status → Priority → Assignees and
-    /// wrapping in both directions.
+    /// (<paramref name="forward"/> = false) is pressed, cycling Status → Priority → Assignees → Lists
+    /// and wrapping in both directions.
     /// </summary>
     public static QuickUpdatesPane Cycle(QuickUpdatesPane current, bool forward)
     {

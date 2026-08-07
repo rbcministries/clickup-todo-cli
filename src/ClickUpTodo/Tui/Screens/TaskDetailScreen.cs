@@ -21,8 +21,8 @@ namespace ClickUpTodo.Tui.Screens;
 /// a tabbed, scrollable pane — Stream / Description / Comments / Other attributes. Built on the shared
 /// screen seam (#38) — swapped into the dashboard's single toplevel, not a nested modal <c>Dialog</c>.
 /// <para>
-/// Esc returns to the list; Ctrl+B requests opening the task in the browser (the host reads
-/// <see cref="OpenBrowserRequested"/> in its close handler and owns the launch). Tab cycles tabs;
+/// Esc returns to the list; Ctrl+B raises <see cref="OpenBrowserRequested"/> and the host owns the
+/// launch (and, per the #518 setting, whether the view also closes — a root view never does). Tab cycles tabs;
 /// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. The Stream tab (#106) is the out-of-the-box
 /// default (the opening tab is configurable via #108); it opens
 /// auto-scrolled to the newest (or oldest) entry per the <see cref="StreamAutoScroll"/> preference
@@ -127,6 +127,14 @@ public sealed class TaskDetailScreen : Screen
     // timer + CancellationTokenSource that RemoveAll alone wouldn't release.
     private MentionPickerView? _mentionPicker;
     private readonly List<CommentComposerModel.MentionToken> _mentionTokens = [];
+    // The editor the mention picker is currently serving — the comment composer (#325, structured runs)
+    // or the description editor (#326, plain "@Name" text). Set on ShowMentionPicker, cleared on Hide, so
+    // the pick/Esc/teardown paths route to the right editor. The one overlay is retargeted, never forked.
+    private TextView? _mentionHostEditor;
+    // Enough seams to open the picker at all: just the member pool. The comment composer additionally
+    // needs the structured-write seam to *post* a mention (MentionEnabled), but a description mention is
+    // plain literal text (#321/#326) so the description trigger gates on this member-only availability.
+    private bool MembersAvailable => _memberMatch is not null && _memberTopFrequent is not null;
     private bool MentionEnabled => _postStructuredCommentAsync is not null && _memberMatch is not null && _memberTopFrequent is not null;
     // The composer's ideal height: the multi-line editor rows + the Post/Cancel button row + the
     // top/bottom frame border. Clamped on show so it degrades gracefully on a short terminal.
@@ -296,8 +304,23 @@ public sealed class TaskDetailScreen : Screen
     /// tree stay in step. Only meaningful when the tree tab exists (a loader was supplied).</summary>
     public event EventHandler? CycleBadgeDisplayRequested;
 
-    /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>
-    public bool OpenBrowserRequested { get; private set; }
+    /// <summary>
+    /// Raised when the user presses Ctrl+B to open the task in the browser (#518). Like its sibling
+    /// command events (<see cref="OpenInNewTabRequested"/>, <see cref="QuickUpdatesRequested"/>, …), the
+    /// host owns the outcome: it launches the browser (flashing success/failure on this still-live view)
+    /// and — for a non-root view, per the <see cref="OpenBrowserBehavior"/> setting — may also close it.
+    /// The screen no longer closes itself; a root view therefore never exits on Ctrl+B (the invariant).
+    /// </summary>
+    public event EventHandler? OpenBrowserRequested;
+
+    /// <summary>
+    /// Lets the host close this detail view (#518). Ctrl+B's "open browser + close" mode is a host
+    /// decision (it reads the <see cref="OpenBrowserBehavior"/> setting and the view's root-ness), so —
+    /// unlike Esc, where the screen closes itself — the host triggers the close, via the same
+    /// <c>Closed</c> path. The host's mount handler defers teardown a loop iteration, so calling this
+    /// from within the <see cref="OpenBrowserRequested"/> handler is safe mid-keypress.
+    /// </summary>
+    public void RequestClose() => Close();
 
     /// <summary>The task currently shown, reflecting any refresh since the screen opened (#159 reads it to
     /// launch Quick Updates for the up-to-date task).</summary>
@@ -1017,11 +1040,14 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // Ctrl+B asks the host to open the task in the browser (#518). It is an event like its siblings
+        // below — the host launches the browser and decides whether to navigate back — so, unlike the
+        // old flag-and-Close() pair, the screen never closes itself here: a root view (the --task launch
+        // task) stays open, which is the invariant that Ctrl+B must never exit the application.
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
         {
             key.Handled = true;
-            OpenBrowserRequested = true;
-            Close();
+            OpenBrowserRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 
@@ -1537,7 +1563,7 @@ public sealed class TaskDetailScreen : Screen
         if (MentionEnabled && _commentEditor.HasFocus && key.AsRune.Value == '@')
         {
             key.Handled = true;
-            ShowMentionPicker();
+            ShowMentionPicker(_commentEditor);
             return;
         }
 
@@ -1615,15 +1641,24 @@ public sealed class TaskDetailScreen : Screen
         FocusCurrentPane();
     }
 
-    /// <summary>Opens the @-mention picker (#325) as a transient overlay over the composer: builds a
-    /// fresh <see cref="MentionPickerView"/> (so no stale query/selection carries between opens), sizes
-    /// and anchors it like the composer, shows it and focuses it. The box is built lazily on first use
-    /// and added to the screen then. No second focusable pane persists (#3) — it's a transient overlay,
-    /// like the composer itself.</summary>
-    private void ShowMentionPicker()
+    /// <summary>Opens the @-mention picker (#325/#326) as a transient overlay over the given host editor
+    /// (the comment composer or the description editor): builds a fresh <see cref="MentionPickerView"/>
+    /// (so no stale query/selection carries between opens), sizes and anchors it like the composer, shows
+    /// it and focuses it. The box is built lazily on first use and added to the screen then. No second
+    /// focusable pane persists (#3) — it's a transient overlay, like the composer itself.</summary>
+    private void ShowMentionPicker(TextView hostEditor)
     {
-        if (!MentionEnabled || !_commentBox.Visible)
+        // The picker needs the member pool, and only makes sense overlaid on a *visible* host editor.
+        // Both current callers are already focus-gated (so the host is visible), but guarding the host's
+        // own box here keeps that the sole precondition — a future caller can't open the overlay over a
+        // hidden editor.
+        if (!MembersAvailable)
             return;
+        if (hostEditor == _commentEditor && !_commentBox.Visible)
+            return;
+        if (hostEditor == _descriptionEditor && !_descriptionBox.Visible)
+            return;
+        _mentionHostEditor = hostEditor;
 
         // Detach and dispose any prior picker before hosting a fresh one. Disposing here (on the next
         // open) rather than in HideMentionPicker keeps us off the stack of the outgoing picker's own
@@ -1671,29 +1706,44 @@ public sealed class TaskDetailScreen : Screen
         picker.SetFocus();
     }
 
-    /// <summary>Closes the mention picker and returns focus to the composer editor, leaving the composer
-    /// and its draft intact.</summary>
+    /// <summary>Closes the mention picker and returns focus to the host editor it opened over (the comment
+    /// composer or the description editor, whichever is still visible), leaving that editor and its draft
+    /// intact.</summary>
     private void HideMentionPicker()
     {
         if (_mentionBox is null || !_mentionBox.Visible)
             return;
         _mentionBox.Visible = false;
         _mentionBox.RemoveAll();
-        if (_commentBox.Visible)
+        if (_mentionHostEditor == _commentEditor && _commentBox.Visible)
             _commentEditor.SetFocus();
+        else if (_mentionHostEditor == _descriptionEditor && _descriptionBox.Visible)
+            _descriptionEditor.SetFocus();
+        _mentionHostEditor = null;
     }
 
-    /// <summary>A member was picked in the mention overlay: close the picker (refocusing the editor),
-    /// insert its <c>@{DisplayName}</c> token (plus a trailing space) at the caret via the editor's own
-    /// <see cref="TextView.InsertText"/> — which handles the caret/word-wrap model internally — and record
-    /// the <see cref="CommentComposerModel.MentionToken"/> so <see cref="PostComment"/> re-derives the
-    /// structured runs from the final text.</summary>
+    /// <summary>A member was picked in the mention overlay: close the picker (refocusing the host editor,
+    /// whose caret is where the <c>@</c> was consumed) and splice the <c>@{DisplayName} </c> literal at the
+    /// caret via the editor's own <see cref="TextView.InsertText"/> — which handles the caret/word-wrap
+    /// model internally. For the <b>comment composer</b> (#325) it also records a
+    /// <see cref="CommentComposerModel.MentionToken"/> so <see cref="PostComment"/> re-derives the
+    /// structured runs from the final text. For the <b>description editor</b> (#326) it records nothing:
+    /// ClickUp descriptions carry no structured mention payload (the #321 spike), so the token is plain
+    /// literal text that the unchanged plain-string save path sends verbatim.</summary>
     private void OnMentionPicked(object? sender, MentionTarget target)
     {
-        var token = new CommentComposerModel.MentionToken(target.UserId, target.DisplayName);
-        HideMentionPicker(); // returns focus to the editor, whose caret is where the '@' was consumed
-        _commentEditor.InsertText(token.Token + " ");
-        _mentionTokens.Add(token);
+        var host = _mentionHostEditor; // capture before Hide clears it
+        HideMentionPicker();           // returns focus to the host editor
+        if (host == _commentEditor)
+        {
+            var token = new CommentComposerModel.MentionToken(target.UserId, target.DisplayName);
+            _commentEditor.InsertText(token.Token + " ");
+            _mentionTokens.Add(token);
+        }
+        else if (host == _descriptionEditor)
+        {
+            _descriptionEditor.InsertText(DescriptionEditorModel.MentionInsertion(target.DisplayName));
+        }
     }
 
     /// <summary>
@@ -1946,6 +1996,19 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // @ opens the mention picker (#326) when the member pool is available and the editor (not a
+        // button) has focus — the literal @ is consumed here (the picker inserts the full "@Name" token on
+        // pick). Unlike the composer (#325), a description mention is plain literal text: ClickUp
+        // descriptions carry no structured mention payload (#321 spike), so the saved @Name is a textual
+        // reference, not a live/notifying mention. Member pool absent (e.g. single-task mode) ⇒ @ falls
+        // through and types a literal @, exactly as before.
+        if (MembersAvailable && _descriptionEditor.HasFocus && key.AsRune.Value == '@')
+        {
+            key.Handled = true;
+            ShowMentionPicker(_descriptionEditor);
+            return;
+        }
+
         var action = DescriptionEditorModel.Route(ClassifyDescription(key));
         if (action == DescriptionEditorModel.EditorAction.PassThrough)
             return;
@@ -2005,11 +2068,13 @@ public sealed class TaskDetailScreen : Screen
     }
 
     /// <summary>Closes the editor and returns focus to the front-most tab (mirrors HidePrompt), clearing
-    /// any pending discard confirm.</summary>
+    /// any pending discard confirm. Also dismisses the mention picker (#326) if it was left open over the
+    /// editor, so a picker can never outlive its host editor.</summary>
     private void HideDescriptionEditor()
     {
         if (!_descriptionBox.Visible)
             return;
+        HideMentionPicker();
         _descriptionBox.Visible = false;
         _descriptionPendingDiscard = false;
         _descriptionConfirm.Text = "";

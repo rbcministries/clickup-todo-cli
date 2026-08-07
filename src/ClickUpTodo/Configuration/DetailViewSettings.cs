@@ -32,4 +32,11 @@ public sealed class DetailViewSettings
     /// <see cref="TaskLinkCtrlClickDestination.Browser"/> — byte-identical to the fixed behaviour
     /// #318 shipped.</summary>
     public TaskLinkCtrlClickDestination TaskLinkCtrlClick { get; set; } = TaskLinkCtrlClickDestination.Browser;
+
+    /// <summary>What <c>Ctrl+B</c> does to a non-root detail view (#518): stay put (default) or close
+    /// back to the list / parent detail. A root view (the <c>--task</c> launch task) always stays — the
+    /// invariant that Ctrl+B never exits. Default: <see cref="OpenBrowserBehavior.KeepOpen"/> — a
+    /// deliberate departure from the "default to prior-shipped behaviour" convention (#320), since the
+    /// prior behaviour is exactly what the <c>--task</c>-host bug came from.</summary>
+    public OpenBrowserBehavior OpenBrowser { get; set; } = OpenBrowserBehavior.KeepOpen;
 }
