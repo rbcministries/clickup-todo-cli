@@ -45,6 +45,7 @@ public sealed class AgentDispatchSettingsTests
         Assert.False(new AgentDispatchSettings { PromptTemplate = "Custom {userPrompt}" }.IsDefault);
         Assert.False(new AgentDispatchSettings { LaunchLocation = LaunchLocation.NewTab }.IsDefault);
         Assert.False(new AgentDispatchSettings { CustomTerminalCommand = "alacritty -e {}" }.IsDefault);
+        Assert.False(new AgentDispatchSettings { TryUseWindowsTerminalProfiles = true }.IsDefault);
     }
 
     [Theory]

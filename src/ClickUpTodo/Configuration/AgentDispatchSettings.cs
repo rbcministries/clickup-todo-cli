@@ -60,6 +60,17 @@ public sealed class AgentDispatchSettings
     /// </summary>
     public LaunchLocation LaunchLocation { get; set; } = LaunchLocation.NewWindow;
 
+    /// <summary>
+    /// On Windows, try to launch a dispatch under the Windows Terminal <b>profile</b> whose
+    /// <c>startingDirectory</c> matches the directory the dispatch resolved (#462) — so the session
+    /// inherits that profile's font / colour scheme / tab title / environment while still running
+    /// Dispatch's own command. Off by default; a strict no-op when off, when not on Windows, or when no
+    /// profile matches. The match is computed per-dispatch in <see cref="Tui.DispatchCoordinator.Plan"/>
+    /// (not by <see cref="ToLauncherOptions"/>, which is directory-agnostic). Absent in an old config ⇒
+    /// off; no migration.
+    /// </summary>
+    public bool TryUseWindowsTerminalProfiles { get; set; }
+
     /// <summary>The <c>claude</c> executable to invoke (looked up on PATH). Blank ⇒ <c>"claude"</c>.</summary>
     public string ClaudeExecutable { get; set; } = "claude";
 
@@ -117,6 +128,7 @@ public sealed class AgentDispatchSettings
         && string.IsNullOrWhiteSpace(FixedWorkingDirectory)
         && DefaultSessionMode == AgentSessionMode.Interactive
         && !DefaultPostResultsToComments
+        && !TryUseWindowsTerminalProfiles
         && string.IsNullOrWhiteSpace(PromptTemplate);
 
     /// <summary>
