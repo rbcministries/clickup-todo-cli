@@ -21,8 +21,8 @@ namespace ClickUpTodo.Tui.Screens;
 /// a tabbed, scrollable pane — Stream / Description / Comments / Other attributes. Built on the shared
 /// screen seam (#38) — swapped into the dashboard's single toplevel, not a nested modal <c>Dialog</c>.
 /// <para>
-/// Esc returns to the list; Ctrl+B requests opening the task in the browser (the host reads
-/// <see cref="OpenBrowserRequested"/> in its close handler and owns the launch). Tab cycles tabs;
+/// Esc returns to the list; Ctrl+B raises <see cref="OpenBrowserRequested"/> and the host owns the
+/// launch (and, per the #518 setting, whether the view also closes — a root view never does). Tab cycles tabs;
 /// ↑/↓/PgUp/PgDn scroll the focused pane; F1 opens Help. The Stream tab (#106) is the out-of-the-box
 /// default (the opening tab is configurable via #108); it opens
 /// auto-scrolled to the newest (or oldest) entry per the <see cref="StreamAutoScroll"/> preference
@@ -296,8 +296,23 @@ public sealed class TaskDetailScreen : Screen
     /// tree stay in step. Only meaningful when the tree tab exists (a loader was supplied).</summary>
     public event EventHandler? CycleBadgeDisplayRequested;
 
-    /// <summary>True when the user pressed Ctrl+B to open the task in the browser.</summary>
-    public bool OpenBrowserRequested { get; private set; }
+    /// <summary>
+    /// Raised when the user presses Ctrl+B to open the task in the browser (#518). Like its sibling
+    /// command events (<see cref="OpenInNewTabRequested"/>, <see cref="QuickUpdatesRequested"/>, …), the
+    /// host owns the outcome: it launches the browser (flashing success/failure on this still-live view)
+    /// and — for a non-root view, per the <see cref="OpenBrowserBehavior"/> setting — may also close it.
+    /// The screen no longer closes itself; a root view therefore never exits on Ctrl+B (the invariant).
+    /// </summary>
+    public event EventHandler? OpenBrowserRequested;
+
+    /// <summary>
+    /// Lets the host close this detail view (#518). Ctrl+B's "open browser + close" mode is a host
+    /// decision (it reads the <see cref="OpenBrowserBehavior"/> setting and the view's root-ness), so —
+    /// unlike Esc, where the screen closes itself — the host triggers the close, via the same
+    /// <c>Closed</c> path. The host's mount handler defers teardown a loop iteration, so calling this
+    /// from within the <see cref="OpenBrowserRequested"/> handler is safe mid-keypress.
+    /// </summary>
+    public void RequestClose() => Close();
 
     /// <summary>The task currently shown, reflecting any refresh since the screen opened (#159 reads it to
     /// launch Quick Updates for the up-to-date task).</summary>
@@ -1017,11 +1032,14 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // Ctrl+B asks the host to open the task in the browser (#518). It is an event like its siblings
+        // below — the host launches the browser and decides whether to navigate back — so, unlike the
+        // old flag-and-Close() pair, the screen never closes itself here: a root view (the --task launch
+        // task) stays open, which is the invariant that Ctrl+B must never exit the application.
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.B)
         {
             key.Handled = true;
-            OpenBrowserRequested = true;
-            Close();
+            OpenBrowserRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 
