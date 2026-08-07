@@ -77,8 +77,15 @@ if (!string.IsNullOrWhiteSpace(markerDbPath))
     changeMarkers = markerStateStore.CreateChangeMarkerStore(instanceId);
 }
 
+var harness = new HarnessContext
+{
+    TaskCount = taskCount,
+    Foreign = foreign,
+    Tree = tree,
+    Checklists = checklists,
+};
 var client = new ClickUpClient(
-    "fake-token", new HttpClient(new FakeClickUp(taskCount, foreign, tree, checklists)), changeMarkers: changeMarkers);
+    "fake-token", new HttpClient(new FakeClickUp(harness)), changeMarkers: changeMarkers);
 IStateStore stateStore = new JsonFileStateStore();
 var configStore = new ConfigStore(stateStore);
 var tasks = new TaskService(client, config, 1, userName: "Ben Seymour");
@@ -182,15 +189,37 @@ sealed class RecordingTerminalLauncher(string path) : ITerminalLauncher
     }
 }
 
-sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false, bool checklists = false) : HttpMessageHandler
+/// <summary>Boot-time scenario state for the harness backend (#487). New scenario state lands here as a
+/// new property — an <em>additive</em> surface, not a positional constructor list, so two PRs adding
+/// properties merge cleanly (a property block still shares an anchor, so this is "usually merges", not
+/// "never conflicts" — E (#489) finishes the job by moving scenario state out of the shared type
+/// entirely). It exists so <see cref="FakeClickUp"/>'s constructor and its sole construction site are no
+/// longer the two single-line append points every scenario had to edit.</summary>
+sealed class HarnessContext
+{
+    /// <summary>Task count for the generated backend (E2E_TASKS; paging is exercised above 100).</summary>
+    public int TaskCount { get; init; } = 200;
+
+    /// <summary>#232 not-mine-rows scenario (E2E_FOREIGN).</summary>
+    public bool Foreign { get; init; }
+
+    /// <summary>#291 Task Tree tab scenario (E2E_TREE).</summary>
+    public bool Tree { get; init; }
+
+    /// <summary>#456 Checklists tab scenario (E2E_CHECKLISTS).</summary>
+    public bool Checklists { get; init; }
+}
+
+sealed class FakeClickUp(HarnessContext ctx) : HttpMessageHandler
 {
     // #232 opt-in scenario flag: serve the small not-mine-rows snapshot + a modelled Status/Priority
     // write instead of the default generated list. Off by default so every existing check is untouched.
-    private readonly bool _foreign = foreign;
-    private readonly bool _tree = tree;
+    private readonly bool _foreign = ctx.Foreign;
+    private readonly bool _tree = ctx.Tree;
     // C (#456): when set, DetailJson embeds a seeded `checklists` array so the Checklists tab renders
     // real groups/items. Off by default, so every other check's task-detail response is untouched.
-    private readonly bool _checklists = checklists;
+    private readonly bool _checklists = ctx.Checklists;
+    private readonly int _taskCount = ctx.TaskCount;
 
     private static readonly string[] Statuses = ["to do", "in progress", "blocked", "in review"];
     private static readonly string[] StatusColors = ["#d3d3d3", "#4194f6", "#e50000", "#a875ff"];
@@ -507,7 +536,7 @@ sealed class FakeClickUp(int taskCount, bool foreign = false, bool tree = false,
             // include_closed=false boot/poll fetches never match this gate.
             if (!_foreign && ClosedStallMs > 0 && _closedStallArmed && IncludeClosed(query))
                 await Task.Delay(ClosedStallMs, ct);
-            body = _foreign ? ForeignTeamTasks() : TasksJson(page: PageOf(query), taskCount, IncludeClosed(query));
+            body = _foreign ? ForeignTeamTasks() : TasksJson(page: PageOf(query), _taskCount, IncludeClosed(query));
         }
         else if (request.Method == HttpMethod.Post && path.Contains("/list/") && path.EndsWith("/task"))
         {
