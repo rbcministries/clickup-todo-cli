@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""Asserts @-mention authoring in the Task Detail comment composer (#325, sub-issue K of #313).
+"""Asserts @-mention authoring in the Task Detail comment composer, in BOTH hosts: the dashboard
+`TodoApp` (#325, sub-issue K of #313) and the single-task `SingleTaskApp` (#473).
 
-Boots the dashboard `TodoApp`, opens Task Detail, and drives the Ctrl+N composer twice:
+A shared `drive_legs()` drives the Ctrl+N composer twice against each host:
 
   A) a PLAIN comment ("plain hello") posted with no @ — must go through the unchanged plain-text
      path (`comment_text` in the request body, no structured `comment` blocks / tag);
   B) a MENTION comment: type "hi ", press @ to open the mention picker, type "Ada", Enter to insert
-     the "@Ada Lovelace" token, then Ctrl+Enter to post — must go through the structured path
-     (a `{"type":"tag","user":{"id":101}}` block, Ada Lovelace being member 101).
+     the "@Ada Lovelace" token, then Tab→Post→Enter to post (Ctrl+Enter folds into a bare newline on
+     some drivers) — must go through the structured path (a `{"type":"tag","user":{"id":101}}` block,
+     Ada Lovelace being member 101).
+
+`run_dashboard()` boots the list and opens a task; `run_single_task()` boots straight into the launch
+task's detail via E2E_SINGLE_TASK (no list) — the same composer + mention path must light up there too,
+warmed from the same GET /team member top-up (single-task mode tallies no working set).
 
 The structured payload is asserted from the harness's E2E_COMMENT_LOG recorder (one request body per
 line) — a file fact, not a screen guess. The on-screen half (the "@Ada Lovelace" token rendered in the
 composer after the pick, and the posted comment in the pane) is asserted on the pyte screen.
 
-Self-contained (sets its own E2E_COMMENT_LOG). Exits nonzero / prints a traceback on failure."""
+Self-contained (each host leg sets its own E2E_COMMENT_LOG). Exits nonzero / prints a traceback on failure."""
 import os, pty, select, struct, sys, termios, fcntl, time, signal, subprocess, tempfile
 import pyte
 
