@@ -1447,7 +1447,7 @@ public sealed class TodoApp
     /// Help (via F1, <see cref="OnScreenHelpRequested"/>) ever stacks on top of another screen.
     /// </para>
     /// </summary>
-    private void ShowScreen(Screen screen, Action onClosed)
+    private void ShowScreen(Screen screen, Action? onClosed = null)
     {
         // Hide the currently-visible layer so only the new top draws/focuses (one visible screen at a
         // time — #3). It stays mounted so Esc can return to it with its state intact.
@@ -1470,7 +1470,7 @@ public sealed class TodoApp
             // next loop iteration lets the current input cycle finish first.
             Application.Invoke(() =>
             {
-                onClosed();          // read the screen's result while it's still intact
+                onClosed?.Invoke();  // read the screen's result while it's still intact
                 CloseScreen(screen); // then tear it down and restore the layer beneath it
             });
         };
@@ -1937,6 +1937,19 @@ public sealed class TodoApp
         }
     }
 
+    /// <summary>
+    /// Handles Ctrl+B on an open Task Detail (#518): launch the browser (flashing the outcome on the
+    /// live view) and then, per the <see cref="OpenBrowserBehavior"/> setting, optionally close the
+    /// detail to navigate back to the list. A dashboard detail is never a host root, so the invariant
+    /// (a root never closes) is satisfied structurally — the setting alone decides here.
+    /// </summary>
+    private void OnDetailOpenBrowser(TaskDetailScreen screen)
+    {
+        LaunchBrowser(screen.Task.Url, screen.Task.Name);
+        if (OpenBrowserAction.ShouldCloseView(_config.DetailView.OpenBrowser, isRoot: false))
+            screen.RequestClose();
+    }
+
     /// <summary>Opens a task URL in the system browser, or flashes why it couldn't.</summary>
     private void LaunchBrowser(string? url, string? name)
     {
@@ -2088,13 +2101,13 @@ public sealed class TodoApp
                     // Clicking a link in a text pane (#318): a task link opens in-app, anything else (and
                     // any Ctrl+click) in the browser.
                     screen.LinkActivationRequested += (_, request) => ActivateLink(request);
-                    ShowScreen(screen, () =>
-                    {
-                        // Use the URL we already fetched rather than re-reading the (possibly
-                        // reordered) selected row after a background refresh.
-                        if (screen.OpenBrowserRequested)
-                            LaunchBrowser(detail.Url, detail.Name);
-                    });
+                    // Ctrl+B (#518) opens the task in the browser. A dashboard detail always has the main
+                    // list beneath it, so it is never a root — the OpenBrowser setting alone decides
+                    // whether we also navigate back. The launch flashes on the live view either way; read
+                    // the task's current url/name (a mid-view refresh may have renamed it), mirroring the
+                    // OpenInNewTabRequested sibling above.
+                    screen.OpenBrowserRequested += (_, _) => OnDetailOpenBrowser(screen);
+                    ShowScreen(screen);
                 });
             }
             catch (Exception ex)
