@@ -31,11 +31,15 @@ F1 = b"\x1bOP"
 ESC = b"\x1b"
 DOWN = b"\x1b[B"
 
-HELP_MARKER = "TASK LIST"          # a distinctive line in HelpScreen.ShortcutsText
-HELP_TITLE = "Keyboard shortcuts"  # the screen/dialog title
-LIST_MARKER = "next section"       # the main-list footer hint, present only on the list
-# A latency ceiling well above the ~50 ms drive.py baseline: a stable guard, not a micro-benchmark.
-LATENCY_CEILING_MS = 1500
+HELP_MARKER = "TASK LIST"          # a distinctive line in HelpScreen.ShortcutsText, in BOTH hosts
+HELP_TITLE = "Keyboard shortcuts"  # the screen/dialog title, in BOTH hosts
+# NativeModalSpike.TitleMarker — appears ONLY in the native Dialog's title, so leg B can prove it took
+# the native path (a silently no-op'd flag would render the identical _screens HelpScreen otherwise).
+NATIVE_TITLE_MARKER = "[native modal spike]"
+LIST_ONLY_MARKER = "Task 1"        # list content; "next section" is unusable — it's in the help text too
+# Absolute latency sanity ceiling (this check runs manually, not in CI, so it can be tight). The real
+# #3-invariant guard is the cross-leg ratio in the main block: native must not degrade list nav vs A.
+LATENCY_CEILING_MS = 500
 
 
 class App:
@@ -84,17 +88,20 @@ class App:
                 return True
         return False
 
-    def send_measured(self, seq, marker, quiet=0.4, timeout=8.0):
+    def send_measured(self, seq, marker, quiet=0.6, timeout=8.0):
         """Send seq; return (latency_ms_to_marker_or_None, bytes_emitted, visible_after).
 
-        Measures the time from the write until a chunk carrying `marker`'s bytes arrives, and the
-        total bytes emitted until output goes quiet for `quiet` seconds."""
+        Measures the time from the write until `marker`'s bytes have arrived, and the total bytes
+        emitted until output goes quiet for `quiet` seconds. The marker is matched against an
+        accumulating tail buffer (not a single chunk) so a marker split across a PTY read boundary is
+        still detected."""
         os.write(self.master, seq)
         t0 = time.monotonic()
         total = 0
         latency = None
         last = time.monotonic()
         mbytes = marker.encode()
+        tail = b""
         while True:
             now = time.monotonic()
             if now - t0 > timeout:
@@ -114,8 +121,10 @@ class App:
             self.stream.feed(chunk)
             total += len(chunk)
             last = time.monotonic()
-            if latency is None and mbytes in chunk:
-                latency = (last - t0) * 1000.0
+            if latency is None:
+                tail = (tail + chunk)[-4096:]  # keep enough to span a split marker
+                if mbytes in tail:
+                    latency = (last - t0) * 1000.0
         return latency, total, self.visible()
 
     def alive(self):
@@ -128,24 +137,36 @@ class App:
             pass
 
 
-def open_close_cycle(app, label, cycle):
-    """F1 (open) → assert help → Esc (close) → assert list + process alive. Returns
-    (open_ms, open_bytes, close_bytes)."""
+def open_close_cycle(app, label, cycle, native):
+    """F1 (open) → assert help + that the intended host rendered → Esc (close) → assert help gone,
+    list restored, process alive. Returns (open_ms, open_bytes, close_bytes)."""
     open_ms, open_bytes, v = app.send_measured(F1, HELP_MARKER)
     assert HELP_MARKER in v, f"{label} cycle {cycle}: F1 did not open help ({HELP_MARKER!r} missing):\n{v[:2000]}"
     assert HELP_TITLE in v, f"{label} cycle {cycle}: help title {HELP_TITLE!r} missing:\n{v[:2000]}"
+    # Prove the intended host rendered: the native Dialog title carries NativeModalSpike.TitleMarker;
+    # the _screens HelpScreen never does. This is what makes the two legs genuinely distinguishable —
+    # otherwise a silently no-op'd flag would render the identical HelpScreen and pass anyway.
+    if native:
+        assert NATIVE_TITLE_MARKER in v, \
+            f"{label} cycle {cycle}: native flag set but the native-Dialog title marker is missing " \
+            f"(flag not honored — leg fell back to _screens?):\n{v[:2000]}"
+    else:
+        assert NATIVE_TITLE_MARKER not in v, \
+            f"{label} cycle {cycle}: the native-Dialog title marker leaked into the _screens leg:\n{v[:2000]}"
     assert open_ms is not None, f"{label} cycle {cycle}: never saw the help paint marker after F1"
     assert open_ms <= LATENCY_CEILING_MS, \
         f"{label} cycle {cycle}: F1 open latency {open_ms:.0f}ms exceeds {LATENCY_CEILING_MS}ms ceiling"
 
-    _, close_bytes, v = app.send_measured(ESC, LIST_MARKER)
+    # Wait for list content ("Task 1") to reappear as the close paint marker; HELP_MARKER-gone is the
+    # actual close proof (it's the one string that is present iff the help body is on screen).
+    _, close_bytes, v = app.send_measured(ESC, LIST_ONLY_MARKER)
     assert app.alive(), f"{label} cycle {cycle}: process died closing the modal (dispose bug #346?):\n{v[:2000]}"
     assert HELP_MARKER not in v, f"{label} cycle {cycle}: Esc did not dismiss the help:\n{v[:2000]}"
-    assert LIST_MARKER in v or "Task 1" in v, f"{label} cycle {cycle}: task list not restored after Esc:\n{v[:2000]}"
+    assert LIST_ONLY_MARKER in v, f"{label} cycle {cycle}: task list not restored after Esc:\n{v[:2000]}"
     return open_ms, open_bytes, close_bytes
 
 
-def run_leg(label, **env):
+def run_leg(label, native, **env):
     """One host: boot → two F1/Esc modal cycles (repeatability + no cumulative crash) →
     steady-state list-nav latency (median of several Down presses, the #3 invariant).
     Returns a dict of the measured numbers for the A/B grid."""
@@ -155,9 +176,9 @@ def run_leg(label, **env):
 
         # 1-2. Two open/close cycles — a native nested run must be re-enterable and must not leave
         #      cumulative cruft that crashes or degrades the app the second time round (#38).
-        open_ms, open_bytes, close_bytes = open_close_cycle(app, label, 1)
+        open_ms, open_bytes, close_bytes = open_close_cycle(app, label, 1, native)
         print(f"  [{label}] cycle 1 done (open {open_ms:.0f}ms)")
-        open_close_cycle(app, label, 2)
+        open_close_cycle(app, label, 2, native)
         print(f"  [{label}] cycle 2 done")
         assert app.alive(), f"{label}: process died after two modal cycles"
 
@@ -183,14 +204,23 @@ def run_leg(label, **env):
 apps_ok = True
 try:
     print("── Leg A: hand-mounted _screens HelpScreen (production default) ──")
-    a = run_leg("A/_screens")
+    a = run_leg("A/_screens", native=False)
     print(f"  open {a['open_ms']:.0f}ms · open {a['open_bytes']}B · close {a['close_bytes']}B · "
           f"post-modal nav {a['nav_ms']:.0f}ms")
 
     print("── Leg B: native Terminal.Gui Dialog on a nested Application.Run (CLICKUP_TODO_NATIVE_MODAL=1) ──")
-    b = run_leg("B/native", CLICKUP_TODO_NATIVE_MODAL="1")
+    b = run_leg("B/native", native=True, CLICKUP_TODO_NATIVE_MODAL="1")
     print(f"  open {b['open_ms']:.0f}ms · open {b['open_bytes']}B · close {b['close_bytes']}B · "
           f"post-modal nav {b['nav_ms']:.0f}ms")
+
+    # The #3-invariant guard: the native nested-run modal must not leave list nav meaningfully slower
+    # than the _screens baseline. Generous factor (cross-process medians are noisy) but tight enough to
+    # catch the #38 failure mode (a nested loop leaving nav at 300-500 ms), which the loose absolute
+    # ceiling alone would miss.
+    nav_budget = max(a["nav_ms"] * 2.5, a["nav_ms"] + 150)
+    assert b["nav_ms"] <= nav_budget, (
+        f"post-modal list-nav regressed: native {b['nav_ms']:.0f}ms vs _screens {a['nav_ms']:.0f}ms "
+        f"(budget {nav_budget:.0f}ms) — a nested run-loop is degrading the #3 latency invariant")
 
     print("\n===== #404 native-modal spike A/B grid =====")
     print(f"{'metric':<26}{'A _screens':>14}{'B native':>14}")
@@ -198,7 +228,8 @@ try:
     print(f"{'F1 open bytes':<26}{a['open_bytes']:>14}{b['open_bytes']:>14}")
     print(f"{'Esc close bytes':<26}{a['close_bytes']:>14}{b['close_bytes']:>14}")
     print(f"{'post-modal nav (ms)':<26}{a['nav_ms']:>14.0f}{b['nav_ms']:>14.0f}")
-    print("\nok — both hosts open, render, close cleanly (process alive), and leave the list responsive")
+    print(f"\nok — leg B proved native (title marker), both hosts open/render/close cleanly (alive), "
+          f"and native nav {b['nav_ms']:.0f}ms is within budget {nav_budget:.0f}ms of _screens {a['nav_ms']:.0f}ms")
 except AssertionError as e:
     apps_ok = False
     print("FAIL:", e)

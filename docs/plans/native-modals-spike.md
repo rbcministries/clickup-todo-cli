@@ -127,10 +127,12 @@ Down-presses after the cycles. Representative run:
    entered and exited for a transient modal leaves the single-`ListView` navigation exactly as snappy
    as the hand-mounted screen does. The #38 fear — a second run-loop leaving the outer app degraded —
    did **not** reproduce.
-3. **Background refresh keeps ticking.** `RefreshService` runs on a background `Task` thread and
-   marshals via `Application.Invoke`; the nested loop pumps the same MainLoop, so queued UI updates
-   still land while the modal is up. No hang or deadlock was observed across the cycles. (Not asserted
-   as a hard gate — recorded as an observation.)
+3. **Background refresh keeps ticking (by construction; not directly measured).** `RefreshService`
+   runs on a background `Task` thread and marshals via `Application.Invoke`; the nested loop pumps the
+   same MainLoop, so queued UI updates still land while the modal is up. The check does not probe for
+   a refresh landing mid-modal — what it *observes* is that no hang or deadlock occurs across the
+   cycles (process alive, list responsive after). Refresh-liveness is therefore reasoned from the
+   architecture, not asserted; a direct probe is listed under "remains unverified".
 4. **Modest, one-time open cost.** Native adds **~78 ms** to the open and **~3.9 KB** of one-time
    paint (the dialog's border/title box drawn over the full frame). Opening any full-frame overlay is
    an `IsFullInvalidation` event that diff-flush can't trim, so both hosts pay ~15–19 KB to open
@@ -159,9 +161,10 @@ transient-modal half of the #402 taxonomy can move to native surfaces and the be
 can shrink to the destination back-stack (#346's `ScreenStackHost` scope) as #402 hoped.
 
 **What remains unverified (explicitly):** intra-modal focusable-input latency; result-marshalling from
-a native modal back to the host (Help returns nothing — F3/QU return a `Result`); the `windows` and
-`dotnet` drivers (this harness is ANSI-only per CLAUDE.md); and modal-stacking (F1 Help *over* an open
-F3 modal, which the `_screens` host supports today via `HelpRequested`).
+a native modal back to the host (Help returns nothing — F3/QU return a `Result`); a background refresh
+actually landing while the modal is up (reasoned from the shared MainLoop, not probed); the `windows`
+and `dotnet` drivers (this harness is ANSI-only per CLAUDE.md); and modal-stacking (F1 Help *over* an
+open F3 modal, which the `_screens` host supports today via `HelpRequested`).
 
 ## Follow-up
 

@@ -30,18 +30,45 @@ internal static class NativeModalSpike
         !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("CLICKUP_TODO_NATIVE_MODAL"));
 
     /// <summary>
+    /// A spike marker in the native <see cref="Dialog"/>'s title, distinguishing it on screen from the
+    /// <c>_screens</c> <see cref="HelpScreen"/> ("Keyboard shortcuts"). The A/B harness asserts on this
+    /// to prove leg B actually took the native path (a silently no-op'd flag would otherwise render the
+    /// identical <see cref="HelpScreen"/> and pass the same assertions).
+    /// </summary>
+    public const string TitleMarker = "[native modal spike]";
+
+    // Serialises open requests: set synchronously in ShowHelp before the deferred nested run is
+    // queued, cleared when RunHelpDialog's nested loop returns. Without it the native path — which
+    // pushes nothing to _screens, so ActiveScreen stays null — could queue two RunHelpDialog invokes
+    // from two F1 presses buffered before the first idle-invoke ran, stacking two nested run-loops.
+    private static bool _open;
+
+    /// <summary>
+    /// Claims the single native-modal slot, returning false if one is already open or opening. Called
+    /// synchronously on the UI thread from <c>ShowHelp</c> before the nested run is deferred.
+    /// </summary>
+    public static bool TryBeginOpen()
+    {
+        if (_open)
+            return false;
+        _open = true;
+        return true;
+    }
+
+    /// <summary>
     /// Opens the keyboard-shortcut help as a native <see cref="Dialog"/> run on its own nested
-    /// run-loop; Esc or Enter closes it. Renders <see cref="HelpScreen.ShortcutsText"/> — the same
-    /// payload the <c>_screens</c> <see cref="HelpScreen"/> shows — so the A/B differs only in the
-    /// hosting mechanism. The dialog dispose is routed through the shared teardown guard so the
-    /// prototype exercises the same Terminal.Gui 2.4.10 dispose mitigation (#346) a real migration of
-    /// the #402 transient-modal category would need.
+    /// run-loop; Esc or Enter closes it. Renders <see cref="HelpScreen.ShortcutsText"/> — the same body
+    /// the <c>_screens</c> <see cref="HelpScreen"/> shows (the title carries <see cref="TitleMarker"/>)
+    /// — so the A/B differs only in the hosting mechanism. The dialog dispose is routed through the
+    /// shared teardown guard so the prototype exercises the same Terminal.Gui 2.4.10 dispose mitigation
+    /// (#346) a real migration of the #402 transient-modal category would need. Must be paired with a
+    /// preceding successful <see cref="TryBeginOpen"/>.
     /// </summary>
     public static void RunHelpDialog()
     {
         var dialog = new Dialog
         {
-            Title = "Keyboard shortcuts",
+            Title = $"Keyboard shortcuts {TitleMarker}",
             Width = Dim.Fill(4),
             Height = Dim.Fill(2),
         };
@@ -72,6 +99,7 @@ internal static class NativeModalSpike
         finally
         {
             TuiTeardown.DisposeSwallowingTeardownBug(dialog, "NativeModalSpike Dialog");
+            _open = false;
         }
     }
 }
