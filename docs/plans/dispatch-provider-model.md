@@ -120,9 +120,13 @@ for delete (no nested modal, #38).
 - Migration, projection and validation are unit-tested; `dotnet test` green, then
   `tui-validate` for the settings surface. ✔
 
-## Scope boundary
+## Scope boundary — what this PR (#546) actually shipped
 
-If the provider-editor screen (Phase 2) proves too large to land cleanly in one
-session, Phase 1 ships alone (the full tested model + migration + projection, with
-the default provider still editable in F2) and the multi-provider **editor UI** is
-deferred to a filed follow-up issue, noted in the PR.
+Phase 1 ships as the deliverable: the full tested model + migration + projection +
+validation, with the default provider still editable in F2 and multiple providers
+already functional at runtime via `config.json`. The dedicated multi-provider
+**editor UI** (Phase 2 above) is **deferred to follow-up #547** — it is a net-new
+interactive Terminal.Gui screen that needs the `tui-validate` PTY harness to verify,
+which is best done where it can be exercised interactively rather than in an
+unattended run. No launch behaviour or acceptance regression: config-driven
+multi-provider works today; #547 adds the F2 management surface over the same model.
