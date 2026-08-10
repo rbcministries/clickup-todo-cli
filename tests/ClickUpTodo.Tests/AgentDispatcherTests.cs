@@ -370,8 +370,8 @@ public sealed class AgentDispatcherTests : IDisposable
         const string template = "CUSTOM LEAD: {userPrompt}\n---\n{contextJson}";
         var settings = new AgentDispatchSettings
         {
-            ClaudeExecutable = "claude-dev",
-            ExtraArgs = ["--model", "opus"],
+            Providers = [new DispatchProvider { Name = "Dev", Executable = "claude-dev", ExtraArgs = ["--model", "opus"] }],
+            DefaultProviderName = "Dev",
             PreferredTerminal = PreferredTerminal.Pwsh,
             WorkingDirectory = AgentWorkingDirectory.Fixed,
             FixedWorkingDirectory = "/projects/foo",

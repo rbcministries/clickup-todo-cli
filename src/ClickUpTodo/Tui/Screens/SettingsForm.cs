@@ -1,4 +1,5 @@
 using System.Globalization;
+using ClickUpTodo.Configuration;
 
 namespace ClickUpTodo.Tui.Screens;
 
@@ -51,6 +52,37 @@ public static class SettingsForm
     /// <summary>Renders an extra-args list back to the space-joined text shown in the field.</summary>
     public static string FormatExtraArgs(IEnumerable<string> args)
         => string.Join(" ", args.Where(a => !string.IsNullOrWhiteSpace(a)));
+
+    /// <summary>
+    /// Folds an F2 edit of the default provider's executable + extra args (#497) back into a provider
+    /// list, preserving every other configured provider unchanged so an F2 Save never drops the
+    /// additional providers the multi-provider editor (Phase 2) manages. The edited provider is the one
+    /// resolved as default — matched on <paramref name="defaultProviderName"/>, else the first, else a
+    /// freshly seeded <see cref="AgentDispatchSettings.DefaultProviderDisplayName"/> provider when the
+    /// list is empty (mirroring <see cref="AgentDispatchSettings.ResolveDefaultProvider"/>). A blank
+    /// executable coalesces to <see cref="AgentDispatchSettings.DefaultExecutable"/>, matching the
+    /// pre-#497 Save. Pure so it can be unit-tested; the returned providers are deep copies, isolated
+    /// from the input list.
+    /// </summary>
+    public static (List<DispatchProvider> Providers, string DefaultProviderName) ApplyDefaultProviderEdit(
+        IReadOnlyList<DispatchProvider> existing, string defaultProviderName, string? executableText, List<string> extraArgs)
+    {
+        var exe = string.IsNullOrWhiteSpace(executableText) ? AgentDispatchSettings.DefaultExecutable : executableText.Trim();
+        var providers = existing
+            .Select(p => new DispatchProvider { Name = p.Name, Executable = p.Executable, ExtraArgs = [.. p.ExtraArgs], Kind = p.Kind })
+            .ToList();
+
+        if (providers.Count == 0)
+        {
+            providers.Add(new DispatchProvider { Name = AgentDispatchSettings.DefaultProviderDisplayName, Executable = exe, ExtraArgs = extraArgs });
+            return (providers, AgentDispatchSettings.DefaultProviderDisplayName);
+        }
+
+        var target = providers.FirstOrDefault(p => string.Equals(p.Name, defaultProviderName, StringComparison.Ordinal)) ?? providers[0];
+        target.Executable = exe;
+        target.ExtraArgs = extraArgs;
+        return (providers, defaultProviderName);
+    }
 
     // ── base working directory (#92) ────────────────────────────────────────────
 

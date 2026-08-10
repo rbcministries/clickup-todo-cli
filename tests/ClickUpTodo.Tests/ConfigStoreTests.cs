@@ -72,8 +72,8 @@ public sealed class ConfigStoreTests : IDisposable
                 PreferredTerminal = PreferredTerminal.Pwsh,
                 CustomTerminalCommand = "ghostty -e {}",
                 LaunchLocation = LaunchLocation.NewTab,
-                ClaudeExecutable = "/opt/claude",
-                ExtraArgs = ["--model", "opus"],
+                Providers = [new DispatchProvider { Name = "Claude", Executable = "/opt/claude", ExtraArgs = ["--model", "opus"] }],
+                DefaultProviderName = "Claude",
                 WorkingDirectory = AgentWorkingDirectory.Fixed,
                 FixedWorkingDirectory = "/work",
                 DefaultSessionMode = AgentSessionMode.OneOff,
@@ -89,8 +89,10 @@ public sealed class ConfigStoreTests : IDisposable
         Assert.Equal(PreferredTerminal.Pwsh, d.PreferredTerminal);
         Assert.Equal("ghostty -e {}", d.CustomTerminalCommand);
         Assert.Equal(LaunchLocation.NewTab, d.LaunchLocation);
-        Assert.Equal("/opt/claude", d.ClaudeExecutable);
-        Assert.Equal(["--model", "opus"], d.ExtraArgs);
+        Assert.Equal("Claude", d.DefaultProviderName);
+        var provider = d.ResolveDefaultProvider();
+        Assert.Equal("/opt/claude", provider.Executable);
+        Assert.Equal(["--model", "opus"], provider.ExtraArgs);
         Assert.Equal(AgentWorkingDirectory.Fixed, d.WorkingDirectory);
         Assert.Equal("/work", d.FixedWorkingDirectory);
         Assert.Equal(AgentSessionMode.OneOff, d.DefaultSessionMode);

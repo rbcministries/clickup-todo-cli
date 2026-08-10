@@ -470,6 +470,113 @@ public sealed class ConfigMigrationsTests : IDisposable
         Assert.Equal(["won't do", "cancelled"], StatusIsNotRules(loaded.View).Select(r => r.Value));
     }
 
+    // ── v6 (#497): claudeExecutable/extraArgs → a single DispatchProvider ────────────
+
+    [Fact]
+    public void Apply_ProviderMigration_FoldsLegacyExeArgsIntoSingleProvider_ByteIdenticalLaunch()
+    {
+        var config = new AppConfig
+        {
+            SchemaVersion = 5,
+            AgentDispatch = new AgentDispatchSettings
+            {
+                LegacyClaudeExecutable = "/opt/claude",
+                LegacyExtraArgs = ["--model", "opus"],
+            },
+        };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(ConfigMigrations.CurrentVersion, config.SchemaVersion);
+        var provider = Assert.Single(config.AgentDispatch.Providers);
+        Assert.Equal(AgentDispatchSettings.DefaultProviderDisplayName, provider.Name);
+        Assert.Equal("/opt/claude", provider.Executable);
+        Assert.Equal(["--model", "opus"], provider.ExtraArgs);
+        Assert.Equal(DispatchProviderKind.LocalCli, provider.Kind);
+        Assert.Equal(AgentDispatchSettings.DefaultProviderDisplayName, config.AgentDispatch.DefaultProviderName);
+        // The shims are consumed and nulled so they stop being persisted.
+        Assert.Null(config.AgentDispatch.LegacyClaudeExecutable);
+        Assert.Null(config.AgentDispatch.LegacyExtraArgs);
+        // The launch is byte-identical to the pre-#497 exe/args pair.
+        var opts = config.AgentDispatch.ToLauncherOptions();
+        Assert.Equal("/opt/claude", opts.ClaudeExecutable);
+        Assert.Equal(["--model", "opus"], opts.ExtraArgs);
+    }
+
+    [Fact]
+    public void Apply_ProviderMigration_FreshConfig_SeedsClaudeDefault_AndStaysDefault()
+    {
+        var config = new AppConfig(); // SchemaVersion 0, no legacy keys
+
+        ConfigMigrations.Apply(config);
+
+        var provider = Assert.Single(config.AgentDispatch.Providers);
+        Assert.Equal(AgentDispatchSettings.DefaultProviderDisplayName, provider.Name);
+        Assert.Equal("claude", provider.Executable);
+        Assert.Empty(provider.ExtraArgs);
+        Assert.Equal(AgentDispatchSettings.DefaultProviderDisplayName, config.AgentDispatch.DefaultProviderName);
+        Assert.True(config.AgentDispatch.IsDefault); // seeding the default provider keeps zero-config true
+        Assert.Equal("claude", config.AgentDispatch.ToLauncherOptions().ClaudeExecutable);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Apply_ProviderMigration_BlankLegacyExecutable_CoalescesToClaude(string? exe)
+    {
+        var config = new AppConfig { SchemaVersion = 5, AgentDispatch = new AgentDispatchSettings { LegacyClaudeExecutable = exe } };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal("claude", Assert.Single(config.AgentDispatch.Providers).Executable);
+    }
+
+    [Fact]
+    public void Apply_ProviderMigration_ExistingProviders_NotReseeded_AndStrayLegacyKeyDropped()
+    {
+        // An already-v6 config with a custom provider list and a stray hand-added claudeExecutable:
+        // migration is version-gated so it leaves the providers alone, but the stray shim is nulled.
+        var config = new AppConfig
+        {
+            SchemaVersion = ConfigMigrations.CurrentVersion,
+            AgentDispatch = new AgentDispatchSettings
+            {
+                Providers = [new DispatchProvider { Name = "Custom", Executable = "my-agent" }],
+                DefaultProviderName = "Custom",
+                LegacyClaudeExecutable = "stray",
+            },
+        };
+
+        ConfigMigrations.Apply(config);
+
+        var provider = Assert.Single(config.AgentDispatch.Providers);
+        Assert.Equal("my-agent", provider.Executable); // untouched
+        Assert.Null(config.AgentDispatch.LegacyClaudeExecutable); // stray key dropped
+    }
+
+    [Fact]
+    public void Load_LegacyConfigWithClaudeExecutable_MigratesOnDisk_AndDropsTheKeys()
+    {
+        var store = new ConfigStore(_dir);
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(store.ConfigPath,
+            """{ "schemaVersion": 5, "workspaceId": "1", "personalTasksListId": "2", "agentDispatch": { "claudeExecutable": "/opt/claude", "extraArgs": ["--model", "opus"] } }""");
+
+        var loaded = store.Load();
+
+        Assert.Equal(ConfigMigrations.CurrentVersion, loaded.SchemaVersion);
+        var provider = Assert.Single(loaded.AgentDispatch.Providers);
+        Assert.Equal("/opt/claude", provider.Executable);
+        Assert.Equal(["--model", "opus"], provider.ExtraArgs);
+        Assert.Equal("/opt/claude", loaded.AgentDispatch.ToLauncherOptions().ClaudeExecutable);
+
+        store.Save(loaded);
+        var json = File.ReadAllText(store.ConfigPath);
+        Assert.DoesNotContain("claudeExecutable", json);
+        Assert.Contains("\"/opt/claude\"", json); // now lives under providers[].executable
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_dir))
