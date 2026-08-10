@@ -8,10 +8,10 @@ using System;
 namespace ClickUpTodo.ClickUp.Generated.Models
 {
     /// <summary>
-    /// Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457) and the rename write (E, #458). Both fields are optional so a caller sends only what it changes: &apos;resolved&apos; toggles the tick, &apos;name&apos; renames the item. Assignee/reparent land with F–G.
+    /// Body for POST /checklist/{checklist_id}/checklist_item — create a checklist item (E, #458). &apos;name&apos; is required; per-item assignee lands with G (#460).
     /// </summary>
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
-    public partial class UpdateChecklistItemRequest : IAdditionalDataHolder, IParsable
+    public partial class CreateChecklistItemRequest : IAdditionalDataHolder, IParsable
     {
         /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
         public IDictionary<string, object> AdditionalData { get; set; }
@@ -23,24 +23,22 @@ namespace ClickUpTodo.ClickUp.Generated.Models
 #else
         public string Name { get; set; }
 #endif
-        /// <summary>The resolved property</summary>
-        public bool? Resolved { get; set; }
         /// <summary>
-        /// Instantiates a new <see cref="global::ClickUpTodo.ClickUp.Generated.Models.UpdateChecklistItemRequest"/> and sets the default values.
+        /// Instantiates a new <see cref="global::ClickUpTodo.ClickUp.Generated.Models.CreateChecklistItemRequest"/> and sets the default values.
         /// </summary>
-        public UpdateChecklistItemRequest()
+        public CreateChecklistItemRequest()
         {
             AdditionalData = new Dictionary<string, object>();
         }
         /// <summary>
         /// Creates a new instance of the appropriate class based on discriminator value
         /// </summary>
-        /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.UpdateChecklistItemRequest"/></returns>
+        /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.CreateChecklistItemRequest"/></returns>
         /// <param name="parseNode">The parse node to use to read the discriminator value and create the object</param>
-        public static global::ClickUpTodo.ClickUp.Generated.Models.UpdateChecklistItemRequest CreateFromDiscriminatorValue(IParseNode parseNode)
+        public static global::ClickUpTodo.ClickUp.Generated.Models.CreateChecklistItemRequest CreateFromDiscriminatorValue(IParseNode parseNode)
         {
             if(ReferenceEquals(parseNode, null)) throw new ArgumentNullException(nameof(parseNode));
-            return new global::ClickUpTodo.ClickUp.Generated.Models.UpdateChecklistItemRequest();
+            return new global::ClickUpTodo.ClickUp.Generated.Models.CreateChecklistItemRequest();
         }
         /// <summary>
         /// The deserialization information for the current model
@@ -51,7 +49,6 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             return new Dictionary<string, Action<IParseNode>>
             {
                 { "name", n => { Name = n.GetStringValue(); } },
-                { "resolved", n => { Resolved = n.GetBoolValue(); } },
             };
         }
         /// <summary>
@@ -62,7 +59,6 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
             writer.WriteStringValue("name", Name);
-            writer.WriteBoolValue("resolved", Resolved);
             writer.WriteAdditionalData(AdditionalData);
         }
     }
