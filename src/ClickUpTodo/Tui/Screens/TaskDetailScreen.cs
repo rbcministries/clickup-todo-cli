@@ -620,6 +620,9 @@ public sealed class TaskDetailScreen : Screen
         // safe to re-run, so the extra fire during CycleTab's own Value set is harmless.
         _tabs.ValueChanged += (_, _) =>
         {
+            // Leaving (or re-entering) a tab cancels a pending checklist-item delete confirm (E, #458) so it
+            // can't linger, invisibly armed, and fire an unprompted delete on a later Enter.
+            _checklistDeletePending = null;
             FocusCurrentPane();
             EnsureTreeLoaded();
         };
@@ -2355,6 +2358,7 @@ public sealed class TaskDetailScreen : Screen
         var desired = !row.Resolved;
         var previous = row.Resolved;
 
+        _checklistDeletePending = null; // a toggle cancels any armed delete confirm (E, #458)
         _togglingChecklistItem = true;
         _pendingChecklistToggle = (checklistId, itemId, desired);
         // Optimistic: flip the item in the working task and re-render — the [ ]/[x] glyph, the group's
@@ -2530,6 +2534,7 @@ public sealed class TaskDetailScreen : Screen
     {
         if (_checklistItemBox.Visible)
             return;
+        _checklistDeletePending = null; // opening the name overlay cancels any armed delete confirm (E, #458)
         _checklistItemEditKind = kind;
         _checklistItemTargetChecklistId = checklistId;
         _checklistItemTargetItemId = itemId;

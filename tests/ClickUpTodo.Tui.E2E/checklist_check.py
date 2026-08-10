@@ -333,8 +333,41 @@ def run_add_cancel():
         s.kill()
 
 
+def run_delete_confirm_cleared_by_overlay():
+    """E (#458) regression: arming the delete confirm (F9) then opening the add overlay (F7) must cancel
+    the armed delete, so a later Enter can't silently delete the once-targeted item."""
+    s = Session({"E2E_CHECKLISTS": "1"})
+    try:
+        s.pump(8.0)
+        assert "Task 0" in s.visible(), "list boot failed:\n" + s.visible()
+        s.open_checklists_tab()
+        # Select an item row: from the top header, one DOWN lands on "[x] Cut the tag".
+        for _ in range(8):
+            s.send(UP)
+            s.pump(0.1)
+        s.send(DOWN)
+        s.pump(0.3)
+
+        s.send(F9)                # arm the delete confirm for the selected item
+        s.pump(0.6)
+        assert "Delete" in s.visible(), "F9 did not arm the delete confirm:\n" + s.visible()
+        s.send(F7)                # open the add overlay — this must cancel the armed delete
+        s.pump(0.6)
+        s.send(b"\x1b")           # Esc: cancel the add overlay (creates nothing)
+        s.pump(0.6)
+        s.send(ENTER)             # a now-stray Enter must NOT delete anything
+        s.pump(1.0)
+        v = s.visible()
+        assert "[x] Cut the tag" in v, "opening the add overlay left a delete armed — Enter deleted an item:\n" + v
+        assert "Checklists (2/5)" in v, "an item was unexpectedly deleted (aggregate changed):\n" + v
+        print("ok — delete-confirm cleared: F9 then F7 cancels the armed delete; a later Enter is inert")
+    finally:
+        s.kill()
+
+
 run_populated()
 run_empty()
 run_toggle()
 run_crud()
 run_add_cancel()
+run_delete_confirm_cleared_by_overlay()

@@ -56,11 +56,11 @@ public static class ChecklistItemEdits
         return trimmed.Length == 0 ? null : trimmed;
     }
 
-    /// <summary>The id present in <paramref name="after"/> but not <paramref name="before"/> — the item a
-    /// create added — so the screen can land the selection on the freshly-created row once the server
-    /// checklist replaces the provisional one. Returns <c>null</c> when the sets don't differ by exactly
-    /// the expected single addition (e.g. a concurrent change), so the caller falls back to identity
-    /// anchoring rather than guessing.</summary>
+    /// <summary>The single id present in <paramref name="after"/> but not <paramref name="before"/> — the
+    /// item a create added — so the screen can land the selection on the freshly-created row once the server
+    /// checklist replaces the provisional one. Returns <c>null</c> when there is no such id, or more than
+    /// one (an ambiguous/concurrent addition), so the caller falls back to identity anchoring rather than
+    /// guessing. A concurrent removal alongside the single addition does not affect the result.</summary>
     public static string? NewItemId(TaskChecklist? before, TaskChecklist? after)
     {
         if (after is null)
