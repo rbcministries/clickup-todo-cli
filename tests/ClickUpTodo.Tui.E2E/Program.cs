@@ -150,6 +150,18 @@ if (!string.IsNullOrWhiteSpace(singleTaskId))
     return;
 }
 
+// Standalone feed host (#509): E2E_FEED=1 boots FeedApp straight into the mentions & comments feed — the
+// harness equivalent of `clickup-todo --feed` — instead of the dashboard. Seeded empty (as a cold launch
+// is), so the check exercises FeedApp's on-show live-load path just like the real host; the recording tab
+// launcher (E2E_TAB_LOG) is passed so an Enter-to-open-a-task-tab leg is observable if a check drives it.
+if (Environment.GetEnvironmentVariable("E2E_FEED") == "1")
+{
+    new FeedApp(feed, feedCache, config, configStore, FeedResult.Empty,
+        changeMarkers: changeMarkers, tabLauncher: tabLauncher).Run("ansi");
+    markerStateStore?.Dispose();
+    return;
+}
+
 new TodoApp(tasks, feed, config, configStore, focus, taskCache, feedCache, assignees, lists, browser,
     changeMarkers, tabLauncher).Run("ansi");
 markerStateStore?.Dispose();
