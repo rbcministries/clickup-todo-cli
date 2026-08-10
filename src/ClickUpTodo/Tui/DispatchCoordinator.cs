@@ -37,11 +37,12 @@ public static class DispatchCoordinator
     /// <see cref="DispatchWorkingDirectoryPreFill.AutoDerivedDefault"/> baseline (the host supplies that
     /// baseline to <see cref="ReconcileCache"/>). Pure data — no I/O, no UI.
     /// <para>
-    /// <see cref="CreateWorkingDir"/> is the directory-creation flag (#533): true when
-    /// <see cref="WorkingDir"/> lies inside the base working-directory tree (inclusive), so the app
+    /// <see cref="CreateWorkingDir"/> is the directory-creation flag (#533): true when, in task-derived
+    /// mode, <see cref="WorkingDir"/> lies inside the base working-directory tree (inclusive), so the app
     /// creates it before launch — covering the base dir, the <c>{custom-id}</c> subdir, a matched
-    /// checkout, and any browsed-to subdir, while never creating a Home/Fixed dir outside the tree nor an
-    /// out-of-tree typo. <see cref="WindowsTerminalProfile"/> is the Windows Terminal profile (#462)
+    /// checkout, and any browsed-to subdir. A Home/Fixed dir is never created (even one configured inside
+    /// the tree), and an out-of-tree task-derived pick isn't either. <see cref="WindowsTerminalProfile"/>
+    /// is the Windows Terminal profile (#462)
     /// whose <c>startingDirectory</c> matched <see cref="WorkingDir"/> when the "Try to use WT profiles"
     /// toggle is on — non-null only for an interactive launch that matched; surfaced via
     /// <see cref="WindowsTerminalProfileNote"/>.
@@ -99,11 +100,15 @@ public static class DispatchCoordinator
         var workingDir = settings.ResolveEffectiveWorkingDirectory(chosenDir, taskDerivedDirectory: baseDir, homeDirectory: home);
         var template = settings.PromptTemplate;
 
-        // Create the resolved working dir when it lies inside the base working-directory tree (inclusive):
-        // the base dir itself, the {custom-id} subdir, a matched checkout, or a browsed-to subdir — but
-        // never a Home/Fixed dir outside the tree, nor a typo outside the tree we own. Pure path
-        // containment; no filesystem probe.
-        var createWorkingDir = !string.IsNullOrWhiteSpace(workingDir) && IsWithinBaseTree(baseDir, workingDir!);
+        // Create the resolved working dir on first use when it lies inside the base working-directory tree
+        // (inclusive) in task-derived mode: the base dir itself, the {custom-id} subdir, a matched checkout,
+        // or a browsed-to subdir. Home/Fixed dirs are the user's own and are never created (decision 4,
+        // unchanged from pre-#533) — even one configured inside the base tree — so the gate keeps the mode
+        // check the old UseTaskDerived gate had, alongside the pure containment check that replaced its
+        // now-defunct no-pick condition (the pre-filled field always submits as a pick). No filesystem probe.
+        var createWorkingDir = settings.WorkingDirectory == AgentWorkingDirectory.TaskDerived
+            && !string.IsNullOrWhiteSpace(workingDir)
+            && IsWithinBaseTree(baseDir, workingDir!);
 
         // Windows Terminal profile match (#462): only when the toggle is on and this is an interactive
         // launch (a one-off has no terminal) with a resolved directory. The settings.json read happens

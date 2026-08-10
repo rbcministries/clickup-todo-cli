@@ -119,6 +119,25 @@ public sealed class DispatchCoordinatorTests
     }
 
     [Fact]
+    public void Plan_FixedMode_DirInsideBaseTree_IsStillNotCreated()
+    {
+        // Decision 4: Home/Fixed are entirely unaffected — never created — even a Fixed dir configured
+        // inside the base tree (which the pure containment check alone would otherwise create). The mode
+        // gate preserves the pre-#533 "the user's own dir isn't created here" behaviour.
+        var settings = new AgentDispatchSettings
+        {
+            WorkingDirectory = AgentWorkingDirectory.Fixed,
+            FixedWorkingDirectory = Path.Combine(BaseDir, "scratch"),
+        };
+        var request = new DispatchRequest("go");
+
+        var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home);
+
+        Assert.Equal(Path.Combine(BaseDir, "scratch"), plan.WorkingDir);
+        Assert.False(plan.CreateWorkingDir);
+    }
+
+    [Fact]
     public void Plan_CarriesSessionModePostToCommentsAndLaunchLocation()
     {
         var settings = new AgentDispatchSettings();
