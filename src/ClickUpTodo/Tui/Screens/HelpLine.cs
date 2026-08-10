@@ -177,7 +177,7 @@ public static class HelpItemSets
         new("Ctrl+P", "📌"),
         new("Ctrl+E", "🔔"),
         new("F1", "ℹ"),
-        new("F2", "⚙"),
+        new("F10", "⚙"),
         new("F3", "⧩ ▼▲ ⛚"),
         new("F4", "subtasks"),
         new("F5", "↻"),

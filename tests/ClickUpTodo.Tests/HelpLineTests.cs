@@ -30,7 +30,7 @@ public sealed class HelpLineTests
     {
         const string expected =
             "↑/↓ move · →| next section · Ctrl+U quick update · ↩ detail · Ctrl+O 🗁 by ID · Ctrl+↩ new tab · Ctrl+N ➕ · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E 🔔 · "
-            + "F1 ℹ · F2 ⚙ · F3 ⧩ ▼▲ ⛚ · F4 subtasks · F5 ↻ · F6 badges · F12 👁✅ · "
+            + "F1 ℹ · F10 ⚙ · F3 ⧩ ▼▲ ⛚ · F4 subtasks · F5 ↻ · F6 badges · F12 👁✅ · "
             + "→/← expand/collapse · Ctrl+→/← all · Ctrl+Q quit · type to search";
 
         Assert.Equal(expected, HelpLine.Format(HelpItemSets.MainList));
