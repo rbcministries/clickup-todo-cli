@@ -111,7 +111,10 @@ public sealed class DetailPaneView : TextView
     }
 
     /// <summary>Classifies a loaded <paramref name="cell"/> by the tag <see cref="BuildCells"/> applied —
-    /// the single mapping both the draw override and the unit tests read, so they can't drift.</summary>
+    /// the mapping <see cref="EnsureFocusedLinkVisible"/> (scroll-into-view) and the unit tests read. The draw
+    /// override (<see cref="OnDrawReadOnlyColor"/>) no longer reads it: since #527 it takes the separator from
+    /// a raw <see cref="Color.None"/> background test and the link/focus cues from <see cref="LinkStyleAt"/>
+    /// (the source-map classification), so they stay offset-correct on a wrapped continuation row.</summary>
     public static DetailCellStyle ClassifyCell(Cell cell)
     {
         if (cell.Attribute is not { } a)
@@ -304,6 +307,10 @@ public sealed class DetailPaneView : TextView
             ? _paneLinks[_focusedLinkIndex]
             : (PaneLink?)null;
         MoveHome();
+        // A focus change re-wraps into fresh row lists, so the reference-keyed source map (#443/#527) is
+        // stale — drop it explicitly (as SetBody does) rather than relying on the draw path noticing new row
+        // references, so the invalidation is intentional and the focus cue reads the new _focusedLinkIndex.
+        _rowSourceMap = null;
         Load(BuildCells(_body, _separator, focused));
         InheritsPreviousAttribute = false;
         // TextView.Load leaves the model unwrapped until a draw pass re-wraps it; force that pass now so the

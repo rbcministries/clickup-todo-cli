@@ -47,8 +47,11 @@ is a **draw-time styling change only**, as the issue requires.
 
 The non-reconciling fallback (`ClassifyRow`, per-row re-extraction) stays focus-unaware: a
 row that fails to reconcile shows kind styling with no focus cue rather than a wrong-column
-one. Reconciliation succeeds for every real body, so this is a strictly-no-worse defensive
-path.
+one. For the link *kind* this is strictly no-worse; for the *focus* cue it is a narrow
+theoretical regression (pre-#527 an unwrapped focused link got its cue from the index-0
+aligned tag without needing reconciliation, so a reconciliation miss on that same single row
+would now drop the cue). Reconciliation succeeds for every real body — both #443's underline
+and the passing E2E depend on it — so this defensive path is not hit in practice.
 
 ## Acceptance criteria (from the issue)
 
@@ -70,5 +73,7 @@ path.
 1. **Core + unit tests** — `ClassifyRowFromSource(focusedSpan)`, `FocusedSpanOnLine`, draw
    rewire; unit tests against real headless-pane wrap output. Build/test/format green.
    Commit/push → open draft PR.
-2. **E2E + ready** — extend `link_tab_check.py` (a wrapped focused link at narrow `COLS`
-   shows the cue on its continuation row) + `SKILL.md` note. `gh pr ready`.
+2. **E2E + ready** — extend `link_wrap_check.py` (it already owns the `E2E_WRAP_SPLIT`
+   split-URL seed and the #443 machinery, so the focus leg reuses the same wrapped `ENDURL`
+   tail): `Tab`-focus the split URL and assert the `Focus` cue lands on its continuation-row
+   cells at narrow `COLS`, verified to fail on pre-#527 code. + `SKILL.md` note. `gh pr ready`.
