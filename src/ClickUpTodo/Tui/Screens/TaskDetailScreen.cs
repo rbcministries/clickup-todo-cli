@@ -291,6 +291,51 @@ public sealed class TaskDetailScreen : Screen
     // server value nor double-apply the toggle; cleared when the write settles.
     private (string ChecklistId, string ItemId, bool Resolved)? _pendingChecklistToggle;
 
+    // ── Checklist item CRUD (E, #458) ───────────────────────────────────────────
+    // The three item writes, owned by the host (the screen never reaches for the client); null ⇒ inert.
+    // Create/rename return the server-confirmed parent checklist so the optimistic tree is reconciled
+    // (create especially, to swap the provisional id for the real one); delete returns void (empty body).
+    private readonly Func<string, string, CancellationToken, Task<TaskChecklist>>? _createChecklistItemAsync;
+    private readonly Func<string, string, string, CancellationToken, Task<TaskChecklist>>? _renameChecklistItemAsync;
+    private readonly Func<string, string, CancellationToken, Task>? _deleteChecklistItemAsync;
+    // Guards against a second CRUD write (add/rename/delete) while one is in flight — the toggle discipline,
+    // shared across the three so a key-mash can't stack writes.
+    private bool _checklistWriteInFlight;
+    // While a CRUD write is optimistically applied, this transform re-applies it onto any refresh landing
+    // mid-write (the _pendingChecklistToggle discipline, generalized to add/rename/delete): the provisional
+    // insert, the new name, or the removal stays authoritative until the write settles and clears it.
+    private Func<IReadOnlyList<TaskChecklist>, IReadOnlyList<TaskChecklist>>? _pendingChecklistEdit;
+
+    // The item add/rename input overlay: a bottom-anchored single-line name field + Save/Cancel (with a
+    // hidden discard-confirm row for an edited rename), hidden until F7/F8. A transient child view within
+    // the one open screen (like the comment composer / description editor), so the single-ListView model
+    // (#3) is untouched.
+    private readonly FrameView _checklistItemBox;
+    private readonly TextField _checklistItemEditor;
+    private readonly Label _checklistItemConfirm;
+    private readonly View[] _checklistItemControls;
+    // What the open overlay will do on submit, and against which target.
+    private ChecklistItemEditKind _checklistItemEditKind;
+    private string _checklistItemTargetChecklistId = "";
+    private string? _checklistItemTargetItemId; // the item being renamed (null for add)
+    private string _checklistItemOriginalName = ""; // for the rename dirty-check
+    // True between an Esc-on-dirty (rename) and the Y/N answer; the next key confirms discard or dismisses.
+    private bool _checklistItemPendingDiscard;
+    // Armed by F9 (delete): the target item awaiting a Y/N confirm on the Checklists tab. The next key
+    // there answers it (Y deletes; anything else cancels) — the inline armed-key confirm the description
+    // editor / exit prompt use, rather than a nested modal (#404/#402 seam untouched).
+    private (string ChecklistId, string ItemId, string Name)? _checklistDeletePending;
+    // The overlay's ideal height: the single-line field + the confirm row + the Save/Cancel button row +
+    // the top/bottom frame border. Clamped on show so it degrades gracefully on a short terminal.
+    private const int ChecklistItemEditorPreferredHeight = 1 + 1 + 1 + 2;
+
+    /// <summary>Whether the item overlay is adding a new item or renaming the selected one (E, #458).</summary>
+    private enum ChecklistItemEditKind
+    {
+        Add,
+        Rename,
+    }
+
     /// <summary>Raised when the user activates a tree row (Enter or double-click) for a task other than
     /// the one being shown (#291). The host opens that task's detail stacked over this one, so Esc walks
     /// back one task at a time — the canonical "Esc = Back" model (#401/#298), uniform with the Ctrl+O
@@ -437,7 +482,10 @@ public sealed class TaskDetailScreen : Screen
         Func<IReadOnlyList<CommentRun>, CancellationToken, Task<CommentItem>>? postStructuredCommentAsync = null,
         Func<string, ISet<long>, IReadOnlyList<WorkspaceMember>>? memberMatch = null,
         Func<int, ISet<long>, IReadOnlyList<WorkspaceMember>>? memberTopFrequent = null,
-        Func<string, string, bool, CancellationToken, Task>? setChecklistResolvedAsync = null)
+        Func<string, string, bool, CancellationToken, Task>? setChecklistResolvedAsync = null,
+        Func<string, string, CancellationToken, Task<TaskChecklist>>? createChecklistItemAsync = null,
+        Func<string, string, string, CancellationToken, Task<TaskChecklist>>? renameChecklistItemAsync = null,
+        Func<string, string, CancellationToken, Task>? deleteChecklistItemAsync = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
@@ -453,6 +501,9 @@ public sealed class TaskDetailScreen : Screen
         _memberMatch = memberMatch;
         _memberTopFrequent = memberTopFrequent;
         _setChecklistResolvedAsync = setChecklistResolvedAsync;
+        _createChecklistItemAsync = createChecklistItemAsync;
+        _renameChecklistItemAsync = renameChecklistItemAsync;
+        _deleteChecklistItemAsync = deleteChecklistItemAsync;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
@@ -768,13 +819,39 @@ public sealed class TaskDetailScreen : Screen
         foreach (var control in _descriptionControls)
             control.KeyDown += OnDescriptionKey;
 
+        // The checklist-item add/rename overlay (E, #458): a bottom-anchored FrameView with a single-line
+        // name field above a Save/Cancel button row (and a hidden discard-confirm row for an edited rename),
+        // shown on F7 (add) / F8 (rename). Modelled on the description editor — Save is the default (Enter
+        // submits) and Esc cancels (arming the discard confirm when a rename has unsaved edits). A single
+        // line, so unlike the multi-line editors the field takes Enter as submit, not a newline. Sized on
+        // show (ShowChecklistItemEditor).
+        _checklistItemEditor = new TextField { X = 1, Y = 0, Width = Dim.Fill(1) };
+        _checklistItemConfirm = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = "" };
+        var checklistSaveButton = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
+        var checklistCancelButton = new Button { X = Pos.Right(checklistSaveButton) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
+        checklistSaveButton.Accepting += (_, _) => SubmitChecklistItemEditor();
+        checklistCancelButton.Accepting += (_, _) => CancelChecklistItemEditor();
+        _checklistItemControls = [_checklistItemEditor, checklistSaveButton, checklistCancelButton];
+        _checklistItemBox = new FrameView
+        {
+            Title = "New item — Enter save · Esc cancel",
+            X = 0,
+            Y = Pos.AnchorEnd(ChecklistItemEditorPreferredHeight),
+            Width = Dim.Fill(),
+            Height = ChecklistItemEditorPreferredHeight,
+            Visible = false,
+        };
+        _checklistItemBox.Add(_checklistItemEditor, _checklistItemConfirm, checklistSaveButton, checklistCancelButton);
+        foreach (var control in _checklistItemControls)
+            control.KeyDown += OnChecklistItemKey;
+
         // Focus lives in whichever scroll target (TextView) is front-most, so the key handler is wired
         // to each to reliably intercept Tab/Esc/Ctrl+B/Ctrl+A/F1 before the read-only TextView sees them.
         foreach (var target in _scrollTargets)
             target.KeyDown += OnKey;
         KeyDown += OnKey;
 
-        Add([_headerView, _tabs, _promptBox, _commentBox, _replyPickerBox, _descriptionBox]);
+        Add([_headerView, _tabs, _promptBox, _commentBox, _replyPickerBox, _descriptionBox, _checklistItemBox]);
     }
 
     // While the comment composer (Ctrl+N) or description editor (Ctrl+E) overlay is open, the footer
@@ -786,7 +863,7 @@ public sealed class TaskDetailScreen : Screen
     public override IReadOnlyList<HelpItem> HelpItems =>
         HelpItemSets.DetailFooter(
             _commentBox.Visible, _descriptionBox.Visible, _replyPickerBox.Visible, _treeList is not null,
-            _mentionBox?.Visible == true);
+            _mentionBox?.Visible == true, _checklistItemBox.Visible);
 
     public override void OnShown()
     {
@@ -834,6 +911,12 @@ public sealed class TaskDetailScreen : Screen
                 Checklists = ChecklistToggle.SetResolved(
                     task.Checklists, pending.ChecklistId, pending.ItemId, pending.Resolved),
             };
+
+        // Likewise for an in-flight item add/rename/delete (E, #458): re-apply the optimistic transform onto
+        // the refresh so a poll landing mid-write can't drop the provisional row, revert the new name, or
+        // resurrect a just-deleted item. Cleared when the write settles, so the next refresh carries truth.
+        if (_pendingChecklistEdit is { } edit)
+            task = task with { Checklists = edit(task.Checklists) };
 
         _task = task;
         _comments = comments;
@@ -981,8 +1064,32 @@ public sealed class TaskDetailScreen : Screen
         // lets the rest fall through to the editor. Don't let the screen's chords (Ctrl+B close,
         // Ctrl+A/U/N/E openers, Ctrl+←/→ tab-cycle, F5 refresh) fire underneath and disrupt (or discard)
         // the draft.
-        if (_commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible)
+        if (_commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible || _checklistItemBox.Visible)
             return;
+
+        // Answer a pending checklist-item delete confirm (E, #458), armed by F9 on the Checklists tab:
+        // Enter deletes, Esc cancels. (A letter like Y can't be used here — the focused Checklists ListView
+        // consumes letters for its type-ahead before this screen-level handler sees them, unlike the
+        // overlay-hosted description/exit confirms; Enter/Esc do reach here, as the tree tab's Enter does.)
+        // Any other key leaves the confirm armed so arrow navigation is undisturbed; the delete targets the
+        // named item by id regardless of where the cursor then sits.
+        if (_checklistDeletePending is { } del && ReferenceEquals(_tabs.Value, _checklistList))
+        {
+            if (key.KeyCode == KeyCode.Enter)
+            {
+                key.Handled = true;
+                _checklistDeletePending = null;
+                PerformChecklistItemDelete(del.ChecklistId, del.ItemId);
+                return;
+            }
+            if (key.KeyCode == KeyCode.Esc)
+            {
+                key.Handled = true;
+                _checklistDeletePending = null;
+                RequestFlash("Delete cancelled.");
+                return;
+            }
+        }
 
         // Enter on the Task Tree tab (#291) navigates the detail screen to the selected row's task
         // (the current-task row no-ops). Guarded on the tree being the front-most tab, so Enter on the
@@ -1013,6 +1120,29 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             ToggleSelectedChecklistItem();
+            return;
+        }
+
+        // Checklist item CRUD (E, #458), guarded to the Checklists tab being front-most (like Space above),
+        // so F7/F8/F9 on the other tabs / text panes stay inert. F7 adds an item, F8 renames the selected
+        // one, F9 deletes it (with an inline confirm). The chords are shown in the Detail footer sets
+        // unconditionally (as Space is), but act only here — the same shape D used for the toggle.
+        if (ReferenceEquals(_tabs.Value, _checklistList)
+            && key.KeyCode is KeyCode.F7 or KeyCode.F8 or KeyCode.F9)
+        {
+            key.Handled = true;
+            switch (key.KeyCode)
+            {
+                case KeyCode.F7:
+                    AddChecklistItem();
+                    break;
+                case KeyCode.F8:
+                    RenameSelectedChecklistItem();
+                    break;
+                case KeyCode.F9:
+                    DeleteSelectedChecklistItem();
+                    break;
+            }
             return;
         }
 
@@ -2267,6 +2397,375 @@ public sealed class TaskDetailScreen : Screen
             }
         });
     }
+
+    // ── Checklist item CRUD (E, #458) ───────────────────────────────────────────
+
+    /// <summary>The selected Checklists-tab row, or null when the selection is off the end or on the
+    /// empty-state row (no projected rows).</summary>
+    private ChecklistRow? SelectedChecklistRow()
+        => _checklistList.SelectedItem is int i && i >= 0 && i < _checklistRows.Count ? _checklistRows[i] : null;
+
+    /// <summary>F7 — add an item to the checklist the selection is in (or whose header is selected). Opens
+    /// the bottom-anchored name overlay; the create fires on submit. Inert-but-flashed when the task has no
+    /// checklist to add to (creating a checklist group is F, #459).</summary>
+    private void AddChecklistItem()
+    {
+        if (_createChecklistItemAsync is null)
+            return;
+        if (_checklistWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (SelectedChecklistRow() is not { } row)
+        {
+            RequestFlash("This task has no checklist to add an item to.");
+            return;
+        }
+        ShowChecklistItemEditor(ChecklistItemEditKind.Add, row.ChecklistId, itemId: null, initialText: "",
+            title: "New item — Enter save · Esc cancel");
+    }
+
+    /// <summary>F8 — rename the selected item. Opens the name overlay pre-filled; the rename fires on
+    /// submit. A header/empty-state row is inert-but-flashed.</summary>
+    private void RenameSelectedChecklistItem()
+    {
+        if (_renameChecklistItemAsync is null)
+            return;
+        if (_checklistWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (SelectedChecklistRow() is not { IsHeader: false, ItemId: { } itemId } row)
+        {
+            RequestFlash("Select a checklist item to rename — headers can't be renamed.");
+            return;
+        }
+        ShowChecklistItemEditor(ChecklistItemEditKind.Rename, row.ChecklistId, itemId, initialText: row.Text,
+            title: "Rename item — Enter save · Esc cancel");
+    }
+
+    /// <summary>F9 — delete the selected item. Arms an inline Y/N confirm on the tab (answered in OnKey)
+    /// rather than deleting on a single keypress, since the API delete is not undoable. A header/empty-state
+    /// row is inert-but-flashed.</summary>
+    private void DeleteSelectedChecklistItem()
+    {
+        if (_deleteChecklistItemAsync is null)
+            return;
+        if (_checklistWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (SelectedChecklistRow() is not { IsHeader: false, ItemId: { } itemId } row)
+        {
+            RequestFlash("Select a checklist item to delete — headers can't be deleted.");
+            return;
+        }
+        _checklistDeletePending = (row.ChecklistId, itemId, row.Text);
+        RequestFlash($"Delete \"{row.Text}\"? (Enter = delete · Esc = cancel)");
+    }
+
+    /// <summary>
+    /// Performs the confirmed delete: optimistic removal (subtree and all) → re-render with the post-delete
+    /// selection → off-thread write → revert-on-failure + flash, mirroring the toggle's discipline. The
+    /// pending edit overlay keeps the removal authoritative against a refresh landing mid-write.
+    /// </summary>
+    private void PerformChecklistItemDelete(string checklistId, string itemId)
+    {
+        if (_deleteChecklistItemAsync is null || _checklistWriteInFlight)
+            return;
+        var idx = _checklistRows.FindIndex(r => !r.IsHeader
+            && string.Equals(r.ChecklistId, checklistId, StringComparison.Ordinal)
+            && string.Equals(r.ItemId, itemId, StringComparison.Ordinal));
+        if (idx < 0)
+        {
+            RequestFlash("That item is no longer here.");
+            return;
+        }
+
+        var oldRows = _checklistRows;
+        var snapshot = _task.Checklists;
+
+        _checklistWriteInFlight = true;
+        _pendingChecklistEdit = cls => ChecklistItemEdits.Remove(cls, checklistId, itemId);
+        UpdateData(_task with { Checklists = ChecklistItemEdits.Remove(_task.Checklists, checklistId, itemId) }, _comments);
+        SelectChecklistRow(ChecklistTabModel.SelectAfterDelete(oldRows, idx, _checklistRows));
+        // Feedback on the optimistic removal (mirrors "Adding item…"); the row is gone from the list now,
+        // the request confirms it in the background.
+        RequestFlash("Deleting item…");
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await _deleteChecklistItemAsync(checklistId, itemId, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null;
+                    // The optimistic removal already matches the confirmed delete (empty body); the next
+                    // refresh reconciles. Nothing to re-render on success.
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null; // cleared first so the overlay doesn't re-remove on revert.
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = snapshot }, _comments); // the item reappears
+                    RequestFlash($"Could not delete item: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>Opens the add/rename name overlay: seeds the field, sizes/anchors the pane (reusing the
+    /// Dispatch pane's clamp), shows it and focuses the field.</summary>
+    private void ShowChecklistItemEditor(ChecklistItemEditKind kind, string checklistId, string? itemId, string initialText, string title)
+    {
+        if (_checklistItemBox.Visible)
+            return;
+        _checklistItemEditKind = kind;
+        _checklistItemTargetChecklistId = checklistId;
+        _checklistItemTargetItemId = itemId;
+        _checklistItemOriginalName = initialText;
+        _checklistItemPendingDiscard = false;
+        _checklistItemConfirm.Text = "";
+        _checklistItemEditor.Text = initialText;
+        _checklistItemBox.Title = title;
+        var height = DispatchPaneModel.ClampHeight(ChecklistItemEditorPreferredHeight, Viewport.Height, minTabRows: 3);
+        _checklistItemBox.Height = height;
+        _checklistItemBox.Y = Pos.AnchorEnd(height);
+        _checklistItemBox.Visible = true;
+        _checklistItemEditor.SetFocus();
+    }
+
+    /// <summary>Closes the name overlay and returns focus to the front-most tab, clearing any pending
+    /// discard confirm.</summary>
+    private void HideChecklistItemEditor()
+    {
+        if (!_checklistItemBox.Visible)
+            return;
+        _checklistItemBox.Visible = false;
+        _checklistItemPendingDiscard = false;
+        _checklistItemConfirm.Text = "";
+        FocusCurrentPane();
+    }
+
+    /// <summary>Esc / Cancel from the name overlay: closes immediately for an add or an unchanged rename;
+    /// for an edited rename it arms the inline discard confirm rather than losing the edit silently.</summary>
+    private void CancelChecklistItemEditor()
+    {
+        var current = _checklistItemEditor.Text?.ToString() ?? "";
+        if (_checklistItemEditKind == ChecklistItemEditKind.Rename
+            && !string.Equals(current, _checklistItemOriginalName, StringComparison.Ordinal))
+        {
+            _checklistItemPendingDiscard = true;
+            _checklistItemConfirm.Text = "Discard the changed item name? (Y / N)";
+            return;
+        }
+        HideChecklistItemEditor();
+    }
+
+    /// <summary>Submit the name overlay: validate (empty/whitespace rejected without a request), then run
+    /// the add or rename optimistically → off-thread write → reconcile with the server checklist (or
+    /// revert + flash on failure). An unchanged rename just closes.</summary>
+    private void SubmitChecklistItemEditor()
+    {
+        var name = ChecklistItemEdits.NormalizeName(_checklistItemEditor.Text?.ToString());
+        if (name is null)
+        {
+            RequestFlash("An item name is required.");
+            return; // keep the overlay open so the user can type one
+        }
+
+        var checklistId = _checklistItemTargetChecklistId;
+        if (_checklistItemEditKind == ChecklistItemEditKind.Rename)
+        {
+            var itemId = _checklistItemTargetItemId!;
+            if (string.Equals(name, _checklistItemOriginalName, StringComparison.Ordinal))
+            {
+                HideChecklistItemEditor(); // unchanged — no needless write
+                return;
+            }
+            HideChecklistItemEditor();
+            RenameChecklistItem(checklistId, itemId, name);
+        }
+        else
+        {
+            HideChecklistItemEditor();
+            CreateChecklistItem(checklistId, name);
+        }
+    }
+
+    /// <summary>Optimistic create: insert a provisional row → off-thread POST → replace the checklist with
+    /// the server-confirmed one (swapping the provisional id for the real item) and select it, or drop the
+    /// provisional row + flash on failure.</summary>
+    private void CreateChecklistItem(string checklistId, string name)
+    {
+        if (_createChecklistItemAsync is null || _checklistWriteInFlight)
+            return;
+        var before = _task.Checklists.FirstOrDefault(c => string.Equals(c.Id, checklistId, StringComparison.Ordinal));
+        var provisional = new TaskChecklistItem(ChecklistItemEdits.ProvisionalItemId, name, Resolved: false);
+
+        _checklistWriteInFlight = true;
+        _pendingChecklistEdit = cls => ChecklistItemEdits.InsertProvisional(cls, checklistId, provisional);
+        UpdateData(_task with { Checklists = ChecklistItemEdits.InsertProvisional(_task.Checklists, checklistId, provisional) }, _comments);
+        SelectChecklistItemById(checklistId, ChecklistItemEdits.ProvisionalItemId);
+        RequestFlash("Adding item…");
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                var server = await _createChecklistItemAsync(checklistId, name, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null; // cleared first so the reconcile isn't re-provisioned.
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = ReplaceChecklist(_task.Checklists, server) }, _comments);
+                    if (ChecklistItemEdits.NewItemId(before, server) is { } newId)
+                        SelectChecklistItemById(checklistId, newId);
+                    RequestFlash("Item added.");
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null;
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = ChecklistItemEdits.Remove(_task.Checklists, checklistId, ChecklistItemEdits.ProvisionalItemId) }, _comments);
+                    RequestFlash($"Could not add item: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>Optimistic rename: set the name locally → off-thread PUT → reconcile with the server
+    /// checklist, or revert to the prior name + flash on failure.</summary>
+    private void RenameChecklistItem(string checklistId, string itemId, string name)
+    {
+        if (_renameChecklistItemAsync is null || _checklistWriteInFlight)
+            return;
+        var snapshot = _task.Checklists;
+
+        _checklistWriteInFlight = true;
+        _pendingChecklistEdit = cls => ChecklistItemEdits.SetName(cls, checklistId, itemId, name);
+        UpdateData(_task with { Checklists = ChecklistItemEdits.SetName(_task.Checklists, checklistId, itemId, name) }, _comments);
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                var server = await _renameChecklistItemAsync(checklistId, itemId, name, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null;
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = ReplaceChecklist(_task.Checklists, server) }, _comments);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null; // cleared first so the revert isn't re-renamed.
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = snapshot }, _comments);
+                    RequestFlash($"Could not rename item: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>Handles keys while the checklist name overlay has focus: a pending discard confirm answers
+    /// first; then Tab cycles the field/buttons, F1 opens Help, Esc cancels, and Enter (field-focused) or
+    /// Ctrl+Enter submits. Everything else falls through so typing works.</summary>
+    private void OnChecklistItemKey(object? sender, Key key)
+    {
+        if (_checklistItemPendingDiscard)
+        {
+            key.Handled = true;
+            _checklistItemPendingDiscard = false;
+            _checklistItemConfirm.Text = "";
+            if ((key.KeyCode & ~KeyCode.ShiftMask) == KeyCode.Y)
+                HideChecklistItemEditor();
+            return;
+        }
+        if (key.KeyCode == KeyCode.Tab)
+        {
+            key.Handled = true;
+            MoveChecklistItemFocus(forward: !key.IsShift);
+            return;
+        }
+        if (key.KeyCode == KeyCode.F1)
+        {
+            key.Handled = true;
+            RequestHelp();
+            return;
+        }
+        if (key.KeyCode == KeyCode.Esc)
+        {
+            key.Handled = true;
+            CancelChecklistItemEditor();
+            return;
+        }
+        // Single-line field: bare Enter (with the field focused) submits, not a newline. Ctrl+Enter submits
+        // from anywhere in the overlay (parity with the composer/description editors); a bare Enter on a
+        // focused button falls through to that button's own Accept (Save submits, Cancel cancels).
+        if ((key.KeyCode == KeyCode.Enter && _checklistItemEditor.HasFocus)
+            || (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.Enter))
+        {
+            key.Handled = true;
+            SubmitChecklistItemEditor();
+        }
+    }
+
+    /// <summary>Moves focus to the next/previous overlay control, wrapping at both ends.</summary>
+    private void MoveChecklistItemFocus(bool forward)
+    {
+        var current = Array.FindIndex(_checklistItemControls, static c => c.HasFocus);
+        if (current < 0)
+            current = 0;
+        _checklistItemControls[DispatchPaneModel.NextFocus(current, _checklistItemControls.Length, forward)].SetFocus();
+    }
+
+    /// <summary>Selects the checklist row at <paramref name="index"/> when it is in range.</summary>
+    private void SelectChecklistRow(int index)
+    {
+        var count = _checklistList.Source?.Count ?? 0;
+        if (count > 0 && index >= 0 && index < count)
+            _checklistList.SelectedItem = index;
+    }
+
+    /// <summary>Selects the row for a given checklist item id, if it is currently projected.</summary>
+    private void SelectChecklistItemById(string checklistId, string itemId)
+    {
+        var i = _checklistRows.FindIndex(r => !r.IsHeader
+            && string.Equals(r.ChecklistId, checklistId, StringComparison.Ordinal)
+            && string.Equals(r.ItemId, itemId, StringComparison.Ordinal));
+        if (i >= 0)
+            SelectChecklistRow(i);
+    }
+
+    /// <summary>Returns a copy of <paramref name="checklists"/> with the checklist whose id matches
+    /// <paramref name="updated"/> replaced by it (the server-reconciled group), others unchanged.</summary>
+    private static IReadOnlyList<TaskChecklist> ReplaceChecklist(IReadOnlyList<TaskChecklist> checklists, TaskChecklist updated)
+        => [.. checklists.Select(c => string.Equals(c.Id, updated.Id, StringComparison.Ordinal) ? updated : c)];
 
     /// <summary>Sets the activity sort direction and re-renders <em>both</em> the Stream and Comments
     /// bodies in place (#106), so the one order applies to both tabs regardless of which is currently

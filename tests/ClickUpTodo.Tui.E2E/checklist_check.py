@@ -36,6 +36,11 @@ UP = b"\x1b[A"
 ENTER = b"\r"
 SPACE = b" "
 CTRL_R = b"\x12"          # refresh (alias of F5) — re-fetches detail from the fake backend
+F7 = b"\x1b[18~"          # add checklist item (E, #458)
+F8 = b"\x1b[19~"          # rename the selected checklist item
+F9 = b"\x1b[20~"          # delete the selected checklist item
+BACKSPACE = b"\x7f"
+DELETE = b"\x1b[3~"       # forward-delete (paired with BACKSPACE to clear a field caret-agnostically)
 
 
 class Session:
@@ -227,6 +232,109 @@ def run_toggle():
         s.kill()
 
 
+def type_text(s, text):
+    s.send(text.encode())
+    s.pump(0.4)
+
+
+def run_crud():
+    """E (#458): F7 add → F8 rename → F9 delete, an item CRUD round-trip that returns the checklist to
+    its starting counts, driven against the mutable fake backend (which persists each write).
+
+    Starting layout / aggregate (E2E_CHECKLISTS=1): Release steps (1/3), QA signoff (1/2) → (2/5).
+    """
+    s = Session({"E2E_CHECKLISTS": "1"})
+    try:
+        s.pump(8.0)
+        assert "Task 0" in s.visible(), "list boot failed:\n" + s.visible()
+        s.open_checklists_tab()
+
+        # Normalise the selection to the top row (row 0 = the "Release steps" header). A new item added
+        # while a Release-steps row is selected joins that checklist.
+        for _ in range(8):
+            s.send(UP)
+            s.pump(0.1)
+        s.pump(0.3)
+        assert "Checklists (2/5)" in s.visible(), "precondition: aggregate should start at (2/5):\n" + s.visible()
+
+        # ── Add (F7): open the name overlay, type a name, Enter ───────────────────────────────────────
+        s.send(F7)
+        s.pump(0.8)
+        assert "New item" in s.visible(), "F7 did not open the add-item overlay:\n" + s.visible()
+        type_text(s, "Ship the release")
+        s.send(ENTER)
+        s.pump(1.5)
+        v = s.visible()
+        assert s.proc.poll() is None, "add crashed the process"
+        assert "[ ] Ship the release" in v, "the new item did not appear after add:\n" + v
+        assert "Checklists (2/6)" in v, "aggregate did not grow to (2/6) after add:\n" + v
+        assert "Release steps  (1/4)" in v, "'Release steps' progress did not grow to (1/4) after add:\n" + v
+
+        # ── Rename (F8): the new item landed selected; clear the prefilled name and type a new one ─────
+        s.send(F8)
+        s.pump(0.8)
+        assert "Rename item" in s.visible(), "F8 did not open the rename overlay:\n" + s.visible()
+        for _ in range(24):        # clear the prefilled "Ship the release" regardless of caret position
+            s.send(BACKSPACE)
+            s.send(DELETE)
+        s.pump(0.4)
+        type_text(s, "Publish v2")
+        s.send(ENTER)
+        s.pump(1.5)
+        v = s.visible()
+        assert "[ ] Publish v2" in v, "the item was not renamed:\n" + v
+        assert "Ship the release" not in v, "the pre-rename name is still shown:\n" + v
+        assert "Checklists (2/6)" in v, "rename wrongly changed the aggregate:\n" + v
+
+        # ── Delete (F9 → Y): confirm and remove; the checklist returns to its starting counts ──────────
+        s.send(F9)
+        s.pump(0.8)
+        assert "Delete" in s.visible(), "F9 did not arm the delete confirm:\n" + s.visible()
+        s.send(ENTER)             # Enter confirms the delete (a letter would be eaten by the ListView type-ahead)
+        s.pump(1.5)
+        v = s.visible()
+        assert s.proc.poll() is None, "delete crashed the process"
+        assert "Publish v2" not in v, "the item was not deleted:\n" + v
+        assert "Checklists (2/5)" in v, "aggregate did not return to (2/5) after delete:\n" + v
+        assert "Release steps  (1/3)" in v, "'Release steps' progress did not return to (1/3) after delete:\n" + v
+
+        # ── Persists across a refresh: the fake persisted create+rename+delete, so Ctrl+R agrees ───────
+        s.send(CTRL_R)
+        s.pump(2.5)
+        v = s.visible()
+        assert "Checklists (2/5)" in v and "Publish v2" not in v, \
+            "a refresh resurrected the deleted item or wrong counts:\n" + v
+
+        print("ok — CRUD: F7 adds an item (2/6), F8 renames it, F9+Y deletes it back to (2/5); persists over refresh")
+    finally:
+        s.kill()
+
+
+def run_add_cancel():
+    """E (#458): Esc dismisses the add overlay without creating an item (no write)."""
+    s = Session({"E2E_CHECKLISTS": "1"})
+    try:
+        s.pump(8.0)
+        assert "Task 0" in s.visible(), "list boot failed:\n" + s.visible()
+        s.open_checklists_tab()
+        for _ in range(8):
+            s.send(UP)
+            s.pump(0.1)
+        s.send(F7)
+        s.pump(0.8)
+        type_text(s, "Should not persist")
+        s.send(b"\x1b")           # Esc — add cancels immediately (no discard confirm for a new item)
+        s.pump(1.0)
+        v = s.visible()
+        assert "Should not persist" not in v, "a cancelled add still created the item:\n" + v
+        assert "Checklists (2/5)" in v, "a cancelled add changed the aggregate:\n" + v
+        print("ok — add cancel: Esc dismisses the overlay and creates nothing")
+    finally:
+        s.kill()
+
+
 run_populated()
 run_empty()
 run_toggle()
+run_crud()
+run_add_cancel()
