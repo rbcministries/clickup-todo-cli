@@ -556,6 +556,43 @@ public sealed class ConfigMigrationsTests : IDisposable
     }
 
     [Fact]
+    public void Apply_ProviderMigration_PreV6ConfigThatAlreadyHasProviders_IsNotReseeded()
+    {
+        // Exercises the MigrateDispatchProviders early-return at a <6 version: a hand-edited pre-v6
+        // config that already carries a providers list must be folded onto (no reseed, no legacy
+        // overwrite), and the stray legacy exe must not clobber the existing provider.
+        var config = new AppConfig
+        {
+            SchemaVersion = 5,
+            AgentDispatch = new AgentDispatchSettings
+            {
+                Providers = [new DispatchProvider { Name = "Custom", Executable = "my-agent" }],
+                DefaultProviderName = "Custom",
+                LegacyClaudeExecutable = "/opt/claude",
+            },
+        };
+
+        ConfigMigrations.Apply(config);
+
+        var provider = Assert.Single(config.AgentDispatch.Providers);
+        Assert.Equal("my-agent", provider.Executable); // not overwritten by the legacy exe
+        Assert.Null(config.AgentDispatch.LegacyClaudeExecutable);
+    }
+
+    [Fact]
+    public void Apply_ProviderMigration_IsIdempotent()
+    {
+        var config = new AppConfig { SchemaVersion = 5, AgentDispatch = new AgentDispatchSettings { LegacyClaudeExecutable = "/opt/claude" } };
+
+        ConfigMigrations.Apply(config);
+        ConfigMigrations.Apply(config); // second run is a no-op — the version gate + early-return both hold
+
+        var provider = Assert.Single(config.AgentDispatch.Providers); // still exactly one provider
+        Assert.Equal("/opt/claude", provider.Executable);
+        Assert.Equal(ConfigMigrations.CurrentVersion, config.SchemaVersion);
+    }
+
+    [Fact]
     public void Load_LegacyConfigWithClaudeExecutable_MigratesOnDisk_AndDropsTheKeys()
     {
         var store = new ConfigStore(_dir);

@@ -61,8 +61,9 @@ public static class SettingsForm
     /// freshly seeded <see cref="AgentDispatchSettings.DefaultProviderDisplayName"/> provider when the
     /// list is empty (mirroring <see cref="AgentDispatchSettings.ResolveDefaultProvider"/>). A blank
     /// executable coalesces to <see cref="AgentDispatchSettings.DefaultExecutable"/>, matching the
-    /// pre-#497 Save. Pure so it can be unit-tested; the returned providers are deep copies, isolated
-    /// from the input list.
+    /// pre-#497 Save. Pure so it can be unit-tested; both the returned providers and the applied
+    /// <paramref name="extraArgs"/> are copied, so the result is isolated from later mutation of either
+    /// input.
     /// </summary>
     public static (List<DispatchProvider> Providers, string DefaultProviderName) ApplyDefaultProviderEdit(
         IReadOnlyList<DispatchProvider> existing, string defaultProviderName, string? executableText, List<string> extraArgs)
@@ -74,13 +75,15 @@ public static class SettingsForm
 
         if (providers.Count == 0)
         {
-            providers.Add(new DispatchProvider { Name = AgentDispatchSettings.DefaultProviderDisplayName, Executable = exe, ExtraArgs = extraArgs });
+            providers.Add(new DispatchProvider { Name = AgentDispatchSettings.DefaultProviderDisplayName, Executable = exe, ExtraArgs = [.. extraArgs] });
             return (providers, AgentDispatchSettings.DefaultProviderDisplayName);
         }
 
+        // Names are exact selector keys (Ordinal), matching ResolveDefaultProvider; an unmatched name
+        // edits the first provider (the same fallback the resolver uses).
         var target = providers.FirstOrDefault(p => string.Equals(p.Name, defaultProviderName, StringComparison.Ordinal)) ?? providers[0];
         target.Executable = exe;
-        target.ExtraArgs = extraArgs;
+        target.ExtraArgs = [.. extraArgs];
         return (providers, defaultProviderName);
     }
 

@@ -169,8 +169,10 @@ public sealed class AgentDispatchSettings
     /// <summary>
     /// Whether the provider list is the zero-config default: no providers at all (a hand-<c>new</c>'d
     /// object), or a single provider that is the built-in default (a blank/<c>claude</c> executable and
-    /// no extra args) — the shape migration seeds on a fresh install. This keeps <see cref="IsDefault"/>
-    /// true after v6 seeds the default provider, preserving the zero-config invariant.
+    /// no <b>effective</b> extra args) — the shape migration seeds on a fresh install. This keeps
+    /// <see cref="IsDefault"/> true after v6 seeds the default provider, preserving the zero-config
+    /// invariant. Blank-only args count as none, matching <see cref="ToLauncherOptions"/> which drops
+    /// them — so <see cref="IsDefault"/> tracks the launch, not the raw list.
     /// </summary>
     private bool ProvidersAreDefault =>
         Providers.Count == 0
@@ -183,7 +185,10 @@ public sealed class AgentDispatchSettings
     /// matches <see cref="DefaultProviderName"/>, else the first configured provider, else a synthesized
     /// built-in <c>claude</c> default when the list is empty. Never returns null, so callers (and a
     /// hand-<c>new</c>'d settings object that never went through migration) always resolve a runnable
-    /// provider with zero config.
+    /// provider with zero config. Names are exact selector keys — the match is
+    /// <see cref="StringComparison.Ordinal"/>, so a <see cref="DefaultProviderName"/> differing only in
+    /// case falls through to the first provider. Treat the result as read-only: it is a live entry from
+    /// <see cref="Providers"/> when the list is non-empty, but a throwaway when it is empty.
     /// </summary>
     public DispatchProvider ResolveDefaultProvider()
     {
