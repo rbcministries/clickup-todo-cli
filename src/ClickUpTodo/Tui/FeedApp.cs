@@ -212,10 +212,15 @@ public sealed class FeedApp
     /// </summary>
     private void RefreshFeed(NotificationsFeedScreen screen)
     {
-        // Runs on the UI thread. No point fetching to update a feed that isn't showing (e.g. Help/exit up);
-        // the next tick or nudge refreshes once it's front-most again.
+        // Runs on the UI thread. No point fetching to update a feed that isn't showing (e.g. Help/exit up).
+        // Record that a refresh was wanted so CloseScreen runs one when the feed returns front-most — an
+        // auto-tick or a cross-process nudge that lands under an overlay would otherwise be dropped (its
+        // marker cursor already advanced) until the feed's own next, possibly-distant, auto-refresh tick.
         if (!ReferenceEquals(ActiveScreen, screen))
+        {
+            _feedRefreshPending = true;
             return;
+        }
 
         if (_refreshingFeed)
         {
