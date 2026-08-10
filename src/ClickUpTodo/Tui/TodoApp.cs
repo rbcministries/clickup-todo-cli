@@ -2967,6 +2967,15 @@ public sealed class TodoApp
     {
         if (ActiveScreen is not null)
             return;
+        if (NativeModalSpike.Enabled)
+        {
+            // #404 spike: open Help as a native Terminal.Gui modal (a nested Application.Run) instead
+            // of the _screens-mounted HelpScreen. Deferred out of the keypress dispatch via
+            // Application.Invoke — mirroring how ShowScreen defers teardown — so the nested run-loop is
+            // not entered re-entrantly from inside the KeyDown handler. Flag-gated; off in production.
+            Application.Invoke(NativeModalSpike.RunHelpDialog);
+            return;
+        }
         ShowScreen(new HelpScreen(), static () => { });
     }
 
