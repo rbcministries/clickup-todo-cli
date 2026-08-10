@@ -619,10 +619,11 @@ public sealed class TerminalLauncherTests
     public void Windows_WindowsTerminal_BakesSetLocationIntoTheTab()
     {
         // wt is the emulator that most visibly ignores the process cwd, so the Set-Location must reach
-        // the command it runs in the new tab.
+        // the command it runs in the new tab. The `;` between Set-Location and the claude invocation is
+        // escaped as `\;` (#534) so Windows Terminal doesn't split it into a bogus second tab.
         var command = PlanCwd(OSPlatformKind.Windows, Present("wt"), "C:/work/dir")[0].Arguments[^1];
 
-        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop;", command);
+        Assert.StartsWith(@"Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop\;", command);
     }
 
     [Fact]
@@ -676,6 +677,143 @@ public sealed class TerminalLauncherTests
             Assert.Contains(PromptFile, command);
             Assert.Matches("Get-Content -Raw|cat ", command);
         }
+    }
+
+    // ── Windows Terminal: escape the `;` subcommand delimiter (#534) ────────────
+    //
+    // `;` is WT's own subcommand delimiter and WT splits on it *inside* arguments (quoting doesn't
+    // protect it). The `Set-Location …; <command>` working-directory prefix (#252) therefore tore the
+    // dispatch into two tabs — pwsh in the right dir with no claude, plus a bogus default-profile tab
+    // failing with 0x80070002. `WtArgs` now escapes every `;` as `\;` (WT's documented escape). Only
+    // the `wt` argv changes; pwsh/powershell/cmd and POSIX/macOS stay byte-identical.
+
+    /// <summary>
+    /// True if <paramref name="s"/> contains a Windows-Terminal-splitting <c>;</c> that is not escaped
+    /// as <c>\;</c>. (Strip the escaped occurrences, then look for any bare <c>;</c> left.)
+    /// </summary>
+    private static bool HasUnescapedSemicolon(string s) => s.Replace("\\;", "").Contains(';');
+
+    private static LaunchSpec WtSpec(
+        Func<string, bool> present, TerminalLauncherOptions options, string? cwd = null, Func<string, string?>? env = null)
+        => TerminalCommandPlanner
+            .Plan(OSPlatformKind.Windows, present, env ?? NoEnv, PromptFile, cwd, options)
+            .Single(s => s.FileName == "wt");
+
+    [Fact]
+    public void Windows_Wt_WorkingDirectory_NewWindowForm_HasNoUnescapedSemicolon()
+    {
+        var spec = WtSpec(Present("wt"), Defaults, "C:/work/dir");
+
+        Assert.Equal(["new-tab", "pwsh", "-NoExit", "-Command"], spec.Arguments.Take(4)); // structural tokens intact
+        Assert.All(spec.Arguments, a => Assert.False(HasUnescapedSemicolon(a)));
+        Assert.Contains(@"Stop\;", spec.Arguments[^1]); // the Set-Location `;` is actually escaped, not dropped
+    }
+
+    [Fact]
+    public void Windows_Wt_WorkingDirectory_CurrentWindowTabForm_HasNoUnescapedSemicolon()
+    {
+        // The `-w 0 new-tab` form (inside WT, tab requested) goes through the same WtArgs choke point.
+        var options = Defaults with { LaunchLocation = LaunchLocation.NewTab };
+        var spec = WtSpec(Present("wt"), options, "C:/work/dir", Env(("WT_SESSION", "abc")));
+
+        Assert.Equal(["-w", "0", "new-tab", "pwsh", "-NoExit", "-Command"], spec.Arguments.Take(6));
+        Assert.All(spec.Arguments, a => Assert.False(HasUnescapedSemicolon(a)));
+        Assert.Contains(@"Stop\;", spec.Arguments[^1]);
+    }
+
+    [Fact]
+    public void Windows_Wt_WorkingDirectory_WithProfile_HasNoUnescapedSemicolon()
+    {
+        // With a #462 `-p <profile>` present, the argv still carries no unescaped `;`.
+        var options = Defaults with { WindowsTerminalProfile = "My Project" };
+        var spec = WtSpec(Present("wt"), options, "C:/work/dir");
+
+        Assert.Equal(["new-tab", "-p", "My Project", "pwsh", "-NoExit", "-Command"], spec.Arguments.Take(6));
+        Assert.All(spec.Arguments, a => Assert.False(HasUnescapedSemicolon(a)));
+        Assert.Contains(@"Stop\;", spec.Arguments[^1]);
+    }
+
+    [Fact]
+    public void Windows_Wt_EscapesSemicolon_InClaudeExecutable()
+    {
+        // A `;` embedded anywhere that reaches the wt argv is escaped — here in the executable path,
+        // with no working directory so the executable is the only source of a `;`.
+        var options = Defaults with { ClaudeExecutable = "cla;ude" };
+        var spec = WtSpec(Present("wt"), options);
+
+        Assert.All(spec.Arguments, a => Assert.False(HasUnescapedSemicolon(a)));
+        Assert.Contains(@"'cla\;ude'", spec.Arguments[^1]);
+    }
+
+    [Fact]
+    public void Windows_Wt_EscapesSemicolon_InExtraArgs()
+    {
+        var options = Defaults with { ExtraArgs = ["--flag=a;b"] };
+        var spec = WtSpec(Present("wt"), options);
+
+        Assert.All(spec.Arguments, a => Assert.False(HasUnescapedSemicolon(a)));
+        Assert.Contains(@"'--flag=a\;b'", spec.Arguments[^1]);
+    }
+
+    [Fact]
+    public void Windows_Wt_EscapesSemicolon_InProfileName()
+    {
+        // A `;` in a matched profile name must be escaped in its own `-p` arg (no working directory,
+        // so the profile is the only `;` source).
+        var options = Defaults with { WindowsTerminalProfile = "My;Profile" };
+        var spec = WtSpec(Present("wt"), options);
+
+        var pIndex = Array.IndexOf(spec.Arguments.ToArray(), "-p");
+        Assert.True(pIndex >= 0);
+        Assert.Equal(@"My\;Profile", spec.Arguments[pIndex + 1]);
+        Assert.All(spec.Arguments, a => Assert.False(HasUnescapedSemicolon(a)));
+    }
+
+    [Fact]
+    public void Windows_Wt_BlankWorkingDirectory_HasNoSemicolonAtAll_ByteIdenticalToToday()
+    {
+        // No working directory ⇒ no Set-Location prefix ⇒ no `;` to escape; the argv is exactly today's.
+        var spec = WtSpec(Present("wt"), Defaults);
+
+        Assert.DoesNotContain(spec.Arguments, a => a.Contains(';') || a.Contains('\\'));
+        Assert.Equal(
+            ["new-tab", "pwsh", "-NoExit", "-Command",
+             "& 'claude' (Get-Content -Raw '/tmp/clickup-todo/agent-prompt.txt')"],
+            spec.Arguments);
+    }
+
+    [Fact]
+    public void Windows_NonWt_Hosts_KeepLiteralSemicolon_NoEscapingLeaks()
+    {
+        // The escape lives only at the wt boundary. The direct pwsh host re-parses nothing, so its
+        // Set-Location `;` stays literal; and the cmd `-EncodedCommand` base64 must still decode to the
+        // literal (unescaped) `;` command — proving no `\;` leaked into paths that don't need it.
+        var specs = TerminalCommandPlanner.Plan(
+            OSPlatformKind.Windows, Present("pwsh", "cmd"), NoEnv, PromptFile, "C:/work/dir", Defaults);
+
+        var pwsh = specs.Single(s => s.FileName == "pwsh").Arguments[^1];
+        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop;", pwsh);
+        Assert.DoesNotContain(@"Stop\;", pwsh);
+
+        var encoded = specs.Single(s => s.FileName == "cmd").Arguments[^1];
+        var decoded = System.Text.Encoding.Unicode.GetString(Convert.FromBase64String(encoded));
+        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop;", decoded);
+        Assert.DoesNotContain(@"Stop\;", decoded);
+    }
+
+    [Fact]
+    public void PlanAppLaunch_Wt_ArgvByteIdentical_NoSemicolonToEscape()
+    {
+        // The app-launch command has no working directory and no `;`, so the escape is a no-op and the
+        // wt argv is byte-identical to today.
+        var spec = TerminalCommandPlanner.PlanAppLaunch(
+            OSPlatformKind.Windows, Present("wt"), NoEnv, new AppLaunchCommand("clickup-todo", ["--task", "86abc"]),
+            Defaults).Single(s => s.FileName == "wt");
+
+        Assert.DoesNotContain(spec.Arguments, a => a.Contains(';') || a.Contains('\\'));
+        Assert.Equal(
+            ["new-tab", "pwsh", "-NoExit", "-Command", "& 'clickup-todo' '--task' '86abc'"],
+            spec.Arguments);
     }
 
     // ── New-tab launch location (#255) ──────────────────────────────────────────
@@ -868,7 +1006,7 @@ public sealed class TerminalLauncherTests
     public void NewTab_BakesWorkingDirectoryIntoTheTabCommand()
     {
         var wt = PlanTab(OSPlatformKind.Windows, Present("wt"), Env(("WT_SESSION", "1")), "C:/work/dir")[0];
-        Assert.StartsWith("Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop;", wt.Arguments[^1]);
+        Assert.StartsWith(@"Set-Location -LiteralPath 'C:/work/dir' -ErrorAction Stop\;", wt.Arguments[^1]); // #534: `;` escaped
 
         var gnome = PlanTab(OSPlatformKind.Linux, Present("gnome-terminal"), Env(("VTE_VERSION", "1")), "/work/dir")[0];
         Assert.StartsWith("cd '/work/dir' && 'claude'", gnome.Arguments[^1]);
