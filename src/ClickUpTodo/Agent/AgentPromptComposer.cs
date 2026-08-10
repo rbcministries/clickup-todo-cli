@@ -28,17 +28,18 @@ public static class AgentPromptComposer
         "JSON below has task details and comment history; use MCP tools if more detail required.";
 
     /// <summary>
-    /// The default prompt template. When neither the output subdirectory (#98) nor the
-    /// post-to-Comments toggle (#97) is supplied, rendering it is <b>byte-for-byte identical</b> to
-    /// the pre-#100 composer output (<c>{userPrompt}\n\n{Preamble}\n\n{contextJson}</c>) — both
-    /// instruction placeholders expand to empty. When a subdirectory is supplied,
-    /// <c>{outputDirInstruction}</c> expands to a "write outputs to ./{subdir}" paragraph; when the
-    /// post-to-Comments toggle is on, <c>{postCommentInstruction}</c> expands to a "post a summary
-    /// comment" paragraph — both slot in between the prompt and the preamble. Uses <c>\n</c>
-    /// throughout so the output is identical across platforms.
+    /// The default prompt template. When the post-to-Comments toggle (#97) is off, rendering it is
+    /// <b>byte-for-byte identical</b> to the pre-#100 composer output
+    /// (<c>{userPrompt}\n\n{Preamble}\n\n{contextJson}</c>) — the instruction placeholder expands to empty.
+    /// When the post-to-Comments toggle is on, <c>{postCommentInstruction}</c> expands to a "post a summary
+    /// comment" paragraph slotted between the prompt and the preamble. #533 removed the per-task
+    /// <c>{outputDirInstruction}</c> from this default (the task-derived directory is now a real directory
+    /// the app creates, not a prompt instruction); the placeholder still resolves to empty in
+    /// <see cref="Compose"/> so a saved custom template (#100) that still references it renders unchanged.
+    /// Uses <c>\n</c> throughout so the output is identical across platforms.
     /// </summary>
     public const string DefaultTemplate =
-        "{userPrompt}\n\n{outputDirInstruction}{postCommentInstruction}" + Preamble + "\n\n{contextJson}";
+        "{userPrompt}\n\n{postCommentInstruction}" + Preamble + "\n\n{contextJson}";
 
     /// <summary>The task description is truncated to this many characters to keep the prompt tight.</summary>
     public const int MaxDescriptionLength = 2000;
@@ -57,7 +58,6 @@ public static class AgentPromptComposer
         ("taskId", "The raw task id"),
         ("customId", "The task's custom id (falls back to the task id)"),
         ("postCommentInstruction", "Post-results-to-Comments instruction (empty unless enabled)"),
-        ("outputDirInstruction", "Output-subdirectory instruction + blank line (empty unless enabled)"),
     ];
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -72,15 +72,20 @@ public static class AgentPromptComposer
     /// <summary>
     /// Builds the full prompt text by rendering <paramref name="template"/> (blank ⇒
     /// <see cref="DefaultTemplate"/>) with the task's placeholder values substituted in. The user
-    /// prompt is trimmed; the <c>custom id</c> placeholder falls back to the task id (#98); a non-blank
-    /// <paramref name="outputSubdirectory"/> (the task-derived working-dir mode, #98) fills
-    /// <c>{outputDirInstruction}</c> with a "write outputs to ./{subdir}" paragraph, else it is empty;
+    /// prompt is trimmed; the <c>custom id</c> placeholder falls back to the task id (#98);
     /// <paramref name="postToComments"/> (the #97 toggle) fills <c>{postCommentInstruction}</c> with a
     /// "post a summary comment to the ClickUp task" paragraph, else it is empty.
+    /// <para>
+    /// The <c>{outputDirInstruction}</c> placeholder always renders to the <b>empty string</b>: the
+    /// per-task output-subdir instruction it once carried (#98) was retired in #533 when the task-derived
+    /// directory became a real, pre-filled directory the app creates rather than a prompt instruction. The
+    /// placeholder is kept (mapped to empty, dropped from the documented <see cref="Placeholders"/> list)
+    /// so a saved custom template (#100) that still references it renders to nothing instead of failing.
+    /// </para>
     /// </summary>
     public static string Compose(
         TaskDetail task, IReadOnlyList<CommentItem> comments, string userPrompt,
-        string? template = null, string? outputSubdirectory = null, bool postToComments = false)
+        string? template = null, bool postToComments = false)
     {
         ArgumentNullException.ThrowIfNull(task);
         comments ??= [];
@@ -95,7 +100,8 @@ public static class AgentPromptComposer
             ["taskId"] = task.Id ?? string.Empty,
             ["customId"] = string.IsNullOrWhiteSpace(task.CustomId) ? (task.Id ?? string.Empty) : task.CustomId,
             ["postCommentInstruction"] = PostCommentInstruction(task, postToComments),
-            ["outputDirInstruction"] = OutputDirInstruction(outputSubdirectory),
+            // Retired in #533 (see remarks) — always empty so existing custom templates still render.
+            ["outputDirInstruction"] = string.Empty,
         };
 
         return Render(tmpl, values);
@@ -176,20 +182,6 @@ public static class AgentPromptComposer
     }
 
     /// <summary>
-    /// The <c>{outputDirInstruction}</c> value for a task-derived launch (#98): a
-    /// "write outputs to <c>./{subdir}</c>" instruction <b>followed by a blank line</b> so it slots in
-    /// as its own paragraph ahead of the preamble, or empty when no subdirectory is supplied (keeping
-    /// the default layout byte-identical to zero-config dispatch).
-    /// </summary>
-    internal static string OutputDirInstruction(string? outputSubdirectory)
-    {
-        var token = (outputSubdirectory ?? string.Empty).Trim();
-        return token.Length == 0
-            ? string.Empty
-            : $"Write any output files to the subdirectory ./{token} (create it if needed).\n\n";
-    }
-
-    /// <summary>
     /// The <c>{postCommentInstruction}</c> value for the post-results-to-Comments toggle (#97): an
     /// instruction telling the dispatched agent to post a brief summary comment back to the ClickUp
     /// task <b>followed by a blank line</b> so it slots in as its own paragraph ahead of the preamble,
@@ -241,8 +233,7 @@ public static class AgentPromptComposer
     /// </summary>
     public static string WritePromptFile(
         TaskDetail task, IReadOnlyList<CommentItem> comments, string userPrompt,
-        string? directory = null, string? template = null, string? outputSubdirectory = null,
-        bool postToComments = false)
+        string? directory = null, string? template = null, bool postToComments = false)
     {
         ArgumentNullException.ThrowIfNull(task);
         var dir = string.IsNullOrWhiteSpace(directory)
@@ -252,7 +243,7 @@ public static class AgentPromptComposer
 
         var fileName = $"agent-prompt-{SafeToken(task.Id)}-{Guid.NewGuid():N}.txt";
         var path = Path.Combine(dir, fileName);
-        File.WriteAllText(path, Compose(task, comments, userPrompt, template, outputSubdirectory, postToComments));
+        File.WriteAllText(path, Compose(task, comments, userPrompt, template, postToComments));
         return path;
     }
 

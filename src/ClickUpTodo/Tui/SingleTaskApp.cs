@@ -258,7 +258,11 @@ public sealed class SingleTaskApp
             defaultSessionMode: _config.AgentDispatch.DefaultSessionMode,
             defaultPostToComments: _config.AgentDispatch.DefaultPostResultsToComments,
             defaultLaunchLocation: _config.AgentDispatch.LaunchLocation,
-            workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, id),
+            // Pre-fill the Dispatch working-dir field (#533): #96 cache → {base}/{Repository} match (#461)
+            // → {base}/{custom-id} (#98) in task-derived mode; blank in Home/Fixed. Shared with the
+            // dashboard via DispatchWorkingDirectoryPreFill so the two hosts can't drift.
+            workingDirectoryPreFill: () => DispatchWorkingDirectoryPreFill.PreFill(
+                _config.TaskWorkingDirectories, id, task, _config.AgentDispatch, baseDir),
             // Ctrl+N posts a plain-text comment; Ctrl+E edits the description — same injected-async seam
             // the dashboard wires, keyed to *this* tab's task so a stacked child writes to its own task.
             postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(id, text, ct),
@@ -531,11 +535,15 @@ public sealed class SingleTaskApp
         _dispatching = true;
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
         var plan = DispatchCoordinator.Plan(_config.AgentDispatch, request, tab.Task, _config.DefaultWorkingDirectory, home);
 
         // Persist an explicit non-default working-dir pick for this task (#96) so the next dispatch
-        // pre-fills it; reverting to the default clears the entry. Save only when the cache changed.
-        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, tab.TaskId, plan))
+        // pre-fills it; accepting the auto-derived pre-fill (or clearing the field) clears the entry. The
+        // reconciliation baseline (what the pre-fill would produce, #533) may consult the filesystem, so
+        // it's computed here rather than in the now-pure Plan. Save only when the cache changed.
+        var resolvedDefault = DispatchWorkingDirectoryPreFill.AutoDerivedDefault(tab.Task, _config.AgentDispatch, baseDir, home);
+        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, tab.TaskId, plan.ChosenDir, resolvedDefault))
             _configStore.Save(_config);
 
         // One-off mode runs as a background child with output in a screen (#99); interactive opens a
