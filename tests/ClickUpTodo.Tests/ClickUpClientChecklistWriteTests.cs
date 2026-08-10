@@ -39,7 +39,7 @@ public sealed class ClickUpClientChecklistWriteTests
         var handler = new CapturingHandler(ChecklistResponse);
         using var client = new ClickUpClient("pk_x", new HttpClient(handler));
 
-        var updated = await client.SetChecklistItemResolvedAsync("c1", "i2", resolved: true);
+        var updated = await client.SetChecklistItemResolvedAsync("t1", "c1", "i2", resolved: true);
 
         // Request: PUT to the checklist-item endpoint with a { resolved: true } body.
         Assert.Equal(HttpMethod.Put, handler.Method);
@@ -68,7 +68,7 @@ public sealed class ClickUpClientChecklistWriteTests
         var handler = new CapturingHandler(ChecklistResponse);
         using var client = new ClickUpClient("pk_x", new HttpClient(handler));
 
-        await client.SetChecklistItemResolvedAsync("c9", "i9", resolved: false);
+        await client.SetChecklistItemResolvedAsync("t9", "c9", "i9", resolved: false);
 
         Assert.Contains("/v2/checklist/c9/checklist_item/i9", handler.RequestUri);
         Assert.Equal(JsonValueKind.False, handler.Body!.RootElement.GetProperty("resolved").ValueKind);

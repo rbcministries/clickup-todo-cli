@@ -387,14 +387,14 @@ public sealed class ClickUpClientIntegrationTests
 
         try
         {
-            var flipped = await client.SetChecklistItemResolvedAsync(checklist.Id, item.Id, !original);
+            var flipped = await client.SetChecklistItemResolvedAsync(checklistTaskId!, checklist.Id, item.Id, !original);
             Assert.Equal(checklist.Id, flipped.Id);
             Assert.Equal(!original, FindItem(flipped.Items, item.Id)?.Resolved);
         }
         finally
         {
             // Restore the original state so the test leaves the real task untouched.
-            var restored = await client.SetChecklistItemResolvedAsync(checklist.Id, item.Id, original);
+            var restored = await client.SetChecklistItemResolvedAsync(checklistTaskId!, checklist.Id, item.Id, original);
             Assert.Equal(original, FindItem(restored.Items, item.Id)?.Resolved);
         }
 
