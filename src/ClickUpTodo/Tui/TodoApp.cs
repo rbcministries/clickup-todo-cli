@@ -2045,10 +2045,12 @@ public sealed class TodoApp
                         // Seed the per-dispatch launch-location toggle (#275) from the persisted default
                         // (#255/#274); the user can override it per dispatch without changing the default.
                         defaultLaunchLocation: _config.AgentDispatch.LaunchLocation,
-                        // Pre-fill the Dispatch working-dir field from the per-task cache (#96) — the
-                        // last explicit dir dispatched from this task, or blank if none. Read live on
-                        // each pane open so a dispatch within this same open screen is reflected on reopen.
-                        workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, detail.Id),
+                        // Pre-fill the Dispatch working-dir field (#533): the #96 per-task cache, else a
+                        // {base}/{Repository} match (#461), else the per-task {base}/{custom-id} dir (#98) —
+                        // in task-derived mode; blank in Home/Fixed. Read live on each pane open so a
+                        // dispatch within this same open screen is reflected on reopen.
+                        workingDirectoryPreFill: () => DispatchWorkingDirectoryPreFill.PreFill(
+                            _config.TaskWorkingDirectories, detail.Id, detail, _config.AgentDispatch, detailBaseDir),
                         // Ctrl+N (#216) composes + posts a plain-text comment; the screen owns the
                         // optimistic append/revert, the host owns the off-thread ClickUp write.
                         postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(resolvedId, text, ct),
@@ -2358,11 +2360,15 @@ public sealed class TodoApp
         // identically; only the Flash / ShowScreen / guard seams differ.
         var agent = _agent;
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
         var plan = DispatchCoordinator.Plan(_config.AgentDispatch, request, detail, _config.DefaultWorkingDirectory, home);
 
         // Remember an explicit non-default pick for this task (#96) so the next dispatch pre-fills it;
-        // reverting to the default clears the entry. Persist only when the cache actually changed.
-        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, detail.Id, plan))
+        // accepting the auto-derived pre-fill unchanged (or clearing the field) clears the entry. The
+        // reconciliation baseline is what the pre-fill would produce (#533) — repo match else
+        // {base}/{custom-id} — which may consult the filesystem, so it's computed here, not in pure Plan.
+        var resolvedDefault = DispatchWorkingDirectoryPreFill.AutoDerivedDefault(detail, _config.AgentDispatch, baseDir, home);
+        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, detail.Id, plan.ChosenDir, resolvedDefault))
             _configStore.Save(_config);
 
         // One-off mode (#94) runs claude -p as a background child of the app — no terminal window — with
