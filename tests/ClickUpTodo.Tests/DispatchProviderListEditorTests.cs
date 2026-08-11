@@ -55,6 +55,39 @@ public sealed class DispatchProviderListEditorTests
     }
 
     [Fact]
+    public void Constructor_DedupesDuplicateIncomingNames_KeepingTheFirst_SoOnlyOneIsDefault()
+    {
+        List<DispatchProvider> dupes =
+        [
+            new() { Name = "Claude", Executable = "claude" },
+            new() { Name = "Claude", Executable = "claude-2" },
+        ];
+
+        var editor = new DispatchProviderListEditor(dupes, "Claude");
+
+        Assert.Equal("Claude", editor.Providers[0].Name);
+        Assert.Equal("Claude (2)", editor.Providers[1].Name);
+        // Exactly one provider is the default (the first, whose name is unchanged).
+        Assert.True(editor.IsDefault(0));
+        Assert.False(editor.IsDefault(1));
+    }
+
+    [Fact]
+    public void Constructor_RepairsABlankIncomingName()
+    {
+        var editor = new DispatchProviderListEditor([new DispatchProvider { Name = "  ", Executable = "x" }], "");
+        Assert.Equal("Provider", Assert.Single(editor.Providers).Name);
+    }
+
+    [Fact]
+    public void Constructor_LeavesUniqueNamesUnchanged()
+    {
+        var editor = new DispatchProviderListEditor(Two(), "Claude");
+        Assert.Equal("Claude", editor.Providers[0].Name);
+        Assert.Equal("Codex", editor.Providers[1].Name);
+    }
+
+    [Fact]
     public void DefaultName_ResolvesToMatch_ElseFirst()
     {
         Assert.Equal("Codex", new DispatchProviderListEditor(Two(), "Codex").DefaultProviderName);

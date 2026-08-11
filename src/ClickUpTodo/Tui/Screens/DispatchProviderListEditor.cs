@@ -20,9 +20,8 @@ public sealed record DispatchProvidersResult(List<DispatchProvider> Providers, s
 /// <see cref="AgentDispatchSettings.ResolveDefaultProvider"/>, so the screen always has a row to show and
 /// <see cref="Delete"/> can re-seed rather than strand the user with nothing. Names are exact selector
 /// keys — every comparison is <see cref="StringComparison.Ordinal"/>, matching
-/// <see cref="AgentDispatchSettings.ResolveDefaultProvider"/> and the retired
-/// <c>SettingsForm.ApplyDefaultProviderEdit</c> — and are kept unique so exactly one provider is the
-/// default.
+/// <see cref="AgentDispatchSettings.ResolveDefaultProvider"/> — and are kept unique (blank/duplicate
+/// names in a hand-edited config are repaired on load) so exactly one provider is the default.
 /// </para>
 /// </summary>
 public sealed class DispatchProviderListEditor
@@ -46,6 +45,19 @@ public sealed class DispatchProviderListEditor
         if (_providers.Count == 0)
             _providers.Add(BuiltInDefault());
 
+        // Repair a hand-edited config so exactly one provider can be the default: blank names get the
+        // "Provider" fallback, and a duplicate name yields to an earlier one with a " (n)" suffix (the
+        // first occurrence keeps its name). A list of already-unique names is left byte-identical.
+        for (var i = 0; i < _providers.Count; i++)
+        {
+            var desired = string.IsNullOrWhiteSpace(_providers[i].Name) ? FallbackName : _providers[i].Name.Trim();
+            var unique = desired;
+            for (var n = 2; EarlierHasName(i, unique); n++)
+                unique = $"{desired} ({n})";
+            _providers[i].Name = unique;
+        }
+
+        // Resolve after the repair; the default follows the first occurrence, whose name is unchanged.
         _defaultName = _providers.Any(p => string.Equals(p.Name, defaultProviderName, StringComparison.Ordinal))
             ? defaultProviderName!
             : _providers[0].Name;
@@ -201,6 +213,16 @@ public sealed class DispatchProviderListEditor
             if (!Taken(candidate))
                 return candidate;
         }
+    }
+
+    /// <summary>Whether any provider before <paramref name="index"/> already has <paramref name="name"/>
+    /// (Ordinal) — the "keep the first occurrence" test for the load-time name repair.</summary>
+    private bool EarlierHasName(int index, string name)
+    {
+        for (var j = 0; j < index; j++)
+            if (string.Equals(_providers[j].Name, name, StringComparison.Ordinal))
+                return true;
+        return false;
     }
 
     private static List<string> CleanArgs(IEnumerable<string>? args)
