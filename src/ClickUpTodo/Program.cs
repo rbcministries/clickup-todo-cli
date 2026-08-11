@@ -40,12 +40,15 @@ if (args.Any(a => a is "--help" or "-h" or "-?"))
 {
     Console.WriteLine($"clickup-todo — {AppBranding.DisplayName}, a keyboard-driven ClickUp task list.");
     Console.WriteLine();
-    Console.WriteLine("Usage: clickup-todo [--task <ref>] [--reset] [--driver <name>]");
+    Console.WriteLine("Usage: clickup-todo [--task <ref>] [--feed] [--reset] [--driver <name>]");
     Console.WriteLine("  (no args)        Launch the task UI (runs first-time setup if needed).");
     Console.WriteLine("  --task <ref>     Open straight into that task's detail view (a single-task tab;");
     Console.WriteLine("                   titles the terminal window/tab with the task's id + name).");
     Console.WriteLine("                   <ref> is a task id (86abc123), a custom id (ABC-123), or a");
     Console.WriteLine("                   ClickUp task URL — the same forms the in-app Ctrl+O accepts.");
+    Console.WriteLine("  --feed           Open straight into the mentions & comments feed as its own");
+    Console.WriteLine("                   host (the same view Ctrl+E opens in the dashboard), so you can");
+    Console.WriteLine("                   keep it in its own window/tab beside your work.");
     Console.WriteLine("  --reset          Forget the saved token and settings.");
     Console.WriteLine("  --driver <name>  Force a Terminal.Gui console driver. One of:");
     Console.WriteLine("                     windows  native Win32 input (try this if input feels laggy)");
@@ -186,7 +189,24 @@ if (launch.HasId)
     return 0;
 }
 
+// The feed aggregator, shared by the standalone --feed host below and the dashboard. Built here (ahead
+// of the launch-mode branch) so both paths use the one instance; --task returned above without it.
 var feedService = new FeedService(client, taskService, config);
+
+// Standalone feed host (`--feed`, #509): boot straight into the mentions & comments feed as its own
+// root host — the same NotificationsFeedScreen the dashboard opens with Ctrl+E — instead of the
+// dashboard. `--task` wins if both flags are given (it returned above). Seed the host with the warm feed
+// cache snapshot (comments only; #123) so the first paint is instant; FeedApp kicks a live refresh on
+// show and wires the cross-process nudge channel (#377). The dashboard's Ctrl+E is unchanged — this is an
+// additional launch path, not a replacement.
+if (FeedLaunchArg.Parse(args).Present)
+{
+    var cachedFeed = feedCache.LoadSnapshot(config);
+    var feedSeed = cachedFeed is { Items.Count: > 0 } ? new FeedResult(cachedFeed.Items, []) : FeedResult.Empty;
+    new FeedApp(feedService, feedCache, config, configStore, feedSeed, changeMarkers: changeMarkers).Run(driverName);
+    return 0;
+}
+
 var focusStore = new LocalFocusStore(config, configStore);
 // The assignee-frequency candidate pool (#155) — warmed from the loaded tasks and topped up from
 // the workspace members — rides the same state store, scoped to the active workspace.

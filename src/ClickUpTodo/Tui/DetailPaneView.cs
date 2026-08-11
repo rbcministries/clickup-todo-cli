@@ -3,6 +3,7 @@ using ClickUpTodo.Configuration;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
+using Terminal.Gui.Text;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using Attribute = Terminal.Gui.Drawing.Attribute;
@@ -180,6 +181,16 @@ public sealed class DetailPaneView : TextView
     public event EventHandler<LinkActivationRequest>? LinkActivationRequested;
 
     /// <summary>
+    /// Raised when the link the mouse is hovering over changes (#408): the argument is that link's
+    /// <b>resolved</b> target URL (a bare link's own URL; a markdown link's destination behind its visible
+    /// text), or <see langword="null"/> when the pointer moved off every link (onto prose, empty space, or
+    /// out of the pane). Fires <b>only on a change</b> — a move within one link raises nothing — so the
+    /// hint surface it drives repaints only when crossing a link boundary, never on every motion report.
+    /// The screen turns this into a status-line hint; the pane never restyles a cell for hover.
+    /// </summary>
+    public event EventHandler<string?>? HoverTargetChanged;
+
+    /// <summary>
     /// Where a <c>Ctrl</c>+click on a <b>task</b> link goes (#320); <c>Ctrl+Shift</c>+click does the
     /// other one. The screen sets this from the persisted <see cref="DetailViewSettings.TaskLinkCtrlClick"/>.
     /// Default <see cref="TaskLinkCtrlClickDestination.Browser"/> — the fixed behaviour #318 shipped, so a
@@ -205,6 +216,11 @@ public sealed class DetailPaneView : TextView
     // reload without the caller re-supplying it.
     private string _body = "";
 
+    // The last hover target raised through HoverTargetChanged (#408), so a motion report that stays on the
+    // same link (or off every link) raises nothing — the dedup that keeps hover off the per-keypress cost.
+    // Reset by SetBody: a new body re-wraps, so the previous target no longer describes what is on screen.
+    private string? _lastHoverTarget;
+
     // Every clickable link in the current body, in document order — the ordered set Tab/Shift+Tab step
     // through (#319). Rebuilt on each SetBody; the mouse path (#318) still re-extracts per clicked line,
     // so this table is only the keyboard traversal order, never the click hit test.
@@ -218,6 +234,10 @@ public sealed class DetailPaneView : TextView
     {
         ReadOnly = true;
         WordWrap = true;
+        // Opt into bare motion reports (#408) so OnMouseEvent sees MouseFlags.PositionReport events and can
+        // name the hovered link on the status line. The ansi driver already enables any-motion tracking
+        // (?1003h) at boot, so this consumes events already arriving — it does not add terminal traffic.
+        MousePositionTracking = true;
     }
 
     /// <summary>The number of clickable links in the current body (the count Tab/Shift+Tab cycle through).</summary>
@@ -241,6 +261,12 @@ public sealed class DetailPaneView : TextView
         _body = body;
         _paneLinks = ExtractPaneLinks(body, separator);
         _focusedLinkIndex = LinkFocus.None;
+        // Clear any hover hint (#408): the re-wrap can move or remove every link, so a hint already on the
+        // status line no longer describes the screen. Route through UpdateHoverTarget so it (a) clears the
+        // footer now via HoverTargetChanged and (b) keeps the dedup coherent — a bare reset to null would
+        // make the *next* move-off match the remembered value and get swallowed, stranding the stale hint.
+        // A no-op when nothing was hovered (the common refresh case) and before any subscriber attaches.
+        UpdateHoverTarget(null);
         // A new body re-wraps into fresh row lists, so the reference-keyed source map (#443) is stale — drop
         // it so it doesn't retain the previous body's rows (the draw path rebuilds it on the next miss).
         _rowSourceMap = null;
@@ -792,6 +818,14 @@ public sealed class DetailPaneView : TextView
     /// </summary>
     protected override bool OnMouseEvent(Mouse mouseEvent)
     {
+        // Hover feedback (#408): a bare motion report (button-less move, MouseFlags.PositionReport) names the
+        // link under the pointer on the status line. The target is read from the draw path's own per-row
+        // extraction (RowLinkUrls) — no caret move, no viewport nudge, no cell restyle — and deduped so only
+        // a change fires HoverTargetChanged. This never handles the event: it always falls through to the
+        // click/base logic below, so a click that also carries a position is unaffected.
+        if (mouseEvent.Flags.HasFlag(MouseFlags.PositionReport) && mouseEvent.Position is { } hoverPosition)
+            UpdateHoverTarget(HoverLinkTargetAt(hoverPosition, Viewport));
+
         // Only a plain, Ctrl, or Ctrl+Shift left click activates. Every other flag combination — a wheel,
         // a press/release (drag), a double- or triple-click (each its own distinct flag), an Alt-modified
         // click, and a *bare* Shift click — falls through to the base view untouched. Refusing those is
@@ -820,6 +854,84 @@ public sealed class DetailPaneView : TextView
             this, new LinkActivationRequest(span, LinkActivator.Resolve(span, ctrl, shift, TaskLinkCtrlClickDestination)));
         mouseEvent.Handled = true;
         return true;
+    }
+
+    /// <summary>
+    /// Raises <see cref="HoverTargetChanged"/> when <paramref name="target"/> differs from the last value
+    /// raised — the dedup that keeps hover off the per-keypress redraw cost: a motion report that stays on
+    /// the same link (or off every link) raises nothing, so the hint surface repaints only when the hovered
+    /// link changes. <paramref name="target"/> is <c>null</c> when the pointer is not on a link.
+    /// </summary>
+    private void UpdateHoverTarget(string? target)
+    {
+        if (string.Equals(target, _lastHoverTarget, StringComparison.Ordinal))
+            return;
+        _lastHoverTarget = target;
+        HoverTargetChanged?.Invoke(this, target);
+    }
+
+    /// <summary>
+    /// The <b>resolved</b> target URL of the link under a viewport-relative point (#408), or <c>null</c> when
+    /// the point is not on a link. Pure of side effects — unlike the click path it does <em>not</em> move the
+    /// base view's caret or nudge the viewport, so it is safe to run on every motion report. It reuses the
+    /// draw path's own per-row link extraction (<see cref="LinkUrlForCell"/> → <see cref="RowLinkUrls"/> →
+    /// <see cref="ClassifyRow"/>) against the already-wrapped display row Terminal.Gui hands the draw path,
+    /// so it adds no word-wrap maths of its own and can't disagree with what the pane drew.
+    /// <paramref name="viewport"/> is the pane's current <see cref="Terminal.Gui.ViewBase.View.Viewport"/>.
+    /// </summary>
+    public string? HoverLinkTargetAt(Point position, Rectangle viewport)
+    {
+        // Below the last wrapped row (the #318 "under a short body" clamp): Lines is the wrapped row count.
+        var displayRow = viewport.Y + position.Y;
+        if (displayRow < 0 || displayRow >= Lines)
+            return null;
+
+        var row = GetLine(displayRow);
+        // Right of the row's rendered text (the #318 "past the text" clamp), and the column→cell mapping in
+        // one pass. Deliberately ignores viewport.X: the pane is word-wrapped, so content never scrolls
+        // horizontally and a report's column is its column in the row (same rationale as LinkAt's guard 2).
+        var cell = CellIndexAtColumn(row, position.X);
+        if (cell < 0)
+            return null;
+
+        // Reuse the draw path's reference-keyed per-row cache (GetLine hands back the same list reference
+        // the draw path caches), so a motion report over a row costs a dictionary hit, not a re-extraction.
+        return LinkUrlAt(row, cell);
+    }
+
+    /// <summary>
+    /// The index of the cell occupying <paramref name="column"/> in a laid-out display <paramref name="row"/>,
+    /// or <c>-1</c> when <paramref name="column"/> is left of 0 or right of the row's rendered width. Walks
+    /// per-grapheme column widths so a row carrying wide runes maps a reported column to the correct cell
+    /// (identity on an ASCII run such as a URL). Mirrors the column measure <see cref="LinkAt"/> guards with.
+    /// </summary>
+    private static int CellIndexAtColumn(List<Cell> row, int column)
+    {
+        if (column < 0)
+            return -1;
+        var col = 0;
+        for (var i = 0; i < row.Count; i++)
+        {
+            // The cell's own column width, straight off its grapheme (no per-cell List allocation) — the
+            // same GetColumns() measure ContextualFooter fits the help line with.
+            var width = (row[i].Grapheme ?? string.Empty).GetColumns();
+            if (width <= 0)
+                width = 1; // defensive: never stall on a zero-width cell
+            if (column < col + width)
+                return i;
+            col += width;
+        }
+        return -1;
+    }
+
+    /// <inheritdoc/>
+    protected override void OnMouseLeave()
+    {
+        // The pointer left the pane entirely (onto another view): clear any hover hint it was showing.
+        // A move that merely leaves a link but stays in the pane is handled by the motion arm returning
+        // null; this covers the case where no further motion report reaches this pane at all (#408).
+        UpdateHoverTarget(null);
+        base.OnMouseLeave();
     }
 
     /// <summary>

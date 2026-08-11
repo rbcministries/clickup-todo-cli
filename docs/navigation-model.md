@@ -40,7 +40,7 @@ it — walks back to the main list, bypassing the feed. This intentionally chang
 |---|---|---|---|---|
 | `TaskDetailScreen` | Enter on list; detail→detail (`OpenTaskRequested`); Ctrl+O resolve; feed row | **Destination** | Back — walk history one task | **Yes** — pushed at the single `OpenTaskDetail` site |
 | `HelpScreen` (F1) | over any screen | Modal | Dismiss to layer beneath | No |
-| `SettingsScreen` (F2) | list | Modal | Cancel (discard edit) | No |
+| `SettingsScreen` (F10) | list | Modal | Cancel (discard edit) | No |
 | `FilterSortGroupScreen` (F3) | list | Modal | Cancel (`Result` null) | No |
 | `QuickUpdatesScreen` (Ctrl+U) | list / over detail | Modal | Cancel | No |
 | `NewTaskScreen` (Ctrl+N) | list | Modal | Cancel | No |
