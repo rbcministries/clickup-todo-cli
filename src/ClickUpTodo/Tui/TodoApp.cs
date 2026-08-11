@@ -1477,6 +1477,7 @@ public sealed class TodoApp
         screen.Closed += handler;
         // The shared footer + status line replace each screen's hand-rolled hint Label (#103).
         screen.FlashRequested += OnScreenFlash;
+        screen.HoverHintChanged += OnScreenHoverHint;
         screen.HelpRequested += OnScreenHelpRequested;
 
         _window.Add(screen);
@@ -1494,7 +1495,10 @@ public sealed class TodoApp
             return;
 
         screen.FlashRequested -= OnScreenFlash;
+        screen.HoverHintChanged -= OnScreenHoverHint;
         screen.HelpRequested -= OnScreenHelpRequested;
+        // A screen closing while its last hover hint is on the status line would leave it stranded; clear it.
+        _footer.SetHoverHint(null);
         _window.Remove(screen);
         // Terminal.Gui 2.4.10 can throw from View/Tabs.Dispose while tearing down a view's subviews
         // (disposing a child mutates the parent's subview list mid-iteration → IndexOutOfRange; hit
@@ -1569,6 +1573,10 @@ public sealed class TodoApp
 
     /// <summary>Routes a screen's transient message (e.g. a validation error) to the status line.</summary>
     private void OnScreenFlash(object? sender, string message) => Flash(message);
+
+    /// <summary>Routes a screen's hover hint (#408) to the footer's low-precedence hover slot: a non-null
+    /// hint shows over the steady status, null restores it. A flash still outranks it.</summary>
+    private void OnScreenHoverHint(object? sender, string? hint) => _footer.SetHoverHint(hint);
 
     /// <summary>
     /// F1 from a screen opens Help stacked over it (Esc returns to the underlying screen). Ignored when
