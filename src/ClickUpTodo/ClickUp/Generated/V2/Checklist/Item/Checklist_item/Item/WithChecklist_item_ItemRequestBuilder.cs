@@ -34,10 +34,28 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Checklist.Item.Checklist_item.Item
         {
         }
         /// <summary>
-        /// Update a checklist item (used here to toggle its `resolved` state — D, #457). ClickUp echoes the whole parent checklist wrapped as { &quot;checklist&quot;: { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. Only `resolved` is modelled in the request; item rename / assignee / reparent land with the CRUD slices (E–G).
+        /// Delete a checklist item (E, #458). ClickUp returns an empty object, so there is no response schema — the caller keeps its optimistic local removal (revert-on-failure), exactly as DELETE /task/{id} does.
+        /// </summary>
+        /// <returns>A <see cref="Stream"/></returns>
+        /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
+        /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public async Task<Stream?> DeleteAsync(Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
+        {
+#nullable restore
+#else
+        public async Task<Stream> DeleteAsync(Action<RequestConfiguration<DefaultQueryParameters>> requestConfiguration = default, CancellationToken cancellationToken = default)
+        {
+#endif
+            var requestInfo = ToDeleteRequestInformation(requestConfiguration);
+            return await RequestAdapter.SendPrimitiveAsync<Stream>(requestInfo, default, cancellationToken).ConfigureAwait(false);
+        }
+        /// <summary>
+        /// Update a checklist item — toggle its `resolved` state (D, #457) and/or rename it (E, #458). ClickUp echoes the whole parent checklist wrapped as { &quot;checklist&quot;: { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. `resolved` and `name` are modelled; per-item assignee / reparent land with F–G.
         /// </summary>
         /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.ChecklistItemResponse"/></returns>
-        /// <param name="body">Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457). Only &apos;resolved&apos; is modelled; rename/assignee/reparent land with E–G.</param>
+        /// <param name="body">Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457) and the rename write (E, #458). Both fields are optional so a caller sends only what it changes: &apos;resolved&apos; toggles the tick, &apos;name&apos; renames the item. Assignee/reparent land with F–G.</param>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
@@ -54,10 +72,28 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Checklist.Item.Checklist_item.Item
             return await RequestAdapter.SendAsync<global::ClickUpTodo.ClickUp.Generated.Models.ChecklistItemResponse>(requestInfo, global::ClickUpTodo.ClickUp.Generated.Models.ChecklistItemResponse.CreateFromDiscriminatorValue, default, cancellationToken).ConfigureAwait(false);
         }
         /// <summary>
-        /// Update a checklist item (used here to toggle its `resolved` state — D, #457). ClickUp echoes the whole parent checklist wrapped as { &quot;checklist&quot;: { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. Only `resolved` is modelled in the request; item rename / assignee / reparent land with the CRUD slices (E–G).
+        /// Delete a checklist item (E, #458). ClickUp returns an empty object, so there is no response schema — the caller keeps its optimistic local removal (revert-on-failure), exactly as DELETE /task/{id} does.
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
-        /// <param name="body">Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457). Only &apos;resolved&apos; is modelled; rename/assignee/reparent land with E–G.</param>
+        /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public RequestInformation ToDeleteRequestInformation(Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default)
+        {
+#nullable restore
+#else
+        public RequestInformation ToDeleteRequestInformation(Action<RequestConfiguration<DefaultQueryParameters>> requestConfiguration = default)
+        {
+#endif
+            var requestInfo = new RequestInformation(Method.DELETE, UrlTemplate, PathParameters);
+            requestInfo.Configure(requestConfiguration);
+            return requestInfo;
+        }
+        /// <summary>
+        /// Update a checklist item — toggle its `resolved` state (D, #457) and/or rename it (E, #458). ClickUp echoes the whole parent checklist wrapped as { &quot;checklist&quot;: { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. `resolved` and `name` are modelled; per-item assignee / reparent land with F–G.
+        /// </summary>
+        /// <returns>A <see cref="RequestInformation"/></returns>
+        /// <param name="body">Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457) and the rename write (E, #458). Both fields are optional so a caller sends only what it changes: &apos;resolved&apos; toggles the tick, &apos;name&apos; renames the item. Assignee/reparent land with F–G.</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable

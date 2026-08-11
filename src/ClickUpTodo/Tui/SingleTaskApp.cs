@@ -297,7 +297,13 @@ public sealed class SingleTaskApp
             // Space on the Checklists tab (D, #457): the Checklists tab is present in single-task mode too,
             // so wire the toggle write here as well, keyed to this tab's task id.
             setChecklistResolvedAsync: (checklistId, itemId, resolved, ct) =>
-                _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct));
+                _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct),
+            createChecklistItemAsync: (checklistId, name, ct) =>
+                _tasks.CreateChecklistItemAsync(checklistId, name, ct),
+            renameChecklistItemAsync: (checklistId, itemId, name, ct) =>
+                _tasks.RenameChecklistItemAsync(checklistId, itemId, name, ct),
+            deleteChecklistItemAsync: (checklistId, itemId, ct) =>
+                _tasks.DeleteChecklistItemAsync(checklistId, itemId, ct));
 
         var tab = new DetailTab(screen, id, task, comments);
 

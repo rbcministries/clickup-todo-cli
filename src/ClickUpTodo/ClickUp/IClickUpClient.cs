@@ -85,6 +85,24 @@ public interface IClickUpClient
     /// <see cref="ClickUpClient"/> overrides it. See <see cref="ClickUpClient.SetChecklistItemResolvedAsync"/>.</summary>
     Task<TaskChecklist> SetChecklistItemResolvedAsync(string checklistId, string itemId, bool resolved, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
+
+    /// <summary>Create a checklist item (E, #458) and return the server-confirmed parent
+    /// <see cref="TaskChecklist"/> (the new item included). Default throwing so read-only fakes needn't
+    /// implement it; <see cref="ClickUpClient"/> overrides it. See <see cref="ClickUpClient.CreateChecklistItemAsync"/>.</summary>
+    Task<TaskChecklist> CreateChecklistItemAsync(string checklistId, string name, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
+
+    /// <summary>Rename a checklist item (E, #458) and return the server-confirmed parent
+    /// <see cref="TaskChecklist"/>. Default throwing; <see cref="ClickUpClient"/> overrides it.
+    /// See <see cref="ClickUpClient.RenameChecklistItemAsync"/>.</summary>
+    Task<TaskChecklist> RenameChecklistItemAsync(string checklistId, string itemId, string name, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
+
+    /// <summary>Delete a checklist item (E, #458). ClickUp returns an empty body, so this is a void write.
+    /// Default throwing; <see cref="ClickUpClient"/> overrides it. See <see cref="ClickUpClient.DeleteChecklistItemAsync"/>.</summary>
+    Task DeleteChecklistItemAsync(string checklistId, string itemId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
+
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
 
     /// <summary>Full detail for a task addressed by its workspace <b>custom id</b> (#303, Ctrl+O
