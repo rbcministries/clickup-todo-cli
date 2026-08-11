@@ -212,4 +212,73 @@ public class ChecklistTabModelTests
     [Fact]
     public void SelectAfterDelete_NoNewRows_ReturnsZero()
         => Assert.Equal(0, ChecklistTabModel.SelectAfterDelete([Item("c1", "i1", "A", false)], deletedIndex: 0, []));
+
+    // ── SelectAfterGroupDelete (F, #459) ──────────────────────────────────────
+
+    [Fact]
+    public void SelectAfterGroupDelete_PrefersTheNextGroupHeader()
+    {
+        var oldRows = new List<ChecklistRow>
+        {
+            Header("c1", "Rel", 0, 1), Item("c1", "i1", "A", false),
+            Header("c2", "QA", 0, 1), Item("c2", "j1", "X", false),
+            Header("c3", "Docs", 0, 0),
+        };
+        // Deleting c1 (header + its item) → the next group header c2 remains.
+        var newRows = new List<ChecklistRow>
+        {
+            Header("c2", "QA", 0, 1), Item("c2", "j1", "X", false), Header("c3", "Docs", 0, 0),
+        };
+        Assert.Equal(0, ChecklistTabModel.SelectAfterGroupDelete(oldRows, deletedHeaderIndex: 0, newRows)); // c2 header
+    }
+
+    [Fact]
+    public void SelectAfterGroupDelete_FallsBackToPreviousGroupHeader_WhenDeletingTheLast()
+    {
+        var oldRows = new List<ChecklistRow>
+        {
+            Header("c1", "Rel", 0, 1), Item("c1", "i1", "A", false),
+            Header("c2", "QA", 0, 1), Item("c2", "j1", "X", false),
+        };
+        // Deleting the last group c2 → previous header c1.
+        var newRows = new List<ChecklistRow> { Header("c1", "Rel", 0, 1), Item("c1", "i1", "A", false) };
+        Assert.Equal(0, ChecklistTabModel.SelectAfterGroupDelete(oldRows, deletedHeaderIndex: 2, newRows)); // c1 header
+    }
+
+    [Fact]
+    public void SelectAfterGroupDelete_DeletingTheOnlyGroup_LandsOnTheEmptyState()
+    {
+        var oldRows = new List<ChecklistRow> { Header("c1", "Rel", 0, 1), Item("c1", "i1", "A", false) };
+        // The list is now empty → the glue renders a single empty-state row at index 0.
+        var newRows = new List<ChecklistRow> { Item("empty", "", "No checklists on this task.", false) };
+        Assert.Equal(0, ChecklistTabModel.SelectAfterGroupDelete(oldRows, deletedHeaderIndex: 0, newRows));
+    }
+
+    [Fact]
+    public void SelectAfterGroupDelete_NoNewRows_ReturnsZero()
+        => Assert.Equal(0, ChecklistTabModel.SelectAfterGroupDelete([Header("c1", "Rel", 0, 0)], deletedHeaderIndex: 0, []));
+
+    [Fact]
+    public void SelectAfterGroupDelete_OutOfRange_ClampsIntoNewRange()
+    {
+        var newRows = new List<ChecklistRow> { Header("c1", "Rel", 0, 0), Header("c2", "QA", 0, 0) };
+        Assert.Equal(1, ChecklistTabModel.SelectAfterGroupDelete([], deletedHeaderIndex: 9, newRows));
+    }
+
+    // ── DeleteGroupPrompt (F, #459) ───────────────────────────────────────────
+
+    [Fact]
+    public void DeleteGroupPrompt_Plural_NamesTheGroupAndCount()
+        => Assert.Equal("Delete checklist 'Release steps' and its 3 items? (Enter / Esc)",
+            ChecklistTabModel.DeleteGroupPrompt("Release steps", 3));
+
+    [Fact]
+    public void DeleteGroupPrompt_Singular_UsesItem()
+        => Assert.Equal("Delete checklist 'QA' and its 1 item? (Enter / Esc)",
+            ChecklistTabModel.DeleteGroupPrompt("QA", 1));
+
+    [Fact]
+    public void DeleteGroupPrompt_Empty_OmitsTheItemClause()
+        => Assert.Equal("Delete checklist 'Docs'? (Enter / Esc)",
+            ChecklistTabModel.DeleteGroupPrompt("Docs", 0));
 }

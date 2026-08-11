@@ -6,8 +6,18 @@ namespace ClickUpTodo.Configuration;
 /// <summary>Where a dispatched <c>claude</c> session starts (issue #27).</summary>
 public enum AgentWorkingDirectory
 {
-    /// <summary>Use a directory derived from the task (supplied at dispatch time); inherit if none.</summary>
-    TaskDerived,
+    /// <summary>
+    /// The default mode: start in the <b>base working directory</b> (#92). The Ctrl+A Dispatch pane
+    /// opens with a <b>task-derived pre-fill</b> the user can accept, edit or clear — a
+    /// <c>{base}/{Repository}</c> checkout match (#461) else the per-task <c>{base}/{custom-id}</c>
+    /// directory (#98), computed by <see cref="Tui.DispatchWorkingDirectoryPreFill"/>. Clearing the
+    /// field launches in the plain base dir. Since #533 the derivation lives entirely in the pre-fill,
+    /// not in <see cref="Tui.DispatchCoordinator.Plan"/> at launch — this member was formerly named
+    /// <c>TaskDerived</c>, which wrongly implied launch-time derivation; the persisted JSON value stays
+    /// <c>"TaskDerived"</c> for config compatibility.
+    /// </summary>
+    [JsonStringEnumMemberName("TaskDerived")]
+    BaseWithTaskPrefill,
 
     /// <summary>Start in the user's home directory.</summary>
     Home,
@@ -114,7 +124,7 @@ public sealed class AgentDispatchSettings
     public List<string>? LegacyExtraArgs { get; set; }
 
     /// <summary>Which directory the new session starts in.</summary>
-    public AgentWorkingDirectory WorkingDirectory { get; set; } = AgentWorkingDirectory.TaskDerived;
+    public AgentWorkingDirectory WorkingDirectory { get; set; } = AgentWorkingDirectory.BaseWithTaskPrefill;
 
     /// <summary>The directory used when <see cref="WorkingDirectory"/> is <see cref="AgentWorkingDirectory.Fixed"/>.</summary>
     public string FixedWorkingDirectory { get; set; } = "";
@@ -159,7 +169,7 @@ public sealed class AgentDispatchSettings
         && string.IsNullOrWhiteSpace(CustomTerminalCommand)
         && LaunchLocation == LaunchLocation.NewWindow
         && ProvidersAreDefault
-        && WorkingDirectory == AgentWorkingDirectory.TaskDerived
+        && WorkingDirectory == AgentWorkingDirectory.BaseWithTaskPrefill
         && string.IsNullOrWhiteSpace(FixedWorkingDirectory)
         && DefaultSessionMode == AgentSessionMode.Interactive
         && !DefaultPostResultsToComments
@@ -230,18 +240,6 @@ public sealed class AgentDispatchSettings
         AgentWorkingDirectory.Fixed => Blank(FixedWorkingDirectory),
         _ => Blank(taskDerivedDirectory),
     };
-
-    /// <summary>
-    /// Whether a dispatch should use the task-derived output behaviour (#98): launch in the base dir
-    /// and seed a per-task <c>./{custom-id}</c> output-subdir instruction (and create the base dir).
-    /// True only in <see cref="AgentWorkingDirectory.TaskDerived"/> mode <b>and</b> when no working
-    /// directory was explicitly picked in the Dispatch pane (#95) — an explicit pick means the user
-    /// chose their exact directory, so no subdir is forced. A blank/whitespace pick counts as "no
-    /// pick" (mirrors <see cref="ResolveEffectiveWorkingDirectory"/>). Pure so it can be unit-tested;
-    /// this is the crux of the #95 explicit-pick behaviour, factored out of the CI-untestable glue.
-    /// </summary>
-    public bool UsesTaskDerivedOutput(string? chosenDirectory)
-        => string.IsNullOrWhiteSpace(chosenDirectory) && WorkingDirectory == AgentWorkingDirectory.TaskDerived;
 
     /// <summary>
     /// Resolves the working directory a dispatch should start in, applying the epic-#90 precedence:

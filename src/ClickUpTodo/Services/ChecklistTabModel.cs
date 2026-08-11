@@ -164,6 +164,62 @@ public static class ChecklistTabModel
         return AnchorSelection(oldRows, deletedIndex, newRows);
     }
 
+    /// <summary>
+    /// The index to select after deleting the <b>group</b> (checklist header) at
+    /// <paramref name="deletedHeaderIndex"/> (F, #459): prefer the <b>next group header</b> (the header
+    /// immediately after the deleted group's rows), else the <b>previous group header</b>, else index
+    /// <c>0</c> — which, once the last group is gone, is the empty-state row. Deterministic and unit-tested,
+    /// the group-level sibling of <see cref="SelectAfterDelete"/>.
+    /// </summary>
+    public static int SelectAfterGroupDelete(
+        IReadOnlyList<ChecklistRow> oldRows, int deletedHeaderIndex, IReadOnlyList<ChecklistRow> newRows)
+    {
+        if (newRows.Count == 0)
+            return 0;
+        if (deletedHeaderIndex < 0 || deletedHeaderIndex >= oldRows.Count)
+            return AnchorSelection(oldRows, deletedHeaderIndex, newRows);
+
+        // The deleted group's rows are its header plus every following row up to (not including) the next
+        // header — headers are the only Depth-0, IsHeader rows, so "until the next header" bounds the group.
+        var groupEnd = deletedHeaderIndex + 1;
+        while (groupEnd < oldRows.Count && !oldRows[groupEnd].IsHeader)
+            groupEnd++;
+
+        // 1) Next group header, immediately after the deleted group.
+        if (groupEnd < oldRows.Count && oldRows[groupEnd].IsHeader)
+        {
+            var idx = IndexOfRow(newRows, oldRows[groupEnd]);
+            if (idx >= 0)
+                return idx;
+        }
+
+        // 2) Previous group header.
+        for (var i = deletedHeaderIndex - 1; i >= 0; i--)
+        {
+            if (!oldRows[i].IsHeader)
+                continue;
+            var idx = IndexOfRow(newRows, oldRows[i]);
+            if (idx >= 0)
+                return idx;
+        }
+
+        // 3) Nothing matched (the last group went away) — the empty-state row sits at index 0.
+        return 0;
+    }
+
+    /// <summary>The destructive delete-group confirmation text (F, #459), naming the checklist and how many
+    /// items go with it so the un-undoable delete is never a blind yes/no: e.g.
+    /// <c>Delete checklist 'Release steps' and its 3 items? (Enter / Esc)</c>, singular
+    /// <c>… and its 1 item?</c>, and an empty group just <c>Delete checklist 'X'? (Enter / Esc)</c>. Pure
+    /// and unit-tested. Answered by <c>Enter</c>/<c>Esc</c> (a bare <c>Y</c> would be eaten by the ListView
+    /// type-ahead), mirroring the item delete confirm.</summary>
+    public static string DeleteGroupPrompt(string name, int itemCount)
+        => itemCount <= 0
+            ? $"Delete checklist '{name}'? (Enter / Esc)"
+            : itemCount == 1
+                ? $"Delete checklist '{name}' and its 1 item? (Enter / Esc)"
+                : $"Delete checklist '{name}' and its {itemCount} items? (Enter / Esc)";
+
     /// <summary>The index of the first row in <paramref name="rows"/> with the same identity as
     /// <paramref name="anchor"/> (<see cref="SameRow"/>), or -1.</summary>
     private static int IndexOfRow(IReadOnlyList<ChecklistRow> rows, ChecklistRow anchor)

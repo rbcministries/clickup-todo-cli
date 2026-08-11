@@ -100,6 +100,44 @@ public sealed class ConfigStoreTests : IDisposable
         Assert.Equal("Lead: {userPrompt}\n{contextJson}", d.PromptTemplate);
     }
 
+    // ── AgentWorkingDirectory wire compatibility (#551) ─────────────────────────────
+    // The enum member was renamed TaskDerived → BaseWithTaskPrefill, but its persisted JSON value is
+    // pinned to "TaskDerived" via [JsonStringEnumMemberName] so existing config.json files keep working
+    // and the on-disk format is unchanged. These lock that contract in both directions.
+
+    [Fact]
+    public void Load_LegacyTaskDerivedWorkingDirValue_MapsToBaseWithTaskPrefill()
+    {
+        var store = new ConfigStore(_dir);
+        Directory.CreateDirectory(Path.GetDirectoryName(store.ConfigPath)!);
+        // A config written before the #551 rename records the mode as "TaskDerived".
+        File.WriteAllText(
+            store.ConfigPath,
+            "{\"workspaceId\":\"1\",\"personalTasksListId\":\"2\",\"agentDispatch\":{\"workingDirectory\":\"TaskDerived\"}}");
+
+        var loaded = store.Load();
+
+        Assert.NotNull(loaded.AgentDispatch);
+        Assert.Equal(AgentWorkingDirectory.BaseWithTaskPrefill, loaded.AgentDispatch.WorkingDirectory);
+    }
+
+    [Fact]
+    public void Save_BaseWithTaskPrefillMode_WritesLegacyTaskDerivedWireValue()
+    {
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig
+        {
+            WorkspaceId = "1",
+            PersonalTasksListId = "2",
+            AgentDispatch = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.BaseWithTaskPrefill },
+        });
+
+        var json = File.ReadAllText(store.ConfigPath);
+        // The wire value stays "TaskDerived"; the C# identifier never leaks to disk.
+        Assert.Contains("\"workingDirectory\": \"TaskDerived\"", json);
+        Assert.DoesNotContain("BaseWithTaskPrefill", json);
+    }
+
     [Fact]
     public void SaveThenLoad_RoundTripsMultipleDispatchProviders_AndSelectsTheDefault()
     {
