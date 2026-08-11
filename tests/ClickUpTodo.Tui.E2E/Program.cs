@@ -240,6 +240,9 @@ sealed class FakeClickUp : HttpMessageHandler
     // Parsed once from the ChecklistsJson seed into a JsonNode DOM; the toggle write flips an item's
     // `resolved` in place and the detail GET serves the current DOM. Mutated/read under _gate.
     private readonly JsonArray _checklistsDom = (JsonArray)JsonNode.Parse(ChecklistsJson)!;
+    // Monotonic id suffix for items created via POST (E, #458), so a create in a run gets a stable, unique
+    // server-assigned id ("inew1", "inew2", …). Mutated under _gate.
+    private int _checklistItemSeq;
 
     // The request dispatch table (#488), replacing the old hand-ordered if/else chain in SendAsync: routes
     // resolve by specificity, not by source order, so appending an endpoint can't silently reorder another,
@@ -557,8 +560,12 @@ sealed class FakeClickUp : HttpMessageHandler
             OkAsync(RepliesJson(CommentIdOfReply(p)))),
 
         // PUT /v2/checklist/{checklist_id}/checklist_item/{checklist_item_id} (D, #457): the toggle-resolved
-        // write — flips an item's `resolved` in the mutable DOM and echoes { checklist: … }.
-        new Route<RouteHandler>(HttpMethod.Put, "checklist/{checklistId}/checklist_item/{itemId}", ToggleChecklistItem),
+        // (and, since E/#458, rename) write — mutates the item in the DOM and echoes { checklist: … }.
+        new Route<RouteHandler>(HttpMethod.Put, "checklist/{checklistId}/checklist_item/{itemId}", ChecklistItemPut),
+        // POST /v2/checklist/{checklist_id}/checklist_item (E, #458): create — appends an item and echoes
+        // { checklist: … }; DELETE .../{item} removes it and returns an empty object.
+        new Route<RouteHandler>(HttpMethod.Post, "checklist/{checklistId}/checklist_item", CreateChecklistItem),
+        new Route<RouteHandler>(HttpMethod.Delete, "checklist/{checklistId}/checklist_item/{itemId}", DeleteChecklistItem),
 
         new Route<RouteHandler>(HttpMethod.Put, "task/{id}", TaskPut),
         new Route<RouteHandler>(HttpMethod.Get, "task/{id}", TaskGet),
@@ -615,19 +622,88 @@ sealed class FakeClickUp : HttpMessageHandler
         return Ok("""{"id":9014000000002,"hist_id":"h2","date":1751500500000}""");
     }
 
-    /// <summary>PUT /checklist/{id}/checklist_item/{id} (D, #457): parse <c>{"resolved":bool}</c>, flip that
-    /// item in the mutable checklist DOM so a later detail GET reflects it, and echo <c>{ "checklist": … }</c>
-    /// exactly as ClickUp does. Its path shares no segment with the /task/ routes, so specificity resolves it
-    /// unambiguously regardless of registration order.</summary>
-    private async Task<HttpResponseMessage> ToggleChecklistItem(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    /// <summary>PUT /checklist/{id}/checklist_item/{id}: the toggle-resolved (D, #457) and rename (E, #458)
+    /// write. Parses whichever of <c>{"resolved":bool}</c> / <c>{"name":string}</c> the body carries, mutates
+    /// that item in the mutable checklist DOM so a later detail GET reflects it, and echoes
+    /// <c>{ "checklist": … }</c> exactly as ClickUp does. Its path shares no segment with the /task/ routes,
+    /// so specificity resolves it unambiguously regardless of registration order.</summary>
+    private async Task<HttpResponseMessage> ChecklistItemPut(HttpRequestMessage request, string path, string query, CancellationToken ct)
     {
         var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
-        var resolved = ParseResolved(reqBody);
         var (checklistId, itemId) = ChecklistItemIds(path);
         string body;
         lock (_gate)
-            body = ToggleChecklistItemResponse(checklistId, itemId, resolved);
+        {
+            foreach (var node in _checklistsDom)
+            {
+                if (node is JsonObject checklist && checklist["id"]?.GetValue<string>() == checklistId)
+                {
+                    if (TryParseResolved(reqBody, out var resolved))
+                        SetItemResolved(checklist["items"] as JsonArray, itemId, resolved);
+                    if (ParseName(reqBody) is { } name)
+                        SetItemName(checklist["items"] as JsonArray, itemId, name);
+                    RecomputeCounts(checklist);
+                    break;
+                }
+            }
+            body = ChecklistEcho(checklistId);
+        }
         return Ok(body);
+    }
+
+    /// <summary>POST /checklist/{id}/checklist_item (E, #458): append a new item (server-assigned id,
+    /// unresolved, ordered last) to the checklist's top level in the DOM and echo the reconciled
+    /// <c>{ "checklist": … }</c> — the create envelope ClickUp returns.</summary>
+    private async Task<HttpResponseMessage> CreateChecklistItem(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
+        var name = ParseName(reqBody) ?? "";
+        var checklistId = ChecklistIdFromCollectionPath(path);
+        string body;
+        lock (_gate)
+        {
+            foreach (var node in _checklistsDom)
+            {
+                if (node is JsonObject checklist && checklist["id"]?.GetValue<string>() == checklistId)
+                {
+                    var items = checklist["items"] as JsonArray ?? [];
+                    checklist["items"] = items;
+                    items.Add(new JsonObject
+                    {
+                        ["id"] = $"inew{++_checklistItemSeq}",
+                        ["name"] = name,
+                        ["resolved"] = false,
+                        ["orderindex"] = items.Count,
+                    });
+                    RecomputeCounts(checklist);
+                    break;
+                }
+            }
+            body = ChecklistEcho(checklistId);
+        }
+        return Ok(body);
+    }
+
+    /// <summary>DELETE /checklist/{id}/checklist_item/{id} (E, #458): remove the item (searching nested
+    /// children) from the DOM, recompute counts, and return an empty object like ClickUp.</summary>
+    private async Task<HttpResponseMessage> DeleteChecklistItem(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        _ = request;
+        await Task.CompletedTask;
+        var (checklistId, itemId) = ChecklistItemIds(path);
+        lock (_gate)
+        {
+            foreach (var node in _checklistsDom)
+            {
+                if (node is JsonObject checklist && checklist["id"]?.GetValue<string>() == checklistId)
+                {
+                    RemoveItem(checklist["items"] as JsonArray, itemId);
+                    RecomputeCounts(checklist);
+                    break;
+                }
+            }
+        }
+        return Ok("{}");
     }
 
     /// <summary>A /task/{id} PUT (#217): status/priority PUTs carry no assignees; an assignee add/remove or
@@ -895,19 +971,52 @@ sealed class FakeClickUp : HttpMessageHandler
     }
 
     /// <summary>Reads the <c>resolved</c> boolean from a checklist-item PUT body (<c>{"resolved":bool}</c>),
-    /// defaulting to false on a missing/odd body (D, #457).</summary>
-    private static bool ParseResolved(string requestBody)
+    /// returning false (via <paramref name="resolved"/>) and <c>false</c> when the body has no boolean
+    /// <c>resolved</c> — so a rename PUT (name only) doesn't get read as an unresolve (D, #457 / E, #458).</summary>
+    private static bool TryParseResolved(string requestBody, out bool resolved)
     {
+        resolved = false;
         try
         {
             using var doc = JsonDocument.Parse(requestBody);
-            return doc.RootElement.TryGetProperty("resolved", out var r)
-                   && r.ValueKind == JsonValueKind.True;
+            if (!doc.RootElement.TryGetProperty("resolved", out var r)
+                || r.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                return false;
+            resolved = r.ValueKind == JsonValueKind.True;
+            return true;
         }
         catch (JsonException)
         {
             return false;
         }
+    }
+
+    /// <summary>Reads the string <c>name</c> from a checklist-item create/rename body (E, #458), or null
+    /// when the body carries no string <c>name</c>.</summary>
+    private static string? ParseName(string requestBody)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            return doc.RootElement.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String
+                ? n.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The checklist id from a create path <c>/v2/checklist/{checklist_id}/checklist_item</c>
+    /// (no trailing item id) (E, #458).</summary>
+    private static string ChecklistIdFromCollectionPath(string path)
+    {
+        const string listSeg = "/checklist/";
+        const string itemSeg = "/checklist_item";
+        var start = path.IndexOf(listSeg, StringComparison.Ordinal) + listSeg.Length;
+        var end = path.IndexOf(itemSeg, StringComparison.Ordinal);
+        return end > start ? path[start..end] : "";
     }
 
     /// <summary>Splits <c>/v2/checklist/{checklist_id}/checklist_item/{checklist_item_id}</c> into its two
@@ -922,26 +1031,19 @@ sealed class FakeClickUp : HttpMessageHandler
         return (end > start ? path[start..end] : "", itemId);
     }
 
-    /// <summary>Flips <paramref name="itemId"/>'s <c>resolved</c> flag (searching items + nested children) in
-    /// checklist <paramref name="checklistId"/> within the mutable DOM, recomputes that checklist's
-    /// resolved/unresolved counts, and returns the ClickUp-shaped <c>{ "checklist": … }</c> echo of the
-    /// updated group (D, #457). Called under <c>_gate</c>.</summary>
-    private string ToggleChecklistItemResponse(string checklistId, string itemId, bool resolved)
+    /// <summary>Echoes the whole parent checklist <paramref name="checklistId"/> from the mutable DOM under
+    /// a <c>checklist</c> key (ClickUp's shape) as a deep clone, so the returned node isn't parented in the
+    /// DOM. Called under <c>_gate</c> after a mutation (D, #457 / E, #458).</summary>
+    private string ChecklistEcho(string checklistId)
     {
         JsonObject? target = null;
         foreach (var node in _checklistsDom)
-        {
             if (node is JsonObject checklist && checklist["id"]?.GetValue<string>() == checklistId)
             {
                 target = checklist;
-                SetItemResolved(checklist["items"] as JsonArray, itemId, resolved);
-                RecomputeCounts(checklist);
                 break;
             }
-        }
 
-        // Echo the whole parent checklist under a `checklist` key (ClickUp's shape); a deep clone so the
-        // returned node isn't parented in the DOM.
         var echoed = target is null ? new JsonObject() : (JsonObject)target.DeepClone();
         return new JsonObject { ["checklist"] = echoed }.ToJsonString();
     }
@@ -962,6 +1064,48 @@ sealed class FakeClickUp : HttpMessageHandler
                 return true;
             }
             if (SetItemResolved(item["children"] as JsonArray, itemId, resolved))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Sets the <c>name</c> of the item with <paramref name="itemId"/>, recursing into each item's
+    /// <c>children</c>; returns true once found (E, #458).</summary>
+    private static bool SetItemName(JsonArray? items, string itemId, string name)
+    {
+        if (items is null)
+            return false;
+        foreach (var node in items)
+        {
+            if (node is not JsonObject item)
+                continue;
+            if (item["id"]?.GetValue<string>() == itemId)
+            {
+                item["name"] = name;
+                return true;
+            }
+            if (SetItemName(item["children"] as JsonArray, itemId, name))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Removes the item with <paramref name="itemId"/> (searching nested <c>children</c>) from
+    /// <paramref name="items"/>; returns true once removed (E, #458).</summary>
+    private static bool RemoveItem(JsonArray? items, string itemId)
+    {
+        if (items is null)
+            return false;
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (items[i] is not JsonObject item)
+                continue;
+            if (item["id"]?.GetValue<string>() == itemId)
+            {
+                items.RemoveAt(i);
+                return true;
+            }
+            if (RemoveItem(item["children"] as JsonArray, itemId))
                 return true;
         }
         return false;
