@@ -837,6 +837,21 @@ public sealed class TaskService(
     public Task<TaskChecklist> SetChecklistItemResolvedAsync(string checklistId, string itemId, bool resolved, CancellationToken ct = default)
         => client.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct);
 
+    /// <summary>Creates a checklist item (E, #458, over the facade write) and returns the server-confirmed
+    /// parent <see cref="TaskChecklist"/> so the detail view can reconcile it. Thin passthrough.</summary>
+    public Task<TaskChecklist> CreateChecklistItemAsync(string checklistId, string name, CancellationToken ct = default)
+        => client.CreateChecklistItemAsync(checklistId, name, ct);
+
+    /// <summary>Renames a checklist item (E, #458, over the facade write) and returns the server-confirmed
+    /// parent <see cref="TaskChecklist"/>. Thin passthrough.</summary>
+    public Task<TaskChecklist> RenameChecklistItemAsync(string checklistId, string itemId, string name, CancellationToken ct = default)
+        => client.RenameChecklistItemAsync(checklistId, itemId, name, ct);
+
+    /// <summary>Deletes a checklist item (E, #458, over the facade write). ClickUp returns an empty body,
+    /// so this is a void write; the caller keeps its optimistic local removal. Thin passthrough.</summary>
+    public Task DeleteChecklistItemAsync(string checklistId, string itemId, CancellationToken ct = default)
+        => client.DeleteChecklistItemAsync(checklistId, itemId, ct);
+
     /// <summary>
     /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying
     /// <paramref name="newStatus"/>, leaving every other task and the overall order untouched. Pure

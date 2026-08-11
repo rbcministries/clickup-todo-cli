@@ -470,6 +470,52 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
             return MapChecklist(checklist);
         });
 
+    /// <summary>
+    /// Create a checklist item (E, #458) via <c>POST /checklist/{checklist_id}/checklist_item</c> with a
+    /// <c>{ name }</c> body. ClickUp echoes the whole parent checklist (the new item included, with its
+    /// server id/orderindex + refreshed counts), so this returns the <b>server-confirmed</b>
+    /// <see cref="TaskChecklist"/> — mapped through the same <see cref="MapChecklist"/> as the read path,
+    /// so no generated type escapes the facade. Same return-the-truth contract as
+    /// <see cref="SetChecklistItemResolvedAsync"/>. Per-item assignee is G (#460); this sends name only.
+    /// </summary>
+    public Task<TaskChecklist> CreateChecklistItemAsync(string checklistId, string name, CancellationToken ct = default)
+        => Guard("CreateChecklistItem", async () =>
+        {
+            var response = await _client.V2.Checklist[checklistId].Checklist_item
+                .PostAsync(new CreateChecklistItemRequest { Name = name }, cancellationToken: ct);
+            var checklist = response?.Checklist
+                ?? throw new InvalidOperationException($"ClickUp returned no checklist for new item in '{checklistId}'.");
+            return MapChecklist(checklist);
+        });
+
+    /// <summary>
+    /// Rename a checklist item (E, #458) via <c>PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id}</c>
+    /// with a <c>{ name }</c> body (the same path/response as the D toggle, a different field). ClickUp
+    /// echoes the whole parent checklist, so this returns the <b>server-confirmed</b>
+    /// <see cref="TaskChecklist"/> mapped via <see cref="MapChecklist"/>.
+    /// </summary>
+    public Task<TaskChecklist> RenameChecklistItemAsync(string checklistId, string itemId, string name, CancellationToken ct = default)
+        => Guard("UpdateChecklistItem", async () =>
+        {
+            var response = await _client.V2.Checklist[checklistId].Checklist_item[itemId]
+                .PutAsync(new UpdateChecklistItemRequest { Name = name }, cancellationToken: ct);
+            var checklist = response?.Checklist
+                ?? throw new InvalidOperationException($"ClickUp returned no checklist for item '{itemId}'.");
+            return MapChecklist(checklist);
+        });
+
+    /// <summary>
+    /// Delete a checklist item (E, #458) via <c>DELETE /checklist/{checklist_id}/checklist_item/{checklist_item_id}</c>.
+    /// ClickUp returns an empty body, so there is nothing to map — the caller keeps its optimistic local
+    /// removal (revert-on-failure), exactly as <see cref="DeleteTaskAsync"/> does. Errors surface as a
+    /// caught <see cref="ClickUpApiException"/>.
+    /// </summary>
+    public Task DeleteChecklistItemAsync(string checklistId, string itemId, CancellationToken ct = default)
+        => Guard("DeleteChecklistItem", async () =>
+        {
+            using var _ = await _client.V2.Checklist[checklistId].Checklist_item[itemId].DeleteAsync(cancellationToken: ct);
+        });
+
     /// <summary>Full detail for a single task (description, tags, assignees, dates, custom fields).</summary>
     public Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default)
         => Guard("GetTask", async () =>

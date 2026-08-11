@@ -413,6 +413,70 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task CreateRenameDeleteChecklistItem_RoundTrips_AndLeavesTheChecklistAsFound()
+    {
+        // Item CRUD (E, #458): add an item to a real checklist, rename it, then delete it — proving each
+        // write against the live API and leaving the checklist exactly as found (the delete is the cleanup).
+        // Reuses the same task-with-a-checklist env var as the toggle test so the suite needn't grow one.
+        var checklistTaskId = Environment.GetEnvironmentVariable("CLICKUP_CHECKLIST_TASK_ID");
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(checklistTaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_CHECKLIST_TASK_ID (a task that has a checklist) to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var detail = await client.GetTaskDetailAsync(checklistTaskId!);
+        var checklist = detail.Checklists.FirstOrDefault();
+        Skip.If(checklist is null, "CLICKUP_CHECKLIST_TASK_ID has no checklist to add an item to.");
+
+        var addedName = $"clickup-todo integration item {Guid.NewGuid():N}";
+        var afterCreate = await client.CreateChecklistItemAsync(checklist!.Id, addedName);
+        var created = FindByName(afterCreate.Items, addedName);
+        Assert.NotNull(created); // the new item is present in the reconciled checklist ClickUp echoes
+
+        try
+        {
+            var renamedName = $"clickup-todo integration renamed {Guid.NewGuid():N}";
+            var afterRename = await client.RenameChecklistItemAsync(checklist.Id, created!.Id, renamedName);
+            Assert.Equal(renamedName, FindItemById(afterRename.Items, created.Id)?.Name);
+            Assert.Null(FindByName(afterRename.Items, addedName)); // old name no longer present
+        }
+        finally
+        {
+            await client.DeleteChecklistItemAsync(checklist.Id, created!.Id);
+        }
+
+        // Re-fetch: the item is gone, so the task is left as it was found.
+        var afterDelete = await client.GetTaskDetailAsync(checklistTaskId!);
+        var afterDeleteChecklist = afterDelete.Checklists.FirstOrDefault(c => c.Id == checklist.Id);
+        Assert.True(afterDeleteChecklist is null || FindItemById(afterDeleteChecklist.Items, created.Id) is null);
+
+        static TaskChecklistItem? FindByName(IReadOnlyList<TaskChecklistItem> items, string name)
+        {
+            foreach (var i in items)
+            {
+                if (i.Name == name)
+                    return i;
+                var nested = FindByName(i.Children, name);
+                if (nested is not null)
+                    return nested;
+            }
+            return null;
+        }
+
+        static TaskChecklistItem? FindItemById(IReadOnlyList<TaskChecklistItem> items, string id)
+        {
+            foreach (var i in items)
+            {
+                if (i.Id == id)
+                    return i;
+                var nested = FindItemById(i.Children, id);
+                if (nested is not null)
+                    return nested;
+            }
+            return null;
+        }
+    }
+
+    [SkippableFact]
     public async Task GetTaskComments_ReturnsComments()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
