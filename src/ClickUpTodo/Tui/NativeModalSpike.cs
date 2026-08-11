@@ -1,3 +1,4 @@
+using ClickUpTodo.Configuration;
 using ClickUpTodo.Tui.Screens;
 using Terminal.Gui.App;
 using Terminal.Gui.Drivers;
@@ -43,6 +44,11 @@ internal static class NativeModalSpike
     // from two F1 presses buffered before the first idle-invoke ran, stacking two nested run-loops.
     private static bool _open;
 
+    // The Filter·Sort·Group (#554) modal's own slot, distinct from the help slot above so native Help
+    // can stack *over* an open F3 modal (both slots claimed at once) — the native analogue of the
+    // _screens LIFO stack. Same rationale as _open: the native path pushes nothing to _screens.
+    private static bool _fsgOpen;
+
     /// <summary>
     /// Claims the single native-modal slot, returning false if one is already open or opening. Called
     /// synchronously on the UI thread from <c>ShowHelp</c> before the nested run is deferred.
@@ -52,6 +58,19 @@ internal static class NativeModalSpike
         if (_open)
             return false;
         _open = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Claims the Filter·Sort·Group (#554) native-modal slot, returning false if one is already open or
+    /// opening. Called synchronously on the UI thread from <c>OpenViewSettings</c> before the nested run
+    /// is deferred (distinct from <see cref="TryBeginOpen"/> so Help can stack over the F3 modal).
+    /// </summary>
+    public static bool TryBeginOpenFilterSortGroup()
+    {
+        if (_fsgOpen)
+            return false;
+        _fsgOpen = true;
         return true;
     }
 
@@ -100,6 +119,73 @@ internal static class NativeModalSpike
         {
             TuiTeardown.DisposeSwallowingTeardownBug(dialog, "NativeModalSpike Dialog");
             _open = false;
+        }
+    }
+
+    /// <summary>
+    /// #554: opens Filter · Sort · Group as a native <see cref="Dialog"/> on its own nested run-loop —
+    /// the focusable-form analogue of <see cref="RunHelpDialog"/> — so the two hosts can be measured A/B
+    /// for the thing Help could not exercise: <b>intra-modal input latency</b> (typing/Tab across the
+    /// form's <see cref="TextField"/>/<see cref="ListView"/>s) and <b>result-marshalling</b>. The form
+    /// itself is built by the shared <see cref="FilterSortGroupFormBuilder"/>, so it is identical to the
+    /// <c>_screens</c> <see cref="FilterSortGroupScreen"/> and the A/B differs only in the hosting
+    /// mechanism (the title carries <see cref="TitleMarker"/> so the harness can prove leg B took the
+    /// native path). Esc / Cancel closes with no result; Save marshals a <see cref="ViewSettings"/> back
+    /// through <paramref name="apply"/>. F1 stacks native Help over the modal, deferred out of the
+    /// keypress via <see cref="Application.Invoke(Action)"/> like <c>ShowHelp</c> so the nested help loop
+    /// is not entered re-entrantly. The dispose is routed through the shared teardown guard (#346). Must
+    /// be paired with a preceding successful <see cref="TryBeginOpenFilterSortGroup"/>.
+    /// </summary>
+    public static void RunFilterSortGroupDialog(ViewSettings current, Action<ViewSettings?> apply, Action<string> flash)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(apply);
+        ArgumentNullException.ThrowIfNull(flash);
+
+        var dialog = new Dialog
+        {
+            Title = $"Filter · Sort · Group {TitleMarker}",
+            Width = Dim.Fill(4),
+            Height = Dim.Fill(2),
+        };
+
+        var form = FilterSortGroupFormBuilder.Build(current, flash, () => Application.RequestStop(dialog));
+        dialog.Add([.. form.Controls]);
+
+        // Start focus on the field picker, matching the _screens host's OnShown, so the A/B measures the
+        // same intra-modal Tab path. Deferred to Initialized so the view is part of the running toplevel.
+        dialog.Initialized += (_, _) => form.PrimaryFocus.SetFocus();
+
+        dialog.KeyDown += (_, key) =>
+        {
+            if (key.KeyCode == KeyCode.Esc)
+            {
+                key.Handled = true;
+                Application.RequestStop(dialog);
+            }
+            else if (key.KeyCode == KeyCode.F1)
+            {
+                // Modal stacking: open native Help *over* the F3 dialog (the native analogue of the
+                // _screens LIFO stack fsg_check.py exercises). Deferred via Application.Invoke so the
+                // nested help loop is not entered re-entrantly from inside KeyDown (mirrors ShowHelp),
+                // and guarded by the help slot so a buffered double-F1 can't stack two help dialogs.
+                key.Handled = true;
+                if (TryBeginOpen())
+                    Application.Invoke(RunHelpDialog);
+            }
+        };
+
+        try
+        {
+            Application.Run(dialog);
+        }
+        finally
+        {
+            TuiTeardown.DisposeSwallowingTeardownBug(dialog, "NativeModalSpike FilterSortGroup Dialog");
+            _fsgOpen = false;
+            // Marshal the result back on the UI thread (the nested loop returns into the outer loop's
+            // invoke) — null on Esc/Cancel, the saved view on Save. This is the axis Help never had.
+            apply(form.Result);
         }
     }
 }

@@ -1127,6 +1127,19 @@ public sealed class TodoApp
         if (ActiveScreen is not null)
             return;
 
+        if (NativeModalSpike.Enabled)
+        {
+            // #554 spike: open Filter·Sort·Group as a native Terminal.Gui Dialog (nested Application.Run)
+            // instead of the _screens-mounted FilterSortGroupScreen — the focusable-form A/B follow-up to
+            // #404's Help modal. The native path pushes nothing to _screens, so the ActiveScreen guard
+            // can't serialise it; TryBeginOpenFilterSortGroup claims its own slot (cleared when the nested
+            // loop returns). The run is deferred out of the keypress via Application.Invoke, and the saved
+            // ViewSettings is marshalled back through ApplyViewSettings. Flag-gated; off in production.
+            if (NativeModalSpike.TryBeginOpenFilterSortGroup())
+                Application.Invoke(() => NativeModalSpike.RunFilterSortGroupDialog(_config.View, ApplyViewSettings, Flash));
+            return;
+        }
+
         var screen = new FilterSortGroupScreen(_config.View);
         ShowScreen(screen, () => ApplyViewSettings(screen.Result));
     }
