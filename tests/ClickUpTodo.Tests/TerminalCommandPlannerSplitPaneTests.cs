@@ -85,6 +85,17 @@ public sealed class TerminalCommandPlannerSplitPaneTests
     }
 
     [Fact]
+    public void Windows_Split_CarriesTheWtProfile_WhenSet()
+    {
+        // The split spec reuses WtArgs, so a matched #462 profile is passed as `-p <profile>` exactly as
+        // on the tab/window WT specs.
+        var withProfile = new TerminalLauncherOptions { LaunchLocation = LaunchLocation.SplitPane, WindowsTerminalProfile = "Ubuntu" };
+        var spec = Plan(OSPlatformKind.Windows, Present("wt", "pwsh"), withProfile, Env(("WT_SESSION", "1")))[0];
+
+        Assert.Equal(["-w", "0", "sp", "-p", "Ubuntu", "pwsh", "-NoExit", "-Command"], spec.Arguments.Take(8));
+    }
+
+    [Fact]
     public void Windows_Split_EscapesTheWtDelimiter_InTheWorkingDirPrefix()
     {
         // The Set-Location prefix contains a `;`, which WT would treat as a subcommand delimiter — WtArgs
@@ -176,6 +187,24 @@ public sealed class TerminalCommandPlannerSplitPaneTests
         Assert.Equal("zellij", spec.FileName);
         Assert.Equal("Zellij (split pane)", spec.DisplayName);
         Assert.Equal(["action", "new-pane", "-d", "right", "--", "bash", "-lc"], spec.Arguments.Take(7));
+    }
+
+    [Fact]
+    public void Linux_Split_ZellijAbsent_EmitsNoSplitSpec()
+    {
+        // ZELLIJ set (a stale/inherited value) but the `zellij` binary is not on PATH — the exe gate wins.
+        var specs = Plan(OSPlatformKind.Linux, Present("xterm"), Split, Env(("ZELLIJ", "0")));
+
+        Assert.DoesNotContain(specs, s => s.DisplayName.Contains("split", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Linux_Split_TmuxAbsent_EmitsNoSplitSpec()
+    {
+        // TMUX set but `tmux` not on PATH — no split spec, and no tmux window/tab rung either.
+        var specs = Plan(OSPlatformKind.Linux, Present("xterm"), Split, Env(("TMUX", "1")));
+
+        Assert.DoesNotContain(specs, s => s.DisplayName.Contains("split", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
