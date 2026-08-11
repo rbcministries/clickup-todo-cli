@@ -102,37 +102,4 @@ public sealed class ChecklistGroupEditsTests
         Assert.False(ChecklistArranger.Project(after).IsEmpty);
         Assert.True(HasGroup(after, ChecklistGroupEdits.ProvisionalChecklistId));
     }
-
-    // ── NewChecklistId ──────────────────────────────────────────────────────────
-
-    [Fact]
-    public void NewChecklistId_FindsTheSingleAddedGroup()
-    {
-        var before = new[] { List("c1", "Rel", 0) };
-        var after = new[] { List("c1", "Rel", 0), List("c2", "QA", 1) };
-        Assert.Equal("c2", ChecklistGroupEdits.NewChecklistId(before, after));
-    }
-
-    [Fact]
-    public void NewChecklistId_FromEmptyBefore_FindsTheFirstGroup()
-        => Assert.Equal("c1", ChecklistGroupEdits.NewChecklistId([], [List("c1", "Rel", 0)]));
-
-    [Fact]
-    public void NewChecklistId_NoNewGroup_IsNull()
-    {
-        var same = new[] { List("c1", "Rel", 0) };
-        Assert.Null(ChecklistGroupEdits.NewChecklistId(same, same));
-    }
-
-    [Fact]
-    public void NewChecklistId_MultipleNewGroups_IsNull_Ambiguous()
-    {
-        var before = new[] { List("c1", "Rel", 0) };
-        var after = new[] { List("c1", "Rel", 0), List("c2", "QA", 1), List("c3", "Docs", 2) };
-        Assert.Null(ChecklistGroupEdits.NewChecklistId(before, after));
-    }
-
-    [Fact]
-    public void NewChecklistId_NullAfter_IsNull()
-        => Assert.Null(ChecklistGroupEdits.NewChecklistId([List("c1", "Rel", 0)], null));
 }

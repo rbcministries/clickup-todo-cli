@@ -97,9 +97,9 @@ A new `ChecklistItemEdits`-style static class (immutable, order-preserving, no T
   group carried through unchanged. No-op on a miss.
 - `Remove(checklists, checklistId)` → the list with the matching group (and, by construction, all its items)
   removed. No-op on a miss.
-- `NewChecklistId(before, after)` → the single group id in `after` not in `before` (else `null`, ambiguous),
-  so create can land the selection on the freshly-created group's header. Mirrors `ChecklistItemEdits.NewItemId`.
 - Name normalization reuses `ChecklistItemEdits.NormalizeName` (already public — trims, rejects empty/whitespace).
+- (No `NewChecklistId` before→after diff, unlike the item level's `NewItemId`: a group-create response *is*
+  the new checklist, so the screen selects it by `server.Id` directly.)
 
 Post-delete **selection** — a new sibling to `ChecklistTabModel.SelectAfterDelete`:
 
@@ -129,8 +129,10 @@ Post-delete **selection** — a new sibling to `ChecklistTabModel.SelectAfterDel
   / the pending-overlay-in-`UpdateData` discipline so a 30 s auto-refresh or `F5` mid-write neither clobbers
   nor double-applies the edit:
   - *Create*: insert a provisional empty group (sentinel id) via `ChecklistGroupEdits.InsertProvisional`,
-    re-project, select its header; fire `createChecklistAsync`; on success replace the provisional with the
-    server-mapped group and select `NewChecklistId`; on failure remove the provisional + flash.
+    re-project, select its header; fire `createChecklistAsync`; on success reconcile idempotently by id
+    (drop the provisional **and** any already-present copy of `server.Id`, then append the server group once
+    — so a refresh landing mid-write can't leave a duplicate header) and select it by `server.Id`; on failure
+    remove the provisional + flash.
   - *Rename*: `ChecklistGroupEdits.Rename` optimistically (selection stays by id), fire `renameChecklistAsync`,
     on success replace with the server group, on failure revert to the snapshot + flash.
   - *Delete*: snapshot the whole `_task.Checklists`; compute `SelectAfterGroupDelete`;

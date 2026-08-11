@@ -2736,9 +2736,16 @@ public sealed class TaskDetailScreen : Screen
                     if (_disposed)
                         return;
                     // Swap the provisional (sentinel id) for the server group (real id), keeping it where the
-                    // provisional sat (appended last). Then land the selection on the new group's header.
+                    // provisional sat (appended last). Idempotent by server id: drop the provisional AND any
+                    // already-present copy of the server group before appending it exactly once — a refresh
+                    // landing after the POST committed but before this reconcile re-applies the provisional
+                    // overlay onto server data that already contains the new group, which would otherwise
+                    // leave [X, provisional] → [X, X]. Then land the selection on the new group's header.
                     var reconciled = ChecklistGroupEdits.InsertProvisional(
-                        ChecklistGroupEdits.Remove(_task.Checklists, ChecklistGroupEdits.ProvisionalChecklistId), server);
+                        ChecklistGroupEdits.Remove(
+                            ChecklistGroupEdits.Remove(_task.Checklists, ChecklistGroupEdits.ProvisionalChecklistId),
+                            server.Id),
+                        server);
                     UpdateData(_task with { Checklists = reconciled }, _comments);
                     SelectChecklistGroupById(server.Id);
                     RequestFlash("Checklist added.");

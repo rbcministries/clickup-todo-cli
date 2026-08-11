@@ -4,12 +4,13 @@ namespace ClickUpTodo.Services;
 
 /// <summary>
 /// The Terminal.Gui-free transforms behind the Checklists tab's <b>group</b> CRUD (F, #459): rename, remove
-/// and optimistic-insert a whole checklist group in a task's checklist list, plus the create-response diff.
-/// Immutable and order-preserving, exactly like <see cref="ChecklistItemEdits"/> (which handles the
-/// <em>item</em> level), so the optimistic-update and revert-on-failure logic is unit-testable without a
-/// terminal — the screen re-projects the result through <see cref="ChecklistArranger"/> to get the new rows
-/// and progress counts. Name normalization is shared with the item level via
-/// <see cref="ChecklistItemEdits.NormalizeName"/>.
+/// and optimistic-insert a whole checklist group in a task's checklist list. Immutable and order-preserving,
+/// exactly like <see cref="ChecklistItemEdits"/> (which handles the <em>item</em> level), so the
+/// optimistic-update and revert-on-failure logic is unit-testable without a terminal — the screen re-projects
+/// the result through <see cref="ChecklistArranger"/> to get the new rows and progress counts. Name
+/// normalization is shared with the item level via <see cref="ChecklistItemEdits.NormalizeName"/>. A group
+/// create needs no before→after diff (unlike the item level's <see cref="ChecklistItemEdits.NewItemId"/>):
+/// the create response <em>is</em> the new checklist, so the screen selects it by its own id directly.
 /// <para>Every transform is a value-identical no-op when its target checklist is missing, so a stray call
 /// (e.g. against an item row) can never corrupt the list.</para>
 /// </summary>
@@ -55,30 +56,4 @@ public static class ChecklistGroupEdits
     public static IReadOnlyList<TaskChecklist> InsertProvisional(
         IReadOnlyList<TaskChecklist> checklists, TaskChecklist provisional)
         => [.. checklists ?? [], provisional];
-
-    /// <summary>The single checklist-group id present in <paramref name="after"/> but not
-    /// <paramref name="before"/> — the group a create added — so the screen can land the selection on the
-    /// freshly-created group's header once the server list replaces the provisional one. Returns
-    /// <c>null</c> when there is no such id, or more than one (an ambiguous/concurrent addition), so the
-    /// caller falls back to identity anchoring rather than guessing. Mirrors
-    /// <see cref="ChecklistItemEdits.NewItemId"/> at the group level.</summary>
-    public static string? NewChecklistId(
-        IReadOnlyList<TaskChecklist>? before, IReadOnlyList<TaskChecklist>? after)
-    {
-        if (after is null)
-            return null;
-        var beforeIds = new HashSet<string>(
-            (before ?? []).Select(c => c.Id).Where(id => !string.IsNullOrEmpty(id)), StringComparer.Ordinal);
-        string? found = null;
-        foreach (var checklist in after)
-        {
-            var id = checklist.Id;
-            if (string.IsNullOrEmpty(id) || beforeIds.Contains(id))
-                continue;
-            if (found is not null)
-                return null; // more than one new id — ambiguous, don't guess.
-            found = id;
-        }
-        return found;
-    }
 }
