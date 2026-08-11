@@ -86,10 +86,13 @@ The single strongest argument, and it is grounded in code:
   (`:56-72`, the cross-platform emulator matrix, same one dispatch uses), and the
   UI-agnostic `AppTabLaunch` glue (`Agent/AppTabLaunch.cs`: `Options` / `Opening` /
   `Opened` / `Fallback`). `SingleTaskApp.LaunchAppTabForTask` (`:716-750`) and
-  `FeedApp.LaunchAppTabForTask` (`:405-439`) are byte-for-byte the same shape.
+  `FeedApp.LaunchAppTabForTask` (`:405-439`) are structurally identical bar the
+  flash label — the shared machinery (`AppLaunchCommand.ForTask`, the `AppTabLaunch`
+  helpers, the re-entrancy guard, the off-thread launch) is the same in both.
 
-So a `--chat` host slots into a shape the repo has built **three times** already
-(`--task`, `--feed`, and the tab-relaunch). Option 3's minimum shape is just
+So a `--chat` host reuses patterns the repo has already proven: **two** standalone
+root hosts (`--task`, `--feed`) as the hosting shape, plus the shared **tab-relaunch**
+machinery as the launch mechanism. Option 3's minimum shape is just
 `--chat <token>` + the conversation surface (E/#500); it is additive and has zero
 blast radius on the dashboard.
 
