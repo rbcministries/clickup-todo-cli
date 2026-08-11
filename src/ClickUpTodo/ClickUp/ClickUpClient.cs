@@ -514,6 +514,41 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         });
 
     /// <summary>
+    /// Reorder / reparent a checklist item (G, #569) via
+    /// <c>PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id}</c> — the same endpoint/response
+    /// as the D toggle and E rename, with the <c>orderindex</c> and <c>parent</c> fields. Sends only what a
+    /// move changes: always the new <paramref name="orderIndex"/> (the slot among siblings the pure
+    /// <see cref="ClickUpTodo.Services.ChecklistMove"/> computed), plus <c>parent</c> when reparenting —
+    /// <paramref name="parentId"/> to indent under an item, or, when <paramref name="clearParent"/> is set,
+    /// an explicit <c>"parent": null</c> to outdent to top level (the additional-data-bag clear pattern
+    /// <see cref="SetTaskPriorityAsync"/> uses, since Kiota omits a null typed property). A plain up/down move
+    /// leaves <c>parent</c> untouched (<paramref name="parentId"/> null and <paramref name="clearParent"/>
+    /// false), so no <c>parent</c> is sent. ClickUp echoes the whole parent checklist, so this returns the
+    /// <b>server-confirmed</b> <see cref="TaskChecklist"/> via <see cref="MapChecklist"/> and records the same
+    /// change-marker nudge (#519) as <see cref="SetChecklistItemResolvedAsync"/>, keyed by the owning
+    /// <paramref name="taskId"/>.
+    /// </summary>
+    public Task<TaskChecklist> MoveChecklistItemAsync(string taskId, string checklistId, string itemId, string? parentId, double orderIndex, bool clearParent, CancellationToken ct = default)
+        => Guard("UpdateChecklistItem", async () =>
+        {
+            var request = new UpdateChecklistItemRequest { Orderindex = orderIndex };
+            if (clearParent)
+                // Outdent to top level: force an explicit `"parent": null` (which ClickUp reads as "no
+                // parent") via the additional-data bag, since a null typed Parent would be omitted and leave
+                // the item where it is — the same shape as SetTaskPriorityAsync's clear.
+                request.AdditionalData["parent"] = null!;
+            else if (parentId is not null)
+                request.Parent = parentId;
+
+            var response = await _client.V2.Checklist[checklistId].Checklist_item[itemId]
+                .PutAsync(request, cancellationToken: ct);
+            var checklist = response?.Checklist
+                ?? throw new InvalidOperationException($"ClickUp returned no checklist for item '{itemId}'.");
+            _changeMarkers.Record(taskId, serverDateUpdatedMs: null, ChecklistFields);
+            return MapChecklist(checklist);
+        });
+
+    /// <summary>
     /// Delete a checklist item (E, #458) via <c>DELETE /checklist/{checklist_id}/checklist_item/{checklist_item_id}</c>.
     /// ClickUp returns an empty body, so there is nothing to map — the caller keeps its optimistic local
     /// removal (revert-on-failure), exactly as <see cref="DeleteTaskAsync"/> does. Errors surface as a

@@ -122,6 +122,56 @@ public sealed class ClickUpClientChecklistWriteTests
         Assert.Null(handler.Body); // DELETE carries no request body
     }
 
+    // ── Reorder / reparent (G, #569) ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task MoveChecklistItem_UpDown_SendsOrderIndexOnly_NoParent()
+    {
+        var handler = new CapturingHandler(ChecklistResponse);
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var updated = await client.MoveChecklistItemAsync("t1", "c1", "i2", parentId: null, orderIndex: 0.5, clearParent: false);
+
+        // A plain up/down move sends the new orderindex and leaves parent untouched (no key at all).
+        Assert.Equal(HttpMethod.Put, handler.Method);
+        Assert.Contains("/v2/checklist/c1/checklist_item/i2", handler.RequestUri);
+        var body = handler.Body!.RootElement;
+        Assert.Equal(JsonValueKind.Number, body.GetProperty("orderindex").ValueKind);
+        Assert.Equal(0.5, body.GetProperty("orderindex").GetDouble());
+        Assert.False(body.TryGetProperty("parent", out _)); // parent unchanged ⇒ not sent
+        // Response mapped back to the domain TaskChecklist.
+        Assert.Equal("c1", updated.Id);
+    }
+
+    [Fact]
+    public async Task MoveChecklistItem_Indent_SendsParentId_AndOrderIndex()
+    {
+        var handler = new CapturingHandler(ChecklistResponse);
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await client.MoveChecklistItemAsync("t1", "c1", "i2", parentId: "i1", orderIndex: 3, clearParent: false);
+
+        var body = handler.Body!.RootElement;
+        Assert.Equal("i1", body.GetProperty("parent").GetString());
+        Assert.Equal(3, body.GetProperty("orderindex").GetDouble());
+    }
+
+    [Fact]
+    public async Task MoveChecklistItem_OutdentToRoot_SendsExplicitNullParent()
+    {
+        var handler = new CapturingHandler(ChecklistResponse);
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await client.MoveChecklistItemAsync("t1", "c1", "i1a", parentId: null, orderIndex: 2, clearParent: true);
+
+        // Outdent to top level forces an explicit "parent": null (ClickUp reads it as "no parent"),
+        // mirroring the priority-clear pattern — not an omitted field.
+        var body = handler.Body!.RootElement;
+        Assert.True(body.TryGetProperty("parent", out var parent));
+        Assert.Equal(JsonValueKind.Null, parent.ValueKind);
+        Assert.Equal(2, body.GetProperty("orderindex").GetDouble());
+    }
+
     // ── Group CRUD (F, #459) ───────────────────────────────────────────────────────────────────────
 
     private const string NewChecklistResponse =

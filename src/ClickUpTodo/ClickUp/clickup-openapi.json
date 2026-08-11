@@ -407,7 +407,7 @@
     "/v2/checklist/{checklist_id}/checklist_item/{checklist_item_id}": {
       "put": {
         "operationId": "UpdateChecklistItem",
-        "summary": "Update a checklist item — toggle its `resolved` state (D, #457) and/or rename it (E, #458). ClickUp echoes the whole parent checklist wrapped as { \"checklist\": { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. `resolved` and `name` are modelled; per-item assignee / reparent land with F–G.",
+        "summary": "Update a checklist item — toggle its `resolved` state (D, #457), rename it (E, #458), or reorder/reparent it (G, #569). ClickUp echoes the whole parent checklist wrapped as { \"checklist\": { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. `resolved`, `name`, `orderindex` and `parent` are modelled; a caller sends only the fields it changes.",
         "parameters": [
           { "name": "checklist_id", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "checklist_item_id", "in": "path", "required": true, "schema": { "type": "string" } }
@@ -555,10 +555,12 @@
       },
       "UpdateChecklistItemRequest": {
         "type": "object",
-        "description": "Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457) and the rename write (E, #458). Both fields are optional so a caller sends only what it changes: 'resolved' toggles the tick, 'name' renames the item. Assignee/reparent land with F–G.",
+        "description": "Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457), the rename write (E, #458) and the reorder/reparent write (G, #569). Every field is optional so a caller sends only what it changes: 'resolved' toggles the tick, 'name' renames, 'orderindex' repositions among siblings, and 'parent' reparents (a parent item id to indent under it, or explicit null to outdent to top level).",
         "properties": {
           "resolved": { "type": "boolean" },
-          "name": { "type": "string" }
+          "name": { "type": "string" },
+          "orderindex": { "type": "number" },
+          "parent": { "type": "string", "nullable": true }
         }
       },
       "CreateChecklistItemRequest": {
