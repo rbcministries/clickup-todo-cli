@@ -220,4 +220,109 @@ public sealed class DirectoryBrowserModelTests : IDisposable
         model.NavigateUp();
         Assert.Contains(leaf, model.Entries);
     }
+
+    // ── SeedTo (#559): seed the browser to the Dispatch pane's pre-filled directory ──────────────
+
+    [Fact]
+    public void SeedTo_ExistingDirectChildOfRoot_HighlightsIt_StillAtRoot()
+    {
+        // The common {base}/{Repository} case (#461): the target is a direct child of the base root, so
+        // the browser stays at root and highlights the target row — ↑/↓ start among its siblings.
+        Directory.CreateDirectory(Sub("repo"));
+        var model = new DirectoryBrowserModel(_root);
+
+        var highlight = model.SeedTo(Sub("repo"));
+
+        Assert.Equal("repo", highlight);
+        Assert.Equal(DirectoryBrowserModel.Normalize(_root), model.CurrentDirectory);
+        Assert.Contains("repo", model.Entries);
+        // The highlighted row resolves back to the pre-filled path (an explicit pick), matching the field.
+        var index = model.Entries.ToList().IndexOf("repo");
+        Assert.Equal(DirectoryBrowserModel.Normalize(Sub("repo")), model.SelectionPathAt(index));
+    }
+
+    [Fact]
+    public void SeedTo_ExistingNestedTarget_MovesToParent_HighlightsLeaf()
+    {
+        // A deeper target (e.g. a #96 cached dir below the base): the browser moves to the target's
+        // parent and highlights the leaf, so ↑/↓ start among the target's siblings.
+        Directory.CreateDirectory(Sub("a", "b"));
+        var model = new DirectoryBrowserModel(_root);
+
+        var highlight = model.SeedTo(Sub("a", "b"));
+
+        Assert.Equal("b", highlight);
+        Assert.Equal(DirectoryBrowserModel.Normalize(Sub("a")), model.CurrentDirectory);
+    }
+
+    [Fact]
+    public void SeedTo_ExistingTargetOutsideBaseTree_MovesThere_ResetStillReturnsToBase()
+    {
+        // The #96 cached dir can point outside the base tree. Seeding follows it, but _root is unchanged,
+        // so Reset() (the every-reopen root restore) still returns to the base working dir (#92).
+        var other = Path.Combine(Path.GetTempPath(), "clickup-browser-other-" + Path.GetRandomFileName());
+        Directory.CreateDirectory(Path.Combine(other, "cached"));
+        try
+        {
+            var model = new DirectoryBrowserModel(_root);
+
+            var highlight = model.SeedTo(Path.Combine(other, "cached"));
+
+            Assert.Equal("cached", highlight);
+            Assert.Equal(DirectoryBrowserModel.Normalize(other), model.CurrentDirectory);
+
+            model.Reset();
+            Assert.Equal(DirectoryBrowserModel.Normalize(_root), model.CurrentDirectory);
+        }
+        finally
+        {
+            try { Directory.Delete(other, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
+    public void SeedTo_NonexistentTarget_EvenAfterNavigatingAway_ResetsToRoot_ReturnsNull()
+    {
+        // A {base}/{custom-id} target that doesn't exist yet degrades to the base root, and does so as a
+        // genuine reset (proven by first navigating the browser away).
+        Directory.CreateDirectory(Sub("child"));
+        var model = new DirectoryBrowserModel(_root);
+        model.Descend(1); // move away from root first
+
+        var highlight = model.SeedTo(Sub("does-not-exist"));
+
+        Assert.Null(highlight);
+        Assert.Equal(DirectoryBrowserModel.Normalize(_root), model.CurrentDirectory);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void SeedTo_BlankTarget_ResetsToRoot_ReturnsNull(string? target)
+    {
+        Directory.CreateDirectory(Sub("child"));
+        var model = new DirectoryBrowserModel(_root);
+        model.Descend(1);
+
+        var highlight = model.SeedTo(target);
+
+        Assert.Null(highlight);
+        Assert.Equal(DirectoryBrowserModel.Normalize(_root), model.CurrentDirectory);
+    }
+
+    [Fact]
+    public void SeedTo_TargetEqualToRoot_ResetsToRoot_ReturnsNull()
+    {
+        // A pre-fill equal to the base root is already what the root view represents (its ".." ⇒ the base
+        // dir); seeding above it would be surprising, so keep the rooted-at-base behaviour.
+        Directory.CreateDirectory(Sub("child"));
+        var model = new DirectoryBrowserModel(_root);
+        model.Descend(1);
+
+        var highlight = model.SeedTo(_root);
+
+        Assert.Null(highlight);
+        Assert.Equal(DirectoryBrowserModel.Normalize(_root), model.CurrentDirectory);
+    }
 }
