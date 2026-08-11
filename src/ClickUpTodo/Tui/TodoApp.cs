@@ -2079,8 +2079,10 @@ public sealed class TodoApp
                         memberMatch: (query, exclude) => MentionMemberProjection.ToMembers(_assignees.Match(query, exclude)),
                         memberTopFrequent: (n, exclude) => MentionMemberProjection.ToMembers(_assignees.TopMostFrequent(n, exclude)),
                         // Space on the Checklists tab (D, #457): toggle the item's resolved state on ClickUp.
+                        // Pass the resolved task id so the facade records a multi-tab nudge (#519) — the
+                        // checklist response carries no task id, so the host (which holds it) supplies it.
                         setChecklistResolvedAsync: (checklistId, itemId, resolved, ct) =>
-                            _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct),
+                            _tasks.SetChecklistItemResolvedAsync(resolvedId, checklistId, itemId, resolved, ct),
                         createChecklistItemAsync: (checklistId, name, ct) =>
                             _tasks.CreateChecklistItemAsync(checklistId, name, ct),
                         renameChecklistItemAsync: (checklistId, itemId, name, ct) =>

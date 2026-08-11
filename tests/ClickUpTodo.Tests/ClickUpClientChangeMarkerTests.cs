@@ -171,6 +171,40 @@ public sealed class ClickUpClientChangeMarkerTests
     }
 
     [Fact]
+    public async Task SetChecklistItemResolved_OnSuccess_RecordsChecklistMarkerWithNullServerDate()
+    {
+        // The checklist-item write response is the parent checklist ({ checklist }), not the task — so it
+        // carries no task date_updated and the nudge records a null serverDateUpdated by design (#519),
+        // keyed by the owning task id the host supplies (the response can't).
+        var recorder = new RecordingChangeMarkerStore();
+        using var client = new ClickUpClient(
+            "pk_x",
+            new HttpClient(Ok("""{ "checklist": { "id": "c1", "name": "n", "resolved": 1, "unresolved": 1, "items": [] } }""")),
+            changeMarkers: recorder);
+
+        await client.SetChecklistItemResolvedAsync("t1", "c1", "i1", resolved: true);
+
+        var m = Assert.Single(recorder.Records);
+        Assert.Equal("t1", m.TaskId);
+        Assert.Null(m.ServerDateUpdatedMs);
+        Assert.Equal(["checklist"], m.ChangedFields);
+    }
+
+    [Fact]
+    public async Task SetChecklistItemResolved_ApiError_RecordsNoMarker()
+    {
+        // The 2xx gate: a non-success response throws in Guard before the nudge is reached (#519).
+        var recorder = new RecordingChangeMarkerStore();
+        using var client = new ClickUpClient(
+            "pk_x", new HttpClient(Status(HttpStatusCode.NotFound, """{ "err": "not found", "ECODE": "ITEM_100" }""")),
+            changeMarkers: recorder);
+
+        await Assert.ThrowsAsync<ClickUpApiException>(() => client.SetChecklistItemResolvedAsync("t1", "c1", "i1", resolved: true));
+
+        Assert.Empty(recorder.Records);
+    }
+
+    [Fact]
     public async Task Write_MissingDateUpdatedInResponse_RecordsMarkerWithNullServerDate()
     {
         var recorder = new RecordingChangeMarkerStore();

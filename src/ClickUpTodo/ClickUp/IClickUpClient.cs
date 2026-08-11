@@ -80,10 +80,11 @@ public interface IClickUpClient
         => throw new NotSupportedException($"{GetType().Name} does not implement task↔list membership writes.");
 
     /// <summary>Toggle (or set) a checklist item's <c>resolved</c> state (D, #457) and return the
-    /// server-confirmed parent <see cref="TaskChecklist"/>. Default throwing implementation so read-only
+    /// server-confirmed parent <see cref="TaskChecklist"/>. <paramref name="taskId"/> is the owning task,
+    /// used to record a multi-tab change-marker nudge (#519). Default throwing implementation so read-only
     /// fakes needn't implement a write they never call (mirroring the other writes);
     /// <see cref="ClickUpClient"/> overrides it. See <see cref="ClickUpClient.SetChecklistItemResolvedAsync"/>.</summary>
-    Task<TaskChecklist> SetChecklistItemResolvedAsync(string checklistId, string itemId, bool resolved, CancellationToken ct = default)
+    Task<TaskChecklist> SetChecklistItemResolvedAsync(string taskId, string checklistId, string itemId, bool resolved, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
 
     /// <summary>Create a checklist item (E, #458) and return the server-confirmed parent

@@ -299,9 +299,10 @@ public sealed class SingleTaskApp
                 ? null
                 : (n, exclude) => MentionMemberProjection.ToMembers(_assignees.TopMostFrequent(n, exclude)),
             // Space on the Checklists tab (D, #457): the Checklists tab is present in single-task mode too,
-            // so wire the toggle write here as well, keyed to this tab's task id.
+            // so wire the toggle write here as well, keyed to this tab's task id. That task id also seeds the
+            // multi-tab change-marker nudge (#519) so a toggle here surfaces promptly in the dashboard tab.
             setChecklistResolvedAsync: (checklistId, itemId, resolved, ct) =>
-                _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct),
+                _tasks.SetChecklistItemResolvedAsync(id, checklistId, itemId, resolved, ct),
             createChecklistItemAsync: (checklistId, name, ct) =>
                 _tasks.CreateChecklistItemAsync(checklistId, name, ct),
             renameChecklistItemAsync: (checklistId, itemId, name, ct) =>

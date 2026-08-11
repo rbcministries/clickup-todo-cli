@@ -457,16 +457,25 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// <see cref="TaskChecklist"/> — mapped through the same <see cref="MapChecklist"/> as the read path,
     /// so its items come back through <see cref="ChecklistReader"/> and no generated type escapes the
     /// facade. Same return-the-truth contract as <see cref="SetTaskStatusAsync"/> /
-    /// <see cref="SetTaskDescriptionAsync"/>. (Multi-tab checklist nudge sync is left to a later slice —
-    /// another tab's 30 s auto-refresh still picks the change up.)
+    /// <see cref="SetTaskDescriptionAsync"/>.
+    /// <para>
+    /// <paramref name="taskId"/> is the owning task (the checklist write response carries only the
+    /// checklist, not the task, so the caller supplies it). After a confirmed write it records a
+    /// change-marker nudge (#294/#519) keyed by that task so another tab viewing the same task re-fetches
+    /// promptly instead of waiting for its 30 s auto-refresh. The <c>{ checklist }</c> response has no
+    /// task <c>date_updated</c>, so the marker carries a null server date — the consumer always re-fetches
+    /// on a checklist nudge, the same "empty body ⇒ always re-fetch" shape as the membership/comment writes.
+    /// </para>
     /// </summary>
-    public Task<TaskChecklist> SetChecklistItemResolvedAsync(string checklistId, string itemId, bool resolved, CancellationToken ct = default)
+    public Task<TaskChecklist> SetChecklistItemResolvedAsync(string taskId, string checklistId, string itemId, bool resolved, CancellationToken ct = default)
         => Guard("UpdateChecklistItem", async () =>
         {
             var response = await _client.V2.Checklist[checklistId].Checklist_item[itemId]
                 .PutAsync(new UpdateChecklistItemRequest { Resolved = resolved }, cancellationToken: ct);
             var checklist = response?.Checklist
                 ?? throw new InvalidOperationException($"ClickUp returned no checklist for item '{itemId}'.");
+            // Reached only on a 2xx (a non-2xx throws in Guard above) — the confirmed-write nudge (#519).
+            _changeMarkers.Record(taskId, serverDateUpdatedMs: null, ChecklistFields);
             return MapChecklist(checklist);
         });
 
@@ -816,6 +825,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     private static readonly string[] AssigneeFields = ["assignees"];
     private static readonly string[] CommentFields = ["comment"];
     private static readonly string[] ListsFields = ["lists"];
+    private static readonly string[] ChecklistFields = ["checklist"];
 
     /// <summary>
     /// Records a change-marker nudge for a confirmed <c>PUT /task</c> write (#294), carrying the
