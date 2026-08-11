@@ -51,6 +51,17 @@ public abstract class Screen : FrameView
     /// <summary>Asks the host to flash <paramref name="message"/> on the shared status line.</summary>
     protected void RequestFlash(string message) => FlashRequested?.Invoke(this, message);
 
+    /// <summary>
+    /// Raised to show or clear a low-precedence hover hint on the host's status line (#408): a non-null
+    /// argument names the link under the pointer, null clears it back to the steady status. Distinct from
+    /// <see cref="FlashRequested"/> because a hint persists while the mouse rests on a link (a flash is a
+    /// one-shot message a flash/status update overrides); the host routes it to the footer's hover slot.
+    /// </summary>
+    public event EventHandler<string?>? HoverHintChanged;
+
+    /// <summary>Asks the host to show <paramref name="hint"/> (or clear it, when null) on the status line.</summary>
+    protected void RequestHoverHint(string? hint) => HoverHintChanged?.Invoke(this, hint);
+
     /// <summary>Raised on F1 so the host opens the Help screen over this one (#103).</summary>
     public event EventHandler? HelpRequested;
 

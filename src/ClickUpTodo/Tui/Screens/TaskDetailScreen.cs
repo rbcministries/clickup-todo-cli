@@ -504,6 +504,7 @@ public sealed class TaskDetailScreen : Screen
         {
             pane.TaskLinkCtrlClickDestination = prefs.TaskLinkCtrlClick;
             pane.LinkActivationRequested += OnPaneLinkActivation;
+            pane.HoverTargetChanged += OnPaneHover;
         }
 
         // The Other tab colours its Priority/Status values (#66), which a plain TextView can't do. Its
@@ -2527,6 +2528,18 @@ public sealed class TaskDetailScreen : Screen
         if (_promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible)
             return;
         LinkActivationRequested?.Invoke(this, request);
+    }
+
+    /// <summary>
+    /// The hovered link under a pane's pointer changed (#408): name its target on the status line, or clear
+    /// the hint. Suppressed while an overlay owns input and partially covers the panes (the same gate
+    /// <see cref="OnPaneLinkActivation"/> applies) — a hint about a link the user can't currently click would
+    /// mislead — so hovering under an open composer/editor/dispatch/reply picker clears rather than shows.
+    /// </summary>
+    private void OnPaneHover(object? sender, string? target)
+    {
+        var suppressed = _promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible;
+        RequestHoverHint(target is null || suppressed ? null : $"Link: {target}");
     }
 
     /// <summary>Raises <see cref="OpenTaskRequested"/> for a non-current task; the current-task row is a
