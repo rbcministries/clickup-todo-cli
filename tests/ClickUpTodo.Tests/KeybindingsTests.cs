@@ -22,6 +22,7 @@ public sealed class KeybindingsTests
         ScreenContext.QuickOpen => HelpItemSets.QuickOpen,
         ScreenContext.NewTask => HelpItemSets.NewTask,
         ScreenContext.PromptTemplateEditor => HelpItemSets.PromptTemplateEditor,
+        ScreenContext.DispatchProviders => HelpItemSets.DispatchProviders,
         ScreenContext.NotificationsFeed => HelpItemSets.NotificationsFeed,
         ScreenContext.AgentRun => HelpItemSets.AgentRun,
         ScreenContext.Help => HelpItemSets.Help,

@@ -54,37 +54,21 @@ public static class SettingsForm
         => string.Join(" ", args.Where(a => !string.IsNullOrWhiteSpace(a)));
 
     /// <summary>
-    /// Folds an F2 edit of the default provider's executable + extra args (#497) back into a provider
-    /// list, preserving every other configured provider unchanged so an F2 Save never drops the
-    /// additional providers the multi-provider editor (Phase 2) manages. The edited provider is the one
-    /// resolved as default — matched on <paramref name="defaultProviderName"/>, else the first, else a
-    /// freshly seeded <see cref="AgentDispatchSettings.DefaultProviderDisplayName"/> provider when the
-    /// list is empty (mirroring <see cref="AgentDispatchSettings.ResolveDefaultProvider"/>). A blank
-    /// executable coalesces to <see cref="AgentDispatchSettings.DefaultExecutable"/>, matching the
-    /// pre-#497 Save. Pure so it can be unit-tested; both the returned providers and the applied
-    /// <paramref name="extraArgs"/> are copied, so the result is isolated from later mutation of either
-    /// input.
+    /// A one-line read-only summary of the configured dispatch providers (#547) for the F10 Dispatch
+    /// section, beside the "Edit dispatch providers…" button: the provider count and the resolved default
+    /// provider's name (matched on <paramref name="defaultName"/> Ordinal, else the first). An empty list
+    /// reads as the single built-in <c>Claude</c> default the editor seeds on demand. Pure so it can be
+    /// unit-tested.
     /// </summary>
-    public static (List<DispatchProvider> Providers, string DefaultProviderName) ApplyDefaultProviderEdit(
-        IReadOnlyList<DispatchProvider> existing, string defaultProviderName, string? executableText, List<string> extraArgs)
+    public static string DescribeProviders(IReadOnlyList<DispatchProvider> providers, string? defaultName)
     {
-        var exe = string.IsNullOrWhiteSpace(executableText) ? AgentDispatchSettings.DefaultExecutable : executableText.Trim();
-        var providers = existing
-            .Select(p => new DispatchProvider { Name = p.Name, Executable = p.Executable, ExtraArgs = [.. p.ExtraArgs], Kind = p.Kind })
-            .ToList();
-
         if (providers.Count == 0)
-        {
-            providers.Add(new DispatchProvider { Name = AgentDispatchSettings.DefaultProviderDisplayName, Executable = exe, ExtraArgs = [.. extraArgs] });
-            return (providers, AgentDispatchSettings.DefaultProviderDisplayName);
-        }
+            return $"1 provider · {AgentDispatchSettings.DefaultProviderDisplayName}";
 
-        // Names are exact selector keys (Ordinal), matching ResolveDefaultProvider; an unmatched name
-        // edits the first provider (the same fallback the resolver uses).
-        var target = providers.FirstOrDefault(p => string.Equals(p.Name, defaultProviderName, StringComparison.Ordinal)) ?? providers[0];
-        target.Executable = exe;
-        target.ExtraArgs = [.. extraArgs];
-        return (providers, defaultProviderName);
+        var def = providers.FirstOrDefault(p => string.Equals(p.Name, defaultName, StringComparison.Ordinal)) ?? providers[0];
+        return providers.Count == 1
+            ? $"1 provider · {def.Name}"
+            : $"{providers.Count} providers · default {def.Name}";
     }
 
     // ── base working directory (#92) ────────────────────────────────────────────

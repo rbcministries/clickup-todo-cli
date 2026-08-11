@@ -229,6 +229,12 @@ public sealed class HelpLineTests
             HelpLine.Format(HelpItemSets.NewTask));
 
     [Fact]
+    public void Format_DispatchProviders_RendersMoveTabDeleteHelpAndCancel()
+        => Assert.Equal(
+            "↑/↓ move · Tab list / fields / buttons · Del delete provider · F1 ℹ · Esc cancel",
+            HelpLine.Format(HelpItemSets.DispatchProviders));
+
+    [Fact]
     public void Format_NotificationsFeed_RendersMoveMentionsHelpAndBack()
         => Assert.Equal(
             "↑/↓ move · Enter open · F3 mentions only · F5 ↻ · F6 activity · F12 👁✅ · Ctrl+E list · F1 ℹ · Esc back",
@@ -268,6 +274,7 @@ public sealed class HelpLineTests
         HelpItemSets.QuickUpdates,
         HelpItemSets.QuickOpen,
         HelpItemSets.NotificationsFeed,
+        HelpItemSets.DispatchProviders,
         HelpItemSets.Help,
         HelpItemSets.ExitConfirm,
     };
@@ -288,6 +295,7 @@ public sealed class HelpLineTests
         HelpItemSets.QuickUpdates,
         HelpItemSets.QuickOpen,
         HelpItemSets.NotificationsFeed,
+        HelpItemSets.DispatchProviders,
     };
 
     [Theory]
@@ -473,6 +481,7 @@ public sealed class HelpLineTests
             HelpItemSets.DetailChecklistItemEditor,
             HelpItemSets.Settings, HelpItemSets.FilterSortGroup, HelpItemSets.QuickUpdates,
             HelpItemSets.QuickOpen, HelpItemSets.NewTask, HelpItemSets.PromptTemplateEditor,
+            HelpItemSets.DispatchProviders,
             HelpItemSets.NotificationsFeed, HelpItemSets.AgentRun, HelpItemSets.Help,
             HelpItemSets.ExitConfirm,
             [HelpLine.HelpFallback],
