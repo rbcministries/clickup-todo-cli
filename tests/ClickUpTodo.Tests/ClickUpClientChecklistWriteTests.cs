@@ -122,6 +122,72 @@ public sealed class ClickUpClientChecklistWriteTests
         Assert.Null(handler.Body); // DELETE carries no request body
     }
 
+    // ── Group CRUD (F, #459) ───────────────────────────────────────────────────────────────────────
+
+    private const string NewChecklistResponse =
+        """
+        {
+          "checklist": {
+            "id": "c2",
+            "name": "QA signoff",
+            "orderindex": 1,
+            "resolved": 0,
+            "unresolved": 0,
+            "items": []
+          }
+        }
+        """;
+
+    [Fact]
+    public async Task CreateChecklist_SendsPostToTaskChecklist_WithName_AndMapsResponse()
+    {
+        var handler = new CapturingHandler(NewChecklistResponse);
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var created = await client.CreateChecklistAsync("t1", "QA signoff");
+
+        // Request: POST to the task's checklist collection with a { name } body (no checklist id in the path).
+        Assert.Equal(HttpMethod.Post, handler.Method);
+        Assert.Contains("/v2/task/t1/checklist", handler.RequestUri);
+        Assert.DoesNotContain("checklist_item", handler.RequestUri);
+        Assert.Equal("QA signoff", handler.Body!.RootElement.GetProperty("name").GetString());
+
+        // Response mapped back to the domain TaskChecklist (a new empty group).
+        Assert.Equal("c2", created.Id);
+        Assert.Equal("QA signoff", created.Name);
+        Assert.Empty(created.Items);
+    }
+
+    [Fact]
+    public async Task RenameChecklist_SendsPutToChecklist_WithName_AndMapsResponse()
+    {
+        var handler = new CapturingHandler(ChecklistResponse);
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var renamed = await client.RenameChecklistAsync("c1", "Release checklist");
+
+        // Request: PUT to the checklist endpoint (no item segment) with a { name } body.
+        Assert.Equal(HttpMethod.Put, handler.Method);
+        Assert.Contains("/v2/checklist/c1", handler.RequestUri);
+        Assert.DoesNotContain("checklist_item", handler.RequestUri);
+        Assert.Equal("Release checklist", handler.Body!.RootElement.GetProperty("name").GetString());
+        Assert.Equal("Release steps", renamed.Name); // server-confirmed name from the echoed checklist
+    }
+
+    [Fact]
+    public async Task DeleteChecklist_SendsDeleteToChecklistEndpoint_WithNoBody()
+    {
+        var handler = new CapturingHandler("{}");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await client.DeleteChecklistAsync("c1");
+
+        Assert.Equal(HttpMethod.Delete, handler.Method);
+        Assert.Contains("/v2/checklist/c1", handler.RequestUri);
+        Assert.DoesNotContain("checklist_item", handler.RequestUri); // the group endpoint, not an item
+        Assert.Null(handler.Body); // DELETE carries no request body
+    }
+
     /// <summary>Records the outgoing request (method, URI, parsed JSON body) and returns a canned body.</summary>
     private sealed class CapturingHandler(string responseBody) : HttpMessageHandler
     {

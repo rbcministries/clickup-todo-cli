@@ -104,6 +104,24 @@ public interface IClickUpClient
     Task DeleteChecklistItemAsync(string checklistId, string itemId, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
 
+    /// <summary>Create a checklist group on a task (F, #459) and return the server-confirmed
+    /// <see cref="TaskChecklist"/> (a new empty group). Default throwing so read-only fakes needn't
+    /// implement it; <see cref="ClickUpClient"/> overrides it. See <see cref="ClickUpClient.CreateChecklistAsync"/>.</summary>
+    Task<TaskChecklist> CreateChecklistAsync(string taskId, string name, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement checklist-group writes.");
+
+    /// <summary>Rename a checklist group (F, #459) and return the server-confirmed
+    /// <see cref="TaskChecklist"/>. Default throwing; <see cref="ClickUpClient"/> overrides it.
+    /// See <see cref="ClickUpClient.RenameChecklistAsync"/>.</summary>
+    Task<TaskChecklist> RenameChecklistAsync(string checklistId, string name, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement checklist-group writes.");
+
+    /// <summary>Delete a checklist group and all its items (F, #459). ClickUp returns an empty body, so this
+    /// is a void write. Default throwing; <see cref="ClickUpClient"/> overrides it. See
+    /// <see cref="ClickUpClient.DeleteChecklistAsync"/>.</summary>
+    Task DeleteChecklistAsync(string checklistId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement checklist-group writes.");
+
     Task<TaskDetail> GetTaskDetailAsync(string taskId, CancellationToken ct = default);
 
     /// <summary>Full detail for a task addressed by its workspace <b>custom id</b> (#303, Ctrl+O

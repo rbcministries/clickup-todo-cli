@@ -2088,7 +2088,15 @@ public sealed class TodoApp
                         renameChecklistItemAsync: (checklistId, itemId, name, ct) =>
                             _tasks.RenameChecklistItemAsync(checklistId, itemId, name, ct),
                         deleteChecklistItemAsync: (checklistId, itemId, ct) =>
-                            _tasks.DeleteChecklistItemAsync(checklistId, itemId, ct));
+                            _tasks.DeleteChecklistItemAsync(checklistId, itemId, ct),
+                        // Checklist group CRUD (F, #459): create is task-scoped (POST /task/{id}/checklist),
+                        // so the host supplies the resolved task id; rename/delete take just the checklist id.
+                        createChecklistAsync: (name, ct) =>
+                            _tasks.CreateChecklistAsync(resolvedId, name, ct),
+                        renameChecklistAsync: (checklistId, name, ct) =>
+                            _tasks.RenameChecklistAsync(checklistId, name, ct),
+                        deleteChecklistAsync: (checklistId, ct) =>
+                            _tasks.DeleteChecklistAsync(checklistId, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the

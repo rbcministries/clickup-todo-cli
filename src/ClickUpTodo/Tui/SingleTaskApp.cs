@@ -308,7 +308,14 @@ public sealed class SingleTaskApp
             renameChecklistItemAsync: (checklistId, itemId, name, ct) =>
                 _tasks.RenameChecklistItemAsync(checklistId, itemId, name, ct),
             deleteChecklistItemAsync: (checklistId, itemId, ct) =>
-                _tasks.DeleteChecklistItemAsync(checklistId, itemId, ct));
+                _tasks.DeleteChecklistItemAsync(checklistId, itemId, ct),
+            // Checklist group CRUD (F, #459), keyed to this tab's task id for the task-scoped create.
+            createChecklistAsync: (name, ct) =>
+                _tasks.CreateChecklistAsync(id, name, ct),
+            renameChecklistAsync: (checklistId, name, ct) =>
+                _tasks.RenameChecklistAsync(checklistId, name, ct),
+            deleteChecklistAsync: (checklistId, ct) =>
+                _tasks.DeleteChecklistAsync(checklistId, ct));
 
         var tab = new DetailTab(screen, id, task, comments);
 
