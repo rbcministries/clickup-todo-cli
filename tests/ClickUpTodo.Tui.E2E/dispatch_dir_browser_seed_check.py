@@ -91,8 +91,11 @@ class App:
         return out
 
     def selected_token(self):
-        """The highlighted browser row's token: the browser row whose cells carry the ListView focus-fill
-        background (like detail_arrow_check.py's tree_selected_index), or None if none stands out."""
+        """The highlighted browser row's token: the browser row whose cells carry the selected-row
+        background fill, or None if none stands out. The pane opens with focus on the prompt field, so the
+        browser ListView is unfocused — its selected row still fills its background (Terminal.Gui's
+        VisualRole.Active when unfocused, Focus when focused), which is what this detects. (Contrast
+        detail_arrow_check.py's tree_selected_index, which reads the focused-list Focus fill.)"""
         best_tok, best_bg = None, 0
         for y, token in self.browser_rows():
             nd = sum(1 for x in range(1, COLS - 1) if self.screen.buffer[y][x].bg != "default")
@@ -101,8 +104,10 @@ class App:
         return best_tok if best_bg > 20 else None
 
     def dir_field(self):
-        """The text on the pane's 'Dir:' row (the pre-filled working directory)."""
-        for y in range(ROWS):
+        """The text on the pane's 'Dir:' row (the pre-filled working directory). Scanned bottom-up: the
+        Dispatch pane is bottom-anchored, so this finds the real field rather than any 'Dir:' substring
+        that might appear in task prose rendered higher up."""
+        for y in reversed(range(ROWS)):
             t = self.screen.display[y]
             if "Dir:" in t:
                 return t.split("Dir:", 1)[1].strip().rstrip("│ ").strip()
@@ -166,8 +171,11 @@ def check_seeded():
 def check_degrade():
     app = open_dispatch_pane(degrade=True)
     field = app.dir_field()
-    # Field carries the (non-existent) task-derived pre-fill and is never clobbered by the degrade Reset().
-    if not field or "SEEDTARGET" in field or "/base/" not in field:
+    # Field carries the (non-existent) {base}/{taskId} task-derived pre-fill and is never clobbered by the
+    # degrade Reset(): non-blank, and carrying none of the seeded nested-target path components (so it is
+    # the degrade pre-fill, not the seed). Asserting on the seed tokens — not the base leaf name — keeps
+    # this decoupled from DispatchSeedScenario's on-disk directory names.
+    if not field or "SEEDTARGET" in field or "WTPROJECTS" in field:
         fail(app, f"degrade field should carry the non-existent base pre-fill, not the seed (got {field!r})")
 
     tokens = [tok for _, tok in app.browser_rows()]

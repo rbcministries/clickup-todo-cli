@@ -77,9 +77,10 @@ to open the Dispatch pane. Two legs, each its own boot:
 - **Seeded leg** (`E2E_DISPATCH_SEED=1`): asserts the working-dir field carries
   the pre-fill `…/WTPROJECTS/SEEDTARGET`; the browser shows the *parent-of-target*
   listing (`SEEDTARGET`, `SIBLINGONE`, `SIBLINGTWO` present; the base-root
-  siblings `AAAROOTKID`/`ZZZROOTKID` absent); and — after tabbing focus onto the
-  browser `ListView` — the highlighted row is `SEEDTARGET` (detected via the
-  focus-fill background, like `detail_arrow_check.py`'s `tree_selected_index`).
+  siblings `AAAROOTKID`/`ZZZROOTKID` absent); and the highlighted row is
+  `SEEDTARGET` (detected via the selected-row background fill — the pane opens
+  with focus on the prompt field, so the browser `ListView` is unfocused and its
+  selected row draws with Terminal.Gui's `VisualRole.Active` fill).
 - **Degrade leg** (`E2E_DISPATCH_SEED=1 E2E_DISPATCH_SEED_DEGRADE=1`): asserts the
   browser opened at the **base root** (`AAAROOTKID`, `WTPROJECTS`, `ZZZROOTKID`
   present; `SEEDTARGET`/`SIBLINGONE` absent) with the `..` row highlighted, and
