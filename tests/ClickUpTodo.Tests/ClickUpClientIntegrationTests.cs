@@ -477,6 +477,52 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task CreateRenameDeleteChecklistGroup_RoundTrips_AndCleansUp()
+    {
+        // Group CRUD (F, #459): on a throwaway task, create a checklist, add an item to it, rename the
+        // checklist, then delete the checklist (which also removes its items) — proving each group write
+        // against the live API. The scratch task is created on CLICKUP_LIST_ID and deleted at the end, so
+        // the run leaves no residue (self-contained; doesn't need a pre-seeded checklist-bearing task).
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(ListId),
+            "Set CLICKUP_TOKEN and CLICKUP_LIST_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var created = await client.CreateTaskAsync(ListId!, new NewTaskRequest
+        {
+            Name = "[clickup-todo-cli test] checklist-group CRUD — safe to delete",
+            Description = "Created by the checklist-group CRUD integration test.",
+        });
+
+        try
+        {
+            // Create a checklist group on the task.
+            var groupName = $"clickup-todo integration checklist {Guid.NewGuid():N}";
+            var group = await client.CreateChecklistAsync(created.Id, groupName);
+            Assert.False(string.IsNullOrWhiteSpace(group.Id));
+            Assert.Equal(groupName, group.Name);
+
+            // Add an item so the delete confirmation's "and its N items" path is exercised server-side.
+            var afterItem = await client.CreateChecklistItemAsync(group.Id, "an item");
+            Assert.Contains(afterItem.Items, i => i.Name == "an item");
+
+            // Rename the group; the echoed checklist carries the new name.
+            var renamedName = $"clickup-todo integration renamed {Guid.NewGuid():N}";
+            var renamed = await client.RenameChecklistAsync(group.Id, renamedName);
+            Assert.Equal(group.Id, renamed.Id);
+            Assert.Equal(renamedName, renamed.Name);
+
+            // Delete the group; a re-fetch of the task must no longer carry it (items go with it).
+            await client.DeleteChecklistAsync(group.Id);
+            var afterDelete = await client.GetTaskDetailAsync(created.Id);
+            Assert.DoesNotContain(afterDelete.Checklists, c => c.Id == group.Id);
+        }
+        finally
+        {
+            await client.DeleteTaskAsync(created.Id);
+        }
+    }
+
+    [SkippableFact]
     public async Task GetTaskComments_ReturnsComments()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
