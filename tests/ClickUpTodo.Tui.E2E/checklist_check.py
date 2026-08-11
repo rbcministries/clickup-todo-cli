@@ -507,6 +507,18 @@ def run_assign():
         s.pump(0.8)
         assert "Assign" in s.visible(), "F11 did not open the assignee picker overlay:\n" + s.visible()
 
+        # Regression guard: while the picker is open on the Checklists tab, the checklist CRUD chords must
+        # NOT fire underneath it. F9 must not arm a delete-confirm (which a later Enter would execute) and
+        # F7 must not open a second (item-editor) overlay on top.
+        s.send(F9)
+        s.pump(0.4)
+        s.send(F7)
+        s.pump(0.4)
+        v = s.visible()
+        assert "Delete" not in v, "F9 armed a delete-confirm underneath the open assignee picker:\n" + v
+        assert "New item" not in v, "F7 opened the item-editor overlay on top of the assignee picker:\n" + v
+        assert "Assign" in v, "a checklist chord dismissed/disturbed the assignee picker:\n" + v
+
         # Type a substring of a seeded member and wait past the ~1s type-ahead debounce.
         type_text(s, "grac")
         s.pump(1.5)

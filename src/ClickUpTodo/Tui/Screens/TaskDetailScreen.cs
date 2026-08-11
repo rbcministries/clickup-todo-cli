@@ -1108,8 +1108,13 @@ public sealed class TaskDetailScreen : Screen
         // keyboard: its own handler (OnCommentKey / OnDescriptionKey) processes Ctrl+Enter/Esc/Tab and
         // lets the rest fall through to the editor. Don't let the screen's chords (Ctrl+B close,
         // Ctrl+A/U/N/E openers, Ctrl+←/→ tab-cycle, F5 refresh) fire underneath and disrupt (or discard)
-        // the draft.
-        if (_commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible || _checklistItemBox.Visible)
+        // the draft. The assignee picker (G, #460) is included explicitly: it opens on the Checklists tab
+        // (where none of the composer/editor boxes are visible, unlike the @-mention picker, which is
+        // covered transitively by _commentBox/_descriptionBox), so without it the checklist chords
+        // (F7/F8/F9/Ctrl+G) would bubble from the picker's search field and fire underneath — F9 even
+        // arming a delete-confirm the picker's Esc can't clear.
+        if (_commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible
+            || _checklistItemBox.Visible || _checklistAssigneeBox?.Visible == true)
             return;
 
         // Answer a pending checklist-item delete confirm (E, #458), armed by F9 on the Checklists tab:
