@@ -337,6 +337,54 @@
         }
       }
     },
+    "/v2/task/{task_id}/checklist": {
+      "post": {
+        "operationId": "CreateChecklist",
+        "summary": "Create a checklist (group) on a task (F, #459) via a { name } body. ClickUp echoes the whole new checklist wrapped as { \"checklist\": { … } } — the same envelope as the item writes — so the caller gets the server-reconciled group (real id/orderindex, empty items) without a read-after-write. Group reorder (the `position` field) is deferred to G (#460); this slice sends name only.",
+        "parameters": [
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateChecklistRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The newly-created checklist under a `checklist` key (its id/name/orderindex and an empty items array).",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChecklistResponse" } } }
+          }
+        }
+      }
+    },
+    "/v2/checklist/{checklist_id}": {
+      "put": {
+        "operationId": "UpdateChecklist",
+        "summary": "Rename a checklist (group) (F, #459) via a { name } body. ClickUp echoes the whole checklist wrapped as { \"checklist\": { … } }, so the caller gets the reconciled group (its items + counts) without a read-after-write. Only `name` is modelled; group reorder (`position`) is deferred to G (#460).",
+        "parameters": [
+          { "name": "checklist_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateChecklistRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated checklist under a `checklist` key, including its items array and resolved/unresolved counts.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChecklistResponse" } } }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "DeleteChecklist",
+        "summary": "Delete a checklist (group) and all its items (F, #459). ClickUp returns an empty object, so there is no response schema — the caller keeps its optimistic local removal (revert-on-failure), exactly as DELETE /checklist/{id}/checklist_item/{id} does.",
+        "parameters": [
+          { "name": "checklist_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "The checklist was deleted (ClickUp returns an empty object)." }
+        }
+      }
+    },
     "/v2/checklist/{checklist_id}/checklist_item": {
       "post": {
         "operationId": "CreateChecklistItem",
@@ -524,6 +572,28 @@
       "ChecklistItemResponse": {
         "type": "object",
         "description": "The checklist-item write response: ClickUp returns the whole parent checklist (the reconciled group with its items and progress counts) under a 'checklist' key. Its items ride on Kiota's AdditionalData and are read back with ChecklistReader, exactly like the GET /task read path.",
+        "properties": {
+          "checklist": { "$ref": "#/components/schemas/Checklist" }
+        }
+      },
+      "CreateChecklistRequest": {
+        "type": "object",
+        "description": "Body for POST /task/{task_id}/checklist — create a checklist group (F, #459). 'name' is required; group reorder ('position') is deferred to G (#460).",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" }
+        }
+      },
+      "UpdateChecklistRequest": {
+        "type": "object",
+        "description": "Body for PUT /checklist/{checklist_id} — rename a checklist group (F, #459). 'name' is the only modelled field; group reorder ('position') is deferred to G (#460).",
+        "properties": {
+          "name": { "type": "string" }
+        }
+      },
+      "ChecklistResponse": {
+        "type": "object",
+        "description": "The checklist (group) write response for create (POST /task/{id}/checklist) and rename (PUT /checklist/{id}) (F, #459): ClickUp returns the whole checklist under a 'checklist' key, the same envelope as ChecklistItemResponse. Its items ride on Kiota's AdditionalData and are read back with ChecklistReader, exactly like the GET /task read path.",
         "properties": {
           "checklist": { "$ref": "#/components/schemas/Checklist" }
         }
