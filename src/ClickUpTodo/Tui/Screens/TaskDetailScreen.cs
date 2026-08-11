@@ -1707,18 +1707,20 @@ public sealed class TaskDetailScreen : Screen
         if (_promptBox.Visible)
             return;
         _promptField.Text = string.Empty;
-        // Pre-fill the working dir from the per-task cache (#96) — the last explicit dir dispatched
-        // from this task, or blank (⇒ default dir #98) if none — read live so a dispatch earlier in
-        // this same open detail screen is reflected on reopen. Reset the browser to its root (the base
-        // working dir #92); pre-fill is independent of browser navigation.
-        // Guard the selection-follows-cursor sync: resetting the browser fires ValueChanged, which
-        // would otherwise overwrite the pre-fill with the browser root before the user touches it.
+        // Pre-fill the working dir from the task-derived precedence (#533: #96 cache → {base}/{Repository}
+        // #461 → {base}/{custom-id} #98), or blank if none — read live so a dispatch earlier in this same
+        // open detail screen is reflected on reopen. Seed the browser to that directory (#559) so ↑/↓
+        // start there when it exists; a target that doesn't exist yet ({base}/{custom-id} before first
+        // launch), a blank pre-fill, or the base root itself degrades to the browser's root (SeedTo does
+        // the Reset), preserving today's behaviour there.
+        // Guard the selection-follows-cursor sync: seeding/resetting the browser fires ValueChanged, which
+        // would otherwise overwrite the pre-fill with the highlighted row before the user touches it.
         _suppressWorkingDirSync = true;
         try
         {
             _workingDirField.Text = _workingDirectoryPreFill?.Invoke() ?? string.Empty;
-            _browser.Reset();
-            RefreshBrowser();
+            var highlight = _browser.SeedTo(_workingDirField.Text?.ToString());
+            RefreshBrowser(selectEntry: highlight);
         }
         finally
         {

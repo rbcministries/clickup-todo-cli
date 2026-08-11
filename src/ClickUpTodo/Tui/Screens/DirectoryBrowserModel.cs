@@ -85,6 +85,66 @@ public sealed class DirectoryBrowserModel
     /// <summary>Returns the browser to the directory it was rooted at.</summary>
     public void Reset() => MoveTo(_root);
 
+    /// <summary>
+    /// Seeds the browser to <paramref name="targetDirectory"/> (#559) so arrow navigation starts there
+    /// when the Dispatch pane opens pre-filled, instead of at the base root. Moves to the target's
+    /// <b>parent</b> and returns the target's own entry name for the ListView to highlight — so
+    /// <c>↑</c>/<c>↓</c> begin among its siblings with the target selected, and the highlighted row's
+    /// <see cref="SelectionPathAt"/> matches the pre-filled field.
+    /// <para>
+    /// Degrades to <see cref="Reset"/> (the base root, no highlight) and returns <c>null</c> when the
+    /// target is blank, does not currently exist (a <c>{base}/{custom-id}</c> pre-fill usually doesn't
+    /// yet — the field carries it regardless), is the root itself (already what the root view
+    /// represents), or is a filesystem root (no parent listing to highlight it in). These are the
+    /// "graceful, field preserved" cases #559 calls out. <see cref="Reset"/> uses the unchanged
+    /// <c>_root</c>, so the browser's rooted-at-base contract (#92) survives a seed.
+    /// </para>
+    /// </summary>
+    public string? SeedTo(string? targetDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(targetDirectory))
+        {
+            Reset();
+            return null;
+        }
+
+        var target = Normalize(targetDirectory);
+
+        // A target equal to the root is already what the root view represents (its ".." ⇒ the base dir),
+        // and a target that doesn't exist can't be highlighted — keep today's rooted-at-base behaviour.
+        if (string.Equals(target, _root, StringComparison.Ordinal) || !Directory.Exists(target))
+        {
+            Reset();
+            return null;
+        }
+
+        var parent = Parent(target);
+        if (string.Equals(parent, target, StringComparison.Ordinal))
+        {
+            // The target is a filesystem root — there is no parent listing to highlight it in.
+            Reset();
+            return null;
+        }
+
+        MoveTo(parent);
+        var name = Path.GetFileName(target);
+        // The target should appear as a child of its parent; if a race or case-fold hid it we've still
+        // moved the browser to the parent (an improvement), so highlight ".." rather than a wrong row.
+        if (string.IsNullOrEmpty(name) || !EntryExists(name))
+            return null;
+        return name;
+    }
+
+    private bool EntryExists(string name)
+    {
+        for (var i = 0; i < Entries.Count; i++)
+        {
+            if (string.Equals(Entries[i], name, StringComparison.Ordinal))
+                return true;
+        }
+        return false;
+    }
+
     private void MoveTo(string directory)
     {
         CurrentDirectory = Normalize(directory);
