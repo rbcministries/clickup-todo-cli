@@ -624,6 +624,113 @@ public sealed class DetailPaneViewTests
             i => Assert.Equal(url, urls[i]));
     }
 
+    // ── Keyboard-focused-link emphasis on a wrapped continuation row (#527) ───────────────────────────
+    // #443 styles the link KIND from the source-line spans so it is contiguous across a wrap; #527 does the
+    // same for the keyboard FOCUS cue by passing the focused span to ClassifyRowFromSource, so the reverse-
+    // video Focus emphasis lands on exactly the focused link's cells on every continuation row it wraps onto
+    // (the residual the tag-driven cue, which word wrap misaligns, left after #443). Driven against a real
+    // headless pane like the #443 tests. The draw-path wiring (LinkStyleAt) is covered by tui-validate.
+
+    // The graphemes ClassifyRowFromSource marks FocusedLink across all rows, the distinct targets it assigns
+    // them, and how many rows carried a focused cell (so a test can prove the cue spanned >1 row). Asserts
+    // every row reconciled, and only the focused source line gets the focused span (others get null).
+    private static (string Focused, HashSet<string?> Targets, int RowsWithFocus) FocusedAcrossRows(
+        IReadOnlyList<List<Cell>> rows, IReadOnlyList<DetailPaneView.RowSource> map, string[] sourceLines,
+        LinkSpan focusedSpan, int focusedLine)
+    {
+        var focused = new List<string>();
+        var targets = new HashSet<string?>();
+        var rowsWithFocus = 0;
+        for (var r = 0; r < rows.Count; r++)
+        {
+            var src = map[r];
+            Assert.True(src.SourceLineIndex >= 0, $"row {r} '{GraphemeText(rows[r])}' did not reconcile");
+            var span = src.SourceLineIndex == focusedLine ? focusedSpan : (LinkSpan?)null;
+            var (styles, urls) = DetailPaneView.ClassifyRowFromSource(
+                rows[r], sourceLines[src.SourceLineIndex], src.StartOffset, span);
+            var any = false;
+            for (var i = 0; i < rows[r].Count; i++)
+                if (styles[i] == DetailPaneView.DetailCellStyle.FocusedLink)
+                {
+                    focused.Add(rows[r][i].Grapheme ?? "");
+                    targets.Add(urls[i]);
+                    any = true;
+                }
+            if (any)
+                rowsWithFocus++;
+        }
+        return (string.Concat(focused), targets, rowsWithFocus);
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_MarksTheFocusedUrlAsFocusedContiguouslyAcrossAWrap()
+    {
+        // The #527 fix: a focused bare URL longer than the pane hard-wraps mid-URL; every row it lands on is
+        // marked FocusedLink for the WHOLE url — the exact continuation-row cells the misaligned tag missed.
+        const string url = "https://example.com/a/very/long/path/that/hard/wraps/across/rows";
+        var body = "See " + url + " end";
+        var (rows, map) = WrapAndMap(body, width: 20);
+        var sourceLines = body.Split('\n');
+        var focusedSpan = Assert.Single(TaskLinkExtractor.Extract(sourceLines[0]));
+
+        var (focused, targets, rowsWithFocus) = FocusedAcrossRows(rows, map, sourceLines, focusedSpan, focusedLine: 0);
+        Assert.True(rowsWithFocus >= 2, $"the focused URL should span >= 2 rows at this width (spanned {rowsWithFocus})");
+        Assert.Equal(url, focused);                 // exactly the URL cells, focused contiguously across the wrap
+        Assert.Equal(url, Assert.Single(targets));  // still carries its OSC-8 target on every focused cell
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_FocusesMarkdownVisibleTextAcrossAWrap_ButNotTheMarkup()
+    {
+        // A focused markdown link whose visible text wraps: every visible-text cell is FocusedLink with the
+        // RESOLVED target on whichever row it lands on; the [ ] ( url ) markup stays unfocused/unstyled.
+        const string target = "https://example.com/runbook";
+        const string visible = "the operations runbook and deploy guide";
+        var body = "See [" + visible + "](" + target + ") now";
+        var (rows, map) = WrapAndMap(body, width: 18);
+        var sourceLines = body.Split('\n');
+        var focusedSpan = Assert.Single(TaskLinkExtractor.Extract(sourceLines[0]));
+
+        var (focused, targets, rowsWithFocus) = FocusedAcrossRows(rows, map, sourceLines, focusedSpan, focusedLine: 0);
+        Assert.True(rowsWithFocus >= 2, $"the focused visible text should span >= 2 rows at this width (spanned {rowsWithFocus})");
+        Assert.Equal(visible, focused);                // exactly the visible text — not the '[', ']', or (url)
+        Assert.Equal(target, Assert.Single(targets));  // the resolved target, not the visible prose
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_MarksOnlyTheFocusedLink_OthersKeepTheirKind()
+    {
+        // Selectivity: with two links on a line, focusing the task link marks only it FocusedLink; the web
+        // link keeps WebLink and no cell is left as the focused link's bare kind (TaskLink).
+        var source = $"web {WebUrl} task {TaskUrl} end";
+        var row = DetailPaneView.BuildCells(source, Sep).Single();
+        var spans = TaskLinkExtractor.Extract(source);           // document order: [0] web, [1] task
+        var focused = spans[1];
+
+        var (styles, _) = DetailPaneView.ClassifyRowFromSource(row, source, 0, focused);
+
+        string TextWhere(DetailPaneView.DetailCellStyle s) => string.Concat(
+            Enumerable.Range(0, row.Count).Where(i => styles[i] == s).Select(i => row[i].Grapheme ?? ""));
+        Assert.Equal(TaskUrl, TextWhere(DetailPaneView.DetailCellStyle.FocusedLink));
+        Assert.Equal(WebUrl, TextWhere(DetailPaneView.DetailCellStyle.WebLink));
+        Assert.Equal("", TextWhere(DetailPaneView.DetailCellStyle.TaskLink)); // the focused task link is FocusedLink, not TaskLink
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_WithNoFocusedSpan_MarksNoCellFocused()
+    {
+        // Guard the default/null overload: with no focused span every link keeps its kind (the #443 behaviour).
+        var source = $"web {WebUrl} end";
+        var row = DetailPaneView.BuildCells(source, Sep).Single();
+
+        var (defaulted, _) = DetailPaneView.ClassifyRowFromSource(row, source, 0);          // default overload
+        var (nulled, _) = DetailPaneView.ClassifyRowFromSource(row, source, 0, null);       // explicit null
+
+        Assert.DoesNotContain(DetailPaneView.DetailCellStyle.FocusedLink, defaulted);
+        Assert.DoesNotContain(DetailPaneView.DetailCellStyle.FocusedLink, nulled);
+        Assert.Contains(DetailPaneView.DetailCellStyle.WebLink, defaulted);
+    }
+
     // Exercises the real SetBody → TextView.Load path (no driver needed to load the model) and inspects
     // the loaded cells. This is the reviewer's concern (PR #184): the terminal-default (Color.None)
     // background must stay on the separator line only, and must not carry forward to the comment/
