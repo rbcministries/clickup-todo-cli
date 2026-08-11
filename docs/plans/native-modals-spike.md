@@ -166,8 +166,63 @@ actually landing while the modal is up (reasoned from the shared MainLoop, not p
 and `dotnet` drivers (this harness is ANSI-only per CLAUDE.md); and modal-stacking (F1 Help *over* an
 open F3 modal, which the `_screens` host supports today via `HelpRequested`).
 
-## Follow-up
+## Follow-up: #554 focusable-form A/B (Filter·Sort·Group) — RESOLVED
 
-The **focusable-form native-modal A/B** (Filter·Sort·Group) described in the caveat is tracked in
-**#554** — that is the gate between this spike's "architecture is sound" and #402 actually committing
-the transient-modal migration.
+The **focusable-form native-modal A/B** the caveat above called for — the gate between this spike's
+"architecture is sound" and #402 committing the transient-modal migration — is now done (#554). It
+repeats the A/B on **Filter·Sort·Group (F3)**, a real focusable form (field/operator `ListView`s, a
+value `TextField`, Add/Remove/Save/Cancel/Reset `Button`s) that returns a `ViewSettings?`, so it
+measures the two axes F1 Help could not: **intra-modal focusable-input latency** and
+**result-marshalling** back to the host.
+
+The form is built once by a shared `FilterSortGroupFormBuilder` and hosted either as the `_screens`
+`FilterSortGroupScreen` (A) or a native `Dialog` on a nested `Application.Run` (B, same
+`CLICKUP_TODO_NATIVE_MODAL` gate); the A/B differs only in the hosting mechanism. Measured under a new
+`fsg_modal_check.py` (ANSI driver, diff-flush on, `E2E_TASKS=200`, `ROWS×COLS = 50×200`).
+Representative run:
+
+| metric                          | A — `_screens` form | B — native `Dialog` |
+| ------------------------------- | ------------------: | ------------------: |
+| F3 open→paint (ms)              |                ~215 |                ~270 |
+| **intra-modal key→paint (ms)**  |             **~43** |             **~44** |
+| post-modal list-nav (ms, med.)  |                 ~65 |                 ~64 |
+
+Both hosts additionally passed, per leg: open → type into the value `TextField` → **Save marshals a
+`ViewSettings` back** (the host flashes the view summary and the applied filter empties the list) →
+**Cancel/Esc discards** (null result, no persist) → **F1 stacks Help over the F3 modal**, Esc returns
+to it → close, process alive throughout.
+
+### What the numbers say (the axes #404 could not measure)
+
+1. **Intra-modal focusable-input latency does not regress — the crux #3 concern.** Typing a character
+   into the modal's `TextField` paints in **~43 ms (A) vs ~44 ms (B)** — indistinguishable, both at the
+   `drive.py` steady-state baseline. The nested run-loop the #3/#38 invariants were written against does
+   **not** make *input inside a focusable modal* any slower than the hand-mounted form. This is the
+   measurement the #404 Help spike explicitly deferred, and it comes back clean.
+2. **Result-marshalling works from a native modal.** Save inside the nested `Dialog` marshals the edited
+   `ViewSettings` back through `ApplyViewSettings` (view summary flashed, filter applied); Cancel yields
+   null and changes nothing. Help returned nothing, so this path was untested until now — it is sound.
+3. **No steady-state regression (the #3 outer invariant), same as #404.** Post-modal list-nav is
+   **~65 ms (A) vs ~64 ms (B)** — a focusable form modal cycle leaves the single-`ListView` navigation
+   exactly as snappy as the `_screens` screen.
+4. **Same modest one-time open cost as #404.** Native adds ~55 ms to the F3 open (dialog chrome over a
+   full-frame repaint) — a per-open cost, not per-keypress, landing nowhere near the invariants.
+
+### Updated recommendation for #402 — GO (caveat cleared)
+
+**Go — migrate the #402 transient *form*-modal category (Filter·Sort·Group, Quick Updates, New Task,
+Prompt Template Editor) to native surfaces.** The #404 spike proved the nested-run-loop architecture
+sound but only on a non-focusable surface; #554 now confirms the remaining unknowns — **intra-modal
+focusable-input latency and result-marshalling** — hold for a real focusable form. The two historical
+blockers (#3/#38 input regression, #346 dispose crash) do not reproduce on Terminal.Gui 2.4.10 with the
+current ANSI renderer, for either a non-focusable *or* a focusable modal. Native Help also **stacks**
+over a native F3 modal, matching the `_screens` LIFO host's one stacking case.
+
+**What remains unverified (explicitly):** the `windows` and `dotnet` drivers (this harness is ANSI-only
+per CLAUDE.md — the biggest remaining gap before a full migration); a background refresh landing *while*
+a focusable modal is up (reasoned from the shared MainLoop, not probed — same as #404); and modals that
+themselves stack multiple focusable forms. A migration PR should carry the native variant behind the
+flag until the `windows`/`dotnet` drivers are confirmed, then flip the default.
+
+The `FilterSortGroupFormBuilder` extraction (host-agnostic form) is the shape a real migration would
+reuse: keep the form pure, and let the host be either `_screens` or native `Dialog`.
