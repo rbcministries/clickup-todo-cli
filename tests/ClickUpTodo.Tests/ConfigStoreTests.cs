@@ -122,7 +122,7 @@ public sealed class ConfigStoreTests : IDisposable
     }
 
     [Fact]
-    public void Save_BaseWithTaskPrefixMode_WritesLegacyTaskDerivedWireValue()
+    public void Save_BaseWithTaskPrefillMode_WritesLegacyTaskDerivedWireValue()
     {
         var store = new ConfigStore(_dir);
         store.Save(new AppConfig
