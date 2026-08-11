@@ -624,6 +624,113 @@ public sealed class DetailPaneViewTests
             i => Assert.Equal(url, urls[i]));
     }
 
+    // ── Keyboard-focused-link emphasis on a wrapped continuation row (#527) ───────────────────────────
+    // #443 styles the link KIND from the source-line spans so it is contiguous across a wrap; #527 does the
+    // same for the keyboard FOCUS cue by passing the focused span to ClassifyRowFromSource, so the reverse-
+    // video Focus emphasis lands on exactly the focused link's cells on every continuation row it wraps onto
+    // (the residual the tag-driven cue, which word wrap misaligns, left after #443). Driven against a real
+    // headless pane like the #443 tests. The draw-path wiring (LinkStyleAt) is covered by tui-validate.
+
+    // The graphemes ClassifyRowFromSource marks FocusedLink across all rows, the distinct targets it assigns
+    // them, and how many rows carried a focused cell (so a test can prove the cue spanned >1 row). Asserts
+    // every row reconciled, and only the focused source line gets the focused span (others get null).
+    private static (string Focused, HashSet<string?> Targets, int RowsWithFocus) FocusedAcrossRows(
+        IReadOnlyList<List<Cell>> rows, IReadOnlyList<DetailPaneView.RowSource> map, string[] sourceLines,
+        LinkSpan focusedSpan, int focusedLine)
+    {
+        var focused = new List<string>();
+        var targets = new HashSet<string?>();
+        var rowsWithFocus = 0;
+        for (var r = 0; r < rows.Count; r++)
+        {
+            var src = map[r];
+            Assert.True(src.SourceLineIndex >= 0, $"row {r} '{GraphemeText(rows[r])}' did not reconcile");
+            var span = src.SourceLineIndex == focusedLine ? focusedSpan : (LinkSpan?)null;
+            var (styles, urls) = DetailPaneView.ClassifyRowFromSource(
+                rows[r], sourceLines[src.SourceLineIndex], src.StartOffset, span);
+            var any = false;
+            for (var i = 0; i < rows[r].Count; i++)
+                if (styles[i] == DetailPaneView.DetailCellStyle.FocusedLink)
+                {
+                    focused.Add(rows[r][i].Grapheme ?? "");
+                    targets.Add(urls[i]);
+                    any = true;
+                }
+            if (any)
+                rowsWithFocus++;
+        }
+        return (string.Concat(focused), targets, rowsWithFocus);
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_MarksTheFocusedUrlAsFocusedContiguouslyAcrossAWrap()
+    {
+        // The #527 fix: a focused bare URL longer than the pane hard-wraps mid-URL; every row it lands on is
+        // marked FocusedLink for the WHOLE url — the exact continuation-row cells the misaligned tag missed.
+        const string url = "https://example.com/a/very/long/path/that/hard/wraps/across/rows";
+        var body = "See " + url + " end";
+        var (rows, map) = WrapAndMap(body, width: 20);
+        var sourceLines = body.Split('\n');
+        var focusedSpan = Assert.Single(TaskLinkExtractor.Extract(sourceLines[0]));
+
+        var (focused, targets, rowsWithFocus) = FocusedAcrossRows(rows, map, sourceLines, focusedSpan, focusedLine: 0);
+        Assert.True(rowsWithFocus >= 2, $"the focused URL should span >= 2 rows at this width (spanned {rowsWithFocus})");
+        Assert.Equal(url, focused);                 // exactly the URL cells, focused contiguously across the wrap
+        Assert.Equal(url, Assert.Single(targets));  // still carries its OSC-8 target on every focused cell
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_FocusesMarkdownVisibleTextAcrossAWrap_ButNotTheMarkup()
+    {
+        // A focused markdown link whose visible text wraps: every visible-text cell is FocusedLink with the
+        // RESOLVED target on whichever row it lands on; the [ ] ( url ) markup stays unfocused/unstyled.
+        const string target = "https://example.com/runbook";
+        const string visible = "the operations runbook and deploy guide";
+        var body = "See [" + visible + "](" + target + ") now";
+        var (rows, map) = WrapAndMap(body, width: 18);
+        var sourceLines = body.Split('\n');
+        var focusedSpan = Assert.Single(TaskLinkExtractor.Extract(sourceLines[0]));
+
+        var (focused, targets, rowsWithFocus) = FocusedAcrossRows(rows, map, sourceLines, focusedSpan, focusedLine: 0);
+        Assert.True(rowsWithFocus >= 2, $"the focused visible text should span >= 2 rows at this width (spanned {rowsWithFocus})");
+        Assert.Equal(visible, focused);                // exactly the visible text — not the '[', ']', or (url)
+        Assert.Equal(target, Assert.Single(targets));  // the resolved target, not the visible prose
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_MarksOnlyTheFocusedLink_OthersKeepTheirKind()
+    {
+        // Selectivity: with two links on a line, focusing the task link marks only it FocusedLink; the web
+        // link keeps WebLink and no cell is left as the focused link's bare kind (TaskLink).
+        var source = $"web {WebUrl} task {TaskUrl} end";
+        var row = DetailPaneView.BuildCells(source, Sep).Single();
+        var spans = TaskLinkExtractor.Extract(source);           // document order: [0] web, [1] task
+        var focused = spans[1];
+
+        var (styles, _) = DetailPaneView.ClassifyRowFromSource(row, source, 0, focused);
+
+        string TextWhere(DetailPaneView.DetailCellStyle s) => string.Concat(
+            Enumerable.Range(0, row.Count).Where(i => styles[i] == s).Select(i => row[i].Grapheme ?? ""));
+        Assert.Equal(TaskUrl, TextWhere(DetailPaneView.DetailCellStyle.FocusedLink));
+        Assert.Equal(WebUrl, TextWhere(DetailPaneView.DetailCellStyle.WebLink));
+        Assert.Equal("", TextWhere(DetailPaneView.DetailCellStyle.TaskLink)); // the focused task link is FocusedLink, not TaskLink
+    }
+
+    [Fact]
+    public void ClassifyRowFromSource_WithNoFocusedSpan_MarksNoCellFocused()
+    {
+        // Guard the default/null overload: with no focused span every link keeps its kind (the #443 behaviour).
+        var source = $"web {WebUrl} end";
+        var row = DetailPaneView.BuildCells(source, Sep).Single();
+
+        var (defaulted, _) = DetailPaneView.ClassifyRowFromSource(row, source, 0);          // default overload
+        var (nulled, _) = DetailPaneView.ClassifyRowFromSource(row, source, 0, null);       // explicit null
+
+        Assert.DoesNotContain(DetailPaneView.DetailCellStyle.FocusedLink, defaulted);
+        Assert.DoesNotContain(DetailPaneView.DetailCellStyle.FocusedLink, nulled);
+        Assert.Contains(DetailPaneView.DetailCellStyle.WebLink, defaulted);
+    }
+
     // Exercises the real SetBody → TextView.Load path (no driver needed to load the model) and inspects
     // the loaded cells. This is the reviewer's concern (PR #184): the terminal-default (Color.None)
     // background must stay on the separator line only, and must not carry forward to the comment/
@@ -1224,4 +1331,131 @@ public sealed class DetailPaneViewTests
         => string.Concat(cells.SelectMany(line => line)
             .Where(c => DetailPaneView.ClassifyCell(c) == style)
             .Select(c => c.Grapheme ?? ""));
+
+    // ── Mouse link hover feedback (#408) ─────────────────────────────────────────────────────────────
+    // The same real, laid-out pane and NewMouseEvent entry point the click tests use, driving bare motion
+    // reports (MouseFlags.PositionReport) instead of clicks. They pin the pure hover hit test — a report
+    // over a link yields that link's resolved target, off a link yields null — and the dedup that fires
+    // HoverTargetChanged only when the hovered link changes, never on a move within one link.
+
+    // A laid-out pane whose HoverTargetChanged values are captured in order.
+    private static (DetailPaneView Pane, List<string?> Targets) HoverablePane(
+        string body, int width = 60, int height = 10, string separator = Sep)
+    {
+        var pane = new DetailPaneView { Frame = new Rectangle(0, 0, width, height) };
+        pane.SetBody(body, separator);
+        Rewrap(pane);
+        var targets = new List<string?>();
+        pane.HoverTargetChanged += (_, target) => targets.Add(target);
+        return (pane, targets);
+    }
+
+    private static void Hover(DetailPaneView pane, Point at)
+        => pane.NewMouseEvent(new Mouse { Position = at, Flags = MouseFlags.PositionReport });
+
+    [Fact]
+    public void Hover_OverATaskLink_RaisesItsResolvedTarget()
+    {
+        var (pane, targets) = HoverablePane($"Related: {TaskUrl} ok");
+
+        Hover(pane, Locate(pane, TaskUrl));
+
+        Assert.Equal(TaskUrl, Assert.Single(targets));
+        // The pure hit test agrees with the event it raised.
+        Assert.Equal(TaskUrl, pane.HoverLinkTargetAt(Locate(pane, TaskUrl), pane.Viewport));
+    }
+
+    [Fact]
+    public void Hover_OverAWebLink_RaisesItsResolvedTarget()
+    {
+        var (pane, targets) = HoverablePane($"See {WebUrl} now");
+
+        Hover(pane, Locate(pane, WebUrl));
+
+        Assert.Equal(WebUrl, Assert.Single(targets));
+    }
+
+    [Fact]
+    public void Hover_OverAMarkdownLink_RaisesItsDestinationBehindTheVisibleText()
+    {
+        // Hovering the *visible text* of a [text](url) link names its real destination (#430), the same
+        // resolved target the OSC-8/underline path carries — not the prose the user sees.
+        var (pane, targets) = HoverablePane($"See [the docs]({WebUrl}) now");
+
+        Hover(pane, Locate(pane, "the docs"));
+
+        Assert.Equal(WebUrl, Assert.Single(targets));
+    }
+
+    [Fact]
+    public void Hover_OverProse_AfterALink_RaisesNull()
+    {
+        var (pane, targets) = HoverablePane($"Related: {TaskUrl} ok");
+
+        Hover(pane, Locate(pane, TaskUrl));   // on the link → its target
+        Hover(pane, new Point(0, 0));          // the 'R' of "Related:" — prose
+
+        Assert.Equal([TaskUrl, null], targets);
+    }
+
+    [Fact]
+    public void Hover_MovingWithinTheSameLink_RaisesOnlyOnce()
+    {
+        var (pane, targets) = HoverablePane($"Related: {TaskUrl} ok");
+        var at = Locate(pane, TaskUrl);
+
+        Hover(pane, at);                                    // enter the link
+        Hover(pane, at with { X = at.X + 3 });              // still inside it
+        Hover(pane, at with { X = at.X + 6 });              // still inside it
+
+        Assert.Equal(TaskUrl, Assert.Single(targets));      // one enter event, no repeats
+    }
+
+    [Fact]
+    public void Hover_ThenSetBodyReRender_ClearsTheStaleHint()
+    {
+        // A background refresh / activity-order toggle re-renders a pane in place (SetBody) while the
+        // pointer rests on a link. The hint on the status line no longer describes the re-wrapped body, so
+        // SetBody must raise a clear — and must not merely reset the dedup, which would swallow the next
+        // move-off and strand the stale hint.
+        var (pane, targets) = HoverablePane($"Related: {TaskUrl} ok");
+        Hover(pane, Locate(pane, TaskUrl));
+        Assert.Equal(TaskUrl, targets[^1]);          // hint shown
+
+        pane.SetBody($"Related: {TaskUrl} ok", Sep);  // re-render in place
+        Rewrap(pane);
+
+        Assert.Equal([TaskUrl, null], targets);       // the stale hint was cleared, not stranded
+    }
+
+    [Fact]
+    public void HoverLinkTargetAt_RightOfTheText_IsNotALink()
+    {
+        var (pane, _) = HoverablePane($"Related: {TaskUrl}");
+        var linkRow = Locate(pane, TaskUrl).Y;
+        var pastEnd = pane.GetColumnsWidth(pane.GetLine(linkRow));
+
+        Assert.Null(pane.HoverLinkTargetAt(new Point(pastEnd, linkRow), pane.Viewport));
+        Assert.Null(pane.HoverLinkTargetAt(new Point(-1, linkRow), pane.Viewport));
+    }
+
+    [Fact]
+    public void HoverLinkTargetAt_BelowTheBody_IsNotALink()
+    {
+        var (pane, _) = HoverablePane($"Related: {TaskUrl}");
+
+        // A row past the last wrapped line (the #318 "under a short body" clamp) resolves to no link.
+        Assert.Null(pane.HoverLinkTargetAt(new Point(0, pane.Lines + 2), pane.Viewport));
+    }
+
+    [Fact]
+    public void HoverLinkTargetAt_WithAWideRuneBeforeTheLink_MapsTheColumnToTheRightCell()
+    {
+        // An emoji is two columns wide, so a naive column==cell-index mapping would read the link one cell
+        // early. The emoji's own column is not a link; the URL's column resolves to the URL.
+        var (pane, _) = HoverablePane($"\U0001F600 {WebUrl}");
+
+        Assert.Null(pane.HoverLinkTargetAt(new Point(0, 0), pane.Viewport));           // the emoji
+        Assert.Equal(WebUrl, pane.HoverLinkTargetAt(Locate(pane, WebUrl), pane.Viewport));
+    }
 }

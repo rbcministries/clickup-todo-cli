@@ -121,9 +121,9 @@ Self-contained (fixed COLS=120 so the seeded URLs don't wrap). Expected: `ok —
 underlined+default-fg (Description), web link underlined+recoloured (Comments)`. The colour/underline
 change is invisible to the text-only `detail_check.py` A/B, which stays identical.
 
-**`link_wrap_check.py`** — in-text link styling on WRAPPED lines (#413 + #443): the wrapped-line case
-`link_check.py` deliberately avoids (it fixes `COLS=120` so URLs don't wrap). Runs at a narrow `COLS=50`
-and covers two wrap cases:
+**`link_wrap_check.py`** — in-text link styling on WRAPPED lines (#413 + #443 + #527): the wrapped-line
+case `link_check.py` deliberately avoids (it fixes `COLS=120` so URLs don't wrap). Runs at a narrow
+`COLS=50` and covers the wrap cases:
 
 - **#413 — a link whole on a continuation row.** The seeded Description line
   (`Parent ticket: https://app.clickup.com/t/86a1b2c3d …`) word-wraps so the task URL lands on a
@@ -137,9 +137,15 @@ and covers two wrap cases:
   underlined **contiguously across the wrap** — the tail on the continuation row is underlined too, which
   per-row re-extraction can't do. The app maps each rendered row back to its source line (by reconciling
   `GetAllLines()` against the source lines) and styles from the source line's spans.
+- **#527 — the keyboard FOCUS cue on a continuation row** (same `E2E_WRAP_SPLIT` seed). `Tab`-focuses the
+  split bare URL and asserts the reverse-video `Focus` emphasis (#319) lands on its `ENDURL` continuation-row
+  tail cells while they stay underlined. Pre-#527 the focus cue was tag-driven and word wrap misaligned the
+  tag off the continuation row; the app now recomputes it from the same #443 source map, so it is contiguous
+  on every row the focused link wraps onto. Fails on the pre-#527 draw path (the tail never gains the `Focus`
+  attribute).
 
 This is the **only** check that exercises the true wrapped-render draw path (the unit tests cover the pure
-helpers on the model), so run it whenever the detail-pane link styling or wrapping changes:
+helpers on the model), so run it whenever the detail-pane link styling, focus cue, or wrapping changes:
 
 ```bash
 E2E_TASKS=20 timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/link_wrap_check.py $DLL
@@ -147,8 +153,10 @@ E2E_TASKS=20 timeout 90 python3 -u tests/ClickUpTodo.Tui.E2E/link_wrap_check.py 
 
 Self-contained (fixed `COLS=50`; sets its own `E2E_WRAP_SPLIT=1`). Expected: `ok — wrapped task URL
 underlined exactly …; a hard-wrapped bare URL and a wrapped markdown link's visible text both underlined
-contiguously across the wrap (#443), COLS=50`. Fails on the pre-#413 code (underline shifted right off the
-URL) and on the pre-#443 code (the split tail / continuation-row visible text left un-underlined).
+contiguously across the wrap (#443); Tab-focusing the split URL applies the Focus emphasis to its
+continuation-row cells too (#527), COLS=50`. Fails on the pre-#413 code (underline shifted right off the
+URL), the pre-#443 code (the split tail / continuation-row visible text left un-underlined), and the
+pre-#527 code (the focus cue misaligned off the continuation row).
 
 **`tab_boundary_check.py`** — Task Detail tab-boundary crash guard: Terminal.Gui 2.4.10's stock `Tabs` control crashes
 (`InvalidOperationException: FocusChanging was not cancelled …` in `Tabs.SelectNextTab`/

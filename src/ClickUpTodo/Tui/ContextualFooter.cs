@@ -24,6 +24,10 @@ internal sealed class ContextualFooter
     private readonly Label _helpLabel;
     private string _status;
 
+    // The hover hint (#408) currently shown over the steady status, or null when none. Lowest precedence:
+    // Flash clears it, CommitStatus keeps it on top of a recomposed steady status.
+    private string? _hoverHint;
+
     /// <param name="initialStatus">The status line's seed text.</param>
     /// <param name="initialHelp">The help line's seed text, or null to leave it empty until the first
     /// <see cref="RenderHelp"/> (the dashboard seeds it with the list shortcuts so the default footer is
@@ -40,6 +44,10 @@ internal sealed class ContextualFooter
     /// <summary>The help <see cref="Label"/>, exposed so a host can attach a footer-click handler (#289).</summary>
     public Label HelpLabel => _helpLabel;
 
+    /// <summary>The status label's current on-screen text — the flash / hover-hint / steady-status
+    /// composition after precedence (#408). Exposed for the precedence unit tests.</summary>
+    internal string StatusText => _statusLabel.Text;
+
     /// <summary>Adds the status + help rows to <paramref name="window"/>.</summary>
     public void AddTo(Window window) => window.Add(_statusLabel, _helpLabel);
 
@@ -53,14 +61,30 @@ internal sealed class ContextualFooter
         set => _status = value;
     }
 
-    /// <summary>Assigns the composed <see cref="Status"/> to the status label.</summary>
-    public void CommitStatus() => _statusLabel.Text = _status;
+    /// <summary>Assigns the composed <see cref="Status"/> to the status label — keeping any active hover
+    /// hint (#408) on top, so recomposing the steady status while the mouse rests on a link updates what
+    /// shows once the hint clears without hiding the hint under the pointer.</summary>
+    public void CommitStatus() => _statusLabel.Text = _hoverHint ?? _status;
 
-    /// <summary>Sets and commits a transient status message in one step.</summary>
+    /// <summary>Sets and commits a transient status message in one step. A flash outranks a hover hint
+    /// (#408): it clears the hint and shows the message, and the hint re-asserts on the next hover move.</summary>
     public void Flash(string message)
     {
+        _hoverHint = null;
         _status = message;
         _statusLabel.Text = message;
+    }
+
+    /// <summary>
+    /// Shows a transient hover hint (#408) over the steady status line, or clears it. A non-<c>null</c>
+    /// <paramref name="hint"/> displays until cleared; <c>null</c> restores the steady <see cref="Status"/>.
+    /// Lowest precedence — a <see cref="Flash"/> replaces a hint and drops it, and <see cref="CommitStatus"/>
+    /// keeps a live hint on top of a recomposed steady status. Idempotent, so repeated clears are cheap.
+    /// </summary>
+    public void SetHoverHint(string? hint)
+    {
+        _hoverHint = hint;
+        _statusLabel.Text = hint ?? _status;
     }
 
     /// <summary>

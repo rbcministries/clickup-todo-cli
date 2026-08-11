@@ -8,6 +8,11 @@ rendered rows is underlined **contiguously across the wrap** — the case per-ro
 reach. Two seeded links exercise it: a bare URL longer than the pane inner width (hard-wrapped mid-URL,
 so its tail starts a continuation row) and a markdown `[text](url)` link whose visible text wraps.
 
+#527 (below, same seed): the keyboard **focus** cue (#319, the reverse-video Focus emphasis Tab steps
+across links) must also reach a continuation row. Tab-focusing the split bare URL and asserting the
+ENDURL tail cells change attribute (the Focus role) proves the cue, recomputed from the #443 source map
+rather than the word-wrap-misaligned tag, lands on the focused link's continuation-row cells too.
+
 Runs at a **narrow** COLS so the seeded Description line
 
     Parent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread
@@ -166,6 +171,45 @@ try:
         "the hard-wrapped URL tail on the continuation row is NOT underlined (#443 case 1 — the exact gap " \
         "per-row re-extraction leaves: the tail fragment has no scheme at its row start):\n" + visible()
 
+    # ── #527: the keyboard FOCUS cue reaches the continuation row of a wrapped link ──
+    # #443 (above) fixed the UNDERLINE across the wrap; #527 does the same for the reverse-video Focus
+    # emphasis (#319) that Tab steps across links. Pre-#527 that cue was tag-driven, and Terminal.Gui's word
+    # wrap misaligns the tag on a continuation row (rebuilding attrs from source index 0), so focusing the
+    # split bare URL left its ENDURL tail — a continuation-row fragment — WITHOUT the focus emphasis. The app
+    # now recomputes the focus cue from the same #443 source map, so it lands on exactly the focused link's
+    # cells on every row it wraps onto. Assert Tab-focusing the split URL changes the ENDURL tail cells'
+    # attributes (the Focus role) while they stay underlined — additional emphasis on the right cells.
+    def tail_sig():
+        loc = find_text("ENDURL")
+        assert loc, "ENDURL tail not on screen while checking the focus cue:\n" + visible()
+        cy, cx = loc
+        c = screen.buffer[cy][cx + 1]        # a cell squarely inside the underlined URL-tail fragment
+        return (c.fg, c.bg, c.reverse, c.underscore)
+
+    before_focus = tail_sig()
+    assert before_focus[3], "precondition: the split URL tail should be underlined before it is focused"
+
+    # Tab within the Description pane until the split URL's tail shows the Focus emphasis. Tab steps the
+    # in-pane link focus (#319) in document order and scrolls the focused link into view; bare ↓ (scroll_to)
+    # only scrolls, never moves focus (#452), so it re-reveals ENDURL after a focus scroll without disturbing
+    # which link is focused. Bounded — the pane has a handful of links, so a few steps reach the split URL.
+    focused_sig = None
+    for _ in range(6):
+        os.write(master, b"\t")              # Tab → focus the next in-pane link (#319)
+        pump(1.2)
+        if not find_text("ENDURL"):
+            scroll_to("ENDURL")
+        s = tail_sig()
+        if s[:3] != before_focus[:3]:        # fg/bg/reverse changed on the tail → the Focus role is on it
+            focused_sig = s
+            break
+    assert focused_sig is not None, \
+        "Tab never applied the Focus emphasis to the wrapped URL's continuation-row (ENDURL) cells — the " \
+        "#527 gap: the tag-driven focus cue is misaligned off the continuation row:\n" + visible()
+    assert focused_sig[3], \
+        "the focused split-URL tail lost its underline — the focus cue must ADD emphasis, not replace the " \
+        "underline (#317 underlines every link):\n" + visible()
+
     # Case 2 — a markdown [text](url) link whose visible text wraps across rows. The visible text on the
     # continuation row must be underlined too (pre-#443 the continuation row held no complete markdown link),
     # while the '(url)' markup — outside the visible-text span — stays un-underlined.
@@ -183,7 +227,8 @@ try:
             "the markdown (url) markup is underlined but is outside the visible-text span:\n" + visible()
 
     print("ok — wrapped task URL underlined exactly (no shift into trailing prose); a hard-wrapped bare URL "
-          "and a wrapped markdown link's visible text both underlined contiguously across the wrap (#443), COLS=%d" % COLS)
+          "and a wrapped markdown link's visible text both underlined contiguously across the wrap (#443); "
+          "Tab-focusing the split URL applies the Focus emphasis to its continuation-row cells too (#527), COLS=%d" % COLS)
 finally:
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)

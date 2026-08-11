@@ -38,9 +38,7 @@ public sealed class AgentDispatcher
     /// the command), which is what keeps the launch safe (#23). <paramref name="workingDir"/> (the
     /// resolved start directory) and <paramref name="template"/> (a blank value keeps the composer's
     /// <see cref="AgentPromptComposer.DefaultTemplate"/>) are the dispatch-time settings threaded in by
-    /// the caller (#91, #100). <paramref name="outputSubdirectory"/> (blank unless the task-derived
-    /// working-dir mode is active, #98) fills the template's <c>{outputDirInstruction}</c> with a
-    /// "write outputs to <c>./{subdir}</c>" instruction. <paramref name="oneOff"/> selects a one-off
+    /// the caller (#91, #100). <paramref name="oneOff"/> selects a one-off
     /// <c>claude -p</c> run over the default interactive session (#94). <paramref name="postToComments"/>
     /// (the #97 toggle) appends an instruction telling the agent to post a summary comment back to the
     /// ClickUp task. <paramref name="launchLocation"/> (the #275 per-dispatch toggle) overrides where
@@ -57,7 +55,6 @@ public sealed class AgentDispatcher
         string userPrompt,
         string? workingDir = null,
         string? template = null,
-        string? outputSubdirectory = null,
         bool oneOff = false,
         bool postToComments = false,
         LaunchLocation? launchLocation = null,
@@ -66,7 +63,7 @@ public sealed class AgentDispatcher
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, outputSubdirectory, postToComments);
+        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, postToComments);
         // Per-dispatch overrides on this launch's options; each null/blank leaves the settings-derived
         // _options untouched. #275: the launch location. #462: the matched Windows Terminal profile
         // (computed from the resolved directory, so it can't live on the directory-agnostic _options).
@@ -84,7 +81,7 @@ public sealed class AgentDispatcher
     /// runs it as a <b>background one-off</b> <c>claude -p</c> child process (#99) via
     /// <see cref="IBackgroundAgentRunner"/> instead of opening a terminal — capturing the output for
     /// rendering in the TUI. All the composition inputs (<paramref name="workingDir"/>,
-    /// <paramref name="template"/>, <paramref name="outputSubdirectory"/>, <paramref name="postToComments"/>)
+    /// <paramref name="template"/>, <paramref name="postToComments"/>)
     /// mean the same as on <see cref="DispatchAsync"/>, so a one-off run's prompt is identical to what the
     /// interactive terminal path would have produced. The composed prompt file is fed to the child on
     /// stdin and then <b>deleted</b> once the run finishes (or is cancelled) — the background path owns the
@@ -99,14 +96,13 @@ public sealed class AgentDispatcher
         string userPrompt,
         string? workingDir = null,
         string? template = null,
-        string? outputSubdirectory = null,
         bool postToComments = false,
         IProgress<string>? progress = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
 
-        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, outputSubdirectory, postToComments);
+        var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, postToComments);
         try
         {
             return await _backgroundRunner.RunAsync(promptFile, workingDir, _options, progress, ct).ConfigureAwait(false);
