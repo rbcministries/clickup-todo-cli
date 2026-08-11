@@ -305,6 +305,19 @@ public sealed class TaskDetailScreen : Screen
     private readonly Func<string, CancellationToken, Task<TaskChecklist>>? _createChecklistAsync;
     private readonly Func<string, string, CancellationToken, Task<TaskChecklist>>? _renameChecklistAsync;
     private readonly Func<string, CancellationToken, Task>? _deleteChecklistAsync;
+    // Per-item assignee (G, #460): the write (checklistId, itemId, assigneeId|null) → server-confirmed parent
+    // checklist (the host closes over the owning task id for the #519 nudge, like the other item writes), plus
+    // the assignee candidate pool (AssigneeFrequencyCache.Match / TopMostFrequent). All three null ⇒ F11 inert
+    // (e.g. single-task launch mode without a member pool), like the other checklist seams.
+    private readonly Func<string, string, long?, CancellationToken, Task<TaskChecklist>>? _setChecklistItemAssigneeAsync;
+    private readonly Func<string, ISet<long>, IReadOnlyList<TaskAssignee>>? _assigneeMatch;
+    private readonly Func<int, ISet<long>, IReadOnlyList<TaskAssignee>>? _assigneeTopFrequent;
+    // The per-item assignee picker overlay (G, #460): a FrameView hosting a freshly-built AssigneeSelectorView
+    // per open (the shared selector, in ImmediateApply mode), anchored at the bottom like the mention picker —
+    // no second persistent focusable pane (#3). Null until the first open; the picker is disposed on the next
+    // open and on teardown (SelectorView owns a debounce timer + CTS that RemoveAll alone wouldn't release).
+    private FrameView? _checklistAssigneeBox;
+    private AssigneeSelectorView? _checklistAssigneePicker;
     // Guards against a second CRUD write (add/rename/delete) while one is in flight — the toggle discipline,
     // shared across the three so a key-mash can't stack writes.
     private bool _checklistWriteInFlight;
@@ -502,7 +515,10 @@ public sealed class TaskDetailScreen : Screen
         Func<string, string, CancellationToken, Task>? deleteChecklistItemAsync = null,
         Func<string, CancellationToken, Task<TaskChecklist>>? createChecklistAsync = null,
         Func<string, string, CancellationToken, Task<TaskChecklist>>? renameChecklistAsync = null,
-        Func<string, CancellationToken, Task>? deleteChecklistAsync = null)
+        Func<string, CancellationToken, Task>? deleteChecklistAsync = null,
+        Func<string, string, long?, CancellationToken, Task<TaskChecklist>>? setChecklistItemAssigneeAsync = null,
+        Func<string, ISet<long>, IReadOnlyList<TaskAssignee>>? assigneeMatch = null,
+        Func<int, ISet<long>, IReadOnlyList<TaskAssignee>>? assigneeTopFrequent = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
@@ -524,6 +540,9 @@ public sealed class TaskDetailScreen : Screen
         _createChecklistAsync = createChecklistAsync;
         _renameChecklistAsync = renameChecklistAsync;
         _deleteChecklistAsync = deleteChecklistAsync;
+        _setChecklistItemAssigneeAsync = setChecklistItemAssigneeAsync;
+        _assigneeMatch = assigneeMatch;
+        _assigneeTopFrequent = assigneeTopFrequent;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
@@ -888,7 +907,8 @@ public sealed class TaskDetailScreen : Screen
     public override IReadOnlyList<HelpItem> HelpItems =>
         HelpItemSets.DetailFooter(
             _commentBox.Visible, _descriptionBox.Visible, _replyPickerBox.Visible, _treeList is not null,
-            _mentionBox?.Visible == true, _checklistItemBox.Visible);
+            _mentionBox?.Visible == true, _checklistItemBox.Visible,
+            _checklistAssigneeBox?.Visible == true);
 
     public override void OnShown()
     {
@@ -1176,7 +1196,7 @@ public sealed class TaskDetailScreen : Screen
         // row they rename / delete the item (E). The chords are shown in the Detail footer sets unconditionally
         // (as Space is), but act only here — the same shape D used for the toggle. Group create is Ctrl+G below.
         if (ReferenceEquals(_tabs.Value, _checklistList)
-            && key.KeyCode is KeyCode.F7 or KeyCode.F8 or KeyCode.F9)
+            && key.KeyCode is KeyCode.F7 or KeyCode.F8 or KeyCode.F9 or KeyCode.F11)
         {
             key.Handled = true;
             var onHeader = SelectedChecklistRow() is { IsHeader: true };
@@ -1196,6 +1216,10 @@ public sealed class TaskDetailScreen : Screen
                         DeleteSelectedChecklistGroup();
                     else
                         DeleteSelectedChecklistItem();
+                    break;
+                case KeyCode.F11:
+                    // F11 assigns the selected item (G, #460); item-scoped, a flash-no-op on a header row.
+                    AssignSelectedChecklistItem();
                     break;
             }
             return;
@@ -3007,6 +3031,146 @@ public sealed class TaskDetailScreen : Screen
         });
     }
 
+    /// <summary>F11 — assign (or unassign) the selected checklist item (G, #460). Opens the shared assignee
+    /// selector overlaid at the bottom of the tab, seeded with the item's current assignee. A header /
+    /// empty-state row is inert-but-flashed; a null seam (no assignee write or member pool) makes F11 inert.
+    /// Re-entrant-safe: a second F11 while the picker is up is ignored (the picker's search field doesn't
+    /// consume F11, so it would otherwise bubble back here).</summary>
+    private void AssignSelectedChecklistItem()
+    {
+        if (_setChecklistItemAssigneeAsync is null || _assigneeMatch is null || _assigneeTopFrequent is null)
+            return;
+        if (_checklistAssigneeBox?.Visible == true)
+            return;
+        if (_checklistWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (SelectedChecklistRow() is not { IsHeader: false, ItemId: { } itemId } row)
+        {
+            RequestFlash("Select a checklist item to assign — headers can't be assigned.");
+            return;
+        }
+        var current = _task.Checklists.FirstOrDefault(c => c.Id == row.ChecklistId) is { } cl
+            ? FindChecklistItem(cl.Items, itemId)?.Assignee
+            : null;
+        ShowChecklistAssigneePicker(row.ChecklistId, itemId, current);
+    }
+
+    /// <summary>Opens the per-item assignee picker (G, #460): a freshly-built <see cref="AssigneeSelectorView"/>
+    /// in <see cref="SelectorMode.ImmediateApply"/> hosted in a bottom-anchored FrameView, mirroring the
+    /// mention picker (no second persistent focusable pane, #3). The shared multi-select view is driven to
+    /// single-assignee semantics purely by what <see cref="BuildAssigneeApply"/>'s callback returns — a
+    /// one-element set on assign (so any prior pick is reconciled away) or an empty set on unassign.</summary>
+    private void ShowChecklistAssigneePicker(string checklistId, string itemId, TaskAssignee? current)
+    {
+        if (_assigneeMatch is null || _assigneeTopFrequent is null || _setChecklistItemAssigneeAsync is null)
+            return;
+
+        // Detach + dispose any prior picker before hosting a fresh one (off the outgoing picker's own event
+        // stack; SelectorView's timer/CTS need an explicit Dispose, RemoveAll only detaches) — as the mention
+        // picker does.
+        _checklistAssigneeBox?.RemoveAll();
+        _checklistAssigneePicker?.Dispose();
+
+        var picker = new AssigneeSelectorView(
+            match: _assigneeMatch,
+            topFrequent: _assigneeTopFrequent,
+            initialSelected: current is { Id: > 0 } ? [current] : null,
+            lockedDefault: null,
+            mode: SelectorMode.ImmediateApply,
+            applyAsync: BuildAssigneeApply(checklistId, itemId))
+        {
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+        };
+        _checklistAssigneePicker = picker;
+        picker.Flash += (_, message) => RequestFlash(message);
+        // Esc closes the picker back to the checklist tab (not "back to the list"): handled on the picker and
+        // marked so it never reaches the screen's OnKey. The base SelectorView owns typing / ↑↓ / Enter.
+        picker.KeyDown += (_, k) =>
+        {
+            if (k.KeyCode == KeyCode.Esc)
+            {
+                k.Handled = true;
+                HideChecklistAssigneePicker();
+            }
+        };
+
+        if (_checklistAssigneeBox is null)
+        {
+            _checklistAssigneeBox = new FrameView
+            {
+                Title = "Assign — type to search · Enter assign/clear · Esc done",
+                X = 0,
+                Width = Dim.Fill(),
+                Visible = false,
+            };
+            Add(_checklistAssigneeBox);
+        }
+
+        _checklistAssigneeBox.Add(picker);
+        var height = DispatchPaneModel.ClampHeight(MentionPickerPreferredHeight, Viewport.Height, minTabRows: 3);
+        _checklistAssigneeBox.Height = height;
+        _checklistAssigneeBox.Y = Pos.AnchorEnd(height);
+        _checklistAssigneeBox.Visible = true;
+        picker.SetFocus();
+    }
+
+    /// <summary>Closes the assignee picker and returns focus to the checklist ListView, leaving the tab on
+    /// the item that was being assigned. The optimistic row already reflects any applied change (the picker's
+    /// per-toggle write reconciles the row to server truth).</summary>
+    private void HideChecklistAssigneePicker()
+    {
+        if (_checklistAssigneeBox is null || !_checklistAssigneeBox.Visible)
+            return;
+        _checklistAssigneeBox.Visible = false;
+        _checklistAssigneeBox.RemoveAll();
+        _checklistList.SetFocus();
+    }
+
+    /// <summary>Builds the <see cref="AssigneeSelectorView"/> immediate-apply callback for one checklist item:
+    /// a selection (<see cref="ToggleKind.Added"/>) writes the person's id, a de-selection
+    /// (<see cref="ToggleKind.Removed"/>) clears it, then the row is reconciled to the server-confirmed
+    /// checklist and the confirmed assignee is returned as a single-element (or empty) set so the shared
+    /// multi-select view collapses to single-assignee semantics. A failed write throws, so the selector
+    /// reverts its own selection and flashes; the row was never optimistically changed, so nothing to undo
+    /// there (the write is the item-CRUD "return the truth" shape, deferring the row update to the server
+    /// response rather than a screen-side optimistic edit).</summary>
+    private Func<ToggleKind, TaskAssignee, CancellationToken, Task<IReadOnlyList<TaskAssignee>>> BuildAssigneeApply(
+        string checklistId, string itemId)
+        => async (kind, person, ct) =>
+        {
+            long? assigneeId = kind == ToggleKind.Added ? person.Id : null;
+            var server = await _setChecklistItemAssigneeAsync!(checklistId, itemId, assigneeId, ct)
+                .ConfigureAwait(false);
+            Application.Invoke(() =>
+            {
+                if (_disposed)
+                    return;
+                UpdateData(_task with { Checklists = ReplaceChecklist(_task.Checklists, server) }, _comments);
+            });
+            var confirmed = FindChecklistItem(server.Items, itemId)?.Assignee;
+            return confirmed is { Id: > 0 } ? [confirmed] : (IReadOnlyList<TaskAssignee>)[];
+        };
+
+    /// <summary>Finds an item by id anywhere in a checklist's item tree (flat list + nested children), or
+    /// null when absent — used to read an item's current/confirmed <see cref="TaskChecklistItem.Assignee"/>.</summary>
+    private static TaskChecklistItem? FindChecklistItem(IReadOnlyList<TaskChecklistItem> items, string itemId)
+    {
+        foreach (var item in items)
+        {
+            if (string.Equals(item.Id, itemId, StringComparison.Ordinal))
+                return item;
+            if (item.Children.Count > 0 && FindChecklistItem(item.Children, itemId) is { } hit)
+                return hit;
+        }
+        return null;
+    }
+
     /// <summary>Handles keys while the checklist name overlay has focus: a pending discard confirm answers
     /// first; then Tab cycles the field/buttons, F1 opens Help, Esc cancels, and Enter (field-focused) or
     /// Ctrl+Enter submits. Everything else falls through so typing works.</summary>
@@ -3410,6 +3574,11 @@ public sealed class TaskDetailScreen : Screen
             _mentionBox?.RemoveAll();
             _mentionPicker?.Dispose();
             _mentionPicker = null;
+            // The per-item assignee picker (G, #460) has the same lifecycle: built fresh per open, otherwise
+            // disposed on the next open — detach-before-dispose here releases the last instance's timer/CTS.
+            _checklistAssigneeBox?.RemoveAll();
+            _checklistAssigneePicker?.Dispose();
+            _checklistAssigneePicker = null;
         }
         base.Dispose(disposing);
     }

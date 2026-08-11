@@ -207,6 +207,7 @@ public static class HelpItemSets
         new("F7", "➕ item"),
         new("F8", "✏ rename"),
         new("F9", "🗑 delete"),
+        new("F11", "👤 assign"),
         new("F5", "↻"),
         new("F1", "ℹ"),
         new("Esc", "back"),
@@ -236,6 +237,7 @@ public static class HelpItemSets
         new("F7", "➕ item"),
         new("F8", "✏ rename"),
         new("F9", "🗑 delete"),
+        new("F11", "👤 assign"),
         new("F5", "↻"),
         new("F6", "badges"),
         new("F1", "ℹ"),
@@ -308,6 +310,19 @@ public static class HelpItemSets
         new("Esc", "cancel"),
     ];
 
+    /// <summary>The Checklists-tab per-item assignee picker overlay (G, #460): the shared
+    /// <see cref="ClickUpTodo.Tui.AssigneeSelectorView"/> over the workspace member pool — type to search,
+    /// ↑/↓ to move, Enter to assign the highlighted person (or, on the current <c>✓</c> assignee, unassign),
+    /// Esc to close. Shown while the picker is open so the footer reflects only what it does (like
+    /// <see cref="DetailMentionPicker"/>); the checklist tab's command chords resume when it closes.</summary>
+    public static readonly IReadOnlyList<HelpItem> DetailChecklistAssigneePicker =
+    [
+        new("type", "search", IsAction: false),
+        new("↑↓", "move", IsAction: false),
+        new("Enter", "assign / clear"),
+        new("Esc", "done"),
+    ];
+
     /// <summary>Picks the Task Detail footer set for the current overlay state (#436). Pure so the
     /// branch order is unit-testable — the <see cref="TaskDetailScreen.HelpItems"/> property that calls
     /// it lives on a Terminal.Gui view and can't run in CI. The mention picker (#325), comment composer,
@@ -320,11 +335,13 @@ public static class HelpItemSets
     /// <see cref="Detail"/> is the no-tree-loader case.</summary>
     public static IReadOnlyList<HelpItem> DetailFooter(
         bool commentComposerVisible, bool descriptionEditorVisible, bool replyPickerVisible, bool hasTaskTree,
-        bool mentionPickerVisible = false, bool checklistItemEditorVisible = false) =>
+        bool mentionPickerVisible = false, bool checklistItemEditorVisible = false,
+        bool checklistAssigneePickerVisible = false) =>
         mentionPickerVisible ? DetailMentionPicker
         : commentComposerVisible ? DetailCommentComposer
         : descriptionEditorVisible ? DetailDescriptionEditor
         : replyPickerVisible ? DetailReplyPicker
+        : checklistAssigneePickerVisible ? DetailChecklistAssigneePicker
         : checklistItemEditorVisible ? DetailChecklistItemEditor
         : hasTaskTree ? DetailWithTaskTree
         : Detail;
