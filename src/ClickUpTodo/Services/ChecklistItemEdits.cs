@@ -28,6 +28,16 @@ public static class ChecklistItemEdits
         => MapChecklist(checklists, checklistId, items => SetNameInItems(items, itemId, name));
 
     /// <summary>Returns a copy of <paramref name="checklists"/> with item <paramref name="itemId"/> in
+    /// checklist <paramref name="checklistId"/> reassigned to <paramref name="assignee"/> (or unassigned when
+    /// it is <c>null</c>), updating the item wherever it appears (the flat <see cref="TaskChecklist.Items"/>
+    /// list and any nested <see cref="TaskChecklistItem.Children"/>). Every other checklist/item is carried
+    /// through unchanged — the optimistic transform behind the G (#460) per-item assignee write, exactly like
+    /// <see cref="SetName"/>.</summary>
+    public static IReadOnlyList<TaskChecklist> SetAssignee(
+        IReadOnlyList<TaskChecklist> checklists, string checklistId, string itemId, TaskAssignee? assignee)
+        => MapChecklist(checklists, checklistId, items => SetAssigneeInItems(items, itemId, assignee));
+
+    /// <summary>Returns a copy of <paramref name="checklists"/> with item <paramref name="itemId"/> in
     /// checklist <paramref name="checklistId"/> — and its whole subtree — removed. Descendants expressed
     /// either as nested <see cref="TaskChecklistItem.Children"/> or as flat items pointing back via
     /// <see cref="TaskChecklistItem.ParentId"/> are dropped too, so a deleted parent never leaves an
@@ -113,6 +123,22 @@ public static class ChecklistItemEdits
             var newName = string.Equals(item.Id, itemId, StringComparison.Ordinal) ? name : item.Name;
             var newChildren = item.Children.Count > 0 ? SetNameInItems(item.Children, itemId, name) : item.Children;
             result.Add(item with { Name = newName, Children = newChildren });
+        }
+        return result;
+    }
+
+    /// <summary>Rebuilds an item list, reassigning the matching item and recursing into every item's children
+    /// (so a nested match — or the same item present flat and as a child — is updated consistently), mirroring
+    /// <see cref="SetNameInItems"/>.</summary>
+    private static IReadOnlyList<TaskChecklistItem> SetAssigneeInItems(
+        IReadOnlyList<TaskChecklistItem> items, string itemId, TaskAssignee? assignee)
+    {
+        var result = new List<TaskChecklistItem>(items.Count);
+        foreach (var item in items)
+        {
+            var newAssignee = string.Equals(item.Id, itemId, StringComparison.Ordinal) ? assignee : item.Assignee;
+            var newChildren = item.Children.Count > 0 ? SetAssigneeInItems(item.Children, itemId, assignee) : item.Children;
+            result.Add(item with { Assignee = newAssignee, Children = newChildren });
         }
         return result;
     }
