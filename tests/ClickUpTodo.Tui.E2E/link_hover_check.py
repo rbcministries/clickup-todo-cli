@@ -143,14 +143,16 @@ def checks():
         assert "Link:" not in app.status(), f"the hint did not clear when leaving the link: {app.status()!r}"
 
         # The hint is suppressed while an overlay owns input: Ctrl+N opens the comment composer over the
-        # panes; hovering the still-visible link must show nothing.
+        # panes. Hovering the link's coordinates must show no hint — whether the composer covers them (the
+        # pane gets no motion report) or leaves them exposed (the screen's overlay gate suppresses it). We
+        # first hover the link so a hint IS up, then open the composer, then hover the same coordinates:
+        # a non-suppressed hover would re-show `Link: …`, so the assertion can't silently no-op.
+        app.move(col + 5, y)
+        assert f"Link: {WEB_URL}" in app.status(), f"precondition: hint should be up before the overlay: {app.status()!r}"
         app.key(b"\x0e", settle=1.5)               # Ctrl+N → comment composer
-        loc2 = app.find_url(WEB_URL)
-        if loc2:
-            y2, col2 = loc2
-            app.move(col2 + 5, y2)
-            assert "Link:" not in app.status(), \
-                f"a hover under the comment composer showed a hint: {app.status()!r}"
+        app.move(col + 6, y)                        # hover the link's coordinates under the composer
+        assert "Link:" not in app.status(), \
+            f"a hover under the comment composer showed a hint: {app.status()!r}\n" + app.visible()
         app.esc()                                   # close the composer
 
         # A keypress after hovering still drives the app (MousePositionTracking didn't wedge input): the

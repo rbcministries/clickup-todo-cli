@@ -1305,6 +1305,23 @@ public sealed class DetailPaneViewTests
     }
 
     [Fact]
+    public void Hover_ThenSetBodyReRender_ClearsTheStaleHint()
+    {
+        // A background refresh / activity-order toggle re-renders a pane in place (SetBody) while the
+        // pointer rests on a link. The hint on the status line no longer describes the re-wrapped body, so
+        // SetBody must raise a clear — and must not merely reset the dedup, which would swallow the next
+        // move-off and strand the stale hint.
+        var (pane, targets) = HoverablePane($"Related: {TaskUrl} ok");
+        Hover(pane, Locate(pane, TaskUrl));
+        Assert.Equal(TaskUrl, targets[^1]);          // hint shown
+
+        pane.SetBody($"Related: {TaskUrl} ok", Sep);  // re-render in place
+        Rewrap(pane);
+
+        Assert.Equal([TaskUrl, null], targets);       // the stale hint was cleared, not stranded
+    }
+
+    [Fact]
     public void HoverLinkTargetAt_RightOfTheText_IsNotALink()
     {
         var (pane, _) = HoverablePane($"Related: {TaskUrl}");

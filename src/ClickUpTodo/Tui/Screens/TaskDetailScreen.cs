@@ -1537,6 +1537,7 @@ public sealed class TaskDetailScreen : Screen
         _promptBox.Height = height;
         _promptBox.Y = Pos.AnchorEnd(height);
         _promptBox.Visible = true;
+        RequestHoverHint(null);   // an overlay now covers the panes; drop any stale hover hint (#408)
         _promptField.SetFocus();
     }
 
@@ -1662,6 +1663,7 @@ public sealed class TaskDetailScreen : Screen
         _commentBox.Height = height;
         _commentBox.Y = Pos.AnchorEnd(height);
         _commentBox.Visible = true;
+        RequestHoverHint(null);   // drop any stale hover hint the overlay now covers (#408)
         _commentEditor.SetFocus();
     }
 
@@ -1927,6 +1929,7 @@ public sealed class TaskDetailScreen : Screen
         _replyPickerBox.Height = height;
         _replyPickerBox.Y = Pos.AnchorEnd(height);
         _replyPickerBox.Visible = true;
+        RequestHoverHint(null);   // drop any stale hover hint the overlay now covers (#408)
         _replyPicker.SetFocus();
     }
 
@@ -2101,6 +2104,7 @@ public sealed class TaskDetailScreen : Screen
         _descriptionBox.Height = height;
         _descriptionBox.Y = Pos.AnchorEnd(height);
         _descriptionBox.Visible = true;
+        RequestHoverHint(null);   // drop any stale hover hint the overlay now covers (#408)
         _descriptionEditor.SetFocus();
     }
 

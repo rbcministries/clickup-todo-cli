@@ -3,6 +3,7 @@ using ClickUpTodo.Configuration;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
+using Terminal.Gui.Text;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using Attribute = Terminal.Gui.Drawing.Attribute;
@@ -255,10 +256,12 @@ public sealed class DetailPaneView : TextView
         _body = body;
         _paneLinks = ExtractPaneLinks(body, separator);
         _focusedLinkIndex = LinkFocus.None;
-        // Drop the remembered hover target (#408): the re-wrap can move every link, so the next motion
-        // report must be free to re-raise. Any hint already on the status line is transient and gets
-        // overwritten by the next status update; SetBody does not raise here (no motion has occurred).
-        _lastHoverTarget = null;
+        // Clear any hover hint (#408): the re-wrap can move or remove every link, so a hint already on the
+        // status line no longer describes the screen. Route through UpdateHoverTarget so it (a) clears the
+        // footer now via HoverTargetChanged and (b) keeps the dedup coherent — a bare reset to null would
+        // make the *next* move-off match the remembered value and get swallowed, stranding the stale hint.
+        // A no-op when nothing was hovered (the common refresh case) and before any subscriber attaches.
+        UpdateHoverTarget(null);
         // A new body re-wraps into fresh row lists, so the reference-keyed source map (#443) is stale — drop
         // it so it doesn't retain the previous body's rows (the draw path rebuilds it on the next miss).
         _rowSourceMap = null;
@@ -857,7 +860,9 @@ public sealed class DetailPaneView : TextView
         if (cell < 0)
             return null;
 
-        return LinkUrlForCell(row, cell);
+        // Reuse the draw path's reference-keyed per-row cache (GetLine hands back the same list reference
+        // the draw path caches), so a motion report over a row costs a dictionary hit, not a re-extraction.
+        return LinkUrlAt(row, cell);
     }
 
     /// <summary>
@@ -866,14 +871,16 @@ public sealed class DetailPaneView : TextView
     /// per-grapheme column widths so a row carrying wide runes maps a reported column to the correct cell
     /// (identity on an ASCII run such as a URL). Mirrors the column measure <see cref="LinkAt"/> guards with.
     /// </summary>
-    private int CellIndexAtColumn(List<Cell> row, int column)
+    private static int CellIndexAtColumn(List<Cell> row, int column)
     {
         if (column < 0)
             return -1;
         var col = 0;
         for (var i = 0; i < row.Count; i++)
         {
-            var width = GetColumnsWidth(row.GetRange(i, 1));
+            // The cell's own column width, straight off its grapheme (no per-cell List allocation) — the
+            // same GetColumns() measure ContextualFooter fits the help line with.
+            var width = (row[i].Grapheme ?? string.Empty).GetColumns();
             if (width <= 0)
                 width = 1; // defensive: never stall on a zero-width cell
             if (column < col + width)
