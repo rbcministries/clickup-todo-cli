@@ -262,6 +262,10 @@ Press `Ctrl+E` to open a feed of recent comments and `@`-mentions across the tas
 from the comments on your **assigned** tasks — which means a mention on a task you aren't assigned to
 won't appear unless a small **per-Space ClickUp Automation** turns mentions into assignments.
 
+You can also open the feed in **its own window/tab** with `clickup-todo --feed` — the same view, hosted
+standalone so you can keep it beside your work instead of toggling it in the dashboard. The dashboard's
+`Ctrl+E` is unchanged; `--feed` is just an additional way in.
+
 A comment that has a reply thread shows a `N replies` count on its feed row; the reply bodies
 themselves aren't fetched for the feed (that would fan out across every assigned task), but they're
 rendered nested under the comment in the Task Detail **Comments** / **Stream** tabs when you open the

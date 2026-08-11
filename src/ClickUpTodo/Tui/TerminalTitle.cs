@@ -52,6 +52,39 @@ public static class TerminalTitle
     }
 
     /// <summary>
+    /// The window title for the standalone feed host (<c>--feed</c>, #509): <c>Feed</c>, suffixed with
+    /// a <c>— {n} mention(s)</c> badge when <paramref name="mentionCount"/> is positive, so several
+    /// <c>--feed</c> tabs (and a feed tab beside task tabs) are distinguishable at a glance and the tab
+    /// carries an at-a-glance unread-mention signal (the analogue of <see cref="ForTask"/> for the feed).
+    /// A zero/negative count yields the bare <c>Feed</c>. Truncated to <paramref name="maxLength"/> like
+    /// <see cref="ForTask"/>. Pure and unit-testable — the <c>Window.Title</c> assignment is host code.
+    /// </summary>
+    public static string ForFeed(int mentionCount, int maxLength = MaxLength)
+    {
+        var composed = mentionCount > 0
+            ? $"Feed — {mentionCount} mention{(mentionCount == 1 ? "" : "s")}"
+            : "Feed";
+
+        maxLength = Math.Max(0, maxLength);
+        if (composed.Length > maxLength)
+            composed = composed[..maxLength];
+
+        return composed.TrimEnd();
+    }
+
+    /// <summary>
+    /// The refreshed feed-host title for <paramref name="mentionCount"/>, or <c>null</c> when it is
+    /// unchanged from <paramref name="currentTitle"/> — so the feed host reassigns the window title on a
+    /// feed refresh (#425) only when the mention count actually moved it. Mirrors <see cref="Retitle"/>
+    /// for the task host; comparison is <b>ordinal</b>. Pure and unit-testable.
+    /// </summary>
+    public static string? RetitleFeed(string? currentTitle, int mentionCount, int maxLength = MaxLength)
+    {
+        var next = ForFeed(mentionCount, maxLength);
+        return string.Equals(next, currentTitle, StringComparison.Ordinal) ? null : next;
+    }
+
+    /// <summary>
     /// The refreshed title for a launch task, or <c>null</c> when it is unchanged from
     /// <paramref name="currentTitle"/> — so the single-task host reassigns the window title on refresh
     /// (#425) only when a rename or a newly-assigned custom id actually moved it. Returning <c>null</c> on
