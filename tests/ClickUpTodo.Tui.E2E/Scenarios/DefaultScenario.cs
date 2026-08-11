@@ -102,10 +102,8 @@ internal sealed class DefaultScenario : IE2EScenario
     private static Task<HttpResponseMessage> TaskGet(FakeClickUp b, string path, string query)
     {
         var idSeg = FakeClickUp.LastSegment(path);
-        if (idSeg == "tmissing")
-            return Task.FromResult(FakeClickUp.TaskNotFound());
-        if (idSeg == "PROJ123" && !query.Contains("custom_task_ids=true", StringComparison.OrdinalIgnoreCase))
-            return Task.FromResult(FakeClickUp.TaskNotFound());
+        if (FakeClickUp.TaskGetSentinel(idSeg, query) is { } notFound)
+            return Task.FromResult(notFound);
         return Task.FromResult(FakeClickUp.Ok(b.DetailJson(idSeg)));
     }
 }

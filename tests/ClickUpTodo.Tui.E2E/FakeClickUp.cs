@@ -158,6 +158,20 @@ internal sealed class FakeClickUp : HttpMessageHandler
     /// <summary>The last path segment (a task/list/comment id for the <c>{id}</c> routes).</summary>
     internal static string LastSegment(string path) => path[(path.LastIndexOf('/') + 1)..];
 
+    /// <summary>The two <c>GET task/{id}</c> 404 sentinels — quick-open not-found (<c>tmissing</c>, #303) and
+    /// the hyphenless custom-id fallback (<c>PROJ123</c> without <c>custom_task_ids=true</c>, #353) — or
+    /// <c>null</c> for any real id. In the monolith these fired ahead of the tree/foreign/nudge/default branch,
+    /// so every scenario's task GET honoured them; scenario overrides call this first to keep that intact
+    /// (none of them serves a task named <c>tmissing</c>/<c>PROJ123</c>, so the guard only ever 404s those).</summary>
+    internal static HttpResponseMessage? TaskGetSentinel(string idSeg, string query)
+    {
+        if (idSeg == "tmissing")
+            return TaskNotFound();
+        if (idSeg == "PROJ123" && !query.Contains("custom_task_ids=true", StringComparison.OrdinalIgnoreCase))
+            return TaskNotFound();
+        return null;
+    }
+
     /// <summary>The task id from a <c>/v2/task/{id}/comment</c> path.</summary>
     internal static string TaskIdOfComment(string path)
     {

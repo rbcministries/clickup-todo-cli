@@ -1,3 +1,4 @@
+using System.Net;
 using ClickUpTodo.Tui.E2E;
 
 namespace ClickUpTodo.Tests;
@@ -74,5 +75,25 @@ public class ScenarioDiscoveryTests
             var ex = Record.Exception(() => new FakeClickUp(new HarnessContext { TaskCount = 1 }, [scenario]));
             Assert.True(ex is null, $"Scenario '{scenario.Name}' produced an ambiguous route table: {ex?.Message}");
         }
+    }
+
+    [Fact]
+    public async Task ScenarioTaskGetOverride_HonoursNotFoundSentinels()
+    {
+        // A scenario that overrides GET task/{id} (here TreeScenario) must still 404 the two quick-open
+        // sentinels — tmissing (#303) and hyphenless PROJ123 without custom_task_ids (#353) — that the
+        // monolith checked ahead of its scenario branch. Passing the scenario directly registers its routes
+        // regardless of its env-gated IsActive, so the override path is what answers here.
+        using var client = new HttpClient(
+            new FakeClickUp(new HarnessContext { TaskCount = 3 }, new IE2EScenario[] { new TreeScenario() }))
+        {
+            BaseAddress = new Uri("https://api.clickup.com/api/v2/"),
+        };
+
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("task/tmissing")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("task/PROJ123")).StatusCode);
+        // custom_task_ids=true lifts the PROJ123 fallback; a real id resolves through the override.
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("task/PROJ123?custom_task_ids=true")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("task/t0")).StatusCode);
     }
 }

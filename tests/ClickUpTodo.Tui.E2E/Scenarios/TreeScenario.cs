@@ -19,6 +19,8 @@ internal sealed class TreeScenario : IE2EScenario
         new(HttpMethod.Get, "task/{id}", (_, path, query, _) =>
         {
             var id = FakeClickUp.LastSegment(path);
+            if (FakeClickUp.TaskGetSentinel(id, query) is { } notFound)
+                return Task.FromResult(notFound);
             var includeSubtasks = query.Contains("include_subtasks=true", StringComparison.OrdinalIgnoreCase);
             return FakeClickUp.OkAsync(TaskJson(id, includeSubtasks));
         }, 1),

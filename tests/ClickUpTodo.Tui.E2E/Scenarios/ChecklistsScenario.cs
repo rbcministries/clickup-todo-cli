@@ -38,9 +38,12 @@ internal sealed class ChecklistsScenario : IE2EScenario
     [
         // Detail read: the default detail with the current checklist DOM spliced in (from the mutable DOM, so
         // a toggle/create/delete persists across a later detail GET).
-        new(HttpMethod.Get, "task/{id}", (_, path, _, _) =>
+        new(HttpMethod.Get, "task/{id}", (_, path, query, _) =>
         {
-            var node = JsonNode.Parse(backend.DetailJson(FakeClickUp.LastSegment(path)))!;
+            var id = FakeClickUp.LastSegment(path);
+            if (FakeClickUp.TaskGetSentinel(id, query) is { } notFound)
+                return Task.FromResult(notFound);
+            var node = JsonNode.Parse(backend.DetailJson(id))!;
             lock (_gate)
                 node["checklists"] = _dom.DeepClone();
             return FakeClickUp.OkAsync(node.ToJsonString());

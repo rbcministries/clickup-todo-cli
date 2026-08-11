@@ -30,9 +30,12 @@ internal sealed class QuListsScenario : IE2EScenario
     [
         // Detail: default detail + the task's set custom-field values, so the List-pane remove preflight has
         // values to strand-check.
-        new(HttpMethod.Get, "task/{id}", (_, path, _, _) =>
+        new(HttpMethod.Get, "task/{id}", (_, path, query, _) =>
         {
-            var node = JsonNode.Parse(backend.DetailJson(FakeClickUp.LastSegment(path)))!;
+            var id = FakeClickUp.LastSegment(path);
+            if (FakeClickUp.TaskGetSentinel(id, query) is { } notFound)
+                return Task.FromResult(notFound);
+            var node = JsonNode.Parse(backend.DetailJson(id))!;
             node["custom_fields"] = JsonNode.Parse(CustomFieldValuesJson);
             return FakeClickUp.OkAsync(node.ToJsonString());
         }, 1),

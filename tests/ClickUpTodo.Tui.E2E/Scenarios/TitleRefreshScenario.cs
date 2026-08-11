@@ -19,9 +19,12 @@ internal sealed class TitleRefreshScenario : IE2EScenario
 
     public IEnumerable<Route<Handler>> Routes(FakeClickUp backend) =>
     [
-        new(HttpMethod.Get, "task/{id}", (_, path, _, _) =>
+        new(HttpMethod.Get, "task/{id}", (_, path, query, _) =>
         {
-            var json = backend.DetailJson(FakeClickUp.LastSegment(path));
+            var id = FakeClickUp.LastSegment(path);
+            if (FakeClickUp.TaskGetSentinel(id, query) is { } notFound)
+                return Task.FromResult(notFound);
+            var json = backend.DetailJson(id);
             if (System.Threading.Interlocked.Increment(ref _fetches) > 1)
             {
                 var node = JsonNode.Parse(json)!;

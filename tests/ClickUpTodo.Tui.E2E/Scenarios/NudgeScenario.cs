@@ -47,9 +47,11 @@ internal sealed class NudgeScenario : IE2EScenario
 
         // The consumer's nudge re-fetch (#295): serve the overlaid status when the writer has committed one,
         // else the task's seeded default (with the original date).
-        new(HttpMethod.Get, "task/{id}", (_, path, _, _) =>
+        new(HttpMethod.Get, "task/{id}", (_, path, query, _) =>
         {
             var id = FakeClickUp.LastSegment(path);
+            if (FakeClickUp.TaskGetSentinel(id, query) is { } notFound)
+                return Task.FromResult(notFound);
             var overlay = ReadOverlay();
             return FakeClickUp.OkAsync(overlay.TryGetValue(id, out var o)
                 ? TaskJson(id, o.Status, o.Color, o.Updated)

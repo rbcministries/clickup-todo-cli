@@ -39,7 +39,10 @@ internal sealed class ForeignScenario : IE2EScenario
     public IEnumerable<Route<Handler>> Routes(FakeClickUp backend) =>
     [
         new(HttpMethod.Get, "team/{id}/task", (_, _, _, _) => FakeClickUp.OkAsync(TeamTasks()), 1),
-        new(HttpMethod.Get, "task/{id}", (_, path, query, _) => FakeClickUp.OkAsync(TaskGet(path, query)), 1),
+        new(HttpMethod.Get, "task/{id}", (_, path, query, _) =>
+            FakeClickUp.TaskGetSentinel(FakeClickUp.LastSegment(path), query) is { } notFound
+                ? Task.FromResult(notFound)
+                : FakeClickUp.OkAsync(TaskGet(path, query)), 1),
         new(HttpMethod.Put, "task/{id}", async (req, path, _, ct) =>
         {
             var reqBody = req.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
