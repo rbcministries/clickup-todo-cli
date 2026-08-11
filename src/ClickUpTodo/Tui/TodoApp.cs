@@ -1214,6 +1214,19 @@ public sealed class TodoApp
             });
         };
 
+        // Opening the dispatch-providers editor (#547) stacks it over settings the same way. On save it
+        // folds the edited list + default back into the settings screen via the request's callback, so
+        // the settings screen's own Save is the transaction boundary (a settings Cancel discards it).
+        screen.EditDispatchProvidersRequested += (_, req) =>
+        {
+            var editor = new DispatchProvidersScreen(req.Providers, req.DefaultProviderName);
+            ShowScreen(editor, () =>
+            {
+                if (editor.Result is not null)
+                    req.Apply(editor.Result.Providers, editor.Result.DefaultProviderName);
+            });
+        };
+
         ShowScreen(screen, () =>
         {
             var result = screen.Result;

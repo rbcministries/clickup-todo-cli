@@ -389,6 +389,18 @@ public static class HelpItemSets
         new("Esc", "cancel"),
     ];
 
+    /// <summary>The dispatch providers editor (#547), reached from F10: a provider list with Name /
+    /// Executable / Extra-args fields and Add / Delete / Set-default buttons. Tab moves between the list,
+    /// fields and buttons; Del arms an inline delete confirm on the selected provider; Save/Esc close.</summary>
+    public static readonly IReadOnlyList<HelpItem> DispatchProviders =
+    [
+        new("↑/↓", "move", IsAction: false),
+        new("Tab", "list / fields / buttons"),
+        new("Del", "delete provider", Chord: "Delete"),
+        new("F1", "ℹ"),
+        new("Esc", "cancel"),
+    ];
+
     /// <summary>The mentions &amp; comments feed screen (opened with Ctrl+E, #109). Enter opens the
     /// selected comment's task (#115); F3 toggles the mentions-only filter (#113/#114); F6 toggles the
     /// recent-activity source (#117); F12 toggles whether completed-task activity is included; Ctrl+E

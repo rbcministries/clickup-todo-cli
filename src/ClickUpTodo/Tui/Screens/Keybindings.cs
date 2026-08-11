@@ -17,6 +17,7 @@ public enum ScreenContext
     QuickOpen,
     NewTask,
     PromptTemplateEditor,
+    DispatchProviders,
     NotificationsFeed,
     AgentRun,
     Help,
@@ -157,6 +158,10 @@ public static class Keybindings
             // ── Prompt-template editor ────────────────────────────────────────────────────────
             [(ScreenContext.PromptTemplateEditor, KeyAction.Help)] = "F1",
             [(ScreenContext.PromptTemplateEditor, KeyAction.Back)] = "Esc",
+
+            // ── Dispatch providers editor (#547) ──────────────────────────────────────────────
+            [(ScreenContext.DispatchProviders, KeyAction.Help)] = "F1",
+            [(ScreenContext.DispatchProviders, KeyAction.Back)] = "Esc",
 
             // ── Notifications feed ────────────────────────────────────────────────────────────
             [(ScreenContext.NotificationsFeed, KeyAction.Open)] = "Enter",
