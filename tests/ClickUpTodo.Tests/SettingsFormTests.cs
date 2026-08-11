@@ -5,76 +5,42 @@ namespace ClickUpTodo.Tests;
 
 public sealed class SettingsFormTests
 {
-    // ── ApplyDefaultProviderEdit (#497): fold an F2 default-provider edit back into the list ──────
+    // ── DescribeProviders (#547): the F10 read-only provider summary ──────────────────────────────
 
     [Fact]
-    public void ApplyDefaultProviderEdit_EmptyList_SeedsASingleDefaultProvider()
-    {
-        var (providers, defaultName) = SettingsForm.ApplyDefaultProviderEdit([], "", "/opt/claude", ["--model", "opus"]);
-
-        var provider = Assert.Single(providers);
-        Assert.Equal(AgentDispatchSettings.DefaultProviderDisplayName, provider.Name);
-        Assert.Equal("/opt/claude", provider.Executable);
-        Assert.Equal(["--model", "opus"], provider.ExtraArgs);
-        Assert.Equal(AgentDispatchSettings.DefaultProviderDisplayName, defaultName);
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void ApplyDefaultProviderEdit_BlankExecutable_CoalescesToClaude(string exe)
-    {
-        var (providers, _) = SettingsForm.ApplyDefaultProviderEdit([], "", exe, []);
-        Assert.Equal("claude", Assert.Single(providers).Executable);
-    }
+    public void DescribeProviders_EmptyList_ReadsAsTheSingleBuiltInDefault()
+        => Assert.Equal(
+            $"1 provider · {AgentDispatchSettings.DefaultProviderDisplayName}",
+            SettingsForm.DescribeProviders([], ""));
 
     [Fact]
-    public void ApplyDefaultProviderEdit_TrimsExecutable()
+    public void DescribeProviders_SingleProvider_NamesIt()
+        => Assert.Equal(
+            "1 provider · Claude",
+            SettingsForm.DescribeProviders([new DispatchProvider { Name = "Claude", Executable = "claude" }], "Claude"));
+
+    [Fact]
+    public void DescribeProviders_MultipleProviders_CountsThemAndNamesTheDefault()
     {
-        var (providers, _) = SettingsForm.ApplyDefaultProviderEdit([], "", "  claude-x  ", []);
-        Assert.Equal("claude-x", Assert.Single(providers).Executable);
+        List<DispatchProvider> providers =
+        [
+            new() { Name = "Claude", Executable = "claude" },
+            new() { Name = "Codex", Executable = "codex" },
+        ];
+
+        Assert.Equal("2 providers · default Codex", SettingsForm.DescribeProviders(providers, "Codex"));
     }
 
     [Fact]
-    public void ApplyDefaultProviderEdit_EditsOnlyTheDefaultProvider_AndPreservesOthers()
+    public void DescribeProviders_UnmatchedDefaultName_FallsBackToTheFirst()
     {
-        var existing = new List<DispatchProvider>
-        {
-            new() { Name = "A", Executable = "a", ExtraArgs = ["--a"] },
-            new() { Name = "B", Executable = "b", ExtraArgs = ["--b"] },
-        };
+        List<DispatchProvider> providers =
+        [
+            new() { Name = "Claude", Executable = "claude" },
+            new() { Name = "Codex", Executable = "codex" },
+        ];
 
-        var (providers, defaultName) = SettingsForm.ApplyDefaultProviderEdit(existing, "B", "b-edited", ["--b2"]);
-
-        Assert.Equal("B", defaultName);
-        Assert.Equal(2, providers.Count);
-        Assert.Equal("a", providers[0].Executable);      // untouched
-        Assert.Equal(["--a"], providers[0].ExtraArgs);
-        Assert.Equal("b-edited", providers[1].Executable); // the default edited
-        Assert.Equal(["--b2"], providers[1].ExtraArgs);
-    }
-
-    [Fact]
-    public void ApplyDefaultProviderEdit_UnmatchedDefaultName_EditsTheFirstProvider()
-    {
-        var existing = new List<DispatchProvider> { new() { Name = "A", Executable = "a" } };
-
-        var (providers, _) = SettingsForm.ApplyDefaultProviderEdit(existing, "missing", "a-edited", []);
-
-        Assert.Equal("a-edited", Assert.Single(providers).Executable);
-    }
-
-    [Fact]
-    public void ApplyDefaultProviderEdit_ReturnsDeepCopies_IsolatedFromInput()
-    {
-        var existing = new List<DispatchProvider> { new() { Name = "A", Executable = "a", ExtraArgs = ["--a"] } };
-
-        var (providers, _) = SettingsForm.ApplyDefaultProviderEdit(existing, "A", "a2", ["--a2"]);
-        existing[0].Executable = "mutated";
-        existing[0].ExtraArgs.Add("mutated");
-
-        Assert.Equal("a2", providers[0].Executable);
-        Assert.Equal(["--a2"], providers[0].ExtraArgs);
+        Assert.Equal("2 providers · default Claude", SettingsForm.DescribeProviders(providers, "missing"));
     }
 
     [Theory]

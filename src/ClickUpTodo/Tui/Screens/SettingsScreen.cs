@@ -25,6 +25,16 @@ public sealed record SettingsResult(int RefreshSeconds, int FeedRefreshSeconds, 
 public sealed record PromptTemplateEditRequest(string CurrentTemplate, Action<string> Apply);
 
 /// <summary>
+/// Carries a dispatch-providers edit request from the settings screen to the host (#547): the current
+/// provider list + default name plus an <see cref="Apply"/> callback the host invokes with the edited
+/// list once the editor screen returns. The settings screen folds the values back into the fields it
+/// carries, so a settings Save persists them (and a settings Cancel discards them) — symmetric to
+/// <see cref="PromptTemplateEditRequest"/>.
+/// </summary>
+public sealed record DispatchProvidersEditRequest(
+    IReadOnlyList<DispatchProvider> Providers, string DefaultProviderName, Action<List<DispatchProvider>, string> Apply);
+
+/// <summary>
 /// A full-window settings screen. The left column changes the refresh interval; the right column
 /// is the consolidated <b>Dispatch</b> section (#27, #101) — preferred terminal, <c>claude</c>
 /// executable + extra args, working directory, the per-dispatch-pane defaults (#94 session mode,
@@ -53,6 +63,15 @@ public sealed class SettingsScreen : Screen
     /// </summary>
     private string _promptTemplate;
 
+    /// <summary>
+    /// The dispatch provider list + chosen default (#497/#547), carried through this screen and edited on
+    /// the dedicated <see cref="DispatchProvidersScreen"/>. Kept here (like <see cref="_promptTemplate"/>)
+    /// so a settings Save persists the whole list and a returning edit folds back in; untouched when the
+    /// user never opens the editor, so a migrated config re-saves byte-identically.
+    /// </summary>
+    private List<DispatchProvider> _providers;
+    private string _defaultProviderName;
+
     /// <summary>The saved settings, or null if the screen was cancelled.</summary>
     public SettingsResult? Result { get; private set; }
 
@@ -63,10 +82,22 @@ public sealed class SettingsScreen : Screen
     /// </summary>
     public event EventHandler<PromptTemplateEditRequest>? EditPromptTemplateRequested;
 
+    /// <summary>
+    /// Raised when the user opens the dispatch-providers editor (#547). The host shows
+    /// <see cref="DispatchProvidersScreen"/> and applies the returned list back via
+    /// <see cref="DispatchProvidersEditRequest.Apply"/>; symmetric to
+    /// <see cref="EditPromptTemplateRequested"/>.
+    /// </summary>
+    public event EventHandler<DispatchProvidersEditRequest>? EditDispatchProvidersRequested;
+
     public SettingsScreen(int refreshSeconds, int feedRefreshSeconds, int feedActivityLookbackDays, string defaultWorkingDirectory, string workspaceSubdomain, AgentDispatchSettings dispatch, DetailViewSettings detailView, bool confirmOnExit)
     {
         Title = "Settings";
         _promptTemplate = dispatch.PromptTemplate;
+        _providers = dispatch.Providers
+            .Select(p => new DispatchProvider { Name = p.Name, Executable = p.Executable, ExtraArgs = [.. p.ExtraArgs], Kind = p.Kind })
+            .ToList();
+        _defaultProviderName = dispatch.DefaultProviderName;
 
         // Home directory used to expand a leading `~` in the working-dir field on Save.
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -205,15 +236,19 @@ public sealed class SettingsScreen : Screen
         var rightX = Pos.Percent(50) + 1;
         var dispatchHeader = new Label { X = rightX, Y = 0, Text = "─ Dispatch ─" };
 
-        // The exe/args fields edit the resolved default provider (#497). Additional providers configured
-        // in config.json are carried through this screen untouched (see the Save block) so an F2 Save
-        // never drops them; the full multi-provider editor is the F2 sub-screen (Phase 2 of #497).
-        var defaultProvider = dispatch.ResolveDefaultProvider();
-        var exeLabel = new Label { X = rightX, Y = 1, Text = "Claude executable (blank = claude):" };
-        var exeField = new TextField { X = rightX, Y = 2, Width = Dim.Fill(2), Text = defaultProvider.Executable };
-
-        var argsLabel = new Label { X = rightX, Y = 4, Text = "Extra args (space-separated):" };
-        var argsField = new TextField { X = rightX, Y = 5, Width = Dim.Fill(2), Text = SettingsForm.FormatExtraArgs(defaultProvider.ExtraArgs) };
+        // The whole provider list (#497/#547) is managed on the dedicated DispatchProvidersScreen, opened
+        // by this button via the host (symmetric to the prompt-template editor). The read-only summary
+        // reflects the carried list; a returning edit updates both it and the carried _providers/_default.
+        var providersLabel = new Label { X = rightX, Y = 1, Text = "Dispatch providers:" };
+        var providersSummary = new Label { X = rightX, Y = 2, Width = Dim.Fill(2), Text = SettingsForm.DescribeProviders(_providers, _defaultProviderName) };
+        var providersButton = new Button { X = rightX, Y = 3, Text = "Edit dispatch providers…" };
+        providersButton.Accepting += (_, _) =>
+            EditDispatchProvidersRequested?.Invoke(this, new DispatchProvidersEditRequest(_providers, _defaultProviderName, (providers, def) =>
+            {
+                _providers = providers;
+                _defaultProviderName = def;
+                providersSummary.Text = SettingsForm.DescribeProviders(_providers, _defaultProviderName);
+            }));
 
         var terminal = dispatch.PreferredTerminal;
         var terminalButton = new Button { X = rightX, Y = 7, Text = TerminalText(terminal) };
@@ -286,19 +321,17 @@ public sealed class SettingsScreen : Screen
             tryWtProfilesButton.Text = TryWtProfilesText(tryWtProfiles);
         };
 
-        // Builds the dispatch settings on Save (#497): the exe/args fields edit the resolved default
-        // provider via the pure SettingsForm.ApplyDefaultProviderEdit, which preserves the other
-        // configured providers and the chosen default name so they survive an F2 round-trip.
+        // Builds the dispatch settings on Save (#547): the whole provider list + chosen default are
+        // carried through this screen (edited on the DispatchProvidersScreen) and persisted directly.
+        // Untouched when the user never opens the editor, so a migrated config re-saves byte-identically.
         AgentDispatchSettings BuildDispatchSettings()
         {
-            var (providers, defaultName) = SettingsForm.ApplyDefaultProviderEdit(
-                dispatch.Providers, dispatch.DefaultProviderName, exeField.Text, SettingsForm.ParseExtraArgs(argsField.Text));
             return new AgentDispatchSettings
             {
                 PreferredTerminal = terminal,
                 CustomTerminalCommand = customTermField.Text?.Trim() ?? "",
-                Providers = providers,
-                DefaultProviderName = defaultName,
+                Providers = _providers,
+                DefaultProviderName = _defaultProviderName,
                 WorkingDirectory = workingDir,
                 FixedWorkingDirectory = fixedDirField.Text?.Trim() ?? "",
                 DefaultSessionMode = sessionMode,
@@ -357,7 +390,7 @@ public sealed class SettingsScreen : Screen
             detailHeader, defaultTabButton, activityOrderButton, autoScrollButton, taskLinkCtrlClickButton,
             openBrowserButton,
             generalHeader, confirmOnExitButton,
-            dispatchHeader, exeLabel, exeField, argsLabel, argsField, terminalButton, workingDirButton,
+            dispatchHeader, providersLabel, providersSummary, providersButton, terminalButton, workingDirButton,
             fixedDirLabel, fixedDirField, templateButton, customTermLabel, customTermField,
             sessionModeButton, postToCommentsButton, launchLocationButton, tryWtProfilesButton,
             save, cancel,
