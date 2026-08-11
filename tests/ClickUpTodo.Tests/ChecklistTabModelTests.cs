@@ -140,4 +140,76 @@ public class ChecklistTabModelTests
         var newRows = new List<ChecklistRow> { Item("c1", "i1", "A", false), Item("c1", "i2", "B", false) };
         Assert.Equal(1, ChecklistTabModel.AnchorSelection([], oldIndex: 9, newRows));
     }
+
+    // ── SelectAfterDelete (E, #458) ───────────────────────────────────────────
+
+    [Fact]
+    public void SelectAfterDelete_PrefersTheNextSiblingInTheSameChecklist()
+    {
+        var oldRows = new List<ChecklistRow>
+        {
+            Header("c1", "Rel", 1, 3), Item("c1", "i1", "A", false), Item("c1", "i2", "B", false), Item("c1", "i3", "C", false),
+        };
+        // i2 deleted → i3 remains and is the next sibling.
+        var newRows = new List<ChecklistRow>
+        {
+            Header("c1", "Rel", 1, 2), Item("c1", "i1", "A", false), Item("c1", "i3", "C", false),
+        };
+        Assert.Equal(2, ChecklistTabModel.SelectAfterDelete(oldRows, deletedIndex: 2, newRows)); // lands on i3
+    }
+
+    [Fact]
+    public void SelectAfterDelete_FallsBackToPreviousSibling_WhenDeletingTheLast()
+    {
+        var oldRows = new List<ChecklistRow>
+        {
+            Header("c1", "Rel", 1, 2), Item("c1", "i1", "A", false), Item("c1", "i2", "B", false),
+        };
+        // i2 (the last item) deleted → previous item i1.
+        var newRows = new List<ChecklistRow> { Header("c1", "Rel", 1, 1), Item("c1", "i1", "A", false) };
+        Assert.Equal(1, ChecklistTabModel.SelectAfterDelete(oldRows, deletedIndex: 2, newRows)); // lands on i1
+    }
+
+    [Fact]
+    public void SelectAfterDelete_SkipsTheDeletedSubtree_WhenChoosingTheNextRow()
+    {
+        var oldRows = new List<ChecklistRow>
+        {
+            Header("c1", "Rel", 0, 3),
+            Item("c1", "i1", "Parent", false, depth: 0),
+            Item("c1", "i1a", "Child", false, depth: 1),
+            Item("c1", "i2", "Next", false, depth: 0),
+        };
+        // Deleting the parent i1 removes its child i1a too; the next row is i2.
+        var newRows = new List<ChecklistRow> { Header("c1", "Rel", 0, 1), Item("c1", "i2", "Next", false) };
+        Assert.Equal(1, ChecklistTabModel.SelectAfterDelete(oldRows, deletedIndex: 1, newRows)); // lands on i2, not into the gone subtree
+    }
+
+    [Fact]
+    public void SelectAfterDelete_DeletingTheOnlyItem_LandsOnTheHeader()
+    {
+        var oldRows = new List<ChecklistRow> { Header("c1", "Rel", 0, 1), Item("c1", "i1", "A", false) };
+        var newRows = new List<ChecklistRow> { Header("c1", "Rel", 0, 0) };
+        Assert.Equal(0, ChecklistTabModel.SelectAfterDelete(oldRows, deletedIndex: 1, newRows)); // the header
+    }
+
+    [Fact]
+    public void SelectAfterDelete_DoesNotJumpToAnotherChecklistsItem()
+    {
+        var oldRows = new List<ChecklistRow>
+        {
+            Header("c1", "Rel", 0, 1), Item("c1", "i1", "A", false),
+            Header("c2", "QA", 0, 1), Item("c2", "j1", "X", false),
+        };
+        // Deleting c1's only item must land on c1's header, never c2's item.
+        var newRows = new List<ChecklistRow>
+        {
+            Header("c1", "Rel", 0, 0), Header("c2", "QA", 0, 1), Item("c2", "j1", "X", false),
+        };
+        Assert.Equal(0, ChecklistTabModel.SelectAfterDelete(oldRows, deletedIndex: 1, newRows)); // c1 header, not j1
+    }
+
+    [Fact]
+    public void SelectAfterDelete_NoNewRows_ReturnsZero()
+        => Assert.Equal(0, ChecklistTabModel.SelectAfterDelete([Item("c1", "i1", "A", false)], deletedIndex: 0, []));
 }

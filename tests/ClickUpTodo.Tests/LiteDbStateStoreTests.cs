@@ -37,14 +37,18 @@ public sealed class LiteDbStateStoreTests : IDisposable
             WorkspaceId = "ws",
             PersonalTasksListId = "list",
             PinnedTaskIds = ["a", "b"],
-            AgentDispatch = new AgentDispatchSettings { ClaudeExecutable = "/opt/claude" },
+            AgentDispatch = new AgentDispatchSettings
+            {
+                Providers = [new DispatchProvider { Name = "Claude", Executable = "/opt/claude" }],
+                DefaultProviderName = "Claude",
+            },
         });
 
         var loaded = store.Load<AppConfig>(StateKeys.Config)!;
         Assert.Equal("ws", loaded.WorkspaceId);
         Assert.Equal("list", loaded.PersonalTasksListId);
         Assert.Equal(["a", "b"], loaded.PinnedTaskIds);
-        Assert.Equal("/opt/claude", loaded.AgentDispatch.ClaudeExecutable);
+        Assert.Equal("/opt/claude", loaded.AgentDispatch.ResolveDefaultProvider().Executable);
     }
 
     [Fact]
@@ -166,7 +170,11 @@ public sealed class LiteDbStateStoreTests : IDisposable
             WorkspaceId = "123",
             PersonalTasksListId = "456",
             PinnedTaskIds = ["a", "b"],
-            AgentDispatch = new AgentDispatchSettings { ClaudeExecutable = "/opt/claude" },
+            AgentDispatch = new AgentDispatchSettings
+            {
+                Providers = [new DispatchProvider { Name = "Claude", Executable = "/opt/claude" }],
+                DefaultProviderName = "Claude",
+            },
         });
 
         Assert.True(store.Exists());
@@ -177,7 +185,7 @@ public sealed class LiteDbStateStoreTests : IDisposable
         var loaded = store.Load();
         Assert.True(loaded.IsConfigured);
         Assert.Equal(["a", "b"], loaded.PinnedTaskIds);
-        Assert.Equal("/opt/claude", loaded.AgentDispatch.ClaudeExecutable);
+        Assert.Equal("/opt/claude", loaded.AgentDispatch.ResolveDefaultProvider().Executable);
 
         store.Delete();
         Assert.False(store.Exists());

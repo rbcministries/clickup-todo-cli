@@ -177,7 +177,7 @@ public static class HelpItemSets
         new("Ctrl+P", "📌"),
         new("Ctrl+E", "🔔"),
         new("F1", "ℹ"),
-        new("F2", "⚙"),
+        new("F10", "⚙"),
         new("F3", "⧩ ▼▲ ⛚"),
         new("F4", "subtasks"),
         new("F5", "↻"),
@@ -203,6 +203,9 @@ public static class HelpItemSets
         new("Ctrl+U", "quick update"),
         new("Ctrl+O", "🗁 by ID"),
         new("␣", "☑ toggle", Chord: "Space"),
+        new("F7", "➕ item"),
+        new("F8", "✏ item"),
+        new("F9", "🗑 item"),
         new("F5", "↻"),
         new("F1", "ℹ"),
         new("Esc", "back"),
@@ -228,6 +231,9 @@ public static class HelpItemSets
         new("Ctrl+O", "🗁 by ID"),
         new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
         new("␣", "☑ toggle", Chord: "Space"),
+        new("F7", "➕ item"),
+        new("F8", "✏ item"),
+        new("F9", "🗑 item"),
         new("F5", "↻"),
         new("F6", "badges"),
         new("F1", "ℹ"),
@@ -289,6 +295,17 @@ public static class HelpItemSets
         new("Esc", "cancel"),
     ];
 
+    /// <summary>The Checklists-tab item add/rename input overlay (E, #458): a single-line name field whose
+    /// own keys are Enter to submit and Esc to cancel (arming a discard confirm on an edited rename).
+    /// Mirrors <see cref="DetailCommentComposer"/> so the footer advertises only what the overlay does —
+    /// otherwise a click on an inert command hint would re-raise its chord into the field (#436).</summary>
+    public static readonly IReadOnlyList<HelpItem> DetailChecklistItemEditor =
+    [
+        new("↩", "save", Chord: "Enter"),
+        new("F1", "ℹ"),
+        new("Esc", "cancel"),
+    ];
+
     /// <summary>Picks the Task Detail footer set for the current overlay state (#436). Pure so the
     /// branch order is unit-testable — the <see cref="TaskDetailScreen.HelpItems"/> property that calls
     /// it lives on a Terminal.Gui view and can't run in CI. The mention picker (#325), comment composer,
@@ -301,11 +318,12 @@ public static class HelpItemSets
     /// <see cref="Detail"/> is the no-tree-loader case.</summary>
     public static IReadOnlyList<HelpItem> DetailFooter(
         bool commentComposerVisible, bool descriptionEditorVisible, bool replyPickerVisible, bool hasTaskTree,
-        bool mentionPickerVisible = false) =>
+        bool mentionPickerVisible = false, bool checklistItemEditorVisible = false) =>
         mentionPickerVisible ? DetailMentionPicker
         : commentComposerVisible ? DetailCommentComposer
         : descriptionEditorVisible ? DetailDescriptionEditor
         : replyPickerVisible ? DetailReplyPicker
+        : checklistItemEditorVisible ? DetailChecklistItemEditor
         : hasTaskTree ? DetailWithTaskTree
         : Detail;
 

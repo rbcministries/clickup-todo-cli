@@ -72,8 +72,8 @@ public sealed class ConfigStoreTests : IDisposable
                 PreferredTerminal = PreferredTerminal.Pwsh,
                 CustomTerminalCommand = "ghostty -e {}",
                 LaunchLocation = LaunchLocation.NewTab,
-                ClaudeExecutable = "/opt/claude",
-                ExtraArgs = ["--model", "opus"],
+                Providers = [new DispatchProvider { Name = "Claude", Executable = "/opt/claude", ExtraArgs = ["--model", "opus"] }],
+                DefaultProviderName = "Claude",
                 WorkingDirectory = AgentWorkingDirectory.Fixed,
                 FixedWorkingDirectory = "/work",
                 DefaultSessionMode = AgentSessionMode.OneOff,
@@ -89,13 +89,55 @@ public sealed class ConfigStoreTests : IDisposable
         Assert.Equal(PreferredTerminal.Pwsh, d.PreferredTerminal);
         Assert.Equal("ghostty -e {}", d.CustomTerminalCommand);
         Assert.Equal(LaunchLocation.NewTab, d.LaunchLocation);
-        Assert.Equal("/opt/claude", d.ClaudeExecutable);
-        Assert.Equal(["--model", "opus"], d.ExtraArgs);
+        Assert.Equal("Claude", d.DefaultProviderName);
+        var provider = d.ResolveDefaultProvider();
+        Assert.Equal("/opt/claude", provider.Executable);
+        Assert.Equal(["--model", "opus"], provider.ExtraArgs);
         Assert.Equal(AgentWorkingDirectory.Fixed, d.WorkingDirectory);
         Assert.Equal("/work", d.FixedWorkingDirectory);
         Assert.Equal(AgentSessionMode.OneOff, d.DefaultSessionMode);
         Assert.True(d.DefaultPostResultsToComments);
         Assert.Equal("Lead: {userPrompt}\n{contextJson}", d.PromptTemplate);
+    }
+
+    [Fact]
+    public void SaveThenLoad_RoundTripsMultipleDispatchProviders_AndSelectsTheDefault()
+    {
+        // Until the editor UI (#547), a hand-edited config.json is the only way to get 2+ providers, so
+        // pin the real path: two providers (incl. the kind discriminator) survive save→load→re-save→reload
+        // through ConfigStore/StateJson, and defaultProviderName resolves to the second one.
+        var store = new ConfigStore(_dir);
+        store.Save(new AppConfig
+        {
+            WorkspaceId = "1",
+            PersonalTasksListId = "2",
+            AgentDispatch = new AgentDispatchSettings
+            {
+                Providers =
+                [
+                    new DispatchProvider { Name = "Claude", Executable = "claude", ExtraArgs = ["--model", "opus"], Kind = DispatchProviderKind.LocalCli },
+                    new DispatchProvider { Name = "Codex", Executable = "/opt/codex", ExtraArgs = ["--yolo"], Kind = DispatchProviderKind.LocalCli },
+                ],
+                DefaultProviderName = "Codex",
+            },
+        });
+
+        var loaded = store.Load();
+        Assert.Equal(ConfigMigrations.CurrentVersion, loaded.SchemaVersion); // v6 no-op: providers already present
+        Assert.Equal(2, loaded.AgentDispatch.Providers.Count);
+        Assert.Equal(["Claude", "Codex"], loaded.AgentDispatch.Providers.Select(p => p.Name)); // order preserved
+        Assert.Equal(DispatchProviderKind.LocalCli, loaded.AgentDispatch.Providers[1].Kind);
+        var resolved = loaded.AgentDispatch.ResolveDefaultProvider();
+        Assert.Equal("Codex", resolved.Name);
+        Assert.Equal("/opt/codex", loaded.AgentDispatch.ToLauncherOptions().ClaudeExecutable);
+        Assert.Equal(["--yolo"], loaded.AgentDispatch.ToLauncherOptions().ExtraArgs);
+
+        // Re-save the already-migrated config and reload: still stable (no second migration, nothing lost).
+        store.Save(loaded);
+        var reloaded = store.Load();
+        Assert.Equal(2, reloaded.AgentDispatch.Providers.Count);
+        Assert.Equal("Codex", reloaded.AgentDispatch.ResolveDefaultProvider().Name);
+        Assert.Equal(["--model", "opus"], reloaded.AgentDispatch.Providers[0].ExtraArgs);
     }
 
     [Fact]

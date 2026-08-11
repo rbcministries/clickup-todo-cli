@@ -180,4 +180,59 @@ public sealed class TerminalTitleTests
     {
         Assert.Equal("t5: Ship it", TerminalTitle.Retitle(null, "t5", null, "Ship it"));
     }
+
+    // ── ForFeed / RetitleFeed (#509): the standalone `--feed` host's window title ──
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-3)]
+    public void ForFeed_ZeroOrNegativeMentions_IsBareFeed(int count)
+    {
+        Assert.Equal("Feed", TerminalTitle.ForFeed(count));
+    }
+
+    [Fact]
+    public void ForFeed_OneMention_IsSingular()
+    {
+        Assert.Equal("Feed — 1 mention", TerminalTitle.ForFeed(1));
+    }
+
+    [Fact]
+    public void ForFeed_ManyMentions_IsPlural()
+    {
+        Assert.Equal("Feed — 4 mentions", TerminalTitle.ForFeed(4));
+    }
+
+    [Fact]
+    public void ForFeed_TruncatesToMaxLength()
+    {
+        var title = TerminalTitle.ForFeed(1_000_000_000, maxLength: 10);
+        Assert.Equal(10, title.Length);
+        Assert.StartsWith("Feed — ", title);
+    }
+
+    [Fact]
+    public void RetitleFeed_ReturnsNull_WhenMentionCountUnchanged()
+    {
+        var current = TerminalTitle.ForFeed(2);
+        Assert.Null(TerminalTitle.RetitleFeed(current, 2));
+    }
+
+    [Fact]
+    public void RetitleFeed_ReturnsNewTitle_WhenMentionCountChanged()
+    {
+        Assert.Equal("Feed — 3 mentions", TerminalTitle.RetitleFeed("Feed — 2 mentions", 3));
+    }
+
+    [Fact]
+    public void RetitleFeed_ReturnsBareFeed_WhenMentionsClearToZero()
+    {
+        Assert.Equal("Feed", TerminalTitle.RetitleFeed("Feed — 2 mentions", 0));
+    }
+
+    [Fact]
+    public void RetitleFeed_NullCurrentTitle_ReturnsTheComposedTitle()
+    {
+        Assert.Equal("Feed", TerminalTitle.RetitleFeed(null, 0));
+    }
 }

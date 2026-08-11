@@ -71,11 +71,47 @@ public sealed class AgentDispatchSettings
     /// </summary>
     public bool TryUseWindowsTerminalProfiles { get; set; }
 
-    /// <summary>The <c>claude</c> executable to invoke (looked up on PATH). Blank ⇒ <c>"claude"</c>.</summary>
-    public string ClaudeExecutable { get; set; } = "claude";
+    /// <summary>
+    /// The configured dispatch providers (#497) — the source of truth for "which agent" a dispatch
+    /// targets, generalizing the pre-#497 single <c>claudeExecutable</c>/<c>extraArgs</c> pair into a
+    /// named list. Seeded to a single <see cref="DefaultProviderDisplayName"/> provider by
+    /// <see cref="ConfigMigrations"/> (v6), which folds a legacy exe/args pair into it. An empty list is
+    /// tolerated everywhere (a hand-<c>new</c>'d settings object, or a hand-emptied config): the
+    /// projection/resolution fall back to the synthesized built-in <c>claude</c> default.
+    /// </summary>
+    public List<DispatchProvider> Providers { get; set; } = [];
 
-    /// <summary>Extra arguments inserted before the prompt argument (e.g. a model flag).</summary>
-    public List<string> ExtraArgs { get; set; } = [];
+    /// <summary>
+    /// The <see cref="DispatchProvider.Name"/> of the provider a dispatch uses by default. Resolved by
+    /// <see cref="ResolveDefaultProvider"/> (falling back to the first provider, then the built-in
+    /// default). Blank on a hand-<c>new</c>'d object; set by migration and the F2 editor.
+    /// </summary>
+    public string DefaultProviderName { get; set; } = "";
+
+    /// <summary>The executable used when a provider's <see cref="DispatchProvider.Executable"/> is blank.</summary>
+    public const string DefaultExecutable = "claude";
+
+    /// <summary>The display name of the provider migration seeds from the legacy single-executable keys.</summary>
+    public const string DefaultProviderDisplayName = "Claude";
+
+    /// <summary>
+    /// Deserialize-only migration shim (#497) for the retired single-executable <c>claudeExecutable</c>
+    /// key. A saved value is folded into a single <see cref="Providers"/> entry by
+    /// <see cref="ConfigMigrations"/> (v6), which then nulls it so it is never written again (the
+    /// <see cref="JsonIgnoreCondition.WhenWritingNull"/> ignore drops it from <c>config.json</c>).
+    /// </summary>
+    [JsonPropertyName("claudeExecutable")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LegacyClaudeExecutable { get; set; }
+
+    /// <summary>
+    /// Deserialize-only migration shim (#497) for the retired <c>extraArgs</c> key, folded into the
+    /// migrated provider alongside <see cref="LegacyClaudeExecutable"/> and then nulled (see that
+    /// property). Nullable so an absent key is distinguishable from an explicit empty list.
+    /// </summary>
+    [JsonPropertyName("extraArgs")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? LegacyExtraArgs { get; set; }
 
     /// <summary>Which directory the new session starts in.</summary>
     public AgentWorkingDirectory WorkingDirectory { get; set; } = AgentWorkingDirectory.TaskDerived;
@@ -122,8 +158,7 @@ public sealed class AgentDispatchSettings
         PreferredTerminal == PreferredTerminal.Auto
         && string.IsNullOrWhiteSpace(CustomTerminalCommand)
         && LaunchLocation == LaunchLocation.NewWindow
-        && (string.IsNullOrWhiteSpace(ClaudeExecutable) || ClaudeExecutable == "claude")
-        && ExtraArgs.Count == 0
+        && ProvidersAreDefault
         && WorkingDirectory == AgentWorkingDirectory.TaskDerived
         && string.IsNullOrWhiteSpace(FixedWorkingDirectory)
         && DefaultSessionMode == AgentSessionMode.Interactive
@@ -132,19 +167,56 @@ public sealed class AgentDispatchSettings
         && string.IsNullOrWhiteSpace(PromptTemplate);
 
     /// <summary>
-    /// Projects these settings onto the launcher's <see cref="TerminalLauncherOptions"/>, coalescing a
-    /// blank executable back to the <c>"claude"</c> default and copying the extra args and preference.
+    /// Whether the provider list is the zero-config default: no providers at all (a hand-<c>new</c>'d
+    /// object), or a single provider that is the built-in default (a blank/<c>claude</c> executable and
+    /// no <b>effective</b> extra args) — the shape migration seeds on a fresh install. This keeps
+    /// <see cref="IsDefault"/> true after v6 seeds the default provider, preserving the zero-config
+    /// invariant. Blank-only args count as none, matching <see cref="ToLauncherOptions"/> which drops
+    /// them — so <see cref="IsDefault"/> tracks the launch, not the raw list.
     /// </summary>
-    public TerminalLauncherOptions ToLauncherOptions() => new()
+    private bool ProvidersAreDefault =>
+        Providers.Count == 0
+        || (Providers.Count == 1
+            && (string.IsNullOrWhiteSpace(Providers[0].Executable) || Providers[0].Executable == DefaultExecutable)
+            && !Providers[0].ExtraArgs.Any(a => !string.IsNullOrWhiteSpace(a)));
+
+    /// <summary>
+    /// The provider a dispatch targets by default: the one whose <see cref="DispatchProvider.Name"/>
+    /// matches <see cref="DefaultProviderName"/>, else the first configured provider, else a synthesized
+    /// built-in <c>claude</c> default when the list is empty. Never returns null, so callers (and a
+    /// hand-<c>new</c>'d settings object that never went through migration) always resolve a runnable
+    /// provider with zero config. Names are exact selector keys — the match is
+    /// <see cref="StringComparison.Ordinal"/>, so a <see cref="DefaultProviderName"/> differing only in
+    /// case falls through to the first provider. Treat the result as read-only: it is a live entry from
+    /// <see cref="Providers"/> when the list is non-empty, but a throwaway when it is empty.
+    /// </summary>
+    public DispatchProvider ResolveDefaultProvider()
     {
-        ClaudeExecutable = string.IsNullOrWhiteSpace(ClaudeExecutable) ? "claude" : ClaudeExecutable.Trim(),
-        // Trim and drop blanks so hand-edited config.json values are cleaned the same way the F2
-        // dialog's ParseExtraArgs cleans typed input (and the executable is coalesced above).
-        ExtraArgs = [.. ExtraArgs.Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim())],
-        Preferred = PreferredTerminal,
-        CustomTerminalCommand = TerminalCommandParser.Parse(CustomTerminalCommand),
-        LaunchLocation = LaunchLocation,
-    };
+        if (Providers.Count == 0)
+            return new DispatchProvider { Name = DefaultProviderDisplayName, Executable = DefaultExecutable };
+        return Providers.FirstOrDefault(p => string.Equals(p.Name, DefaultProviderName, StringComparison.Ordinal))
+            ?? Providers[0];
+    }
+
+    /// <summary>
+    /// Projects these settings onto the launcher's <see cref="TerminalLauncherOptions"/> from the
+    /// <see cref="ResolveDefaultProvider">resolved default provider</see>, coalescing a blank executable
+    /// back to the <c>"claude"</c> default and copying the extra args and preference.
+    /// </summary>
+    public TerminalLauncherOptions ToLauncherOptions()
+    {
+        var provider = ResolveDefaultProvider();
+        return new()
+        {
+            ClaudeExecutable = string.IsNullOrWhiteSpace(provider.Executable) ? DefaultExecutable : provider.Executable.Trim(),
+            // Trim and drop blanks so hand-edited config.json values are cleaned the same way the F2
+            // dialog's ParseExtraArgs cleans typed input (and the executable is coalesced above).
+            ExtraArgs = [.. provider.ExtraArgs.Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim())],
+            Preferred = PreferredTerminal,
+            CustomTerminalCommand = TerminalCommandParser.Parse(CustomTerminalCommand),
+            LaunchLocation = LaunchLocation,
+        };
+    }
 
     /// <summary>
     /// Resolves the directory to start the session in (null ⇒ inherit the current directory), given

@@ -205,11 +205,15 @@ public sealed class SettingsScreen : Screen
         var rightX = Pos.Percent(50) + 1;
         var dispatchHeader = new Label { X = rightX, Y = 0, Text = "─ Dispatch ─" };
 
+        // The exe/args fields edit the resolved default provider (#497). Additional providers configured
+        // in config.json are carried through this screen untouched (see the Save block) so an F2 Save
+        // never drops them; the full multi-provider editor is the F2 sub-screen (Phase 2 of #497).
+        var defaultProvider = dispatch.ResolveDefaultProvider();
         var exeLabel = new Label { X = rightX, Y = 1, Text = "Claude executable (blank = claude):" };
-        var exeField = new TextField { X = rightX, Y = 2, Width = Dim.Fill(2), Text = dispatch.ClaudeExecutable };
+        var exeField = new TextField { X = rightX, Y = 2, Width = Dim.Fill(2), Text = defaultProvider.Executable };
 
         var argsLabel = new Label { X = rightX, Y = 4, Text = "Extra args (space-separated):" };
-        var argsField = new TextField { X = rightX, Y = 5, Width = Dim.Fill(2), Text = SettingsForm.FormatExtraArgs(dispatch.ExtraArgs) };
+        var argsField = new TextField { X = rightX, Y = 5, Width = Dim.Fill(2), Text = SettingsForm.FormatExtraArgs(defaultProvider.ExtraArgs) };
 
         var terminal = dispatch.PreferredTerminal;
         var terminalButton = new Button { X = rightX, Y = 7, Text = TerminalText(terminal) };
@@ -282,6 +286,29 @@ public sealed class SettingsScreen : Screen
             tryWtProfilesButton.Text = TryWtProfilesText(tryWtProfiles);
         };
 
+        // Builds the dispatch settings on Save (#497): the exe/args fields edit the resolved default
+        // provider via the pure SettingsForm.ApplyDefaultProviderEdit, which preserves the other
+        // configured providers and the chosen default name so they survive an F2 round-trip.
+        AgentDispatchSettings BuildDispatchSettings()
+        {
+            var (providers, defaultName) = SettingsForm.ApplyDefaultProviderEdit(
+                dispatch.Providers, dispatch.DefaultProviderName, exeField.Text, SettingsForm.ParseExtraArgs(argsField.Text));
+            return new AgentDispatchSettings
+            {
+                PreferredTerminal = terminal,
+                CustomTerminalCommand = customTermField.Text?.Trim() ?? "",
+                Providers = providers,
+                DefaultProviderName = defaultName,
+                WorkingDirectory = workingDir,
+                FixedWorkingDirectory = fixedDirField.Text?.Trim() ?? "",
+                DefaultSessionMode = sessionMode,
+                DefaultPostResultsToComments = postToComments,
+                LaunchLocation = launchLocation,
+                TryUseWindowsTerminalProfiles = tryWtProfiles,
+                PromptTemplate = _promptTemplate,
+            };
+        }
+
         var save = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var cancel = new Button { X = Pos.Right(save) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         save.Accepting += (_, _) =>
@@ -292,20 +319,7 @@ public sealed class SettingsScreen : Screen
                 SettingsForm.ParseLookbackDays(_feedLookbackField.Text, feedActivityLookbackDays),
                 SettingsForm.ExpandHomePath(workingDirField.Text, home),
                 ClickUpUrl.NormalizeSubdomain(subdomainField.Text),
-                new AgentDispatchSettings
-                {
-                    PreferredTerminal = terminal,
-                    CustomTerminalCommand = customTermField.Text?.Trim() ?? "",
-                    ClaudeExecutable = string.IsNullOrWhiteSpace(exeField.Text) ? "claude" : exeField.Text!.Trim(),
-                    ExtraArgs = SettingsForm.ParseExtraArgs(argsField.Text),
-                    WorkingDirectory = workingDir,
-                    FixedWorkingDirectory = fixedDirField.Text?.Trim() ?? "",
-                    DefaultSessionMode = sessionMode,
-                    DefaultPostResultsToComments = postToComments,
-                    LaunchLocation = launchLocation,
-                    TryUseWindowsTerminalProfiles = tryWtProfiles,
-                    PromptTemplate = _promptTemplate,
-                },
+                BuildDispatchSettings(),
                 new DetailViewSettings
                 {
                     DefaultTab = defaultTab,

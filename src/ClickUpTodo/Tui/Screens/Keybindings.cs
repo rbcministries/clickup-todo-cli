@@ -61,6 +61,9 @@ public enum KeyAction
     ReplyToComment,
     EditDescription,
     ToggleChecklistItem,
+    AddChecklistItem,
+    RenameChecklistItem,
+    DeleteChecklistItem,
 
     // Quick Updates.
     Apply,
@@ -100,7 +103,7 @@ public static class Keybindings
             [(ScreenContext.MainList, KeyAction.TogglePin)] = "Ctrl+P",
             [(ScreenContext.MainList, KeyAction.Feed)] = "Ctrl+E",
             [(ScreenContext.MainList, KeyAction.Help)] = "F1",
-            [(ScreenContext.MainList, KeyAction.Settings)] = "F2",
+            [(ScreenContext.MainList, KeyAction.Settings)] = "F10",
             [(ScreenContext.MainList, KeyAction.FilterSortGroup)] = "F3",
             [(ScreenContext.MainList, KeyAction.CycleSubtasks)] = "F4",
             [(ScreenContext.MainList, KeyAction.Refresh)] = "F5",
@@ -114,6 +117,9 @@ public static class Keybindings
             [(ScreenContext.Detail, KeyAction.ReplyToComment)] = "Ctrl+T",
             [(ScreenContext.Detail, KeyAction.EditDescription)] = "Ctrl+E",
             [(ScreenContext.Detail, KeyAction.ToggleChecklistItem)] = "Space",
+            [(ScreenContext.Detail, KeyAction.AddChecklistItem)] = "F7",
+            [(ScreenContext.Detail, KeyAction.RenameChecklistItem)] = "F8",
+            [(ScreenContext.Detail, KeyAction.DeleteChecklistItem)] = "F9",
             [(ScreenContext.Detail, KeyAction.OpenInBrowser)] = "Ctrl+B",
             [(ScreenContext.Detail, KeyAction.QuickUpdate)] = "Ctrl+U",
             [(ScreenContext.Detail, KeyAction.Refresh)] = "F5",
