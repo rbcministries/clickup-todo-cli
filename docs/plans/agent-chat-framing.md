@@ -330,28 +330,34 @@ occludes it. A standalone `--chat` launch (no originating task) simply quits on 
 | **#497** | B — provider model | **Already shipped** (PR #546). Unaffected, but its `DispatchProviderKind` enum (`Configuration/DispatchProvider.cs:8-12`, "room for a future non-local kind … per #491") is the anticipated hook for a `SuperAgent` kind. |
 | **#498** | C — provider selector in the Dispatch pane | **Stays.** Adds a Super-Agent provider entry; picking it *launches the `--chat` host in a new tab* (via the relaunch machinery) rather than adding a provider field to `DispatchRequest`. The selector supplies the resolved token, so the primary path needs no disambiguation. |
 | **#499** | D — route an agent provider to a conversation (DispatchCoordinator's "third flow") | **Reshaped.** The "third flow" becomes a branch on `provider.Kind == SuperAgent` in the dispatch path (`SingleTaskApp.DispatchAgent` `:543-582` / `DispatchCoordinator`): instead of `ToLauncherOptions()` → terminal CLI, call `AppLaunchCommand`/`PlanAppLaunch` → chat-host tab. **No longer hard-depends on #494** — the DM/channel id carries the routing. |
-| **#500** | E — the conversation surface | **The host's core**, and the minimum shippable shape of option 3 (`--chat <token>` + E). Cheaper than #496 originally assumed. **New prerequisite surfaced below.** |
+| **#500** | E — the conversation surface | **The host's core**, and the minimum shippable shape of option 3 (`--chat <token>` + E). Cheaper than #496 originally assumed. **Sequenced behind #493** (the ClickUp Chat v3 client plumbing — see below). |
 | **#501** | F — browse & resume (bare `--chat`) | **Stays a stretch,** now *native* to the host as its landing screen, but deferrable indefinitely (direct-open-is-resume covers the common case). |
 | **#491** | Epic | Host is `--chat`, a sibling of `--task` / `--feed`, reusing the `SingleTaskApp` / `FeedApp` shape + `AppTabLaunch` relaunch. |
 
 ---
 
-## Prerequisite this framing surfaces (deferred, needs its own issue)
+## Prerequisite this framing surfaces (already tracked by #493)
 
 **The repo's own ClickUp client has no chat plumbing.** Verified: `Models.cs`,
-the curated spec `ClickUp/clickup-openapi.json`, and the Kiota-generated
+the curated spec `ClickUp/clickup-openapi.json` (v2-only), and the Kiota-generated
 `ClickUp/Generated/V2/` tree have **zero** channel/message/chat types — the generated
 request-builder tree covers only Team, Space, Folder, List, Task, Comment, Checklist,
 User. ClickUp Chat exists in the repo **only** at the MCP-tool layer, not in the app's
-client. So **E (#500) has a hard foundation dependency that no open issue tracks
-today**: adding the ClickUp Chat v3 endpoints (channel list, channel messages,
-threaded replies, send message) to the **curated spec** `clickup-openapi.json`,
-regenerating the client (`pwsh scripts/regen-client.ps1` — never hand-editing
-`Generated/`), and surfacing DTOs through `Models.cs` + the `ClickUpClient` /
-`IClickUpClient` facade as stable domain records.
+client. So **E (#500) has a hard foundation dependency**: adding the ClickUp Chat
+**v3** endpoints (channel list, channel messages, threaded replies, send message) to
+the **curated spec** `clickup-openapi.json`, regenerating the client
+(`pwsh scripts/regen-client.ps1` — never hand-editing `Generated/`), and surfacing
+DTOs through `Models.cs` + the `ClickUpClient` / `IClickUpClient` facade as stable
+domain records.
 
-This is real work outside #496's "no shipping code" scope, so a separate issue tracks
-it and E (#500) should be sequenced behind it. (Filed and linked from the PR.)
+**This is already tracked by [#493](https://github.com/rbcministries/clickup-todo-cli/issues/493)**
+("Super Agents (B): Chat / v3 API client strategy + plumbing", under the Super-Agents
+epic #490) — no new issue is needed. #493 even records the same verified state
+("`grep -ril chat` returns zero matches", the v2-only spec) and offers the route
+decision (extend the curated spec vs a separate v3 client vs a hand-rolled helper).
+E (#500) should be sequenced **behind #493**; this framing simply confirms that
+sequencing and that the domain-facade boundary (`ClickUpClient`, never generated
+types) is preserved.
 
 ---
 
