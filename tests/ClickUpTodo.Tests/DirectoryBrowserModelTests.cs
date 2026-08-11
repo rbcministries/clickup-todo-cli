@@ -312,6 +312,23 @@ public sealed class DirectoryBrowserModelTests : IDisposable
     }
 
     [Fact]
+    public void SeedTo_FilesystemRootTarget_ResetsToBaseRoot_ReturnsNull()
+    {
+        // A target that is a filesystem root has no parent listing to highlight it in, so it degrades
+        // to the base root like the other unseeded cases.
+        var fsRoot = Path.GetPathRoot(Path.GetTempPath())!;
+        Assert.Equal(
+            DirectoryBrowserModel.Normalize(fsRoot),
+            DirectoryBrowserModel.Parent(fsRoot)); // precondition: it really is a filesystem root
+        var model = new DirectoryBrowserModel(_root);
+
+        var highlight = model.SeedTo(fsRoot);
+
+        Assert.Null(highlight);
+        Assert.Equal(DirectoryBrowserModel.Normalize(_root), model.CurrentDirectory);
+    }
+
+    [Fact]
     public void SeedTo_TargetEqualToRoot_ResetsToRoot_ReturnsNull()
     {
         // A pre-fill equal to the base root is already what the root view represents (its ".." ⇒ the base
