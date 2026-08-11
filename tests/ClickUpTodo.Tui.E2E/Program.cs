@@ -59,6 +59,10 @@ if (Environment.GetEnvironmentVariable("E2E_LINK_CTRL_DEST") == "tab")
 // (two groups, a nested item, mixed resolved state, one assigned item) so the Checklists tab has real
 // content to render. Gated so no other check's GET /task/{id} response changes.
 var checklists = Environment.GetEnvironmentVariable("E2E_CHECKLISTS") == "1";
+// F (#459) group-CRUD scenario: serve the mutable checklist DOM (so creates/deletes persist across a
+// refresh) but seed it EMPTY, so the task starts on the empty-state row. Ctrl+G creates the first group,
+// F9 on its header deletes it back to the empty state — the round-trip the checklist_check.py F leg drives.
+var checklistsEmpty = Environment.GetEnvironmentVariable("E2E_CHECKLISTS_EMPTY") == "1";
 
 // Two-instance nudge channel (#376 item 1): when E2E_MARKER_DB is set, wire a real shared-file
 // LiteDbChangeMarkerStore into BOTH the producer (ClickUpClient) and the consumer (TodoApp), so a Quick
@@ -84,7 +88,8 @@ var harness = new HarnessContext
     TaskCount = taskCount,
     Foreign = foreign,
     Tree = tree,
-    Checklists = checklists,
+    Checklists = checklists || checklistsEmpty, // both scenarios serve the mutable DOM on GET /task
+    ChecklistsEmpty = checklistsEmpty,
 };
 var client = new ClickUpClient(
     "fake-token", new HttpClient(new FakeClickUp(harness)), changeMarkers: changeMarkers);
@@ -222,8 +227,12 @@ sealed class HarnessContext
     /// <summary>#291 Task Tree tab scenario (E2E_TREE).</summary>
     public bool Tree { get; init; }
 
-    /// <summary>#456 Checklists tab scenario (E2E_CHECKLISTS).</summary>
+    /// <summary>#456 Checklists tab scenario (E2E_CHECKLISTS) — serve the mutable checklist DOM on GET /task.</summary>
     public bool Checklists { get; init; }
+
+    /// <summary>#459 group-CRUD scenario (E2E_CHECKLISTS_EMPTY): serve the DOM but seed it empty, so the task
+    /// starts on the empty-state row and create/delete round-trip back to it.</summary>
+    public bool ChecklistsEmpty { get; init; }
 }
 
 sealed class FakeClickUp : HttpMessageHandler
@@ -237,12 +246,13 @@ sealed class FakeClickUp : HttpMessageHandler
     private readonly bool _checklists;
     private readonly int _taskCount;
     // D (#457): the mutable checklist state, so a Space-toggle PUT persists across later detail GETs.
-    // Parsed once from the ChecklistsJson seed into a JsonNode DOM; the toggle write flips an item's
-    // `resolved` in place and the detail GET serves the current DOM. Mutated/read under _gate.
-    private readonly JsonArray _checklistsDom = (JsonArray)JsonNode.Parse(ChecklistsJson)!;
-    // Monotonic id suffix for items created via POST (E, #458), so a create in a run gets a stable, unique
-    // server-assigned id ("inew1", "inew2", …). Mutated under _gate.
+    // Seeded from the ChecklistsJson fixture, or EMPTY under the F (#459) E2E_CHECKLISTS_EMPTY scenario;
+    // writes mutate it in place and the detail GET serves the current DOM. Mutated/read under _gate.
+    private readonly JsonArray _checklistsDom;
+    // Monotonic id suffix for items (E, #458) / groups (F, #459) created via POST, so a create in a run gets
+    // a stable, unique server-assigned id ("inew1"… / "cnew1"…). Mutated under _gate.
     private int _checklistItemSeq;
+    private int _checklistGroupSeq;
 
     // The request dispatch table (#488), replacing the old hand-ordered if/else chain in SendAsync: routes
     // resolve by specificity, not by source order, so appending an endpoint can't silently reorder another,
@@ -257,6 +267,7 @@ sealed class FakeClickUp : HttpMessageHandler
         _foreign = ctx.Foreign;
         _tree = ctx.Tree;
         _checklists = ctx.Checklists;
+        _checklistsDom = ctx.ChecklistsEmpty ? [] : (JsonArray)JsonNode.Parse(ChecklistsJson)!;
         _taskCount = ctx.TaskCount;
         _routes = BuildRoutes();
     }
@@ -567,6 +578,14 @@ sealed class FakeClickUp : HttpMessageHandler
         new Route<RouteHandler>(HttpMethod.Post, "checklist/{checklistId}/checklist_item", CreateChecklistItem),
         new Route<RouteHandler>(HttpMethod.Delete, "checklist/{checklistId}/checklist_item/{itemId}", DeleteChecklistItem),
 
+        // Checklist group CRUD (F, #459): POST /task/{id}/checklist creates a group (appended, echoes
+        // { checklist: … }); PUT /checklist/{id} renames it (echoes { checklist: … }); DELETE /checklist/{id}
+        // removes it and returns an empty object. The two-segment /checklist/{id} routes are distinguished
+        // from the longer /checklist/{id}/checklist_item/{id} ones by segment count (suffix-anchored matching).
+        new Route<RouteHandler>(HttpMethod.Post, "task/{taskId}/checklist", CreateChecklist),
+        new Route<RouteHandler>(HttpMethod.Put, "checklist/{checklistId}", ChecklistPut),
+        new Route<RouteHandler>(HttpMethod.Delete, "checklist/{checklistId}", DeleteChecklist),
+
         new Route<RouteHandler>(HttpMethod.Put, "task/{id}", TaskPut),
         new Route<RouteHandler>(HttpMethod.Get, "task/{id}", TaskGet),
 
@@ -702,6 +721,71 @@ sealed class FakeClickUp : HttpMessageHandler
                     break;
                 }
             }
+        }
+        return Ok("{}");
+    }
+
+    /// <summary>POST /task/{id}/checklist (F, #459): append a new (empty) checklist group with a
+    /// server-assigned id ("cnew1"…) to the DOM and echo the reconciled <c>{ "checklist": … }</c> — the
+    /// create envelope ClickUp returns.</summary>
+    private async Task<HttpResponseMessage> CreateChecklist(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
+        var name = ParseName(reqBody) ?? "";
+        string body;
+        lock (_gate)
+        {
+            var id = $"cnew{++_checklistGroupSeq}";
+            _checklistsDom.Add(new JsonObject
+            {
+                ["id"] = id,
+                ["name"] = name,
+                ["orderindex"] = _checklistsDom.Count,
+                ["resolved"] = 0,
+                ["unresolved"] = 0,
+                ["items"] = new JsonArray(),
+            });
+            body = ChecklistEcho(id);
+        }
+        return Ok(body);
+    }
+
+    /// <summary>PUT /checklist/{id} (F, #459): rename the group in the DOM and echo the reconciled
+    /// <c>{ "checklist": … }</c>. The two-segment path is distinct from the item PUT by segment count.</summary>
+    private async Task<HttpResponseMessage> ChecklistPut(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
+        var checklistId = ChecklistIdFromPath(path);
+        string body;
+        lock (_gate)
+        {
+            foreach (var node in _checklistsDom)
+                if (node is JsonObject checklist && checklist["id"]?.GetValue<string>() == checklistId)
+                {
+                    if (ParseName(reqBody) is { } name)
+                        checklist["name"] = name;
+                    break;
+                }
+            body = ChecklistEcho(checklistId);
+        }
+        return Ok(body);
+    }
+
+    /// <summary>DELETE /checklist/{id} (F, #459): remove the whole group (its items go with it) from the DOM
+    /// and return an empty object like ClickUp.</summary>
+    private async Task<HttpResponseMessage> DeleteChecklist(HttpRequestMessage request, string path, string query, CancellationToken ct)
+    {
+        _ = request;
+        await Task.CompletedTask;
+        var checklistId = ChecklistIdFromPath(path);
+        lock (_gate)
+        {
+            for (var i = 0; i < _checklistsDom.Count; i++)
+                if (_checklistsDom[i] is JsonObject checklist && checklist["id"]?.GetValue<string>() == checklistId)
+                {
+                    _checklistsDom.RemoveAt(i);
+                    break;
+                }
         }
         return Ok("{}");
     }
@@ -1018,6 +1102,11 @@ sealed class FakeClickUp : HttpMessageHandler
         var end = path.IndexOf(itemSeg, StringComparison.Ordinal);
         return end > start ? path[start..end] : "";
     }
+
+    /// <summary>The checklist id from a two-segment <c>/v2/checklist/{checklist_id}</c> path — the group
+    /// rename/delete routes (F, #459); the id is the last path segment.</summary>
+    private static string ChecklistIdFromPath(string path)
+        => path[(path.LastIndexOf('/') + 1)..];
 
     /// <summary>Splits <c>/v2/checklist/{checklist_id}/checklist_item/{checklist_item_id}</c> into its two
     /// ids (D, #457).</summary>

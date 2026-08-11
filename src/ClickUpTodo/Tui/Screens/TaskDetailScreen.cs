@@ -298,6 +298,13 @@ public sealed class TaskDetailScreen : Screen
     private readonly Func<string, string, CancellationToken, Task<TaskChecklist>>? _createChecklistItemAsync;
     private readonly Func<string, string, string, CancellationToken, Task<TaskChecklist>>? _renameChecklistItemAsync;
     private readonly Func<string, string, CancellationToken, Task>? _deleteChecklistItemAsync;
+    // Checklist group CRUD (F, #459), owned by the host like the item writes above; null ⇒ inert. Create
+    // takes just the name (the host closes over the owning task id, since POST /task/{id}/checklist is
+    // task-scoped and the response carries only the checklist); rename takes the checklist id; both return
+    // the server-confirmed checklist so the optimistic tree is reconciled. Delete returns void (empty body).
+    private readonly Func<string, CancellationToken, Task<TaskChecklist>>? _createChecklistAsync;
+    private readonly Func<string, string, CancellationToken, Task<TaskChecklist>>? _renameChecklistAsync;
+    private readonly Func<string, CancellationToken, Task>? _deleteChecklistAsync;
     // Guards against a second CRUD write (add/rename/delete) while one is in flight — the toggle discipline,
     // shared across the three so a key-mash can't stack writes.
     private bool _checklistWriteInFlight;
@@ -325,15 +332,22 @@ public sealed class TaskDetailScreen : Screen
     // there answers it (Y deletes; anything else cancels) — the inline armed-key confirm the description
     // editor / exit prompt use, rather than a nested modal (#404/#402 seam untouched).
     private (string ChecklistId, string ItemId, string Name)? _checklistDeletePending;
+    // Armed by F9 on a checklist-header row (F, #459): the target group awaiting a Y/N confirm on the tab,
+    // carrying its item count so the confirm prompt can name what goes with it. Answered in OnKey alongside
+    // the item-delete confirm; the two are mutually exclusive (a header selection arms this, an item the other).
+    private (string ChecklistId, string Name, int ItemCount)? _checklistGroupDeletePending;
     // The overlay's ideal height: the single-line field + the confirm row + the Save/Cancel button row +
     // the top/bottom frame border. Clamped on show so it degrades gracefully on a short terminal.
     private const int ChecklistItemEditorPreferredHeight = 1 + 1 + 1 + 2;
 
-    /// <summary>Whether the item overlay is adding a new item or renaming the selected one (E, #458).</summary>
+    /// <summary>What the checklist name overlay will do on submit: add or rename an item (E, #458), or
+    /// create or rename a checklist group (F, #459). The two group kinds reuse the same single-line overlay.</summary>
     private enum ChecklistItemEditKind
     {
         Add,
         Rename,
+        NewGroup,
+        RenameGroup,
     }
 
     /// <summary>Raised when the user activates a tree row (Enter or double-click) for a task other than
@@ -485,7 +499,10 @@ public sealed class TaskDetailScreen : Screen
         Func<string, string, bool, CancellationToken, Task>? setChecklistResolvedAsync = null,
         Func<string, string, CancellationToken, Task<TaskChecklist>>? createChecklistItemAsync = null,
         Func<string, string, string, CancellationToken, Task<TaskChecklist>>? renameChecklistItemAsync = null,
-        Func<string, string, CancellationToken, Task>? deleteChecklistItemAsync = null)
+        Func<string, string, CancellationToken, Task>? deleteChecklistItemAsync = null,
+        Func<string, CancellationToken, Task<TaskChecklist>>? createChecklistAsync = null,
+        Func<string, string, CancellationToken, Task<TaskChecklist>>? renameChecklistAsync = null,
+        Func<string, CancellationToken, Task>? deleteChecklistAsync = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
@@ -504,6 +521,9 @@ public sealed class TaskDetailScreen : Screen
         _createChecklistItemAsync = createChecklistItemAsync;
         _renameChecklistItemAsync = renameChecklistItemAsync;
         _deleteChecklistItemAsync = deleteChecklistItemAsync;
+        _createChecklistAsync = createChecklistAsync;
+        _renameChecklistAsync = renameChecklistAsync;
+        _deleteChecklistAsync = deleteChecklistAsync;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
@@ -621,9 +641,10 @@ public sealed class TaskDetailScreen : Screen
         // safe to re-run, so the extra fire during CycleTab's own Value set is harmless.
         _tabs.ValueChanged += (_, _) =>
         {
-            // Leaving (or re-entering) a tab cancels a pending checklist-item delete confirm (E, #458) so it
-            // can't linger, invisibly armed, and fire an unprompted delete on a later Enter.
+            // Leaving (or re-entering) a tab cancels a pending checklist-item (E, #458) or -group (F, #459)
+            // delete confirm so it can't linger, invisibly armed, and fire an unprompted delete on a later Enter.
             _checklistDeletePending = null;
+            _checklistGroupDeletePending = null;
             FocusCurrentPane();
             EnsureTreeLoaded();
         };
@@ -1095,6 +1116,28 @@ public sealed class TaskDetailScreen : Screen
             }
         }
 
+        // Answer a pending checklist-group delete confirm (F, #459), armed by F9 on a checklist-header row:
+        // Enter deletes the whole group (and its items), Esc cancels. Same Enter/Esc-only shape as the item
+        // confirm above (a bare Y is eaten by the ListView type-ahead); any other key leaves it armed so
+        // navigation is undisturbed, and the delete targets the named group by id wherever the cursor sits.
+        if (_checklistGroupDeletePending is { } delGroup && ReferenceEquals(_tabs.Value, _checklistList))
+        {
+            if (key.KeyCode == KeyCode.Enter)
+            {
+                key.Handled = true;
+                _checklistGroupDeletePending = null;
+                PerformChecklistGroupDelete(delGroup.ChecklistId);
+                return;
+            }
+            if (key.KeyCode == KeyCode.Esc)
+            {
+                key.Handled = true;
+                _checklistGroupDeletePending = null;
+                RequestFlash("Delete cancelled.");
+                return;
+            }
+        }
+
         // Enter on the Task Tree tab (#291) navigates the detail screen to the selected row's task
         // (the current-task row no-ops). Guarded on the tree being the front-most tab, so Enter on the
         // read-only text panes (which ignore it) is undisturbed.
@@ -1127,26 +1170,46 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
-        // Checklist item CRUD (E, #458), guarded to the Checklists tab being front-most (like Space above),
-        // so F7/F8/F9 on the other tabs / text panes stay inert. F7 adds an item, F8 renames the selected
-        // one, F9 deletes it (with an inline confirm). The chords are shown in the Detail footer sets
-        // unconditionally (as Space is), but act only here — the same shape D used for the toggle.
+        // Checklist CRUD (E, #458 items; F, #459 groups), guarded to the Checklists tab being front-most
+        // (like Space above), so the chords on the other tabs / text panes stay inert. F7 adds an item; F8/F9
+        // are row-kind-scoped — on a checklist-header row they rename / delete the whole group (F), on an item
+        // row they rename / delete the item (E). The chords are shown in the Detail footer sets unconditionally
+        // (as Space is), but act only here — the same shape D used for the toggle. Group create is Ctrl+G below.
         if (ReferenceEquals(_tabs.Value, _checklistList)
             && key.KeyCode is KeyCode.F7 or KeyCode.F8 or KeyCode.F9)
         {
             key.Handled = true;
+            var onHeader = SelectedChecklistRow() is { IsHeader: true };
             switch (key.KeyCode)
             {
                 case KeyCode.F7:
                     AddChecklistItem();
                     break;
                 case KeyCode.F8:
-                    RenameSelectedChecklistItem();
+                    if (onHeader)
+                        RenameSelectedChecklistGroup();
+                    else
+                        RenameSelectedChecklistItem();
                     break;
                 case KeyCode.F9:
-                    DeleteSelectedChecklistItem();
+                    if (onHeader)
+                        DeleteSelectedChecklistGroup();
+                    else
+                        DeleteSelectedChecklistItem();
                     break;
             }
+            return;
+        }
+
+        // Ctrl+G creates a new checklist group on the task (F, #459). Guarded to the Checklists tab being
+        // front-most (like the chords above) and to the prompt being closed; available even on the empty-state
+        // row (a task with no checklists), which is how the first checklist is created. A Ctrl-chord (not a
+        // bare letter, which the ListView type-ahead would eat) matching the screen's command-chord model.
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.G
+            && !_promptBox.Visible && ReferenceEquals(_tabs.Value, _checklistList) && _createChecklistAsync is not null)
+        {
+            key.Handled = true;
+            NewChecklistGroup();
             return;
         }
 
@@ -2533,13 +2596,235 @@ public sealed class TaskDetailScreen : Screen
         });
     }
 
+    // ── Checklist group CRUD (F, #459) ──────────────────────────────────────────
+
+    /// <summary>Ctrl+G — create a new checklist group on the task. Opens the shared name overlay in the
+    /// NewGroup kind; the create fires on submit. Available even on the empty-state row (the first-checklist
+    /// path), so there is no "select a row first" guard.</summary>
+    private void NewChecklistGroup()
+    {
+        if (_createChecklistAsync is null)
+            return;
+        if (_checklistWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        ShowChecklistItemEditor(ChecklistItemEditKind.NewGroup, checklistId: "", itemId: null, initialText: "",
+            title: "New checklist — Enter save · Esc cancel");
+    }
+
+    /// <summary>F8 on a checklist-header row — rename the selected group. Opens the name overlay pre-filled
+    /// with the group's name; the rename fires on submit.</summary>
+    private void RenameSelectedChecklistGroup()
+    {
+        if (_renameChecklistAsync is null)
+            return;
+        if (_checklistWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (SelectedChecklistRow() is not { IsHeader: true } row)
+        {
+            RequestFlash("Select a checklist header to rename the group.");
+            return;
+        }
+        ShowChecklistItemEditor(ChecklistItemEditKind.RenameGroup, row.ChecklistId, itemId: null, initialText: row.Text,
+            title: "Rename checklist — Enter save · Esc cancel");
+    }
+
+    /// <summary>F9 on a checklist-header row — delete the selected group. Arms an inline Enter/Esc confirm
+    /// (answered in OnKey) that names the group and its item count, since the group delete (which also
+    /// destroys every item) is not undoable via the API.</summary>
+    private void DeleteSelectedChecklistGroup()
+    {
+        if (_deleteChecklistAsync is null)
+            return;
+        if (_checklistWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (SelectedChecklistRow() is not { IsHeader: true } row)
+        {
+            RequestFlash("Select a checklist header to delete the group.");
+            return;
+        }
+        _checklistDeletePending = null; // a group-delete supersedes any armed item-delete
+        _checklistGroupDeletePending = (row.ChecklistId, row.Text, row.TotalCount);
+        RequestFlash(ChecklistTabModel.DeleteGroupPrompt(row.Text, row.TotalCount));
+    }
+
+    /// <summary>Performs the confirmed group delete: snapshot the whole checklist list (so a failure restores
+    /// the group and every item, in order, at its original position) → optimistic removal → re-render with the
+    /// post-delete selection → off-thread write → revert-on-failure + flash, mirroring the item delete.</summary>
+    private void PerformChecklistGroupDelete(string checklistId)
+    {
+        if (_deleteChecklistAsync is null || _checklistWriteInFlight)
+            return;
+        var idx = _checklistRows.FindIndex(r => r.IsHeader
+            && string.Equals(r.ChecklistId, checklistId, StringComparison.Ordinal));
+        if (idx < 0)
+        {
+            RequestFlash("That checklist is no longer here.");
+            return;
+        }
+
+        var oldRows = _checklistRows;
+        var snapshot = _task.Checklists;
+
+        _checklistWriteInFlight = true;
+        _pendingChecklistEdit = cls => ChecklistGroupEdits.Remove(cls, checklistId);
+        UpdateData(_task with { Checklists = ChecklistGroupEdits.Remove(_task.Checklists, checklistId) }, _comments);
+        SelectChecklistRow(ChecklistTabModel.SelectAfterGroupDelete(oldRows, idx, _checklistRows));
+        RequestFlash("Deleting checklist…");
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await _deleteChecklistAsync(checklistId, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null;
+                    // The optimistic removal already matches the confirmed delete (empty body); the next
+                    // refresh reconciles. Nothing to re-render on success.
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null; // cleared first so the overlay doesn't re-remove on revert.
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = snapshot }, _comments); // the group and its items reappear
+                    RequestFlash($"Could not delete checklist: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>Optimistic group create: append a provisional (empty) group → off-thread POST → swap the
+    /// provisional for the server-confirmed checklist (real id) and select its header, or drop the provisional
+    /// + flash on failure. Mirrors <see cref="CreateChecklistItem"/> at the group level.</summary>
+    private void CreateChecklistGroup(string name)
+    {
+        if (_createChecklistAsync is null || _checklistWriteInFlight)
+            return;
+        var provisional = new TaskChecklist(
+            ChecklistGroupEdits.ProvisionalChecklistId, name, OrderIndex: null, Resolved: 0, Unresolved: 0, Items: []);
+
+        _checklistWriteInFlight = true;
+        _pendingChecklistEdit = cls => ChecklistGroupEdits.InsertProvisional(cls, provisional);
+        UpdateData(_task with { Checklists = ChecklistGroupEdits.InsertProvisional(_task.Checklists, provisional) }, _comments);
+        SelectChecklistGroupById(ChecklistGroupEdits.ProvisionalChecklistId);
+        RequestFlash("Adding checklist…");
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                var server = await _createChecklistAsync(name, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null; // cleared first so the reconcile isn't re-provisioned.
+                    if (_disposed)
+                        return;
+                    // Swap the provisional (sentinel id) for the server group (real id), keeping it where the
+                    // provisional sat (appended last). Idempotent by server id: drop the provisional AND any
+                    // already-present copy of the server group before appending it exactly once — a refresh
+                    // landing after the POST committed but before this reconcile re-applies the provisional
+                    // overlay onto server data that already contains the new group, which would otherwise
+                    // leave [X, provisional] → [X, X]. Then land the selection on the new group's header.
+                    var reconciled = ChecklistGroupEdits.InsertProvisional(
+                        ChecklistGroupEdits.Remove(
+                            ChecklistGroupEdits.Remove(_task.Checklists, ChecklistGroupEdits.ProvisionalChecklistId),
+                            server.Id),
+                        server);
+                    UpdateData(_task with { Checklists = reconciled }, _comments);
+                    SelectChecklistGroupById(server.Id);
+                    RequestFlash("Checklist added.");
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null;
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = ChecklistGroupEdits.Remove(_task.Checklists, ChecklistGroupEdits.ProvisionalChecklistId) }, _comments);
+                    RequestFlash($"Could not add checklist: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>Optimistic group rename: set the name locally → off-thread PUT → reconcile with the server
+    /// checklist, or revert to the prior name + flash on failure. Mirrors <see cref="RenameChecklistItem"/>.</summary>
+    private void RenameChecklistGroup(string checklistId, string name)
+    {
+        if (_renameChecklistAsync is null || _checklistWriteInFlight)
+            return;
+        var snapshot = _task.Checklists;
+
+        _checklistWriteInFlight = true;
+        _pendingChecklistEdit = cls => ChecklistGroupEdits.Rename(cls, checklistId, name);
+        UpdateData(_task with { Checklists = ChecklistGroupEdits.Rename(_task.Checklists, checklistId, name) }, _comments);
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                var server = await _renameChecklistAsync(checklistId, name, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null;
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = ReplaceChecklist(_task.Checklists, server) }, _comments);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null; // cleared first so the revert isn't re-renamed.
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = snapshot }, _comments);
+                    RequestFlash($"Could not rename checklist: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>Selects the header row for a given checklist id, if it is currently projected.</summary>
+    private void SelectChecklistGroupById(string checklistId)
+    {
+        var i = _checklistRows.FindIndex(r => r.IsHeader
+            && string.Equals(r.ChecklistId, checklistId, StringComparison.Ordinal));
+        if (i >= 0)
+            SelectChecklistRow(i);
+    }
+
     /// <summary>Opens the add/rename name overlay: seeds the field, sizes/anchors the pane (reusing the
     /// Dispatch pane's clamp), shows it and focuses the field.</summary>
     private void ShowChecklistItemEditor(ChecklistItemEditKind kind, string checklistId, string? itemId, string initialText, string title)
     {
         if (_checklistItemBox.Visible)
             return;
-        _checklistDeletePending = null; // opening the name overlay cancels any armed delete confirm (E, #458)
+        // Opening the name overlay cancels any armed delete confirm — item (E, #458) or group (F, #459).
+        _checklistDeletePending = null;
+        _checklistGroupDeletePending = null;
         _checklistItemEditKind = kind;
         _checklistItemTargetChecklistId = checklistId;
         _checklistItemTargetItemId = itemId;
@@ -2572,11 +2857,13 @@ public sealed class TaskDetailScreen : Screen
     private void CancelChecklistItemEditor()
     {
         var current = _checklistItemEditor.Text?.ToString() ?? "";
-        if (_checklistItemEditKind == ChecklistItemEditKind.Rename
-            && !string.Equals(current, _checklistItemOriginalName, StringComparison.Ordinal))
+        var isRename = _checklistItemEditKind is ChecklistItemEditKind.Rename or ChecklistItemEditKind.RenameGroup;
+        if (isRename && !string.Equals(current, _checklistItemOriginalName, StringComparison.Ordinal))
         {
             _checklistItemPendingDiscard = true;
-            _checklistItemConfirm.Text = "Discard the changed item name? (Y / N)";
+            _checklistItemConfirm.Text = _checklistItemEditKind == ChecklistItemEditKind.RenameGroup
+                ? "Discard the changed checklist name? (Y / N)"
+                : "Discard the changed item name? (Y / N)";
             return;
         }
         HideChecklistItemEditor();
@@ -2590,26 +2877,42 @@ public sealed class TaskDetailScreen : Screen
         var name = ChecklistItemEdits.NormalizeName(_checklistItemEditor.Text?.ToString());
         if (name is null)
         {
-            RequestFlash("An item name is required.");
+            RequestFlash(_checklistItemEditKind is ChecklistItemEditKind.NewGroup or ChecklistItemEditKind.RenameGroup
+                ? "A checklist name is required."
+                : "An item name is required.");
             return; // keep the overlay open so the user can type one
         }
 
         var checklistId = _checklistItemTargetChecklistId;
-        if (_checklistItemEditKind == ChecklistItemEditKind.Rename)
+        switch (_checklistItemEditKind)
         {
-            var itemId = _checklistItemTargetItemId!;
-            if (string.Equals(name, _checklistItemOriginalName, StringComparison.Ordinal))
-            {
-                HideChecklistItemEditor(); // unchanged — no needless write
-                return;
-            }
-            HideChecklistItemEditor();
-            RenameChecklistItem(checklistId, itemId, name);
-        }
-        else
-        {
-            HideChecklistItemEditor();
-            CreateChecklistItem(checklistId, name);
+            case ChecklistItemEditKind.Rename:
+                var itemId = _checklistItemTargetItemId!;
+                if (string.Equals(name, _checklistItemOriginalName, StringComparison.Ordinal))
+                {
+                    HideChecklistItemEditor(); // unchanged — no needless write
+                    return;
+                }
+                HideChecklistItemEditor();
+                RenameChecklistItem(checklistId, itemId, name);
+                break;
+            case ChecklistItemEditKind.RenameGroup:
+                if (string.Equals(name, _checklistItemOriginalName, StringComparison.Ordinal))
+                {
+                    HideChecklistItemEditor(); // unchanged — no needless write
+                    return;
+                }
+                HideChecklistItemEditor();
+                RenameChecklistGroup(checklistId, name);
+                break;
+            case ChecklistItemEditKind.NewGroup:
+                HideChecklistItemEditor();
+                CreateChecklistGroup(name);
+                break;
+            default: // Add an item
+                HideChecklistItemEditor();
+                CreateChecklistItem(checklistId, name);
+                break;
         }
     }
 
