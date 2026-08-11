@@ -315,15 +315,7 @@ public sealed class SingleTaskApp
             renameChecklistAsync: (checklistId, name, ct) =>
                 _tasks.RenameChecklistAsync(checklistId, name, ct),
             deleteChecklistAsync: (checklistId, ct) =>
-                _tasks.DeleteChecklistAsync(checklistId, ct),
-            // F11 on the Checklists tab (G, #460): set/clear a checklist item's assignee, keyed to this tab's
-            // task id for the #519 nudge. The picker's candidate pool needs the frequency-ranked assignee
-            // cache, so — like the #325 mention picker above — it's wired only when a host supplied one
-            // (_assignees); otherwise F11 is inert, as it is for any other missing seam.
-            setChecklistItemAssigneeAsync: (checklistId, itemId, assigneeId, ct) =>
-                _tasks.SetChecklistItemAssigneeAsync(id, checklistId, itemId, assigneeId, ct),
-            assigneeMatch: _assignees is null ? null : (query, exclude) => _assignees.Match(query, exclude),
-            assigneeTopFrequent: _assignees is null ? null : (n, exclude) => _assignees.TopMostFrequent(n, exclude));
+                _tasks.DeleteChecklistAsync(checklistId, ct));
 
         var tab = new DetailTab(screen, id, task, comments);
 

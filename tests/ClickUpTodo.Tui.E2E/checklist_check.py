@@ -40,7 +40,6 @@ CTRL_G = b"\x07"          # new checklist group (F, #459)
 F7 = b"\x1b[18~"          # add checklist item (E, #458)
 F8 = b"\x1b[19~"          # rename the selected item / group (row-kind-scoped, F, #459)
 F9 = b"\x1b[20~"          # delete the selected item / group (row-kind-scoped, F, #459)
-F11 = b"\x1b[23~"         # assign the selected item (G, #460)
 BACKSPACE = b"\x7f"
 DELETE = b"\x1b[3~"       # forward-delete (paired with BACKSPACE to clear a field caret-agnostically)
 
@@ -473,80 +472,6 @@ def run_group_rename():
         s.kill()
 
 
-def run_assign():
-    """G (#460): F11 on a checklist item opens the shared assignee selector; picking a member assigns them
-    (the row grows an assignee suffix), and the write persists across a refresh.
-
-    Row layout on the Checklists tab (E2E_CHECKLISTS=1):
-        0  Release steps  (1/3)          ← header
-        1  [x] Cut the tag
-        2  [ ] Draft release notes — Ada Lovelace
-        3    [ ] Verify the changelog    ← nested under row 2
-        4  QA signoff  (1/2)             ← header
-        5  [x] Smoke test on staging
-        6  [ ] Cross-browser check       ← unassigned; we assign it
-    """
-    s = Session({"E2E_CHECKLISTS": "1"})
-    try:
-        s.pump(8.0)
-        assert "Task 0" in s.visible(), "list boot failed:\n" + s.visible()
-        s.open_checklists_tab()
-
-        # Normalise to the top header, then move down to "[ ] Cross-browser check" (row 6), which starts
-        # unassigned (no suffix).
-        for _ in range(8):
-            s.send(UP)
-            s.pump(0.1)
-        for _ in range(6):
-            s.send(DOWN)
-            s.pump(0.15)
-        assert "[ ] Cross-browser check" in s.visible(), "precondition: unassigned target row present:\n" + s.visible()
-
-        # ── F11 opens the assignee picker overlay ────────────────────────────────────────────────────
-        s.send(F11)
-        s.pump(0.8)
-        assert "Assign" in s.visible(), "F11 did not open the assignee picker overlay:\n" + s.visible()
-
-        # Regression guard: while the picker is open on the Checklists tab, the checklist CRUD chords must
-        # NOT fire underneath it. F9 must not arm a delete-confirm (which a later Enter would execute) and
-        # F7 must not open a second (item-editor) overlay on top.
-        s.send(F9)
-        s.pump(0.4)
-        s.send(F7)
-        s.pump(0.4)
-        v = s.visible()
-        assert "Delete" not in v, "F9 armed a delete-confirm underneath the open assignee picker:\n" + v
-        assert "New item" not in v, "F7 opened the item-editor overlay on top of the assignee picker:\n" + v
-        assert "Assign" in v, "a checklist chord dismissed/disturbed the assignee picker:\n" + v
-
-        # Type a substring of a seeded member and wait past the ~1s type-ahead debounce.
-        type_text(s, "grac")
-        s.pump(1.5)
-        assert "Grace Hopper" in s.visible(), "type-ahead did not surface the seeded member:\n" + s.visible()
-
-        # Enter assigns the highlighted member (immediate-apply write → server-confirmed row), Esc closes.
-        s.send(ENTER)
-        s.pump(1.5)
-        s.send(b"\x1b")           # Esc closes the picker back to the checklist tab
-        s.pump(0.8)
-        v = s.visible()
-        assert s.proc.poll() is None, "assign crashed the process"
-        assert "[ ] Cross-browser check" in v, "the assigned item row is missing:\n" + v
-        assert "Grace Hopper" in v, "the item did not gain the assignee suffix after F11 assign:\n" + v
-
-        # ── Persists across a refresh: the fake persisted the assignee, so Ctrl+R agrees ───────────────
-        s.send(CTRL_R)
-        s.pump(2.5)
-        v = s.visible()
-        assert "Grace Hopper" in v and "[ ] Cross-browser check" in v, \
-            "a refresh dropped the assigned member (assignee write didn't persist):\n" + v
-
-        print("ok — assign: F11 opens the shared selector, picking Grace Hopper assigns the item "
-              "(row gains the suffix) and survives a refresh")
-    finally:
-        s.kill()
-
-
 run_populated()
 run_empty()
 run_toggle()
@@ -555,4 +480,3 @@ run_add_cancel()
 run_delete_confirm_cleared_by_overlay()
 run_group_crud()
 run_group_rename()
-run_assign()

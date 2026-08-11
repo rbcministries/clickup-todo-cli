@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -50,7 +49,7 @@ internal sealed class ChecklistsScenario : IE2EScenario
             return FakeClickUp.OkAsync(node.ToJsonString());
         }, 1),
 
-        // PUT /checklist/{id}/checklist_item/{id} (D #457 toggle-resolved, E #458 rename, G #460 assignee).
+        // PUT /checklist/{id}/checklist_item/{id} (D #457 toggle-resolved, E #458 rename).
         new(HttpMethod.Put, "checklist/{checklistId}/checklist_item/{itemId}", ChecklistItemPut, 1),
         // POST /checklist/{id}/checklist_item (E #458 create); DELETE .../{item} (delete).
         new(HttpMethod.Post, "checklist/{checklistId}/checklist_item", CreateChecklistItem, 1),
@@ -61,12 +60,9 @@ internal sealed class ChecklistsScenario : IE2EScenario
         new(HttpMethod.Delete, "checklist/{checklistId}", DeleteChecklist, 1),
     ];
 
-    /// <summary>PUT: the toggle-resolved (D #457), rename (E #458) and per-item assignee (G #460) write.
-    /// Parses whichever of <c>{"resolved":bool}</c> / <c>{"name":string}</c> / <c>{"assignee":id|null}</c> the
-    /// body carries, mutates that item in the DOM, and echoes <c>{ "checklist": … }</c> exactly as ClickUp
-    /// does. An <c>assignee</c> id is stored back as a full <c>{ id, username }</c> user object (resolved
-    /// against <see cref="FakeClickUp.Members"/>, as ClickUp echoes it) so the row renders the name; an
-    /// explicit <c>assignee: null</c> clears it.</summary>
+    /// <summary>PUT: the toggle-resolved (D #457) and rename (E #458) write. Parses whichever of
+    /// <c>{"resolved":bool}</c> / <c>{"name":string}</c> the body carries, mutates that item in the DOM, and
+    /// echoes <c>{ "checklist": … }</c> exactly as ClickUp does.</summary>
     private async Task<HttpResponseMessage> ChecklistItemPut(HttpRequestMessage request, string path, string query, CancellationToken ct)
     {
         var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
@@ -82,8 +78,6 @@ internal sealed class ChecklistsScenario : IE2EScenario
                         SetItemResolved(checklist["items"] as JsonArray, itemId, resolved);
                     if (FakeClickUp.ParseName(reqBody) is { } name)
                         SetItemName(checklist["items"] as JsonArray, itemId, name);
-                    if (TryParseAssignee(reqBody, out var assigneeId))
-                        SetItemAssignee(checklist["items"] as JsonArray, itemId, assigneeId);
                     RecomputeCounts(checklist);
                     break;
                 }
@@ -242,59 +236,6 @@ internal sealed class ChecklistsScenario : IE2EScenario
         {
             return false;
         }
-    }
-
-    /// <summary>Parses <c>{"assignee": id | null}</c> (G #460): returns <c>true</c> when the key is present,
-    /// with <paramref name="assigneeId"/> the numeric user id or <c>null</c> for an explicit clear.</summary>
-    private static bool TryParseAssignee(string requestBody, out long? assigneeId)
-    {
-        assigneeId = null;
-        try
-        {
-            using var doc = JsonDocument.Parse(requestBody);
-            if (!doc.RootElement.TryGetProperty("assignee", out var a))
-                return false;
-            if (a.ValueKind == JsonValueKind.Number && a.TryGetInt64(out var id))
-                assigneeId = id;
-            return true; // present — a JSON null leaves assigneeId null (clear).
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    /// <summary>Sets (or clears, when <paramref name="assigneeId"/> is null) an item's assignee — stored as a
-    /// full <c>{ id, username }</c> user object (name resolved from <see cref="FakeClickUp.Members"/>), the
-    /// shape ClickUp echoes and the read model renders. Recurses into nested children.</summary>
-    private static bool SetItemAssignee(JsonArray? items, string itemId, long? assigneeId)
-    {
-        if (items is null)
-            return false;
-        foreach (var node in items)
-        {
-            if (node is not JsonObject item)
-                continue;
-            if (item["id"]?.GetValue<string>() == itemId)
-            {
-                item["assignee"] = assigneeId is { } id
-                    ? new JsonObject { ["id"] = id, ["username"] = MemberName(id) }
-                    : null;
-                return true;
-            }
-            if (SetItemAssignee(item["children"] as JsonArray, itemId, assigneeId))
-                return true;
-        }
-        return false;
-    }
-
-    /// <summary>The display name for a member id, or the id itself when it isn't a seeded member.</summary>
-    private static string MemberName(long id)
-    {
-        foreach (var (memberId, name) in FakeClickUp.Members)
-            if (memberId == id)
-                return name;
-        return id.ToString(CultureInfo.InvariantCulture);
     }
 
     /// <summary>The checklist id from a create path <c>/v2/checklist/{id}/checklist_item</c> (no item id).</summary>

@@ -5,7 +5,16 @@ Slice **G** of the Task Checklists epic (#453), depends on **F** (#459, group CR
 valuable of the two, and reorder can be dropped or deferred without blocking anything else in the epic")
 **this plan/PR scopes to the per-item _assignee_ half only.** The **reorder / reparent** half — `orderindex`
 / `parent` moves, the `Alt+↑/↓/←/→` movement chords, the `NavSafeTabs` guard interplay (#452), and the pure
-ordering/legality arranger — is **deferred to a tracked follow-up** and noted in the PR.
+ordering/legality arranger — is **deferred to a tracked follow-up** (#569).
+
+> **Scope note (post-review).** A standalone `F11` picker was rejected: `F11` is Windows Terminal's
+> fullscreen toggle (an `Alt+Enter` alias), and — more importantly — the **#538 decision** records that in
+> Task Detail **`F2` renames the highlighted item** and native modals are accepted, so the per-item assignee
+> belongs **inside the checklist-item rename modal** (`F2`/`Ctrl+E`, migrating under #537/#541), not a
+> separate chord. This PR therefore lands only the **UI-agnostic core** — the facade write + pure optimistic
+> transform + their unit tests — and **stubs the invocation hook** at
+> `TaskDetailScreen.RenameSelectedChecklistItem`. Building the assignee control into the rename modal (and
+> threading the write delegate + member pool from the hosts) is tracked as **#572**.
 
 ## Background (what already exists on `main`)
 
@@ -66,51 +75,51 @@ for a clear. Both shapes are pinned by a unit test asserting the outgoing JSON b
    - `ChecklistItemEditsTests` — `SetAssignee` sets, clears (→ null), updates a nested item, and is a no-op on a
      missing checklist/item.
 
-### Phase 2 — TUI wiring (build-verified; TG UI is not CI-unit-testable)
+### Phase 2 — UI (deferred to #572, per the #538 decision)
 
-6. `TaskDetailScreen`: a new `_setChecklistItemAssigneeAsync` delegate field; an **`F11`** chord (see below),
-   guarded to the checklist ListView being front-most and scoped to a non-header item row, that opens a
-   bottom-anchored modal hosting an `AssigneeSelectorView` in `ImmediateApply` mode. Single-assignee semantics
-   are enforced **through** the shared multi-select view (no fork, per the acceptance criterion) by the
-   `applyAsync` handler returning the authoritative single-element (or empty) selection: selecting a member
-   writes `assignee=id` and returns `[member]` (so the view unticks any prior pick); unticking writes
-   `assignee=null` and returns `[]`. The handler also applies `ChecklistItemEdits.SetAssignee` optimistically to
-   the screen's checklist rows and reconciles to / reverts from server truth, reusing the `RenameChecklistItem`
-   discipline.
-7. Host wiring: `TodoApp` + `SingleTaskApp` lambdas → `TaskService` → `ClickUpClient`.
-8. `Keybindings`: a new `AssignChecklistItem` action, `(Detail) = "F11"`. `HelpLine`: an `F11  👤 assign`
-   action item in **both** the `Detail` and `DetailWithTaskTree` footer sets (kept in sync with the table per the
-   #355 `KeybindingsTests`/`HelpLineTests` cross-check).
+The invocation UI is **not** in this PR. Per the scope note above, the per-item assignee is set from the
+**checklist-item rename modal** (`F2`/`Ctrl+E`, migrating under #537/#541), reusing a shared
+`AssigneeSelectorView` specialisation over the frequency-ranked member pool, with the write going through the
+Phase-1 facade + `ChecklistItemEdits.SetAssignee` (optimistic apply → reconcile/revert). The hosts
+(`TodoApp`/`SingleTaskApp`) thread the write delegate + candidate pool there. This PR **stubs the hook** with a
+doc comment at `TaskDetailScreen.RenameSelectedChecklistItem` pointing at the landed facade/transform and #572.
 
-**Chord choice — `F11`.** `F7/F8/F9` (checklist add/rename/delete) form the checklist function-key cluster;
-`Space` toggles, `Ctrl+G` creates a group. `F11` is unused anywhere in the app, so it adds a checklist-tab
-action with **zero** cross-context collision and no entanglement with the #537 contextual-chord epic (which is
-eyeing `F2` for rename) — deliberately avoiding a contextual overload of `Ctrl+U` (task Quick Updates), which is
-exactly the kind of decision #538 owns. Open to the maintainer's preference.
+A standalone `F11` chord was **rejected** (Windows Terminal fullscreen alias; and #538 puts item-editing in the
+rename modal), so no keybinding/footer/overlay ships here.
 
-### Phase 3 — E2E + finalize
+### Phase 3 — E2E + finalize (with #572)
 
-9. Extend `checklist_check.py` with an assign leg: on the populated task, select an unassigned item, `F11`, pick a
-   member from the selector, assert the assignee suffix renders on the row and survives a `Ctrl+R` refresh
-   (the fake backend persists the write). Requires the E2E fake backend to (a) serve workspace members for the
-   selector pool and (b) round-trip the `PUT` `assignee` on the checklist item. If that backend surface proves
-   larger than a one-session slice, the E2E leg is deferred to the same reorder follow-up and called out in the
-   PR (the write + transform stay fully unit-tested regardless).
-10. `dotnet build/test` green, `dotnet format`, then `tui-validate`; first-pass review subagent; ready-for-review.
+The `checklist_check.py` assign leg and the `ChecklistsScenario` `PUT {assignee}` handler (echo a
+`{id, username}` user object from `FakeClickUp.Members`) land with the modal in #572 — there is no live chord to
+drive until then. This PR is validated by the Phase-1 unit tests (facade set/clear + transform) plus the
+unchanged `checklist_check.py` suite (8 legs) staying green.
 
-## Acceptance criteria (assignee half of #460)
+## Acceptance criteria
 
-- [ ] An item's assignee can be set and cleared, persists in ClickUp, and renders on the row.
-- [ ] The assignee picker is a specialisation of the shared `SelectorView` (#243) — no duplicated selector.
+**This PR (core):**
+
+- [x] Facade `SetChecklistItemAssigneeAsync` sets (user id) and clears (`null` → explicit `"assignee": null`),
+      pinned by unit tests asserting the outgoing JSON body (number vs JSON null).
+- [x] Pure `ChecklistItemEdits.SetAssignee` transform (set / clear / nested / no-op), unit-tested.
+- [x] Spec-driven `assignee` field via Kiota regen (no `Generated/` hand edits); `dotnet test` green; the
+      unchanged `checklist_check.py` suite stays green.
+
+**Deferred to #572 (the rename-modal UI):**
+
+- [ ] An item's assignee can be set and cleared from the rename modal, persists in ClickUp, and renders on the
+      row — via a shared `SelectorView` (#243) specialisation, no fork.
 - [ ] A failed assignee write reverts to the exact prior state.
-- [ ] The new chord doesn't collide with `Ctrl+←`/`Ctrl+→` tab cycling and is registered in `Keybindings` +
-      both `HelpLine` sets, with the #355 cross-check tests green.
-- [ ] Unit tests for the pure transform and the facade write body (set + clear); `dotnet test` green, then
-      `tui-validate`.
+- [ ] No new bare-letter chord; the #355 footer/keybinding cross-checks stay green; `tui-validate` covers it.
 
 ## Deferred to a tracked follow-up (reorder / reparent half of #460)
 
 Move up/down + indent/outdent via `orderindex`/`parent` on the same `PUT`; the pure ordering + legality rules in
 B's arranger (illegal: indent the first item in a group, reparent under a descendant); the `Alt+↑/↓/←/→`
-movement chords and their `NavSafeTabs` nav-guard interplay (#452); snapshot-the-sibling-list revert. Tracked so
-#460's remaining half is not lost.
+movement chords and their `NavSafeTabs` nav-guard interplay (#452); snapshot-the-sibling-list revert. Tracked in
+**#569** so #460's remaining half is not lost.
+
+## Follow-ups
+
+- **#572** — build the per-item assignee control into the checklist-item rename modal (`F2`/`Ctrl+E`, per the
+  #538 decision), consuming this PR's landed facade + transform.
+- **#569** — the reorder / reparent half of #460 (above).
