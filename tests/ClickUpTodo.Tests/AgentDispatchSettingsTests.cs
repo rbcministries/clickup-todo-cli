@@ -9,6 +9,14 @@ namespace ClickUpTodo.Tests;
 /// </summary>
 public sealed class AgentDispatchSettingsTests
 {
+    /// <summary>A single-provider settings object, the #497 stand-in for the pre-provider exe/args pair.</summary>
+    private static AgentDispatchSettings WithProvider(string? exe = null, List<string>? args = null) =>
+        new()
+        {
+            Providers = [new DispatchProvider { Name = "P", Executable = exe ?? "claude", ExtraArgs = args ?? [] }],
+            DefaultProviderName = "P",
+        };
+
     [Fact]
     public void Defaults_AreZeroConfig()
     {
@@ -16,8 +24,13 @@ public sealed class AgentDispatchSettingsTests
 
         Assert.True(s.IsDefault);
         Assert.Equal(PreferredTerminal.Auto, s.PreferredTerminal);
-        Assert.Equal("claude", s.ClaudeExecutable);
-        Assert.Empty(s.ExtraArgs);
+        // A hand-new'd object carries no providers; the resolver synthesizes the built-in claude default.
+        Assert.Empty(s.Providers);
+        Assert.Equal("", s.DefaultProviderName);
+        var resolved = s.ResolveDefaultProvider();
+        Assert.Equal("claude", resolved.Executable);
+        Assert.Empty(resolved.ExtraArgs);
+        Assert.Equal(DispatchProviderKind.LocalCli, resolved.Kind);
         Assert.Equal(AgentWorkingDirectory.TaskDerived, s.WorkingDirectory);
         Assert.Equal(AgentSessionMode.Interactive, s.DefaultSessionMode);
         Assert.False(s.DefaultPostResultsToComments);
@@ -29,15 +42,21 @@ public sealed class AgentDispatchSettingsTests
     [InlineData("claude")]
     [InlineData("")]
     [InlineData("   ")]
-    public void IsDefault_TreatsBlankOrDefaultExecutableAsDefault(string exe)
-        => Assert.True(new AgentDispatchSettings { ClaudeExecutable = exe }.IsDefault);
+    public void IsDefault_TreatsBlankOrDefaultSingleProviderAsDefault(string exe)
+        => Assert.True(WithProvider(exe).IsDefault);
+
+    [Fact]
+    public void IsDefault_TrueForNoProviders()
+        => Assert.True(new AgentDispatchSettings().IsDefault);
 
     [Fact]
     public void IsDefault_FalseOnceAnythingIsCustomised()
     {
         Assert.False(new AgentDispatchSettings { PreferredTerminal = PreferredTerminal.Pwsh }.IsDefault);
-        Assert.False(new AgentDispatchSettings { ClaudeExecutable = "/opt/claude" }.IsDefault);
-        Assert.False(new AgentDispatchSettings { ExtraArgs = ["--model", "opus"] }.IsDefault);
+        Assert.False(WithProvider("/opt/claude").IsDefault);
+        Assert.False(WithProvider(args: ["--model", "opus"]).IsDefault);
+        // More than one configured provider is a customisation even if each is otherwise default.
+        Assert.False(new AgentDispatchSettings { Providers = [new DispatchProvider(), new DispatchProvider()] }.IsDefault);
         Assert.False(new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.Home }.IsDefault);
         Assert.False(new AgentDispatchSettings { FixedWorkingDirectory = "/work" }.IsDefault);
         Assert.False(new AgentDispatchSettings { DefaultSessionMode = AgentSessionMode.OneOff }.IsDefault);
@@ -46,6 +65,47 @@ public sealed class AgentDispatchSettingsTests
         Assert.False(new AgentDispatchSettings { LaunchLocation = LaunchLocation.NewTab }.IsDefault);
         Assert.False(new AgentDispatchSettings { CustomTerminalCommand = "alacritty -e {}" }.IsDefault);
         Assert.False(new AgentDispatchSettings { TryUseWindowsTerminalProfiles = true }.IsDefault);
+    }
+
+    // ── ResolveDefaultProvider ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void ResolveDefaultProvider_EmptyList_SynthesizesClaudeDefault()
+    {
+        var p = new AgentDispatchSettings().ResolveDefaultProvider();
+        Assert.Equal(AgentDispatchSettings.DefaultProviderDisplayName, p.Name);
+        Assert.Equal("claude", p.Executable);
+        Assert.Empty(p.ExtraArgs);
+    }
+
+    [Fact]
+    public void ResolveDefaultProvider_PicksByDefaultName()
+    {
+        var s = new AgentDispatchSettings
+        {
+            Providers =
+            [
+                new DispatchProvider { Name = "A", Executable = "a" },
+                new DispatchProvider { Name = "B", Executable = "b" },
+            ],
+            DefaultProviderName = "B",
+        };
+        Assert.Equal("b", s.ResolveDefaultProvider().Executable);
+    }
+
+    [Fact]
+    public void ResolveDefaultProvider_FallsBackToFirst_WhenNameUnmatched()
+    {
+        var s = new AgentDispatchSettings
+        {
+            Providers =
+            [
+                new DispatchProvider { Name = "A", Executable = "a" },
+                new DispatchProvider { Name = "B", Executable = "b" },
+            ],
+            DefaultProviderName = "missing",
+        };
+        Assert.Equal("a", s.ResolveDefaultProvider().Executable);
     }
 
     [Theory]
@@ -59,18 +119,32 @@ public sealed class AgentDispatchSettingsTests
     [Fact]
     public void ToLauncherOptions_CopiesExecutableArgsAndPreference()
     {
-        var opts = new AgentDispatchSettings
-        {
-            ClaudeExecutable = "/opt/claude",
-            ExtraArgs = ["--model", "opus"],
-            PreferredTerminal = PreferredTerminal.Pwsh,
-            LaunchLocation = LaunchLocation.NewTab,
-        }.ToLauncherOptions();
+        var s = WithProvider("/opt/claude", ["--model", "opus"]);
+        s.PreferredTerminal = PreferredTerminal.Pwsh;
+        s.LaunchLocation = LaunchLocation.NewTab;
+        var opts = s.ToLauncherOptions();
 
         Assert.Equal("/opt/claude", opts.ClaudeExecutable);
         Assert.Equal(["--model", "opus"], opts.ExtraArgs);
         Assert.Equal(PreferredTerminal.Pwsh, opts.Preferred);
         Assert.Equal(LaunchLocation.NewTab, opts.LaunchLocation);
+    }
+
+    [Fact]
+    public void ToLauncherOptions_ProjectsFromTheSelectedDefaultProvider()
+    {
+        var opts = new AgentDispatchSettings
+        {
+            Providers =
+            [
+                new DispatchProvider { Name = "A", Executable = "a", ExtraArgs = ["--a"] },
+                new DispatchProvider { Name = "B", Executable = "b", ExtraArgs = ["--b"] },
+            ],
+            DefaultProviderName = "B",
+        }.ToLauncherOptions();
+
+        Assert.Equal("b", opts.ClaudeExecutable);
+        Assert.Equal(["--b"], opts.ExtraArgs);
     }
 
     [Fact]
@@ -94,26 +168,26 @@ public sealed class AgentDispatchSettingsTests
     [InlineData("")]
     [InlineData("   ")]
     public void ToLauncherOptions_CoalescesBlankExecutableToClaude(string exe)
-        => Assert.Equal("claude", new AgentDispatchSettings { ClaudeExecutable = exe }.ToLauncherOptions().ClaudeExecutable);
+        => Assert.Equal("claude", WithProvider(exe).ToLauncherOptions().ClaudeExecutable);
 
     [Fact]
     public void ToLauncherOptions_TrimsExecutable()
-        => Assert.Equal("claude-x", new AgentDispatchSettings { ClaudeExecutable = "  claude-x  " }.ToLauncherOptions().ClaudeExecutable);
+        => Assert.Equal("claude-x", WithProvider("  claude-x  ").ToLauncherOptions().ClaudeExecutable);
 
     [Fact]
     public void ToLauncherOptions_TrimsAndDropsBlankExtraArgs()
     {
-        var opts = new AgentDispatchSettings { ExtraArgs = ["  --model ", "", "  ", "opus"] }.ToLauncherOptions();
+        var opts = WithProvider(args: ["  --model ", "", "  ", "opus"]).ToLauncherOptions();
         Assert.Equal(["--model", "opus"], opts.ExtraArgs);
     }
 
     [Fact]
     public void ToLauncherOptions_ExtraArgsIsADistinctList()
     {
-        var settings = new AgentDispatchSettings { ExtraArgs = ["--model"] };
+        var settings = WithProvider(args: ["--model"]);
         var opts = settings.ToLauncherOptions();
 
-        settings.ExtraArgs.Add("mutated");
+        settings.Providers[0].ExtraArgs.Add("mutated");
 
         Assert.Equal(["--model"], opts.ExtraArgs); // isolated from later mutation of the source list
     }

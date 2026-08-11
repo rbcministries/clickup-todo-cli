@@ -32,45 +32,46 @@ namespace ClickUpTodo.Tui;
 public static class DispatchCoordinator
 {
     /// <summary>
-    /// The fully-resolved inputs for one dispatch, plus the two values
-    /// (<see cref="ChosenDir"/>/<see cref="ResolvedDefault"/>) the per-task working-dir cache (#96)
-    /// needs to reconcile. Pure data — no I/O, no UI. <see cref="RepositoryDir"/> is the
-    /// <c>{base}/{Repository}</c> checkout sub-dir a task-derived launch matched into (#461), non-null
-    /// only when the match actually drove <see cref="WorkingDir"/> (task-derived mode, no explicit pick);
-    /// it is surfaced to the user via <see cref="RepositoryMatchNote"/>. <see cref="WindowsTerminalProfile"/>
-    /// is the Windows Terminal profile (#462) whose <c>startingDirectory</c> matched
-    /// <see cref="WorkingDir"/> when the "Try to use WT profiles" toggle is on — non-null only for an
-    /// interactive launch that matched; surfaced via <see cref="WindowsTerminalProfileNote"/>.
+    /// The fully-resolved inputs for one dispatch, plus <see cref="ChosenDir"/> — the tilde-expanded
+    /// working-dir pick the per-task cache (#96) reconciles against its
+    /// <see cref="DispatchWorkingDirectoryPreFill.AutoDerivedDefault"/> baseline (the host supplies that
+    /// baseline to <see cref="ReconcileCache"/>). Pure data — no I/O, no UI.
+    /// <para>
+    /// <see cref="CreateWorkingDir"/> is the directory-creation flag (#533): true when, in task-derived
+    /// mode, <see cref="WorkingDir"/> lies inside the base working-directory tree (inclusive), so the app
+    /// creates it before launch — covering the base dir, the <c>{custom-id}</c> subdir, a matched
+    /// checkout, and any browsed-to subdir. A Home/Fixed dir is never created (even one configured inside
+    /// the tree), and an out-of-tree task-derived pick isn't either. <see cref="WindowsTerminalProfile"/>
+    /// is the Windows Terminal profile (#462)
+    /// whose <c>startingDirectory</c> matched <see cref="WorkingDir"/> when the "Try to use WT profiles"
+    /// toggle is on — non-null only for an interactive launch that matched; surfaced via
+    /// <see cref="WindowsTerminalProfileNote"/>.
+    /// </para>
     /// </summary>
     public readonly record struct ResolvedDispatch(
         string Prompt,
         string? WorkingDir,
-        string? OutputSubdir,
         string? Template,
-        bool UseTaskDerived,
+        bool CreateWorkingDir,
         bool OneOff,
         bool PostToComments,
         LaunchLocation LaunchLocation,
         string? ChosenDir,
-        string? ResolvedDefault,
-        string? RepositoryDir = null,
         string? WindowsTerminalProfile = null);
 
     /// <summary>
     /// Resolves everything a dispatch needs from the settings + the pane's <paramref name="request"/> —
-    /// a verbatim lift of the resolution block in <c>TodoApp.DispatchAgent</c> so both hosts behave
-    /// identically. An explicit pane pick (#95) is <c>~</c>-expanded and overrides the configured mode;
-    /// task-derived mode without a pick seeds a per-task <c>./{custom-id}</c> output subdir (#98).
+    /// so both hosts behave identically. An explicit pane pick (#95, now the pre-filled working-dir field
+    /// #533) is <c>~</c>-expanded and overrides the configured mode; a blank/cleared field in task-derived
+    /// mode resolves to the plain base dir.
     /// <para>
-    /// In task-derived mode it also looks for a <c>{base}/{Repository}</c> checkout sub-dir (#461): when
-    /// the task carries a <c>Repository</c> custom field naming a direct child of the base dir, the launch
-    /// starts <i>inside that checkout</i> and the <c>./{custom-id}</c> output-subdir instruction is
-    /// <b>suppressed</b> (owner decision — work belongs in the project, not a scratch folder in its tree).
-    /// The base-dir-creation flag (<see cref="ResolvedDispatch.UseTaskDerived"/>) is unchanged by a match;
-    /// only the output-subdir emission and the resolved directory are. This is the one place the resolution
-    /// consults the filesystem, via the injected <paramref name="directoryExists"/> /
-    /// <paramref name="childDirectoryNames"/> probes (default: the real filesystem), and only when a
-    /// <c>Repository</c> value is present — so a task without one stays pure and byte-identical to before.
+    /// Since #533 this is <b>pure</b> apart from the injected #462 Windows Terminal profile lookup: all
+    /// task-directory derivation (the #461 <c>{base}/{Repository}</c> match and the #98
+    /// <c>{base}/{custom-id}</c> directory) moved into <see cref="DispatchWorkingDirectoryPreFill"/>, which
+    /// pre-fills the field. Plan no longer probes the filesystem for the working directory and no longer
+    /// emits an output-subdir instruction. Directory creation is decided by the pure
+    /// <see cref="ResolvedDispatch.CreateWorkingDir"/> containment flag (create when inside the base tree),
+    /// not by the mode.
     /// </para>
     /// </summary>
     public static ResolvedDispatch Plan(
@@ -79,16 +80,12 @@ public static class DispatchCoordinator
         TaskDetail detail,
         string? defaultWorkingDirectory,
         string home,
-        Func<string, bool>? directoryExists = null,
-        Func<string, IReadOnlyList<string>>? childDirectoryNames = null,
         Func<string?>? loadWindowsTerminalSettings = null,
         Func<string, string>? expandEnvironment = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(detail);
-        directoryExists ??= Directory.Exists;
-        childDirectoryNames ??= SystemChildDirectoryNames;
         loadWindowsTerminalSettings ??= SystemLoadWindowsTerminalSettings;
         expandEnvironment ??= Environment.ExpandEnvironmentVariables;
 
@@ -98,28 +95,20 @@ public static class DispatchCoordinator
         var chosenDir = expandedPick.Length == 0 ? null : expandedPick;
         var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(defaultWorkingDirectory, home);
 
-        // A `Repository`-field match refines the task-derived candidate to a checkout sub-dir (#461); it
-        // only applies in task-derived mode (Home/Fixed ignore the candidate). Computed even when a pick
-        // is present so `resolvedDefault` reflects it — an explicit pick equal to the matched dir must
-        // still count as "reverted to default" for the #96 cache.
-        var repoMatch = settings.WorkingDirectory == AgentWorkingDirectory.TaskDerived
-            ? RepositoryWorkingDirectory.Resolve(detail, baseDir, directoryExists, childDirectoryNames)
-            : null;
-        var taskDerived = repoMatch?.Directory ?? baseDir;
-
-        var workingDir = settings.ResolveEffectiveWorkingDirectory(chosenDir, taskDerivedDirectory: taskDerived, homeDirectory: home);
-        var useTaskDerived = settings.UsesTaskDerivedOutput(chosenDir);
-        // Emit the per-task output subdir only in task-derived mode with no pick AND no repo match: on a
-        // match the session is already in the checkout, so `./{custom-id}` would litter the working tree.
-        var outputSubdir = useTaskDerived && repoMatch is null ? AgentPromptComposer.OutputSubdirectoryToken(detail) : null;
+        // A cleared task-derived field resolves to the plain base dir (#533 decision 1): all derivation
+        // now lives in the pre-fill, so Plan never touches the filesystem for the working directory.
+        var workingDir = settings.ResolveEffectiveWorkingDirectory(chosenDir, taskDerivedDirectory: baseDir, homeDirectory: home);
         var template = settings.PromptTemplate;
 
-        var resolvedDefaultRaw = settings.ResolveWorkingDirectory(taskDerivedDirectory: taskDerived, homeDirectory: home);
-        var resolvedDefault = resolvedDefaultRaw is null ? null : SettingsForm.ExpandHomePath(resolvedDefaultRaw, home);
-
-        // The match "applied" (drove the working dir, so it's worth reporting) only when it exists and no
-        // explicit pick overrode it.
-        var repositoryDir = repoMatch is { } m && chosenDir is null ? m.Directory : null;
+        // Create the resolved working dir on first use when it lies inside the base working-directory tree
+        // (inclusive) in task-derived mode: the base dir itself, the {custom-id} subdir, a matched checkout,
+        // or a browsed-to subdir. Home/Fixed dirs are the user's own and are never created (decision 4,
+        // unchanged from pre-#533) — even one configured inside the base tree — so the gate keeps the mode
+        // check the old UseTaskDerived gate had, alongside the pure containment check that replaced its
+        // now-defunct no-pick condition (the pre-filled field always submits as a pick). No filesystem probe.
+        var createWorkingDir = settings.WorkingDirectory == AgentWorkingDirectory.TaskDerived
+            && !string.IsNullOrWhiteSpace(workingDir)
+            && IsWithinBaseTree(baseDir, workingDir!);
 
         // Windows Terminal profile match (#462): only when the toggle is on and this is an interactive
         // launch (a one-off has no terminal) with a resolved directory. The settings.json read happens
@@ -132,20 +121,29 @@ public static class DispatchCoordinator
             : null;
 
         return new ResolvedDispatch(
-            request.Prompt, workingDir, outputSubdir, template, useTaskDerived, oneOff,
-            request.PostToComments, request.LaunchLocation, chosenDir, resolvedDefault, repositoryDir, wtProfile);
+            request.Prompt, workingDir, template, createWorkingDir, oneOff,
+            request.PostToComments, request.LaunchLocation, chosenDir, wtProfile);
     }
 
-    /// <summary>
-    /// A status-line suffix naming the <c>{base}/{Repository}</c> checkout a task-derived launch matched
-    /// into (#461), or <c>null</c> when no repo match drove the working directory — so the user can tell
-    /// why the session opened where it did (a silent directory change is unexplainable). Pure/testable;
-    /// the interactive host appends it to <see cref="AgentDispatchResult.StatusMessage"/>.
-    /// </summary>
-    public static string? RepositoryMatchNote(ResolvedDispatch plan)
-        => plan.RepositoryDir is { } dir
-            ? $" (Working in {dir} — matched by the task's {RepositoryWorkingDirectory.FieldName} field.)"
-            : null;
+    /// <summary>True when <paramref name="workingDir"/> is the base working directory or a descendant of
+    /// it (the #533 directory-creation rule). Pure path containment via <see cref="Path.GetFullPath(string)"/>;
+    /// compared ordinally, matching the per-task cache's case-sensitive convention
+    /// (<see cref="DispatchWorkingDirectoryCache"/>). Any malformed path degrades to <c>false</c> (don't
+    /// create).</summary>
+    private static bool IsWithinBaseTree(string baseDirectory, string workingDir)
+    {
+        if (string.IsNullOrWhiteSpace(baseDirectory))
+            return false;
+        try
+        {
+            var fullBase = Path.TrimEndingDirectorySeparator(Path.GetFullPath(baseDirectory));
+            var fullDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workingDir));
+            return string.Equals(fullDir, fullBase, StringComparison.Ordinal)
+                || fullDir.StartsWith(fullBase + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+        }
+        catch (ArgumentException) { return false; }
+        catch (PathTooLongException) { return false; }
+    }
 
     /// <summary>
     /// A status-line suffix naming the Windows Terminal profile (#462) a dispatch launched under, or
@@ -170,43 +168,28 @@ public static class DispatchCoordinator
     private static string? SystemLoadWindowsTerminalSettings()
         => WindowsTerminalSettings.Load(Environment.GetEnvironmentVariable, File.Exists, File.ReadAllText);
 
-    /// <summary>The immediate child <b>directory</b> names of <paramref name="dir"/> (the real-filesystem
-    /// default for <see cref="Plan"/>'s case-insensitive repo scan); empty when the dir is missing or
-    /// unreadable, so a filesystem hiccup degrades to "no match", never a thrown dispatch.</summary>
-    private static IReadOnlyList<string> SystemChildDirectoryNames(string dir)
-    {
-        try
-        {
-            if (!Directory.Exists(dir))
-                return [];
-            var names = new List<string>();
-            foreach (var path in Directory.EnumerateDirectories(dir))
-            {
-                var name = Path.GetFileName(path);
-                if (!string.IsNullOrEmpty(name))
-                    names.Add(name);
-            }
-            return names;
-        }
-        catch (IOException) { return []; }
-        catch (UnauthorizedAccessException) { return []; }
-    }
-
     /// <summary>
     /// Reconciles the per-task working-dir cache (#96) after a dispatch, mutating
     /// <paramref name="cache"/> in place and returning <c>true</c> only when it changed (so the host
     /// persists <c>config.json</c> exactly when needed). Thin wrapper over the already-tested
-    /// <see cref="DispatchWorkingDirectoryCache.Update"/>, sourced from the plan.
+    /// <see cref="DispatchWorkingDirectoryCache.Update"/>. <paramref name="chosenDir"/> is
+    /// <see cref="ResolvedDispatch.ChosenDir"/>; <paramref name="resolvedDefault"/> is the host's
+    /// <see cref="DispatchWorkingDirectoryPreFill.AutoDerivedDefault"/> baseline — the value an
+    /// accepted-unchanged pre-fill produces, so accepting it clears rather than stores a #96 entry. It is
+    /// passed in rather than computed here because it may require the filesystem (the #461 repo match),
+    /// which Plan no longer touches (#533).
     /// </summary>
-    public static bool ReconcileCache(IDictionary<string, string> cache, string taskId, ResolvedDispatch plan)
-        => DispatchWorkingDirectoryCache.Update(cache, taskId, plan.ChosenDir, plan.ResolvedDefault);
+    public static bool ReconcileCache(
+        IDictionary<string, string> cache, string taskId, string? chosenDir, string? resolvedDefault)
+        => DispatchWorkingDirectoryCache.Update(cache, taskId, chosenDir, resolvedDefault);
 
     /// <summary>
     /// Launches an interactive terminal session for <paramref name="detail"/> off the UI thread, then
     /// reports the outcome status text through <paramref name="report"/> (invoked on the UI thread). The
-    /// host's <paramref name="report"/> clears its re-entrancy guard and flashes the message. A
-    /// task-derived launch creates its base dir on first use (#98) before launching. Must be called on
-    /// the UI thread (the resolution already happened in <see cref="Plan"/>).
+    /// host's <paramref name="report"/> clears its re-entrancy guard and flashes the message. A launch
+    /// into the base working-directory tree (the base dir, the {custom-id} subdir, a matched checkout)
+    /// creates that directory on first use (#533) before launching. Must be called on the UI thread (the
+    /// resolution already happened in <see cref="Plan"/>).
     /// </summary>
     public static void RunInteractive(
         AgentDispatcher agent,
@@ -219,20 +202,21 @@ public static class DispatchCoordinator
         {
             try
             {
-                // A task-derived launch starts in the base dir; create it on first use (#98) so
-                // Process.Start doesn't fail on a not-yet-existing path. Home/Fixed dirs and an explicit
-                // pane pick are the user's own and aren't created here.
-                if (plan.UseTaskDerived && !string.IsNullOrWhiteSpace(plan.WorkingDir))
+                // Create the working dir on first use when it lies inside the base tree (#533) so
+                // Process.Start doesn't fail on a not-yet-existing path (e.g. the {custom-id} subdir). A
+                // Home/Fixed dir or an out-of-tree pick is the user's own and isn't created here.
+                if (plan.CreateWorkingDir && !string.IsNullOrWhiteSpace(plan.WorkingDir))
                     Directory.CreateDirectory(plan.WorkingDir);
 
                 var result = await agent.DispatchAsync(
-                    detail, comments, plan.Prompt, plan.WorkingDir, plan.Template, plan.OutputSubdir,
+                    detail, comments, plan.Prompt, plan.WorkingDir, plan.Template,
                     plan.OneOff, plan.PostToComments, launchLocation: plan.LaunchLocation,
                     windowsTerminalProfile: plan.WindowsTerminalProfile);
-                // Tell the user when a #461 Repository match opened the session in a checkout sub-dir, or a
-                // #462 WT profile match launched it under a non-default profile — otherwise a launch that
-                // landed somewhere / looked different than expected is unexplained.
-                var status = result.StatusMessage + (RepositoryMatchNote(plan) ?? "") + (WindowsTerminalProfileNote(plan, result.LaunchedWith) ?? "");
+                // Tell the user when a #462 WT profile match launched the session under a non-default
+                // profile — otherwise a launch that looked different than expected is unexplained. The
+                // #461 Repository match no longer needs a note: the directory it chose is now visible in
+                // the pre-filled working-dir field, which explains itself (#533 decision 5).
+                var status = result.StatusMessage + (WindowsTerminalProfileNote(plan, result.LaunchedWith) ?? "");
                 Application.Invoke(() => report(status));
             }
             catch (Exception ex)
@@ -276,13 +260,13 @@ public static class DispatchCoordinator
         {
             try
             {
-                // A task-derived launch starts in the base dir; create it on first use (#98), same as the
-                // interactive path, so the child process doesn't fail on a not-yet-existing path.
-                if (plan.UseTaskDerived && !string.IsNullOrWhiteSpace(plan.WorkingDir))
+                // Create the working dir on first use when it lies inside the base tree (#533), same as
+                // the interactive path, so the child process doesn't fail on a not-yet-existing path.
+                if (plan.CreateWorkingDir && !string.IsNullOrWhiteSpace(plan.WorkingDir))
                     Directory.CreateDirectory(plan.WorkingDir);
 
                 var run = await agent.DispatchBackgroundAsync(
-                    detail, comments, plan.Prompt, plan.WorkingDir, plan.Template, plan.OutputSubdir,
+                    detail, comments, plan.Prompt, plan.WorkingDir, plan.Template,
                     plan.PostToComments, progress, cts.Token);
                 Application.Invoke(() => { clearDispatching(); screen.ShowResult(AgentRunModel.FormatOutput(run), run.Success); });
             }

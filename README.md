@@ -135,7 +135,7 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `Ctrl+P`      | 📌   | Pin / unpin the focused task to the Focus pane                |
 | `Ctrl+E`      | 🔔   | Toggle the mentions & comments feed                          |
 | `F1`          | ℹ    | Show help + full shortcut list                                |
-| `F2`          | ⚙    | Settings                                                      |
+| `F10`         | ⚙    | Settings                                                      |
 | `F3`          | ⧩ ▼▲ ⛚ | Filter / sort / group                                      |
 | `F4`          |      | Cycle the subtasks view                                       |
 | `F5`          | ↻    | Refresh now (`Ctrl+R` is an alias)                           |
@@ -144,7 +144,7 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `→` / `←`     |      | Expand / collapse the focused parent's subtasks              |
 | `Ctrl+→` / `Ctrl+←` | | Expand-all / collapse-all subtasks                        |
 | `type`        |      | Type-ahead search by task title                               |
-| `Ctrl+Q` / `Esc` |   | Quit — confirms first (`Y`/`Enter` exits, `N`/`Esc` stays; F2 to turn off) |
+| `Ctrl+Q` / `Esc` |   | Quit — confirms first (`Y`/`Enter` exits, `N`/`Esc` stays; F10 to turn off) |
 
 ### Task Detail
 
@@ -171,14 +171,14 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 destructive — leaving the app — is guarded: `Esc` (or `Ctrl+Q`) from the main list, or from the launch
 task in a single-task tab (`--task`), shows a confirmation. `Y`/`Enter` exits; `N`/`Esc` returns you to
 exactly where you were, with your cursor and tab unchanged. `Esc` anywhere else still just goes back.
-The guard is on by default; turn it off in Settings (`F2` → *Confirm on exit*) to restore a one-key quit.
+The guard is on by default; turn it off in Settings (`F10` → *Confirm on exit*) to restore a one-key quit.
 
 **`Ctrl+B` in Task Detail now keeps the task on screen.** Opening a task in the browser never leaves
 the app, and by default it no longer closes the detail view either — you stay exactly where you were
 (matching the `Ctrl`+click-a-task-link gesture, and making the dashboard and single-task `--task` tab
 behave the same). This is a change from earlier builds, where `Ctrl+B` also returned you to the list —
 and where, in a `--task` tab, it *quit the program*. For the old close-on-`Ctrl+B` behaviour, set
-**Settings (`F2`) → Detail view → `Ctrl+B` → "Open browser + close"**; a `--task` launch task always
+**Settings (`F10`) → Detail view → `Ctrl+B` → "Open browser + close"**; a `--task` launch task always
 stays open regardless, since there is nothing to go back to.
 
 Quick Updates opens with `Ctrl+U` from both the main list and Task Detail. Pinned tasks persist
@@ -200,7 +200,7 @@ Links in a task's **Description**, **Comments** and **Stream** panes are underli
 `Enter` follows the focused one — the keyboard equivalent of a left-click, for when you'd rather not reach
 for the mouse. `Ctrl+`Left-Click on a **task** link has a configurable destination — **open in your
 browser** (the default, Windows Terminal's own "open this link" gesture) or **open the task in a new
-terminal tab** — set under **Settings → Detail view → Ctrl+Click task link** (`F2`); `Ctrl+Shift+`Left-Click
+terminal tab** — set under **Settings → Detail view → Ctrl+Click task link** (`F10`); `Ctrl+Shift+`Left-Click
 does the other one. A **web** link always opens in the browser, whatever the modifiers. A task link works
 with either a plain ClickUp id or a **custom id** (`/t/{teamId}/{customId}`). In single-task mode
 (`--task`) every link opens in the browser, since that mode has no list to stack another task on top of.
@@ -229,7 +229,7 @@ Auto-detection (used by both the task-tab launch and agent dispatch) probes thes
 uses the first one present:
 
 - **Windows** — Windows Terminal → `pwsh` → `powershell` → `cmd` (choose a specific one with the
-  **Preferred terminal** setting in F2, or `AgentDispatch.PreferredTerminal` in `config.json`).
+  **Preferred terminal** setting in F10, or `AgentDispatch.PreferredTerminal` in `config.json`).
 - **macOS** — iTerm2 (for a new tab, when you're inside it) then Terminal.app.
 - **Linux** — `$TERMINAL`, then `x-terminal-emulator`, `gnome-terminal`, `konsole`,
   `xfce4-terminal`, `alacritty`, `kitty`, `wezterm`, `foot`, `xterm`, `terminator`; a `tmux` window
@@ -237,7 +237,7 @@ uses the first one present:
 
 If your emulator isn't in that list, or you want to **prefer a specific one on macOS/Linux** (where
 `PreferredTerminal` doesn't apply), set a **custom terminal launch command** — the
-"Custom terminal cmd" field in F2, or `"customTerminalCommand"` under `agentDispatch` in
+"Custom terminal cmd" field in F10, or `"customTerminalCommand"` under `agentDispatch` in
 `config.json`. When set and its executable is on your `PATH`, it's tried **first**, ahead of
 auto-detection; leave it blank for auto-detection only. It's a shell-style command line where a `{}`
 placeholder marks where the launched command is inserted (appended if you omit it):
@@ -261,6 +261,10 @@ Press `Ctrl+E` to open a feed of recent comments and `@`-mentions across the tas
 (`F3` toggles a mentions-only view). ClickUp has no inbox/mentions API, so the feed is synthesised
 from the comments on your **assigned** tasks — which means a mention on a task you aren't assigned to
 won't appear unless a small **per-Space ClickUp Automation** turns mentions into assignments.
+
+You can also open the feed in **its own window/tab** with `clickup-todo --feed` — the same view, hosted
+standalone so you can keep it beside your work instead of toggling it in the dashboard. The dashboard's
+`Ctrl+E` is unchanged; `--feed` is just an additional way in.
 
 A comment that has a reply thread shows a `N replies` count on its feed row; the reply bodies
 themselves aren't fetched for the feed (that would fan out across every assigned task), but they're

@@ -164,8 +164,9 @@ public sealed class AgentPromptComposerTests
     [Fact]
     public void Compose_ToggleInstructionPlaceholders_RenderEmpty_WhenTheirTogglesAreOff()
     {
-        // Both #97 (postToComments) and #98 (outputSubdirectory) default off ⇒ their placeholders
-        // expand to empty, so a template referencing them is inert with no options supplied.
+        // #97 (postToComments) defaults off ⇒ {postCommentInstruction} expands to empty, and since #533
+        // {outputDirInstruction} always expands to empty (the #98 output-subdir instruction was retired).
+        // So a template referencing either is inert with no options supplied.
         var composed = AgentPromptComposer.Compose(
             Task(), [], "go", template: "[{postCommentInstruction}][{outputDirInstruction}]");
         Assert.Equal("[][]", composed);
@@ -266,7 +267,10 @@ public sealed class AgentPromptComposerTests
         var known = AgentPromptComposer.Placeholders.Select(p => p.Name).ToHashSet();
         Assert.Contains("userPrompt", known);
         Assert.Contains("contextJson", known);
-        Assert.Contains("outputDirInstruction", known);
+        Assert.Contains("postCommentInstruction", known);
+        // outputDirInstruction was dropped from both the default template and the documented list in #533
+        // (it always renders empty now); it survives only as a backward-compat mapping for saved templates.
+        Assert.DoesNotContain("outputDirInstruction", known);
     }
 
     // ── #27 → #100 preamble migration helper ────────────────────────────────────────
@@ -276,9 +280,9 @@ public sealed class AgentPromptComposerTests
     {
         var template = AgentPromptComposer.DefaultTemplateWithPreamble("  Only use the JSON.  ");
 
-        Assert.Equal("{userPrompt}\n\n{outputDirInstruction}{postCommentInstruction}Only use the JSON.\n\n{contextJson}", template);
+        Assert.Equal("{userPrompt}\n\n{postCommentInstruction}Only use the JSON.\n\n{contextJson}", template);
         Assert.DoesNotContain(AgentPromptComposer.Preamble, template);
-        // Renders like the old custom-preamble output (no output subdir ⇒ {outputDirInstruction} empty).
+        // Renders like the old custom-preamble output (post-to-Comments off ⇒ {postCommentInstruction} empty).
         var composed = AgentPromptComposer.Compose(Task(), [], "go", template);
         Assert.StartsWith("go\n\nOnly use the JSON.\n\n{", composed);
     }
@@ -290,7 +294,7 @@ public sealed class AgentPromptComposerTests
     public void DefaultTemplateWithPreamble_BlankValue_YieldsTheUnchangedDefault(string? preamble)
         => Assert.Equal(AgentPromptComposer.DefaultTemplate, AgentPromptComposer.DefaultTemplateWithPreamble(preamble));
 
-    // ── output subdirectory (task-derived working dir, #98) ─────────────────────────
+    // ── OutputSubdirectoryToken (task-derived dir segment, #98; the #533 pre-fill uses it) ──────────
 
     [Fact]
     public void OutputSubdirectoryToken_PrefersCustomId_WhenSet()
@@ -319,73 +323,14 @@ public sealed class AgentPromptComposerTests
     }
 
     [Fact]
-    public void Compose_OutputSubdirectory_InsertsInstructionBetweenPromptAndPreamble()
+    public void Compose_OutputDirInstructionPlaceholder_RendersEmpty_EvenInACustomTemplate()
     {
-        var composed = AgentPromptComposer.Compose(Task(), [], "triage", outputSubdirectory: "TEAM-42");
-
-        Assert.StartsWith(
-            $"triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n{AgentPromptComposer.Preamble}\n\n{{",
-            composed);
-    }
-
-    [Fact]
-    public void Compose_OutputSubdirectory_IsTrimmed()
-    {
-        var composed = AgentPromptComposer.Compose(Task(), [], "triage", outputSubdirectory: "  TEAM-42  ");
-        Assert.StartsWith("triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n", composed);
-    }
-
-    [Fact]
-    public void Compose_OutputSubdirectory_EmptyPrompt_YieldsLeadingBlankThenInstruction()
-    {
-        // With the #100 template model an empty {userPrompt} leaves the template's leading "\n\n"
-        // (consistent with Compose_EmptyPrompt_StillEmitsPreambleAndJson), then the instruction
-        // paragraph. (Pre-#100 #98 special-cased this to drop the blank; templatization unifies it.)
-        var composed = AgentPromptComposer.Compose(Task(), [], "", outputSubdirectory: "TEAM-42");
-        Assert.StartsWith(
-            $"\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n{AgentPromptComposer.Preamble}\n\n{{",
-            composed);
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void Compose_BlankOutputSubdirectory_IsByteIdenticalToNoArg(string? subdir)
-    {
-        var expected = AgentPromptComposer.Compose(Task(), [Comment()], "triage");
-        var actual = AgentPromptComposer.Compose(Task(), [Comment()], "triage", outputSubdirectory: subdir);
-        Assert.Equal(expected, actual);
-    }
-
-    [Fact]
-    public void Compose_OutputSubdirectory_CombinesWithCustomTemplatePreamble()
-    {
-        // A custom preamble is now expressed as a template; the #98 output-subdir instruction still
-        // slots in ahead of it via {outputDirInstruction}.
-        var template = AgentPromptComposer.DefaultTemplateWithPreamble("Use only the JSON.");
-        var composed = AgentPromptComposer.Compose(Task(), [], "triage", template, outputSubdirectory: "TEAM-42");
-        Assert.StartsWith(
-            "triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\nUse only the JSON.\n\n{",
-            composed);
-    }
-
-    [Fact]
-    public void WritePromptFile_HonorsOutputSubdirectory()
-    {
-        var dir = Path.Combine(Path.GetTempPath(), "clickup-todo-tests", Guid.NewGuid().ToString("N"));
-        try
-        {
-            var path = AgentPromptComposer.WritePromptFile(Task(), [], "triage", dir, outputSubdirectory: "TEAM-42");
-            Assert.Equal(
-                AgentPromptComposer.Compose(Task(), [], "triage", outputSubdirectory: "TEAM-42"),
-                File.ReadAllText(path));
-        }
-        finally
-        {
-            if (Directory.Exists(dir))
-                Directory.Delete(dir, recursive: true);
-        }
+        // #533 retired the #98 output-subdir instruction (the task-derived dir is now a real directory the
+        // app creates, not a prompt instruction). The {outputDirInstruction} placeholder is kept mapped to
+        // empty so a saved custom template (#100) that still references it renders to nothing rather than
+        // failing — verified here on a template that puts it between markers.
+        var composed = AgentPromptComposer.Compose(Task(), [], "triage", template: "[{outputDirInstruction}]{userPrompt}");
+        Assert.Equal("[]triage", composed);
     }
 
     [Fact]
@@ -429,19 +374,6 @@ public sealed class AgentPromptComposerTests
         var expected = AgentPromptComposer.Compose(Task(), [Comment()], "triage");
         var actual = AgentPromptComposer.Compose(Task(), [Comment()], "triage", postToComments: false);
         Assert.Equal(expected, actual);
-    }
-
-    [Fact]
-    public void Compose_PostToComments_CombinesWithOutputSubdirectory_InAWellDefinedOrder()
-    {
-        // Both instruction paragraphs are on: output-subdir first (#98), then post-to-Comments (#97),
-        // then the preamble, then the JSON — the DefaultTemplate slot order.
-        var composed = AgentPromptComposer.Compose(
-            Task(), [], "triage", outputSubdirectory: "TEAM-42", postToComments: true);
-
-        Assert.StartsWith(
-            $"triage\n\nWrite any output files to the subdirectory ./TEAM-42 (create it if needed).\n\n{PostComment}\n\n{AgentPromptComposer.Preamble}\n\n{{",
-            composed);
     }
 
     [Fact]

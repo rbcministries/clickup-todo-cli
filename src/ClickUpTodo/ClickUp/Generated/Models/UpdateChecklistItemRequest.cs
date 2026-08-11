@@ -8,13 +8,21 @@ using System;
 namespace ClickUpTodo.ClickUp.Generated.Models
 {
     /// <summary>
-    /// Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457). Only &apos;resolved&apos; is modelled; rename/assignee/reparent land with E–G.
+    /// Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457) and the rename write (E, #458). Both fields are optional so a caller sends only what it changes: &apos;resolved&apos; toggles the tick, &apos;name&apos; renames the item. Assignee/reparent land with F–G.
     /// </summary>
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     public partial class UpdateChecklistItemRequest : IAdditionalDataHolder, IParsable
     {
         /// <summary>Stores additional data not described in the OpenAPI description found when deserializing. Can be used for serialization as well.</summary>
         public IDictionary<string, object> AdditionalData { get; set; }
+        /// <summary>The name property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public string? Name { get; set; }
+#nullable restore
+#else
+        public string Name { get; set; }
+#endif
         /// <summary>The resolved property</summary>
         public bool? Resolved { get; set; }
         /// <summary>
@@ -42,6 +50,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         {
             return new Dictionary<string, Action<IParseNode>>
             {
+                { "name", n => { Name = n.GetStringValue(); } },
                 { "resolved", n => { Resolved = n.GetBoolValue(); } },
             };
         }
@@ -52,6 +61,7 @@ namespace ClickUpTodo.ClickUp.Generated.Models
         public virtual void Serialize(ISerializationWriter writer)
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
+            writer.WriteStringValue("name", Name);
             writer.WriteBoolValue("resolved", Resolved);
             writer.WriteAdditionalData(AdditionalData);
         }
