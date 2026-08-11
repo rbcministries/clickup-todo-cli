@@ -157,13 +157,60 @@ public class RouteTableTests
         Assert.Throws<ArgumentException>(() => new RouteTable<string>(new[] { R(HttpMethod.Get, "", "x") }));
     }
 
-    [Fact]
-    public void FakeClickUp_RealRouteTable_RegistersWithoutAmbiguity()
+    // ── Priority tier: a scenario route overrides a same-pattern default route (E, #489) ─────────────────
+
+    [Theory]
+    [InlineData(true)]  // default registered first
+    [InlineData(false)] // scenario (tier 1) registered first
+    public void HigherTier_OverridesSamePattern_RegardlessOfOrder(bool defaultFirst)
     {
-        // The tests above pin the generic RouteTable invariants; this pins the *concrete* registration.
-        // Constructing FakeClickUp runs BuildRoutes(), whose RouteTable constructor throws on any
-        // same-method equal-specificity overlap — so a future scenario that adds an ambiguous route fails
-        // `dotnet test` here, not only at E2E harness boot. Only the table is built; no handler is invoked.
-        Assert.Null(Record.Exception(() => new global::FakeClickUp(new global::HarnessContext { TaskCount = 1 })));
+        // Both register the identical pattern GET task/{id}; specificity can't break that tie, so without the
+        // tier they would be flagged ambiguous. The tier-1 scenario route wins on the shared path.
+        var def = R(HttpMethod.Get, "task/{id}", "default");
+        var scenario = new Route<string>(HttpMethod.Get, "task/{id}", "scenario", 1);
+        var table = new RouteTable<string>(defaultFirst ? new[] { def, scenario } : new[] { scenario, def });
+
+        Assert.Equal("scenario", table.Resolve(HttpMethod.Get, "/api/v2/task/t1"));
+    }
+
+    [Fact]
+    public void HigherTier_OnlyWinsWhereItMatches()
+    {
+        // The tier-1 override wins on the paths it matches; every other route still serves its own paths.
+        var table = new RouteTable<string>(new[]
+        {
+            R(HttpMethod.Get, "task/{id}", "default"),
+            new Route<string>(HttpMethod.Get, "task/{id}", "scenario", 1),
+            R(HttpMethod.Get, "user", "user"),
+        });
+
+        Assert.Equal("scenario", table.Resolve(HttpMethod.Get, "/api/v2/task/t1"));
+        Assert.Equal("user", table.Resolve(HttpMethod.Get, "/api/v2/user"));
+    }
+
+    [Fact]
+    public void SamePattern_SameTier_IsStillAmbiguous()
+    {
+        // Two scenario routes (both tier 1) overriding the same endpoint is the unsupported combination the
+        // tier cannot resolve — it must still fail loudly at construction. (The 39-check audit confirms no
+        // real invocation activates two scenarios that override one endpoint, so this only guards the future.)
+        var ex = Assert.Throws<InvalidOperationException>(() => new RouteTable<string>(new[]
+        {
+            new Route<string>(HttpMethod.Get, "task/{id}", "a", 1),
+            new Route<string>(HttpMethod.Get, "task/{id}", "b", 1),
+        }));
+        Assert.Contains("task/{id}", ex.Message);
+        Assert.Contains("tier 1", ex.Message);
+    }
+
+    [Fact]
+    public void FakeClickUp_DefaultRouteTable_RegistersWithoutAmbiguity()
+    {
+        // The tests above pin the generic RouteTable invariants; this pins the *concrete* default registration.
+        // Constructing FakeClickUp with no active scenarios builds DefaultScenario's routes through the
+        // RouteTable constructor, which throws on any same-tier equal-specificity overlap — so a change that
+        // makes the default routes ambiguous fails `dotnet test` here, not only at E2E harness boot. Only the
+        // table is built; no handler is invoked.
+        Assert.Null(Record.Exception(() => new FakeClickUp(new HarnessContext { TaskCount = 1 })));
     }
 }
