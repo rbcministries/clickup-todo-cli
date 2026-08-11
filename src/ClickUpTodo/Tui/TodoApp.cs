@@ -2338,10 +2338,10 @@ public sealed class TodoApp
     /// directory and prompt preamble are resolved from the AgentDispatch settings on the UI thread and
     /// threaded into the dispatch (#91). A working directory explicitly picked in the Dispatch pane
     /// (#95, <see cref="DispatchRequest.WorkingDirectory"/>) overrides the configured mode and starts
-    /// the session there. Otherwise, in the default <see cref="AgentWorkingDirectory.TaskDerived"/>
-    /// mode the launch starts in the saved base working directory (#92, created on first use) and the
-    /// prompt instructs the agent to write outputs to a per-task <c>./{custom-id}</c> subdir (#98);
-    /// Home/Fixed modes resolve to their own dir with no subdir instruction.
+    /// the session there. Otherwise, in the default <see cref="AgentWorkingDirectory.BaseWithTaskPrefill"/>
+    /// mode the launch starts in the saved base working directory (#92, created on first use), with the
+    /// pane pre-filled to a per-task <c>{base}/{custom-id}</c> directory (#98/#533) the user can accept,
+    /// edit or clear; Home/Fixed modes resolve to their own dir.
     /// </summary>
     private void DispatchAgent(TaskDetail detail, IReadOnlyList<CommentItem> comments, DispatchRequest request)
     {

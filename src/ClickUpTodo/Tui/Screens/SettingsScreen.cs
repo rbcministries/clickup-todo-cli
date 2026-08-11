@@ -40,7 +40,7 @@ public sealed class SettingsScreen : Screen
         [PreferredTerminal.Auto, PreferredTerminal.WindowsTerminal, PreferredTerminal.Pwsh, PreferredTerminal.PowerShell, PreferredTerminal.Cmd];
 
     private static readonly AgentWorkingDirectory[] WorkingDirOrder =
-        [AgentWorkingDirectory.TaskDerived, AgentWorkingDirectory.Home, AgentWorkingDirectory.Fixed];
+        [AgentWorkingDirectory.BaseWithTaskPrefill, AgentWorkingDirectory.Home, AgentWorkingDirectory.Fixed];
 
     private readonly TextField _refreshField;
     private readonly TextField _feedRefreshField;
