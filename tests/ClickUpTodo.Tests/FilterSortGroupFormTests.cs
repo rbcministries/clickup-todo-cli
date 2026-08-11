@@ -137,4 +137,63 @@ public sealed class FilterSortGroupFormTests
     [Fact]
     public void Fields_IncludesPriority()
         => Assert.Contains(TaskField.Priority, FilterSortGroupForm.Fields);
+
+    // ── BuildResult: the Save-time marshalling shared by the _screens form and the #554 native modal ──
+
+    [Fact]
+    public void BuildResult_MapsIndicesFiltersAndDirection()
+    {
+        var filters = new List<FilterRule> { new() { Field = TaskField.Priority, Op = FilterOp.Is, Value = "High" } };
+        var current = new ViewSettings();
+
+        var result = FilterSortGroupForm.BuildResult(
+            filters,
+            FilterSortGroupForm.FieldToIndex(TaskField.Priority),
+            SortDirection.Descending,
+            FilterSortGroupForm.FieldToIndex(TaskField.Status),
+            current);
+
+        Assert.Equal(TaskField.Priority, result.SortField);
+        Assert.Equal(SortDirection.Descending, result.SortDirection);
+        Assert.Equal(TaskField.Status, result.GroupField);
+        Assert.Single(result.Filters);
+        Assert.Equal("High", result.Filters[0].Value);
+    }
+
+    [Fact]
+    public void BuildResult_ZeroIndex_IsNoneField()
+    {
+        var result = FilterSortGroupForm.BuildResult(
+            [], sortIndex: 0, SortDirection.Ascending, groupIndex: 0, new ViewSettings());
+
+        Assert.Null(result.SortField);
+        Assert.Null(result.GroupField);
+        Assert.Empty(result.Filters);
+    }
+
+    [Fact]
+    public void BuildResult_PreservesSubtasksAndCompletedFromCurrent()
+    {
+        // F3 doesn't edit the F4 subtasks view (#179) or the F12 completed view (#191); reconstructing
+        // ViewSettings without carrying them would silently reset both on any save.
+        var current = new ViewSettings { Subtasks = SubtaskView.MineAndUnassigned, Completed = CompletedView.All };
+
+        var result = FilterSortGroupForm.BuildResult([], 0, SortDirection.Ascending, 0, current);
+
+        Assert.Equal(SubtaskView.MineAndUnassigned, result.Subtasks);
+        Assert.Equal(CompletedView.All, result.Completed);
+    }
+
+    [Fact]
+    public void BuildResult_CopiesFilters_NotTheSameInstance()
+    {
+        // The caller's working list must not alias the saved view's — a later edit of one must not mutate
+        // the other (the _screens form and the native modal both hand in their live working list).
+        var filters = new List<FilterRule> { new() { Field = TaskField.Status, Op = FilterOp.Is, Value = "Open" } };
+
+        var result = FilterSortGroupForm.BuildResult(filters, 0, SortDirection.Ascending, 0, new ViewSettings());
+
+        Assert.NotSame(filters, result.Filters);
+        Assert.Equal(filters.Count, result.Filters.Count);
+    }
 }

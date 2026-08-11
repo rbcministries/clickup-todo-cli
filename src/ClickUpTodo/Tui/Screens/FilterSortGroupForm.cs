@@ -35,6 +35,26 @@ public static class FilterSortGroupForm
         => selected is int i && i >= 0 && i < count ? i : 0;
 
     /// <summary>
+    /// Builds the saved <see cref="ViewSettings"/> from the form's edited state: the active filter
+    /// rules and the sort/group picker indices (0 = "(none)") + direction. The F4 subtasks view (#179)
+    /// and F12 completed view (#191) are <b>preserved from <paramref name="current"/></b> — this screen
+    /// doesn't edit them, and reconstructing without them would silently reset subtasks to Hidden (and,
+    /// since #68, flip <c>IsDefault</c>) and completed to Active on any save. Pure so the marshalling the
+    /// Save handler performs — the axis Help's #404 modal never exercised — is unit-testable.
+    /// </summary>
+    public static ViewSettings BuildResult(
+        IReadOnlyList<FilterRule> filters, int? sortIndex, SortDirection direction, int? groupIndex, ViewSettings current)
+        => new()
+        {
+            Filters = filters.ToList(),
+            SortField = IndexToField(sortIndex),
+            SortDirection = direction,
+            GroupField = IndexToField(groupIndex),
+            Subtasks = current.Subtasks,
+            Completed = current.Completed,
+        };
+
+    /// <summary>
     /// Validates and builds a filter rule from the picker selections: the value must be non-blank, and
     /// the operator must be valid for the field (ordering operators only on numeric/date and ordinal
     /// fields; assignee is IS-only, #68). Returns false with an <paramref name="error"/> message otherwise.
