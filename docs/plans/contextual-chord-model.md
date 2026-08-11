@@ -44,7 +44,7 @@ mean different things per Task Detail tab:
 | `Delete` | (later: delete comment) | delete **checklist item** | —                | —                            |
 
 Today that scoping is done *informally*, entirely inside Task Detail's monolithic hand-rolled
-`OnKey` (`src/ClickUpTodo/Tui/Screens/TaskDetailScreen.cs:1085-1423`) — **Detail was never migrated to
+`OnKey` (`src/ClickUpTodo/Tui/Screens/TaskDetailScreen.cs:1085-1426`) — **Detail was never migrated to
 `KeybindingDispatcher`** (the `central-keybinding-dispatcher.md` plan migrated only the main list and
 deferred the rest). The existing `F7/F8/F9` block is the precedent to generalize — one key already
 resolves by **front tab *and* selected-row kind**:
@@ -151,7 +151,7 @@ Do **not** widen the base `Map` key to a triple. Instead:
 
 Detail is **not** migrated to `KeybindingDispatcher`, and migrating it is **out of scope for this
 epic** (it's a large, separate refactor). C–G therefore keep the literal `OnKey`
-(`TaskDetailScreen.cs:1085-1423`), but replace the `Ctrl+N` / `F7` / `F8` / `F9` literal branches with a
+(`TaskDetailScreen.cs:1085-1426`), but replace the `Ctrl+N` / `F7` / `F8` / `F9` literal branches with a
 single table-driven step that mirrors the F7/F8/F9 precedent, now sourced from `Keybindings`:
 
 ```csharp
@@ -218,8 +218,8 @@ This keeps the #290 convention (F2 = Rename) while leaving `Ctrl+E` exactly as u
 
 Native modals are **accepted** for the two modal-bearing slices:
 
-- **F — contextual `Delete` + confirmation.** A native confirm dialog, superseding #458's inline
-  `Enter`/`Esc` confirm (`TaskDetailScreen.cs:1101-1139`).
+- **F — contextual `Delete` + confirmation.** A native confirm dialog, superseding the inline
+  `Enter`/`Esc` confirm for #458 items (`TaskDetailScreen.cs:1101-1117`) and #459 groups (`:1119-1139`).
 - **G — `Ctrl+N` sibling-vs-child clarification.** A native choice dialog ("Add {Task|Comment|item}"
   vs "{Subtask|Reply|sub-item}") that, on the child choice, builds the parent association (subtask
   parent; reply target #330; checklist sub-item parent #460).

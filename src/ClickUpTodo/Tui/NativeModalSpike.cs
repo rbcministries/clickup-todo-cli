@@ -22,7 +22,7 @@ namespace ClickUpTodo.Tui;
 /// (<see cref="DiffFlushAnsiBackend"/>, <see cref="TuiTeardown"/>) has removed the original blockers.
 ///
 /// Enabled only when the <c>CLICKUP_TODO_NATIVE_MODAL</c> environment variable is set; off by default,
-/// so production behaviour is byte-identical. See <c>docs/plans/native-modals-spike.md</c>.
+/// so production behaviour is byte-identical. See <c>docs/plans/completed/native-modals-spike.md</c>.
 /// </summary>
 internal static class NativeModalSpike
 {
