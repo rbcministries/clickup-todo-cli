@@ -1,4 +1,3 @@
-using System.Text.Json;
 using ClickUpTodo.Agent;
 using ClickUpTodo.ClickUp;
 using ClickUpTodo.Configuration;
@@ -9,11 +8,13 @@ namespace ClickUpTodo.Tests;
 
 /// <summary>
 /// Unit tests for the pure half of the shared agent-dispatch coordinator (#345): <see cref="DispatchCoordinator.Plan"/>
-/// (the resolution block lifted out of <c>TodoApp.DispatchAgent</c>) and <see cref="DispatchCoordinator.ReconcileCache"/>.
-/// Asserting these directly locks the dashboard and single-task hosts to one behaviour. The execution
-/// flows (<c>RunInteractive</c>/<c>RunBackground</c>) are Terminal.Gui + real-process glue and aren't
-/// CI-testable — covered by <c>tui-validate</c> + manual verification, exactly as the code they replaced.
-/// No API / no Terminal.Gui here.
+/// and <see cref="DispatchCoordinator.ReconcileCache"/>. Asserting these directly locks the dashboard and
+/// single-task hosts to one behaviour. Since #533 <c>Plan</c> is pure (no filesystem probes) — all
+/// task-directory derivation moved to <see cref="DispatchWorkingDirectoryPreFill"/> (its own tests) — so
+/// these cover the pick/mode resolution, the <see cref="ResolvedDispatch.CreateWorkingDir"/> containment
+/// rule, the #462 WT-profile lookup, and cache reconciliation. The execution flows
+/// (<c>RunInteractive</c>/<c>RunBackground</c>) are Terminal.Gui + real-process glue and aren't
+/// CI-testable — covered by <c>tui-validate</c> + manual verification. No API / no Terminal.Gui here.
 /// </summary>
 public sealed class DispatchCoordinatorTests
 {
@@ -23,42 +24,56 @@ public sealed class DispatchCoordinatorTests
     private static TaskDetail TaskWith(string id = "9xyz", string? customId = "ABC-12")
         => new() { Id = id, Name = "A task", CustomId = customId };
 
+    // ── Working-dir resolution + the #533 CreateWorkingDir containment rule ──────────────────────
+
     [Fact]
-    public void Plan_TaskDerived_NoPick_ResolvesBaseDirAndSeedsOutputSubdir()
+    public void Plan_TaskDerived_ClearedField_ResolvesBaseDirAndCreatesIt()
     {
         var settings = new AgentDispatchSettings(); // defaults: TaskDerived, Interactive, NewWindow
-        var request = new DispatchRequest("do the thing");
+        var request = new DispatchRequest("do the thing"); // blank/cleared working-dir field
 
         var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home);
 
         Assert.Equal("do the thing", plan.Prompt);
+        // A cleared task-derived field resolves to the plain base dir (#533 decision 1) — no derivation.
         Assert.Equal(BaseDir, plan.WorkingDir);
-        Assert.True(plan.UseTaskDerived);
-        // Task-derived output subdir is the custom id (preferred over the raw id), filesystem-safe.
-        Assert.Equal(AgentPromptComposer.OutputSubdirectoryToken(TaskWith()), plan.OutputSubdir);
-        Assert.Equal("ABC-12", plan.OutputSubdir);
+        // The base dir lies inside the base tree (it is the tree), so it's created on first use.
+        Assert.True(plan.CreateWorkingDir);
         Assert.False(plan.OneOff);
         Assert.False(plan.PostToComments);
         Assert.Equal(LaunchLocation.NewWindow, plan.LaunchLocation);
         Assert.Null(plan.ChosenDir);
-        Assert.Equal(BaseDir, plan.ResolvedDefault);
     }
 
     [Fact]
-    public void Plan_TaskDerived_ExplicitPick_OverridesModeAndSuppressesSubdir()
+    public void Plan_TaskDerived_PickInsideBaseTree_IsCreated()
+    {
+        var settings = new AgentDispatchSettings();
+        // The pre-fill submits the {base}/{custom-id} (or repo-match) dir as an explicit pick; it lies
+        // inside the base tree, so it's created on first use even though it isn't the mode default.
+        var inTree = Path.Combine(BaseDir, "ABC-12");
+        var request = new DispatchRequest("go", WorkingDirectory: inTree);
+
+        var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home);
+
+        Assert.Equal(inTree, plan.WorkingDir);
+        Assert.Equal(inTree, plan.ChosenDir);
+        Assert.True(plan.CreateWorkingDir);
+    }
+
+    [Fact]
+    public void Plan_TaskDerived_PickOutsideBaseTree_IsNotCreated()
     {
         var settings = new AgentDispatchSettings();
         var request = new DispatchRequest("go", WorkingDirectory: "/tmp/custom");
 
         var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home);
 
-        // An explicit pick (#95) wins over the configured mode and means "no forced ./{id} subdir".
+        // An explicit pick outside the tree we own overrides the mode and is never created (a typo must
+        // not silently make a junk directory).
         Assert.Equal("/tmp/custom", plan.WorkingDir);
-        Assert.False(plan.UseTaskDerived);
-        Assert.Null(plan.OutputSubdir);
+        Assert.False(plan.CreateWorkingDir);
         Assert.Equal("/tmp/custom", plan.ChosenDir);
-        // resolvedDefault is what the mode would use with no pick — the base dir, for cache reconciliation.
-        Assert.Equal(BaseDir, plan.ResolvedDefault);
     }
 
     [Fact]
@@ -72,11 +87,11 @@ public sealed class DispatchCoordinatorTests
         var expected = Path.Combine(Home, "mine");
         Assert.Equal(expected, plan.WorkingDir);
         Assert.Equal(expected, plan.ChosenDir);
-        Assert.False(plan.UseTaskDerived);
+        Assert.False(plan.CreateWorkingDir); // ~/mine is outside the base tree
     }
 
     [Fact]
-    public void Plan_HomeMode_ResolvesHomeWithNoSubdir()
+    public void Plan_HomeMode_ResolvesHome_AndIsNotCreated()
     {
         var settings = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.Home };
         var request = new DispatchRequest("go");
@@ -84,13 +99,11 @@ public sealed class DispatchCoordinatorTests
         var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home);
 
         Assert.Equal(Home, plan.WorkingDir);
-        Assert.False(plan.UseTaskDerived);
-        Assert.Null(plan.OutputSubdir);
-        Assert.Equal(Home, plan.ResolvedDefault);
+        Assert.False(plan.CreateWorkingDir); // the home dir is the user's own, outside the base tree
     }
 
     [Fact]
-    public void Plan_FixedMode_ResolvesFixedDirWithNoSubdir()
+    public void Plan_FixedMode_ResolvesFixedDir_AndIsNotCreated()
     {
         var settings = new AgentDispatchSettings
         {
@@ -102,9 +115,26 @@ public sealed class DispatchCoordinatorTests
         var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home);
 
         Assert.Equal("/opt/fixed", plan.WorkingDir);
-        Assert.False(plan.UseTaskDerived);
-        Assert.Null(plan.OutputSubdir);
-        Assert.Equal("/opt/fixed", plan.ResolvedDefault);
+        Assert.False(plan.CreateWorkingDir);
+    }
+
+    [Fact]
+    public void Plan_FixedMode_DirInsideBaseTree_IsStillNotCreated()
+    {
+        // Decision 4: Home/Fixed are entirely unaffected — never created — even a Fixed dir configured
+        // inside the base tree (which the pure containment check alone would otherwise create). The mode
+        // gate preserves the pre-#533 "the user's own dir isn't created here" behaviour.
+        var settings = new AgentDispatchSettings
+        {
+            WorkingDirectory = AgentWorkingDirectory.Fixed,
+            FixedWorkingDirectory = Path.Combine(BaseDir, "scratch"),
+        };
+        var request = new DispatchRequest("go");
+
+        var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home);
+
+        Assert.Equal(Path.Combine(BaseDir, "scratch"), plan.WorkingDir);
+        Assert.False(plan.CreateWorkingDir);
     }
 
     [Fact]
@@ -125,17 +155,6 @@ public sealed class DispatchCoordinatorTests
     }
 
     [Fact]
-    public void Plan_TaskDerivedOutputSubdir_FallsBackToTaskIdWhenNoCustomId()
-    {
-        var settings = new AgentDispatchSettings();
-        var request = new DispatchRequest("go");
-
-        var plan = DispatchCoordinator.Plan(settings, request, TaskWith(id: "task9", customId: null), BaseDir, Home);
-
-        Assert.Equal("task9", plan.OutputSubdir);
-    }
-
-    [Fact]
     public void Plan_CarriesTheConfiguredPromptTemplate()
     {
         var settings = new AgentDispatchSettings { PromptTemplate = "custom {task} template" };
@@ -147,180 +166,27 @@ public sealed class DispatchCoordinatorTests
     }
 
     [Fact]
-    public void Plan_TaskDerived_NullDefaultWorkingDirectory_FallsBackToTheDefaultBaseDir()
+    public void Plan_TaskDerived_NullDefaultWorkingDirectory_FallsBackToTheDefaultBaseDir_AndCreatesIt()
     {
         var settings = new AgentDispatchSettings(); // TaskDerived
         var request = new DispatchRequest("go");
 
         var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), defaultWorkingDirectory: null, home: Home);
 
-        // A blank/absent base dir resolves to {home}/<default folder>, not to null/empty.
+        // A blank/absent base dir resolves to {home}/<default folder>, not to null/empty, and is created.
         var expectedBase = SettingsForm.ResolveDefaultWorkingDirectory(null, Home);
         Assert.Equal(expectedBase, plan.WorkingDir);
-        Assert.Equal(expectedBase, plan.ResolvedDefault);
-        Assert.True(plan.UseTaskDerived);
+        Assert.True(plan.CreateWorkingDir);
     }
 
-    [Fact]
-    public void Plan_FixedMode_ResolvedDefaultIsTildeExpanded_SoAnEquivalentPickRevertsTheCache()
-    {
-        var settings = new AgentDispatchSettings
-        {
-            WorkingDirectory = AgentWorkingDirectory.Fixed,
-            FixedWorkingDirectory = "~/fixed",
-        };
-        var expandedFixed = Path.Combine(Home, "fixed");
+    // ── #462 Windows Terminal profile match (Plan's one remaining injected I/O seam) ─────────────
 
-        // An explicit "~/fixed" pick expands to the same absolute path the Fixed default resolves to,
-        // and ResolvedDefault is ~-expanded to match — the case the coordinator comment calls out.
-        var plan = DispatchCoordinator.Plan(settings, new DispatchRequest("go", WorkingDirectory: "~/fixed"), TaskWith(), BaseDir, Home);
-        Assert.Equal(expandedFixed, plan.ChosenDir);
-        Assert.Equal(expandedFixed, plan.ResolvedDefault);
-
-        // So reconciling a pick equal to the (expanded) Fixed default clears any stored entry rather
-        // than persisting a redundant one.
-        var cache = new Dictionary<string, string> { ["9xyz"] = "/old/pick" };
-        Assert.True(DispatchCoordinator.ReconcileCache(cache, "9xyz", plan));
-        Assert.False(cache.ContainsKey("9xyz"));
-    }
-
-    // ── #461 Repository sub-directory match ──────────────────────────────────
-
-    private static TaskDetail TaskWithRepo(string repoValue, string id = "9xyz", string? customId = "ABC-12")
-        => new()
-        {
-            Id = id,
-            Name = "A task",
-            CustomId = customId,
-            CustomFields = [new CustomFieldItem("Repository", "text", JsonDocument.Parse($"\"{repoValue}\"").RootElement.Clone())],
-        };
-
-    private static Func<string, bool> Exists(params string[] dirs)
-    {
-        var set = new HashSet<string>(dirs, StringComparer.Ordinal);
-        return set.Contains;
-    }
-
-    private static Func<string, IReadOnlyList<string>> Children(params string[] names) => _ => names;
-
-    [Fact]
-    public void Plan_TaskDerived_RepoMatch_LaunchesInCheckoutAndSuppressesOutputSubdir()
-    {
-        var settings = new AgentDispatchSettings();
-        var matched = Path.Combine(BaseDir, "proj");
-
-        var plan = DispatchCoordinator.Plan(
-            settings, new DispatchRequest("go"), TaskWithRepo("proj"), BaseDir, Home,
-            Exists(matched), Children("proj"));
-
-        Assert.Equal(matched, plan.WorkingDir);
-        // Owner decision: no ./{custom-id} instruction inside a real checkout.
-        Assert.Null(plan.OutputSubdir);
-        // The base-dir-creation / mode flag is unchanged by a match (the matched dir already exists).
-        Assert.True(plan.UseTaskDerived);
-        Assert.Equal(matched, plan.RepositoryDir);
-        // resolvedDefault reflects the match so an equal explicit pick still reverts the #96 cache.
-        Assert.Equal(matched, plan.ResolvedDefault);
-    }
-
-    [Fact]
-    public void Plan_TaskDerived_RepoValuePresentButNoMatchingDir_IsByteIdenticalToToday()
-    {
-        var settings = new AgentDispatchSettings();
-
-        var plan = DispatchCoordinator.Plan(
-            settings, new DispatchRequest("go"), TaskWithRepo("proj"), BaseDir, Home,
-            Exists(), Children());
-
-        Assert.Equal(BaseDir, plan.WorkingDir);
-        Assert.Equal("ABC-12", plan.OutputSubdir); // subdir emitted exactly as today
-        Assert.True(plan.UseTaskDerived);
-        Assert.Null(plan.RepositoryDir);
-        Assert.Equal(BaseDir, plan.ResolvedDefault);
-    }
-
-    [Fact]
-    public void Plan_TaskDerived_RepoMatch_CaseInsensitiveChildScan()
-    {
-        var settings = new AgentDispatchSettings();
-        var onDisk = Path.Combine(BaseDir, "My-Proj");
-
-        // Exact-case `/work/my-proj` is absent (case-sensitive FS), but a `My-Proj` child exists.
-        var plan = DispatchCoordinator.Plan(
-            settings, new DispatchRequest("go"), TaskWithRepo("my-proj"), BaseDir, Home,
-            Exists(onDisk), Children("My-Proj"));
-
-        Assert.Equal(onDisk, plan.WorkingDir);
-        Assert.Equal(onDisk, plan.RepositoryDir);
-    }
-
-    [Fact]
-    public void Plan_ExplicitPickEqualToMatchedDir_RevertsTheCache()
-    {
-        var settings = new AgentDispatchSettings();
-        var matched = Path.Combine(BaseDir, "proj");
-
-        var plan = DispatchCoordinator.Plan(
-            settings, new DispatchRequest("go", WorkingDirectory: matched), TaskWithRepo("proj"), BaseDir, Home,
-            Exists(matched), Children("proj"));
-
-        Assert.Equal(matched, plan.WorkingDir);
-        Assert.False(plan.UseTaskDerived);     // an explicit pick, not the mode
-        Assert.Null(plan.OutputSubdir);
-        Assert.Null(plan.RepositoryDir);       // the pick, not the match, drove the dir → nothing to report
-        Assert.Equal(matched, plan.ResolvedDefault);
-
-        // So a pick equal to the (repo-matched) default clears any stored entry rather than persisting it.
-        var cache = new Dictionary<string, string> { ["9xyz"] = "/old/pick" };
-        Assert.True(DispatchCoordinator.ReconcileCache(cache, "9xyz", plan));
-        Assert.False(cache.ContainsKey("9xyz"));
-    }
-
-    [Fact]
-    public void Plan_HomeMode_WithRepositoryField_IsUnaffectedAndNeverProbes()
-    {
-        var settings = new AgentDispatchSettings { WorkingDirectory = AgentWorkingDirectory.Home };
-        var probed = false;
-
-        var plan = DispatchCoordinator.Plan(
-            settings, new DispatchRequest("go"), TaskWithRepo("proj"), BaseDir, Home,
-            _ => { probed = true; return true; },
-            _ => { probed = true; return []; });
-
-        Assert.Equal(Home, plan.WorkingDir);
-        Assert.Null(plan.RepositoryDir);
-        Assert.False(probed); // repo matching is task-derived-only
-    }
-
-    [Fact]
-    public void RepositoryMatchNote_NamesTheDirectory_OnlyWhenAMatchDroveTheWorkingDir()
-    {
-        var settings = new AgentDispatchSettings();
-        var matched = Path.Combine(BaseDir, "proj");
-
-        var withMatch = DispatchCoordinator.Plan(
-            settings, new DispatchRequest("go"), TaskWithRepo("proj"), BaseDir, Home,
-            Exists(matched), Children("proj"));
-        var note = DispatchCoordinator.RepositoryMatchNote(withMatch);
-        Assert.NotNull(note);
-        Assert.Contains(matched, note);
-        Assert.Contains("Repository", note);
-
-        var noMatch = DispatchCoordinator.Plan(
-            settings, new DispatchRequest("go"), TaskWithRepo("proj"), BaseDir, Home, Exists(), Children());
-        Assert.Null(DispatchCoordinator.RepositoryMatchNote(noMatch));
-    }
-
-    // ── #462 Windows Terminal profile match ──────────────────────────────────
-
-    // A settings.json whose only profile's startingDirectory is the base dir the task-derived launch
-    // resolves to, so the match keys off plan.WorkingDir.
     private static string WtSettings(string startingDir) => $$"""
         { "profiles": { "list": [ { "guid": "{proj}", "name": "Project", "startingDirectory": "{{startingDir}}" } ] } }
         """;
 
-    // A loader that fails the test if it is ever called — proves the settings.json is not read on the
-    // no-op paths (toggle off, one-off).
+    // A loader that fails the test if it is ever called — proves settings.json is not read on the no-op
+    // paths (toggle off, one-off).
     private static Func<string?> NeverLoad => () => throw new InvalidOperationException("settings.json must not be read here");
 
     [Fact]
@@ -330,7 +196,6 @@ public sealed class DispatchCoordinatorTests
 
         var plan = DispatchCoordinator.Plan(
             settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
-            directoryExists: Exists(), childDirectoryNames: Children(),
             loadWindowsTerminalSettings: () => WtSettings(BaseDir), expandEnvironment: s => s);
 
         Assert.Equal(BaseDir, plan.WorkingDir);
@@ -344,7 +209,6 @@ public sealed class DispatchCoordinatorTests
 
         var plan = DispatchCoordinator.Plan(
             settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
-            directoryExists: Exists(), childDirectoryNames: Children(),
             loadWindowsTerminalSettings: NeverLoad, expandEnvironment: s => s);
 
         Assert.Null(plan.WindowsTerminalProfile);
@@ -357,7 +221,6 @@ public sealed class DispatchCoordinatorTests
 
         var plan = DispatchCoordinator.Plan(
             settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
-            directoryExists: Exists(), childDirectoryNames: Children(),
             loadWindowsTerminalSettings: () => WtSettings("/somewhere/else"), expandEnvironment: s => s);
 
         Assert.Null(plan.WindowsTerminalProfile);
@@ -371,7 +234,6 @@ public sealed class DispatchCoordinatorTests
 
         var plan = DispatchCoordinator.Plan(
             settings, new DispatchRequest("go", SessionMode: AgentSessionMode.OneOff), TaskWith(), BaseDir, Home,
-            directoryExists: Exists(), childDirectoryNames: Children(),
             loadWindowsTerminalSettings: NeverLoad, expandEnvironment: s => s);
 
         Assert.True(plan.OneOff);
@@ -385,7 +247,6 @@ public sealed class DispatchCoordinatorTests
 
         var plan = DispatchCoordinator.Plan(
             settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
-            directoryExists: Exists(), childDirectoryNames: Children(),
             loadWindowsTerminalSettings: () => null, expandEnvironment: s => s);
 
         Assert.Null(plan.WindowsTerminalProfile);
@@ -398,7 +259,6 @@ public sealed class DispatchCoordinatorTests
 
         var matched = DispatchCoordinator.Plan(
             settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
-            directoryExists: Exists(), childDirectoryNames: Children(),
             loadWindowsTerminalSettings: () => WtSettings(BaseDir), expandEnvironment: s => s);
 
         // Only when the launch actually used a Windows Terminal host is the profile note emitted.
@@ -418,10 +278,11 @@ public sealed class DispatchCoordinatorTests
         // No profile matched → never a note, whatever launched.
         var noMatch = DispatchCoordinator.Plan(
             settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home,
-            directoryExists: Exists(), childDirectoryNames: Children(),
             loadWindowsTerminalSettings: () => null, expandEnvironment: s => s);
         Assert.Null(DispatchCoordinator.WindowsTerminalProfileNote(noMatch, "Windows Terminal"));
     }
+
+    // ── Cache reconciliation (#96), now with the host-supplied AutoDerivedDefault baseline ───────
 
     [Fact]
     public void ReconcileCache_StoresAnExplicitPick_ThenClearsOnRevertToDefault()
@@ -429,18 +290,59 @@ public sealed class DispatchCoordinatorTests
         var cache = new Dictionary<string, string>();
         var settings = new AgentDispatchSettings();
 
-        // First dispatch with an explicit, non-default pick → cache stores it (returns changed=true).
+        // First dispatch with an explicit, non-default pick → cache stores it (returns changed=true). The
+        // baseline (what the pre-fill would produce) is the task-derived {base}/{custom-id}.
         var pick = DispatchCoordinator.Plan(settings, new DispatchRequest("go", WorkingDirectory: "/tmp/custom"), TaskWith(), BaseDir, Home);
-        Assert.True(DispatchCoordinator.ReconcileCache(cache, "9xyz", pick));
+        var baseline = DispatchWorkingDirectoryPreFill.AutoDerivedDefault(TaskWith(), settings, BaseDir, Home, _ => false, _ => []);
+        Assert.True(DispatchCoordinator.ReconcileCache(cache, "9xyz", pick.ChosenDir, baseline));
         Assert.Equal("/tmp/custom", cache["9xyz"]);
 
         // Re-running the identical pick is a no-op (returns changed=false, entry unchanged).
-        Assert.False(DispatchCoordinator.ReconcileCache(cache, "9xyz", pick));
+        Assert.False(DispatchCoordinator.ReconcileCache(cache, "9xyz", pick.ChosenDir, baseline));
         Assert.Equal("/tmp/custom", cache["9xyz"]);
 
         // Reverting to the default (blank pick) clears the entry (returns changed=true).
         var reverted = DispatchCoordinator.Plan(settings, new DispatchRequest("go"), TaskWith(), BaseDir, Home);
-        Assert.True(DispatchCoordinator.ReconcileCache(cache, "9xyz", reverted));
+        Assert.True(DispatchCoordinator.ReconcileCache(cache, "9xyz", reverted.ChosenDir, baseline));
+        Assert.False(cache.ContainsKey("9xyz"));
+    }
+
+    [Fact]
+    public void ReconcileCache_AcceptingTheAutoDerivedPreFillUnchanged_WritesNoEntry()
+    {
+        var cache = new Dictionary<string, string>();
+        var settings = new AgentDispatchSettings();
+
+        // The pre-fill submits the {base}/{custom-id} dir; the reconciliation baseline is the same value,
+        // so accepting it unchanged clears rather than stores an entry (no cache poisoning on every dispatch).
+        var accepted = Path.Combine(BaseDir, "ABC-12");
+        var plan = DispatchCoordinator.Plan(settings, new DispatchRequest("go", WorkingDirectory: accepted), TaskWith(), BaseDir, Home);
+        var baseline = DispatchWorkingDirectoryPreFill.AutoDerivedDefault(TaskWith(), settings, BaseDir, Home, _ => false, _ => []);
+
+        Assert.Equal(accepted, baseline);
+        Assert.False(DispatchCoordinator.ReconcileCache(cache, "9xyz", plan.ChosenDir, baseline));
+        Assert.False(cache.ContainsKey("9xyz"));
+    }
+
+    [Fact]
+    public void ReconcileCache_FixedModeTildeExpandedPickEqualToDefault_RevertsTheCache()
+    {
+        var settings = new AgentDispatchSettings
+        {
+            WorkingDirectory = AgentWorkingDirectory.Fixed,
+            FixedWorkingDirectory = "~/fixed",
+        };
+        var expandedFixed = Path.Combine(Home, "fixed");
+
+        // An explicit "~/fixed" pick expands to the same absolute path the Fixed default resolves to, and
+        // AutoDerivedDefault ~-expands to match — so reconciling clears any stored entry.
+        var plan = DispatchCoordinator.Plan(settings, new DispatchRequest("go", WorkingDirectory: "~/fixed"), TaskWith(), BaseDir, Home);
+        var baseline = DispatchWorkingDirectoryPreFill.AutoDerivedDefault(TaskWith(), settings, BaseDir, Home);
+        Assert.Equal(expandedFixed, plan.ChosenDir);
+        Assert.Equal(expandedFixed, baseline);
+
+        var cache = new Dictionary<string, string> { ["9xyz"] = "/old/pick" };
+        Assert.True(DispatchCoordinator.ReconcileCache(cache, "9xyz", plan.ChosenDir, baseline));
         Assert.False(cache.ContainsKey("9xyz"));
     }
 }

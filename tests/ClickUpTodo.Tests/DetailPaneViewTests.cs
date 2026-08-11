@@ -1224,4 +1224,131 @@ public sealed class DetailPaneViewTests
         => string.Concat(cells.SelectMany(line => line)
             .Where(c => DetailPaneView.ClassifyCell(c) == style)
             .Select(c => c.Grapheme ?? ""));
+
+    // ── Mouse link hover feedback (#408) ─────────────────────────────────────────────────────────────
+    // The same real, laid-out pane and NewMouseEvent entry point the click tests use, driving bare motion
+    // reports (MouseFlags.PositionReport) instead of clicks. They pin the pure hover hit test — a report
+    // over a link yields that link's resolved target, off a link yields null — and the dedup that fires
+    // HoverTargetChanged only when the hovered link changes, never on a move within one link.
+
+    // A laid-out pane whose HoverTargetChanged values are captured in order.
+    private static (DetailPaneView Pane, List<string?> Targets) HoverablePane(
+        string body, int width = 60, int height = 10, string separator = Sep)
+    {
+        var pane = new DetailPaneView { Frame = new Rectangle(0, 0, width, height) };
+        pane.SetBody(body, separator);
+        Rewrap(pane);
+        var targets = new List<string?>();
+        pane.HoverTargetChanged += (_, target) => targets.Add(target);
+        return (pane, targets);
+    }
+
+    private static void Hover(DetailPaneView pane, Point at)
+        => pane.NewMouseEvent(new Mouse { Position = at, Flags = MouseFlags.PositionReport });
+
+    [Fact]
+    public void Hover_OverATaskLink_RaisesItsResolvedTarget()
+    {
+        var (pane, targets) = HoverablePane($"Related: {TaskUrl} ok");
+
+        Hover(pane, Locate(pane, TaskUrl));
+
+        Assert.Equal(TaskUrl, Assert.Single(targets));
+        // The pure hit test agrees with the event it raised.
+        Assert.Equal(TaskUrl, pane.HoverLinkTargetAt(Locate(pane, TaskUrl), pane.Viewport));
+    }
+
+    [Fact]
+    public void Hover_OverAWebLink_RaisesItsResolvedTarget()
+    {
+        var (pane, targets) = HoverablePane($"See {WebUrl} now");
+
+        Hover(pane, Locate(pane, WebUrl));
+
+        Assert.Equal(WebUrl, Assert.Single(targets));
+    }
+
+    [Fact]
+    public void Hover_OverAMarkdownLink_RaisesItsDestinationBehindTheVisibleText()
+    {
+        // Hovering the *visible text* of a [text](url) link names its real destination (#430), the same
+        // resolved target the OSC-8/underline path carries — not the prose the user sees.
+        var (pane, targets) = HoverablePane($"See [the docs]({WebUrl}) now");
+
+        Hover(pane, Locate(pane, "the docs"));
+
+        Assert.Equal(WebUrl, Assert.Single(targets));
+    }
+
+    [Fact]
+    public void Hover_OverProse_AfterALink_RaisesNull()
+    {
+        var (pane, targets) = HoverablePane($"Related: {TaskUrl} ok");
+
+        Hover(pane, Locate(pane, TaskUrl));   // on the link → its target
+        Hover(pane, new Point(0, 0));          // the 'R' of "Related:" — prose
+
+        Assert.Equal([TaskUrl, null], targets);
+    }
+
+    [Fact]
+    public void Hover_MovingWithinTheSameLink_RaisesOnlyOnce()
+    {
+        var (pane, targets) = HoverablePane($"Related: {TaskUrl} ok");
+        var at = Locate(pane, TaskUrl);
+
+        Hover(pane, at);                                    // enter the link
+        Hover(pane, at with { X = at.X + 3 });              // still inside it
+        Hover(pane, at with { X = at.X + 6 });              // still inside it
+
+        Assert.Equal(TaskUrl, Assert.Single(targets));      // one enter event, no repeats
+    }
+
+    [Fact]
+    public void Hover_ThenSetBodyReRender_ClearsTheStaleHint()
+    {
+        // A background refresh / activity-order toggle re-renders a pane in place (SetBody) while the
+        // pointer rests on a link. The hint on the status line no longer describes the re-wrapped body, so
+        // SetBody must raise a clear — and must not merely reset the dedup, which would swallow the next
+        // move-off and strand the stale hint.
+        var (pane, targets) = HoverablePane($"Related: {TaskUrl} ok");
+        Hover(pane, Locate(pane, TaskUrl));
+        Assert.Equal(TaskUrl, targets[^1]);          // hint shown
+
+        pane.SetBody($"Related: {TaskUrl} ok", Sep);  // re-render in place
+        Rewrap(pane);
+
+        Assert.Equal([TaskUrl, null], targets);       // the stale hint was cleared, not stranded
+    }
+
+    [Fact]
+    public void HoverLinkTargetAt_RightOfTheText_IsNotALink()
+    {
+        var (pane, _) = HoverablePane($"Related: {TaskUrl}");
+        var linkRow = Locate(pane, TaskUrl).Y;
+        var pastEnd = pane.GetColumnsWidth(pane.GetLine(linkRow));
+
+        Assert.Null(pane.HoverLinkTargetAt(new Point(pastEnd, linkRow), pane.Viewport));
+        Assert.Null(pane.HoverLinkTargetAt(new Point(-1, linkRow), pane.Viewport));
+    }
+
+    [Fact]
+    public void HoverLinkTargetAt_BelowTheBody_IsNotALink()
+    {
+        var (pane, _) = HoverablePane($"Related: {TaskUrl}");
+
+        // A row past the last wrapped line (the #318 "under a short body" clamp) resolves to no link.
+        Assert.Null(pane.HoverLinkTargetAt(new Point(0, pane.Lines + 2), pane.Viewport));
+    }
+
+    [Fact]
+    public void HoverLinkTargetAt_WithAWideRuneBeforeTheLink_MapsTheColumnToTheRightCell()
+    {
+        // An emoji is two columns wide, so a naive column==cell-index mapping would read the link one cell
+        // early. The emoji's own column is not a link; the URL's column resolves to the URL.
+        var (pane, _) = HoverablePane($"\U0001F600 {WebUrl}");
+
+        Assert.Null(pane.HoverLinkTargetAt(new Point(0, 0), pane.Viewport));           // the emoji
+        Assert.Equal(WebUrl, pane.HoverLinkTargetAt(Locate(pane, WebUrl), pane.Viewport));
+    }
 }
