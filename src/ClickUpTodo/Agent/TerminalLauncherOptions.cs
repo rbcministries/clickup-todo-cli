@@ -17,11 +17,12 @@ public enum PreferredTerminal
 
 /// <summary>
 /// Where an interactive dispatch's <c>claude</c> session opens (issue #255): a
-/// <see cref="NewWindow"/> (the historical default) or a <see cref="NewTab"/> of the terminal the
-/// app is already running in, where the host supports it. New-tab is best-effort and detection-gated
-/// per emulator; when the host isn't a supported/detected one it falls back to a new window. It only
-/// applies to interactive sessions — a one-off <c>claude -p</c> runs through the background runner
-/// with no terminal, so "new tab" is meaningless there.
+/// <see cref="NewWindow"/> (the historical default), a <see cref="NewTab"/> of the terminal the
+/// app is already running in, or a <see cref="SplitPane"/> beside it (#502), where the host supports it.
+/// The in-place destinations are best-effort and detection-gated per emulator; when the host can't honour
+/// the request it degrades down the split → tab → window ladder. All apply to interactive sessions only —
+/// a one-off <c>claude -p</c> runs through the background runner with no terminal, so an in-place
+/// location is meaningless there.
 /// </summary>
 public enum LaunchLocation
 {
@@ -30,6 +31,13 @@ public enum LaunchLocation
 
     /// <summary>Open the session in a new tab of the current terminal where supported, else a window.</summary>
     NewTab,
+
+    /// <summary>
+    /// Open the session in a split pane beside the current one (#502), where the host supports it
+    /// (Windows Terminal, tmux, iTerm2, WezTerm, kitty, Zellij). Degrades down the split → tab → window
+    /// ladder on a host with no scriptable split. Interactive-only, like <see cref="NewTab"/>.
+    /// </summary>
+    SplitPane,
 }
 
 /// <summary>
