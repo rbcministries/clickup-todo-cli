@@ -243,11 +243,32 @@ public static class TerminalCommandPlanner
     /// then the trailing <c>pwsh -NoExit -Command &lt;command&gt;</c> that WT runs <b>instead of</b> the
     /// profile's own commandline. A blank/null <paramref name="profile"/> omits <c>-p</c> entirely, so
     /// the argv is byte-identical to the pre-#462 launch.
+    ///
+    /// Every emitted argument is run through <see cref="EscapeWtDelimiter"/> (#534): <c>;</c> is Windows
+    /// Terminal's own subcommand delimiter and WT splits on it <b>inside</b> arguments (quoting doesn't
+    /// protect it), so an unescaped <c>;</c> — from the <c>Set-Location …;</c> working-directory prefix,
+    /// or from a <c>;</c> in <c>ClaudeExecutable</c>/<c>ExtraArgs</c>/a matched profile name — would tear
+    /// the command in two and open a bogus second tab. WT's documented escape is <c>\;</c>, which it
+    /// unescapes before handing the commandline to the profile.
     /// </summary>
     private static string[] WtArgs(IReadOnlyList<string> prefix, string? profile, string command)
-        => string.IsNullOrWhiteSpace(profile)
+    {
+        string[] args = string.IsNullOrWhiteSpace(profile)
             ? [.. prefix, "pwsh", "-NoExit", "-Command", command]
             : [.. prefix, "-p", profile, "pwsh", "-NoExit", "-Command", command];
+        for (var i = 0; i < args.Length; i++)
+            args[i] = EscapeWtDelimiter(args[i]);
+        return args;
+    }
+
+    /// <summary>
+    /// Escape Windows Terminal's subcommand delimiter in a single <c>wt</c> argument: every <c>;</c>
+    /// becomes <c>\;</c> (WT's documented escape). A no-op on arguments with no <c>;</c> — including the
+    /// structural WT tokens (<c>new-tab</c>, <c>-w</c>, <c>-p</c>, …), which never contain one — so it is
+    /// safe to apply to every emitted argument. Only <c>;</c> is touched: backslashes in Windows paths are
+    /// left alone, as WT does not treat <c>\</c> as a general escape elsewhere.
+    /// </summary>
+    private static string EscapeWtDelimiter(string arg) => arg.Replace(";", "\\;");
 
     /// <summary>The PowerShell host to run inside the cmd window — pwsh preferred, else powershell; null if neither.</summary>
     private static string? PwshHost(Func<string, bool> exists) =>

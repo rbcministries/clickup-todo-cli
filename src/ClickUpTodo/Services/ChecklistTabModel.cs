@@ -101,6 +101,79 @@ public static class ChecklistTabModel
         return Math.Clamp(oldIndex, 0, newRows.Count - 1);
     }
 
+    /// <summary>
+    /// The index to select after deleting the item at <paramref name="deletedIndex"/> (E, #458): prefer
+    /// the next item row in the same checklist (the sibling/next row immediately after the deleted item's
+    /// subtree), else the previous item row in the same checklist, else that checklist's header row — so a
+    /// delete lands the cursor deterministically on a neighbour rather than jumping checklists or off the
+    /// end. Falls back to <see cref="AnchorSelection"/>'s clamp when none of those survive in
+    /// <paramref name="newRows"/> (or the index is out of range). Pure and unit-tested.
+    /// </summary>
+    public static int SelectAfterDelete(
+        IReadOnlyList<ChecklistRow> oldRows, int deletedIndex, IReadOnlyList<ChecklistRow> newRows)
+    {
+        if (newRows.Count == 0)
+            return 0;
+        if (deletedIndex < 0 || deletedIndex >= oldRows.Count)
+            return AnchorSelection(oldRows, deletedIndex, newRows);
+
+        var deleted = oldRows[deletedIndex];
+        var checklistId = deleted.ChecklistId;
+
+        // The deleted subtree is contiguous: the deleted row plus the following rows deeper than it.
+        var subtreeEnd = deletedIndex + 1;
+        while (subtreeEnd < oldRows.Count && oldRows[subtreeEnd].Depth > deleted.Depth)
+            subtreeEnd++;
+
+        // 1) Next item row in the same checklist, immediately after the subtree.
+        if (subtreeEnd < oldRows.Count
+            && !oldRows[subtreeEnd].IsHeader
+            && string.Equals(oldRows[subtreeEnd].ChecklistId, checklistId, StringComparison.Ordinal))
+        {
+            var idx = IndexOfRow(newRows, oldRows[subtreeEnd]);
+            if (idx >= 0)
+                return idx;
+        }
+
+        // 2) Previous item row in the same checklist (stop at this checklist's header).
+        for (var i = deletedIndex - 1; i >= 0; i--)
+        {
+            var row = oldRows[i];
+            if (!string.Equals(row.ChecklistId, checklistId, StringComparison.Ordinal))
+                continue;
+            if (row.IsHeader)
+                break; // reached our header without a prior item — fall through to it.
+            var idx = IndexOfRow(newRows, row);
+            if (idx >= 0)
+                return idx;
+        }
+
+        // 3) The checklist's header row.
+        for (var i = 0; i < oldRows.Count; i++)
+        {
+            if (oldRows[i].IsHeader
+                && string.Equals(oldRows[i].ChecklistId, checklistId, StringComparison.Ordinal))
+            {
+                var idx = IndexOfRow(newRows, oldRows[i]);
+                if (idx >= 0)
+                    return idx;
+            }
+        }
+
+        // 4) Nothing matched — clamp the old index into the new range.
+        return AnchorSelection(oldRows, deletedIndex, newRows);
+    }
+
+    /// <summary>The index of the first row in <paramref name="rows"/> with the same identity as
+    /// <paramref name="anchor"/> (<see cref="SameRow"/>), or -1.</summary>
+    private static int IndexOfRow(IReadOnlyList<ChecklistRow> rows, ChecklistRow anchor)
+    {
+        for (var i = 0; i < rows.Count; i++)
+            if (SameRow(rows[i], anchor))
+                return i;
+        return -1;
+    }
+
     /// <summary>Row identity for selection anchoring: same kind, same checklist, same item (an ordinal
     /// id compare; a header carries a null item id, so two headers of the same checklist match).</summary>
     private static bool SameRow(ChecklistRow a, ChecklistRow b)

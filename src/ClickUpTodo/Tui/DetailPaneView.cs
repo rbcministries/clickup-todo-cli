@@ -3,6 +3,7 @@ using ClickUpTodo.Configuration;
 using Terminal.Gui.App;
 using Terminal.Gui.Drawing;
 using Terminal.Gui.Input;
+using Terminal.Gui.Text;
 using Terminal.Gui.ViewBase;
 using Terminal.Gui.Views;
 using Attribute = Terminal.Gui.Drawing.Attribute;
@@ -74,12 +75,14 @@ public sealed class DetailPaneView : TextView
 
     /// <summary>
     /// Tag applied to the cells of the <b>keyboard-focused</b> link (#319) — the one <c>Tab</c>/<c>Shift+Tab</c>
-    /// last stepped to. A pure sentinel like the kind markers: <see cref="OnDrawReadOnlyColor"/> re-resolves
-    /// the real attribute (the theme's <see cref="VisualRole.Focus"/> + an underline) at draw time. Its
-    /// colours differ from both link kind markers (so the draw path can tell "focused" from "task"/"web")
-    /// and its background is opaque (so it never trips the separator branch). Because #317 underlines
-    /// <em>every</em> link, the focus indicator has to be additional emphasis (a focus/reverse fill), not the
-    /// underline itself.
+    /// last stepped to. A pure sentinel: it lets <see cref="ClassifyCell"/> / <see cref="EnsureFocusedLinkVisible"/>
+    /// locate the focused link's rows (for scroll-into-view) on the source (first) row, where word wrap leaves
+    /// the tag aligned. Its colours differ from both link kind markers and its background is opaque (so it
+    /// never trips the separator branch). The <em>drawn</em> focus emphasis is no longer read from this tag:
+    /// since #527, <see cref="OnDrawReadOnlyColor"/> recomputes it from the source-line span
+    /// (<see cref="ClassifyRowFromSource"/>) so the cue is offset-correct on a continuation row that word wrap
+    /// would misalign the tag on. Because #317 underlines <em>every</em> link, the focus indicator is
+    /// additional emphasis (the theme's <see cref="VisualRole.Focus"/> role + underline), not the underline itself.
     /// </summary>
     public static readonly Attribute FocusedLinkMarker =
         new(new Color(ColorName16.Black), new Color(ColorName16.Gray), TextStyle.Underline);
@@ -109,7 +112,10 @@ public sealed class DetailPaneView : TextView
     }
 
     /// <summary>Classifies a loaded <paramref name="cell"/> by the tag <see cref="BuildCells"/> applied —
-    /// the single mapping both the draw override and the unit tests read, so they can't drift.</summary>
+    /// the mapping <see cref="EnsureFocusedLinkVisible"/> (scroll-into-view) and the unit tests read. The draw
+    /// override (<see cref="OnDrawReadOnlyColor"/>) no longer reads it: since #527 it takes the separator from
+    /// a raw <see cref="Color.None"/> background test and the link/focus cues from <see cref="LinkStyleAt"/>
+    /// (the source-map classification), so they stay offset-correct on a wrapped continuation row.</summary>
     public static DetailCellStyle ClassifyCell(Cell cell)
     {
         if (cell.Attribute is not { } a)
@@ -175,6 +181,16 @@ public sealed class DetailPaneView : TextView
     public event EventHandler<LinkActivationRequest>? LinkActivationRequested;
 
     /// <summary>
+    /// Raised when the link the mouse is hovering over changes (#408): the argument is that link's
+    /// <b>resolved</b> target URL (a bare link's own URL; a markdown link's destination behind its visible
+    /// text), or <see langword="null"/> when the pointer moved off every link (onto prose, empty space, or
+    /// out of the pane). Fires <b>only on a change</b> — a move within one link raises nothing — so the
+    /// hint surface it drives repaints only when crossing a link boundary, never on every motion report.
+    /// The screen turns this into a status-line hint; the pane never restyles a cell for hover.
+    /// </summary>
+    public event EventHandler<string?>? HoverTargetChanged;
+
+    /// <summary>
     /// Where a <c>Ctrl</c>+click on a <b>task</b> link goes (#320); <c>Ctrl+Shift</c>+click does the
     /// other one. The screen sets this from the persisted <see cref="DetailViewSettings.TaskLinkCtrlClick"/>.
     /// Default <see cref="TaskLinkCtrlClickDestination.Browser"/> — the fixed behaviour #318 shipped, so a
@@ -200,6 +216,11 @@ public sealed class DetailPaneView : TextView
     // reload without the caller re-supplying it.
     private string _body = "";
 
+    // The last hover target raised through HoverTargetChanged (#408), so a motion report that stays on the
+    // same link (or off every link) raises nothing — the dedup that keeps hover off the per-keypress cost.
+    // Reset by SetBody: a new body re-wraps, so the previous target no longer describes what is on screen.
+    private string? _lastHoverTarget;
+
     // Every clickable link in the current body, in document order — the ordered set Tab/Shift+Tab step
     // through (#319). Rebuilt on each SetBody; the mouse path (#318) still re-extracts per clicked line,
     // so this table is only the keyboard traversal order, never the click hit test.
@@ -213,6 +234,10 @@ public sealed class DetailPaneView : TextView
     {
         ReadOnly = true;
         WordWrap = true;
+        // Opt into bare motion reports (#408) so OnMouseEvent sees MouseFlags.PositionReport events and can
+        // name the hovered link on the status line. The ansi driver already enables any-motion tracking
+        // (?1003h) at boot, so this consumes events already arriving — it does not add terminal traffic.
+        MousePositionTracking = true;
     }
 
     /// <summary>The number of clickable links in the current body (the count Tab/Shift+Tab cycle through).</summary>
@@ -236,6 +261,12 @@ public sealed class DetailPaneView : TextView
         _body = body;
         _paneLinks = ExtractPaneLinks(body, separator);
         _focusedLinkIndex = LinkFocus.None;
+        // Clear any hover hint (#408): the re-wrap can move or remove every link, so a hint already on the
+        // status line no longer describes the screen. Route through UpdateHoverTarget so it (a) clears the
+        // footer now via HoverTargetChanged and (b) keeps the dedup coherent — a bare reset to null would
+        // make the *next* move-off match the remembered value and get swallowed, stranding the stale hint.
+        // A no-op when nothing was hovered (the common refresh case) and before any subscriber attaches.
+        UpdateHoverTarget(null);
         // A new body re-wraps into fresh row lists, so the reference-keyed source map (#443) is stale — drop
         // it so it doesn't retain the previous body's rows (the draw path rebuilds it on the next miss).
         _rowSourceMap = null;
@@ -302,6 +333,10 @@ public sealed class DetailPaneView : TextView
             ? _paneLinks[_focusedLinkIndex]
             : (PaneLink?)null;
         MoveHome();
+        // A focus change re-wraps into fresh row lists, so the reference-keyed source map (#443/#527) is
+        // stale — drop it explicitly (as SetBody does) rather than relying on the draw path noticing new row
+        // references, so the invalidation is intentional and the focus cue reads the new _focusedLinkIndex.
+        _rowSourceMap = null;
         Load(BuildCells(_body, _separator, focused));
         InheritsPreviousAttribute = false;
         // TextView.Load leaves the model unwrapped until a draw pass re-wraps it; force that pass now so the
@@ -596,9 +631,17 @@ public sealed class DetailPaneView : TextView
     /// <see langword="null"/>. Each cell's source offset is <paramref name="startOffset"/> plus the row's own
     /// accumulated grapheme length (a cell is one grapheme, which may be several UTF-16 chars), the same
     /// accounting <see cref="ClassifyRow"/> uses. Pure and Terminal.Gui-draw-free, so it is unit-tested.
+    /// <para>
+    /// When <paramref name="focusedSpan"/> is the keyboard-focused link's span on this source line (#319),
+    /// its covering cells are classified <see cref="DetailCellStyle.FocusedLink"/> instead of their kind, so
+    /// the focus emphasis lands on exactly the focused link's cells on <b>every</b> continuation row it wraps
+    /// onto (#527) — the residual the tag-driven cue (which word wrap misaligns) left after #443. The URL is
+    /// still emitted, so OSC-8 is unaffected. <see langword="null"/> (the default) means no link is focused
+    /// on this line and every link keeps its kind style.
+    /// </para>
     /// </summary>
     public static (DetailCellStyle[] Styles, string?[] Urls) ClassifyRowFromSource(
-        IReadOnlyList<Cell> row, string sourceLine, int startOffset)
+        IReadOnlyList<Cell> row, string sourceLine, int startOffset, LinkSpan? focusedSpan = null)
     {
         var styles = new DetailCellStyle[row.Count];
         var urls = new string?[row.Count];
@@ -628,7 +671,9 @@ public sealed class DetailPaneView : TextView
                 break;
             if (off >= links[li].Start && off < links[li].End)
             {
-                styles[i] = links[li].Kind == LinkKind.Task ? DetailCellStyle.TaskLink : DetailCellStyle.WebLink;
+                styles[i] = focusedSpan is { } fs && links[li].Equals(fs)
+                    ? DetailCellStyle.FocusedLink
+                    : links[li].Kind == LinkKind.Task ? DetailCellStyle.TaskLink : DetailCellStyle.WebLink;
                 urls[i] = links[li].Url;
             }
         }
@@ -667,14 +712,29 @@ public sealed class DetailPaneView : TextView
         if (ReferenceEquals(_linkRow, line) && _linkRowStyles is { } s && s.Length == line.Count && _linkRowUrls is not null)
             return;
 
-        // Prefer the source-line mapping (#443) so a link word wrap split across rows is styled contiguously;
-        // fall back to the per-row re-extraction (#413/#430) for any row that doesn't reconcile — that is
-        // exactly today's behaviour, so a reconciliation miss never regresses.
+        // Prefer the source-line mapping (#443) so a link word wrap split across rows is styled contiguously
+        // — and, via the focused span (#527), so the keyboard focus cue lands on the right cells on every
+        // continuation row too. Fall back to the per-row re-extraction (#413/#430) for any row that doesn't
+        // reconcile — that is exactly today's behaviour, so a reconciliation miss never regresses.
         if (TryGetRowSource(line) is { SourceLineIndex: >= 0 } src && src.SourceLineIndex < _lines.Length)
-            (_linkRowStyles, _linkRowUrls) = ClassifyRowFromSource(line, _lines[src.SourceLineIndex], src.StartOffset);
+            (_linkRowStyles, _linkRowUrls) = ClassifyRowFromSource(
+                line, _lines[src.SourceLineIndex], src.StartOffset, FocusedSpanOnLine(src.SourceLineIndex));
         else
             (_linkRowStyles, _linkRowUrls) = ClassifyRow(line);
         _linkRow = line;
+    }
+
+    // The keyboard-focused link's span (#319) when it lies on the given source line, else null. Passed to
+    // ClassifyRowFromSource so the focus cue is styled from the source-line span (#527) on every continuation
+    // row the focused link wraps onto — instead of the FocusedLinkMarker tag, which word wrap misaligns. A
+    // focus change reloads (RenderFocusedLink), minting fresh row references, so the per-row cache recomputes
+    // and re-reads _focusedLinkIndex here on the next draw.
+    private LinkSpan? FocusedSpanOnLine(int sourceLineIndex)
+    {
+        if (_focusedLinkIndex < 0 || _focusedLinkIndex >= _paneLinks.Count)
+            return null;
+        var focused = _paneLinks[_focusedLinkIndex];
+        return focused.LineIndex == sourceLineIndex ? focused.Span : null;
     }
 
     // The source-line origin of a drawn row, from the reference-keyed map (built once from GetAllLines()).
@@ -758,6 +818,14 @@ public sealed class DetailPaneView : TextView
     /// </summary>
     protected override bool OnMouseEvent(Mouse mouseEvent)
     {
+        // Hover feedback (#408): a bare motion report (button-less move, MouseFlags.PositionReport) names the
+        // link under the pointer on the status line. The target is read from the draw path's own per-row
+        // extraction (RowLinkUrls) — no caret move, no viewport nudge, no cell restyle — and deduped so only
+        // a change fires HoverTargetChanged. This never handles the event: it always falls through to the
+        // click/base logic below, so a click that also carries a position is unaffected.
+        if (mouseEvent.Flags.HasFlag(MouseFlags.PositionReport) && mouseEvent.Position is { } hoverPosition)
+            UpdateHoverTarget(HoverLinkTargetAt(hoverPosition, Viewport));
+
         // Only a plain, Ctrl, or Ctrl+Shift left click activates. Every other flag combination — a wheel,
         // a press/release (drag), a double- or triple-click (each its own distinct flag), an Alt-modified
         // click, and a *bare* Shift click — falls through to the base view untouched. Refusing those is
@@ -786,6 +854,84 @@ public sealed class DetailPaneView : TextView
             this, new LinkActivationRequest(span, LinkActivator.Resolve(span, ctrl, shift, TaskLinkCtrlClickDestination)));
         mouseEvent.Handled = true;
         return true;
+    }
+
+    /// <summary>
+    /// Raises <see cref="HoverTargetChanged"/> when <paramref name="target"/> differs from the last value
+    /// raised — the dedup that keeps hover off the per-keypress redraw cost: a motion report that stays on
+    /// the same link (or off every link) raises nothing, so the hint surface repaints only when the hovered
+    /// link changes. <paramref name="target"/> is <c>null</c> when the pointer is not on a link.
+    /// </summary>
+    private void UpdateHoverTarget(string? target)
+    {
+        if (string.Equals(target, _lastHoverTarget, StringComparison.Ordinal))
+            return;
+        _lastHoverTarget = target;
+        HoverTargetChanged?.Invoke(this, target);
+    }
+
+    /// <summary>
+    /// The <b>resolved</b> target URL of the link under a viewport-relative point (#408), or <c>null</c> when
+    /// the point is not on a link. Pure of side effects — unlike the click path it does <em>not</em> move the
+    /// base view's caret or nudge the viewport, so it is safe to run on every motion report. It reuses the
+    /// draw path's own per-row link extraction (<see cref="LinkUrlForCell"/> → <see cref="RowLinkUrls"/> →
+    /// <see cref="ClassifyRow"/>) against the already-wrapped display row Terminal.Gui hands the draw path,
+    /// so it adds no word-wrap maths of its own and can't disagree with what the pane drew.
+    /// <paramref name="viewport"/> is the pane's current <see cref="Terminal.Gui.ViewBase.View.Viewport"/>.
+    /// </summary>
+    public string? HoverLinkTargetAt(Point position, Rectangle viewport)
+    {
+        // Below the last wrapped row (the #318 "under a short body" clamp): Lines is the wrapped row count.
+        var displayRow = viewport.Y + position.Y;
+        if (displayRow < 0 || displayRow >= Lines)
+            return null;
+
+        var row = GetLine(displayRow);
+        // Right of the row's rendered text (the #318 "past the text" clamp), and the column→cell mapping in
+        // one pass. Deliberately ignores viewport.X: the pane is word-wrapped, so content never scrolls
+        // horizontally and a report's column is its column in the row (same rationale as LinkAt's guard 2).
+        var cell = CellIndexAtColumn(row, position.X);
+        if (cell < 0)
+            return null;
+
+        // Reuse the draw path's reference-keyed per-row cache (GetLine hands back the same list reference
+        // the draw path caches), so a motion report over a row costs a dictionary hit, not a re-extraction.
+        return LinkUrlAt(row, cell);
+    }
+
+    /// <summary>
+    /// The index of the cell occupying <paramref name="column"/> in a laid-out display <paramref name="row"/>,
+    /// or <c>-1</c> when <paramref name="column"/> is left of 0 or right of the row's rendered width. Walks
+    /// per-grapheme column widths so a row carrying wide runes maps a reported column to the correct cell
+    /// (identity on an ASCII run such as a URL). Mirrors the column measure <see cref="LinkAt"/> guards with.
+    /// </summary>
+    private static int CellIndexAtColumn(List<Cell> row, int column)
+    {
+        if (column < 0)
+            return -1;
+        var col = 0;
+        for (var i = 0; i < row.Count; i++)
+        {
+            // The cell's own column width, straight off its grapheme (no per-cell List allocation) — the
+            // same GetColumns() measure ContextualFooter fits the help line with.
+            var width = (row[i].Grapheme ?? string.Empty).GetColumns();
+            if (width <= 0)
+                width = 1; // defensive: never stall on a zero-width cell
+            if (column < col + width)
+                return i;
+            col += width;
+        }
+        return -1;
+    }
+
+    /// <inheritdoc/>
+    protected override void OnMouseLeave()
+    {
+        // The pointer left the pane entirely (onto another view): clear any hover hint it was showing.
+        // A move that merely leaves a link but stays in the pane is handled by the motion arm returning
+        // null; this covers the case where no further motion report reaches this pane at all (#408).
+        UpdateHoverTarget(null);
+        base.OnMouseLeave();
     }
 
     /// <summary>
@@ -860,43 +1006,37 @@ public sealed class DetailPaneView : TextView
 
         if (idxCol >= 0 && idxCol < line.Count)
         {
-            // The separator and focused-link cues are tag-driven. A separator row is tagged uniformly, so
-            // word wrap leaves its tag correct; the focused-link tag (#319) is only reliable on a source
-            // (non-wrapped-continuation) row — the same wrap/attribute misalignment #413 works around for
-            // link kind can move it on a continuation row, a residual limit tracked in #443.
-            if (line[idxCol].Attribute is { } attr)
+            // The separator cue stays tag-driven: a separator row is tagged uniformly, so word wrap leaves
+            // its tag correct. A separator cell keeps the pane's read-only foreground for the rule glyph but
+            // drops the background to Color.None so the driver emits CSI 49m and the terminal's own default /
+            // transparent background shows through instead of the grey read-only fill.
+            if (line[idxCol].Attribute is { } attr && attr.Background == Color.None)
             {
-                // A separator cell: keep the pane's read-only foreground for the rule glyph, but drop the
-                // background to Color.None so the driver emits CSI 49m and the terminal's own default /
-                // transparent background shows through instead of the grey read-only fill.
-                if (attr.Background == Color.None)
-                {
-                    var readOnly = GetAttributeForRole(VisualRole.ReadOnly);
-                    SetAttribute(new Attribute(readOnly.Foreground, Color.None, readOnly.Style));
-                    return;
-                }
-
-                // The keyboard-focused link (#319): draw it in the theme's Focus role (a reverse-video-style
-                // emphasis) plus an underline, so it stands out from the always-on link underline (#317
-                // underlines every link, so the focus cue must be additional emphasis, not the underline).
-                // Re-resolved from the live role each draw, so it stays theme-aware like the kind markers.
-                if (attr.Equals(FocusedLinkMarker))
-                {
-                    var focus = GetAttributeForRole(VisualRole.Focus);
-                    SetAttribute(new Attribute(focus.Foreground, focus.Background, focus.Style | TextStyle.Underline));
-                    return;
-                }
+                var readOnly = GetAttributeForRole(VisualRole.ReadOnly);
+                SetAttribute(new Attribute(readOnly.Foreground, Color.None, readOnly.Style));
+                return;
             }
 
-            // A link cell (#317): keep the pane's live read-only background so the link sits in the pane
-            // like surrounding text, but recolour the foreground (blue for a web link, the read-only
-            // foreground for a task link) and add an underline. The kind is recomputed from the row's own
-            // graphemes (#413) rather than the per-cell tag, which word wrap misaligns on continuation rows
-            // — so this is deliberately NOT gated on the cell's own (possibly misaligned or null) attribute.
-            // Re-resolving from the live role keeps the link theme-aware.
+            // Both the link kind (#317/#413) and the keyboard-focus cue (#319/#527) are recomputed from the
+            // row's SOURCE-line spans (#443, via LinkStyleAt) rather than the per-cell tags, which word wrap
+            // misaligns on a continuation row — so the focus emphasis lands on exactly the focused link's
+            // cells even when the link itself wraps. Deliberately NOT gated on the cell's own (possibly
+            // misaligned or null) attribute. Re-resolving from the live role each draw keeps it theme-aware.
             var style = LinkStyleAt(line, idxCol);
+            if (style == DetailCellStyle.FocusedLink)
+            {
+                // The keyboard-focused link (#319): the theme's Focus role (a reverse-video-style emphasis)
+                // plus an underline, so it stands out from the always-on link underline (#317 underlines
+                // every link, so the focus cue must be additional emphasis, not the underline itself).
+                var focus = GetAttributeForRole(VisualRole.Focus);
+                SetAttribute(new Attribute(focus.Foreground, focus.Background, focus.Style | TextStyle.Underline));
+                return;
+            }
             if (style is DetailCellStyle.TaskLink or DetailCellStyle.WebLink)
             {
+                // A link cell (#317): keep the pane's live read-only background so the link sits in the pane
+                // like surrounding text, but recolour the foreground (blue for a web link, the read-only
+                // foreground for a task link) and add an underline.
                 var readOnly = GetAttributeForRole(VisualRole.ReadOnly);
                 var foreground = style == DetailCellStyle.WebLink ? WebLinkForeground : readOnly.Foreground;
                 SetAttribute(new Attribute(foreground, readOnly.Background, readOnly.Style | TextStyle.Underline));

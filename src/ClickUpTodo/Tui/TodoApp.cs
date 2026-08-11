@@ -1477,6 +1477,7 @@ public sealed class TodoApp
         screen.Closed += handler;
         // The shared footer + status line replace each screen's hand-rolled hint Label (#103).
         screen.FlashRequested += OnScreenFlash;
+        screen.HoverHintChanged += OnScreenHoverHint;
         screen.HelpRequested += OnScreenHelpRequested;
 
         _window.Add(screen);
@@ -1494,7 +1495,10 @@ public sealed class TodoApp
             return;
 
         screen.FlashRequested -= OnScreenFlash;
+        screen.HoverHintChanged -= OnScreenHoverHint;
         screen.HelpRequested -= OnScreenHelpRequested;
+        // A screen closing while its last hover hint is on the status line would leave it stranded; clear it.
+        _footer.SetHoverHint(null);
         _window.Remove(screen);
         // Terminal.Gui 2.4.10 can throw from View/Tabs.Dispose while tearing down a view's subviews
         // (disposing a child mutates the parent's subview list mid-iteration → IndexOutOfRange; hit
@@ -1569,6 +1573,10 @@ public sealed class TodoApp
 
     /// <summary>Routes a screen's transient message (e.g. a validation error) to the status line.</summary>
     private void OnScreenFlash(object? sender, string message) => Flash(message);
+
+    /// <summary>Routes a screen's hover hint (#408) to the footer's low-precedence hover slot: a non-null
+    /// hint shows over the steady status, null restores it. A flash still outranks it.</summary>
+    private void OnScreenHoverHint(object? sender, string? hint) => _footer.SetHoverHint(hint);
 
     /// <summary>
     /// F1 from a screen opens Help stacked over it (Esc returns to the underlying screen). Ignored when
@@ -2037,10 +2045,12 @@ public sealed class TodoApp
                         // Seed the per-dispatch launch-location toggle (#275) from the persisted default
                         // (#255/#274); the user can override it per dispatch without changing the default.
                         defaultLaunchLocation: _config.AgentDispatch.LaunchLocation,
-                        // Pre-fill the Dispatch working-dir field from the per-task cache (#96) — the
-                        // last explicit dir dispatched from this task, or blank if none. Read live on
-                        // each pane open so a dispatch within this same open screen is reflected on reopen.
-                        workingDirectoryPreFill: () => DispatchWorkingDirectoryCache.PreFill(_config.TaskWorkingDirectories, detail.Id),
+                        // Pre-fill the Dispatch working-dir field (#533): the #96 per-task cache, else a
+                        // {base}/{Repository} match (#461), else the per-task {base}/{custom-id} dir (#98) —
+                        // in task-derived mode; blank in Home/Fixed. Read live on each pane open so a
+                        // dispatch within this same open screen is reflected on reopen.
+                        workingDirectoryPreFill: () => DispatchWorkingDirectoryPreFill.PreFill(
+                            _config.TaskWorkingDirectories, detail.Id, detail, _config.AgentDispatch, detailBaseDir),
                         // Ctrl+N (#216) composes + posts a plain-text comment; the screen owns the
                         // optimistic append/revert, the host owns the off-thread ClickUp write.
                         postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(resolvedId, text, ct),
@@ -2070,7 +2080,13 @@ public sealed class TodoApp
                         memberTopFrequent: (n, exclude) => MentionMemberProjection.ToMembers(_assignees.TopMostFrequent(n, exclude)),
                         // Space on the Checklists tab (D, #457): toggle the item's resolved state on ClickUp.
                         setChecklistResolvedAsync: (checklistId, itemId, resolved, ct) =>
-                            _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct));
+                            _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct),
+                        createChecklistItemAsync: (checklistId, name, ct) =>
+                            _tasks.CreateChecklistItemAsync(checklistId, name, ct),
+                        renameChecklistItemAsync: (checklistId, itemId, name, ct) =>
+                            _tasks.RenameChecklistItemAsync(checklistId, itemId, name, ct),
+                        deleteChecklistItemAsync: (checklistId, itemId, ct) =>
+                            _tasks.DeleteChecklistItemAsync(checklistId, itemId, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the
@@ -2344,11 +2360,15 @@ public sealed class TodoApp
         // identically; only the Flash / ShowScreen / guard seams differ.
         var agent = _agent;
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
         var plan = DispatchCoordinator.Plan(_config.AgentDispatch, request, detail, _config.DefaultWorkingDirectory, home);
 
         // Remember an explicit non-default pick for this task (#96) so the next dispatch pre-fills it;
-        // reverting to the default clears the entry. Persist only when the cache actually changed.
-        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, detail.Id, plan))
+        // accepting the auto-derived pre-fill unchanged (or clearing the field) clears the entry. The
+        // reconciliation baseline is what the pre-fill would produce (#533) — repo match else
+        // {base}/{custom-id} — which may consult the filesystem, so it's computed here, not in pure Plan.
+        var resolvedDefault = DispatchWorkingDirectoryPreFill.AutoDerivedDefault(detail, _config.AgentDispatch, baseDir, home);
+        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, detail.Id, plan.ChosenDir, resolvedDefault))
             _configStore.Save(_config);
 
         // One-off mode (#94) runs claude -p as a background child of the app — no terminal window — with
@@ -2967,6 +2987,19 @@ public sealed class TodoApp
     {
         if (ActiveScreen is not null)
             return;
+        if (NativeModalSpike.Enabled)
+        {
+            // #404 spike: open Help as a native Terminal.Gui modal (a nested Application.Run) instead
+            // of the _screens-mounted HelpScreen. The native path pushes nothing to _screens, so the
+            // ActiveScreen guard above can't serialise it — TryBeginOpen claims the slot synchronously
+            // (cleared when the nested loop returns) so two buffered F1s can't stack two dialogs. The
+            // run itself is deferred out of the keypress dispatch via Application.Invoke — mirroring how
+            // ShowScreen defers teardown — so the nested run-loop is not entered re-entrantly from
+            // inside the KeyDown handler. Flag-gated; off in production.
+            if (NativeModalSpike.TryBeginOpen())
+                Application.Invoke(NativeModalSpike.RunHelpDialog);
+            return;
+        }
         ShowScreen(new HelpScreen(), static () => { });
     }
 

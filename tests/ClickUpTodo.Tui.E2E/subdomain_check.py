@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Boots the TUI under a PTY and validates the workspace-subdomain browser rewrite (#304):
-with E2E_SUBDOMAIN=odbm seeded into config, (1) F2 opens Settings and the "ClickUp subdomain"
+with E2E_SUBDOMAIN=odbm seeded into config, (1) F10 opens Settings and the "ClickUp subdomain"
 field renders with the seeded value, and (2) Ctrl+B on a task row launches the browser with the
 task's app.clickup.com URL rewritten onto odbm.clickup.com — observed via a recording
 IBrowserLauncher that logs each launched URL to E2E_BROWSER_LOG. Asserts each step on the pyte
@@ -56,7 +56,8 @@ def send(seq, wait=1.2):
     os.write(master, seq)
     return pump(wait)
 
-F2 = b"\x1bOQ"
+# F10 opens Settings since #539 (was F2); CSI-tilde form, matching the harness's F5/F6/F12.
+F10 = b"\x1b[21~"
 ESC = b"\x1b"
 TAB = b"\t"
 CTRL_B = b"\x02"
@@ -66,8 +67,8 @@ try:
     assert "Task" in visible(), "app never rendered the list:\n" + visible()[-1500:]
     pump(1.0)
 
-    # (1) F2 opens Settings; the ClickUp subdomain field renders with the seeded value.
-    send(F2, 2.0)
+    # (1) F10 opens Settings; the ClickUp subdomain field renders with the seeded value.
+    send(F10, 2.0)
     v = visible()
     assert "ClickUp subdomain" in v, f"subdomain field label missing in Settings:\n{v}"
     assert "odbm" in v, f"seeded subdomain 'odbm' not shown in Settings:\n{v}"

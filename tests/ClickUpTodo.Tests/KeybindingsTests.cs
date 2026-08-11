@@ -112,6 +112,16 @@ public sealed class KeybindingsTests
         }
     }
 
+    // #539 (contextual chords B): Settings moved F2 → F10 to free F2 for the later rename slices
+    // (D #541 / E #542 / H #545). Pinned so a future run can't re-introduce an F2 binding without
+    // deciding the #538 rename model first — F2 must stay bound to nothing in every context.
+    [Fact]
+    public void Settings_IsF10_OnMainList_AndNoBindingUsesF2()
+    {
+        Assert.Equal("F10", Keybindings.Token(ScreenContext.MainList, KeyAction.Settings));
+        Assert.DoesNotContain(Keybindings.All, e => e.Value == "F2");
+    }
+
     // The Help screen is the help; it must not bind a Help action (it would advertise F1 → itself).
     [Fact]
     public void HelpContext_DoesNotBindHelp()
