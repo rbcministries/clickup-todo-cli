@@ -61,6 +61,9 @@ public enum KeyAction
     ReplyToComment,
     EditDescription,
     ToggleChecklistItem,
+    AddChecklistItem,
+    RenameChecklistItem,
+    DeleteChecklistItem,
 
     // Quick Updates.
     Apply,
@@ -114,6 +117,9 @@ public static class Keybindings
             [(ScreenContext.Detail, KeyAction.ReplyToComment)] = "Ctrl+T",
             [(ScreenContext.Detail, KeyAction.EditDescription)] = "Ctrl+E",
             [(ScreenContext.Detail, KeyAction.ToggleChecklistItem)] = "Space",
+            [(ScreenContext.Detail, KeyAction.AddChecklistItem)] = "F7",
+            [(ScreenContext.Detail, KeyAction.RenameChecklistItem)] = "F8",
+            [(ScreenContext.Detail, KeyAction.DeleteChecklistItem)] = "F9",
             [(ScreenContext.Detail, KeyAction.OpenInBrowser)] = "Ctrl+B",
             [(ScreenContext.Detail, KeyAction.QuickUpdate)] = "Ctrl+U",
             [(ScreenContext.Detail, KeyAction.Refresh)] = "F5",

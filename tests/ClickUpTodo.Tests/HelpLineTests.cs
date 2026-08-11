@@ -470,6 +470,7 @@ public sealed class HelpLineTests
             HelpItemSets.MainList, HelpItemSets.Detail, HelpItemSets.DetailWithTaskTree,
             HelpItemSets.DetailDescriptionEditor, HelpItemSets.DetailCommentComposer,
             HelpItemSets.DetailMentionPicker, HelpItemSets.DetailReplyPicker,
+            HelpItemSets.DetailChecklistItemEditor,
             HelpItemSets.Settings, HelpItemSets.FilterSortGroup, HelpItemSets.QuickUpdates,
             HelpItemSets.QuickOpen, HelpItemSets.NewTask, HelpItemSets.PromptTemplateEditor,
             HelpItemSets.NotificationsFeed, HelpItemSets.AgentRun, HelpItemSets.Help,
