@@ -36,9 +36,10 @@ UP = b"\x1b[A"
 ENTER = b"\r"
 SPACE = b" "
 CTRL_R = b"\x12"          # refresh (alias of F5) — re-fetches detail from the fake backend
+CTRL_G = b"\x07"          # new checklist group (F, #459)
 F7 = b"\x1b[18~"          # add checklist item (E, #458)
-F8 = b"\x1b[19~"          # rename the selected checklist item
-F9 = b"\x1b[20~"          # delete the selected checklist item
+F8 = b"\x1b[19~"          # rename the selected item / group (row-kind-scoped, F, #459)
+F9 = b"\x1b[20~"          # delete the selected item / group (row-kind-scoped, F, #459)
 BACKSPACE = b"\x7f"
 DELETE = b"\x1b[3~"       # forward-delete (paired with BACKSPACE to clear a field caret-agnostically)
 
@@ -365,9 +366,117 @@ def run_delete_confirm_cleared_by_overlay():
         s.kill()
 
 
+def run_group_crud():
+    """F (#459): checklist GROUP CRUD on a task that starts with no checklists (E2E_CHECKLISTS_EMPTY seeds
+    the mutable DOM empty). Ctrl+G create a group -> F7 add an item to it -> F9+Enter on its header delete
+    the group, returning to the empty state. Each write persists in the fake backend, so a refresh agrees."""
+    s = Session({"E2E_CHECKLISTS_EMPTY": "1"})
+    try:
+        s.pump(8.0)
+        assert "Task 0" in s.visible(), "list boot failed:\n" + s.visible()
+        s.open_checklists_tab()
+        v = s.visible()
+        assert "No checklists on this task." in v, "F leg should start on the empty state:\n" + v
+
+        # ── Create a group (Ctrl+G): open the name overlay, type a name, Enter ────────────────────────
+        s.send(CTRL_G)
+        s.pump(0.8)
+        assert "New checklist" in s.visible(), "Ctrl+G did not open the new-checklist overlay:\n" + s.visible()
+        type_text(s, "Release steps")
+        s.send(ENTER)
+        s.pump(1.5)
+        v = s.visible()
+        assert s.proc.poll() is None, "group create crashed the process"
+        assert "Release steps" in v, "the new checklist header did not appear:\n" + v
+        assert "No checklists on this task." not in v, "empty state should be gone after create:\n" + v
+        assert "(0/0)" in v, "the new empty checklist header should show (0/0):\n" + v
+
+        # ── Add an item to it (F7): the new group's header is selected, so F7 adds into that group ─────
+        s.send(F7)
+        s.pump(0.8)
+        assert "New item" in s.visible(), "F7 did not open the add-item overlay on the new group:\n" + s.visible()
+        type_text(s, "Ship it")
+        s.send(ENTER)
+        s.pump(1.5)
+        v = s.visible()
+        assert "[ ] Ship it" in v, "the item was not added to the new group:\n" + v
+        assert "Release steps  (0/1)" in v, "the group progress did not grow to (0/1):\n" + v
+        assert "Checklists (0/1)" in v, "the tab title aggregate did not update to (0/1):\n" + v
+
+        # ── Delete the group (F9 on its header -> Enter): the item added lands selected, so ↑ to the header
+        s.send(UP)
+        s.pump(0.3)
+        s.send(F9)
+        s.pump(0.8)
+        v = s.visible()
+        assert "Delete checklist 'Release steps'" in v, "F9 on the header did not arm the group-delete confirm:\n" + v
+        assert "1 item" in v, "the group-delete confirm did not name the item count:\n" + v
+        s.send(ENTER)            # Enter confirms (a bare letter would be eaten by the ListView type-ahead)
+        s.pump(1.5)
+        v = s.visible()
+        assert s.proc.poll() is None, "group delete crashed the process"
+        assert "No checklists on this task." in v, "deleting the only group did not return to the empty state:\n" + v
+        assert "Release steps" not in v, "the deleted group is still shown:\n" + v
+
+        # ── Persists across a refresh: the fake persisted create+delete, so Ctrl+R stays empty ─────────
+        s.send(CTRL_R)
+        s.pump(2.5)
+        v = s.visible()
+        assert "No checklists on this task." in v and "Release steps" not in v, \
+            "a refresh resurrected the deleted group:\n" + v
+
+        print("ok — group CRUD: Ctrl+G creates a checklist, F7 adds an item (0/1), F9+Enter on the header "
+              "deletes the group back to the empty state; persists over refresh")
+    finally:
+        s.kill()
+
+
+def run_group_rename():
+    """F (#459): F8 on a checklist header renames the GROUP (not an item), optimistic + persisted."""
+    s = Session({"E2E_CHECKLISTS": "1"})
+    try:
+        s.pump(8.0)
+        assert "Task 0" in s.visible(), "list boot failed:\n" + s.visible()
+        s.open_checklists_tab()
+        # Normalise to the top row (the "Release steps" header).
+        for _ in range(8):
+            s.send(UP)
+            s.pump(0.1)
+        s.pump(0.3)
+        assert "Release steps" in s.visible(), "precondition: 'Release steps' header present:\n" + s.visible()
+
+        s.send(F8)               # F8 on a header opens the rename-checklist overlay
+        s.pump(0.8)
+        assert "Rename checklist" in s.visible(), "F8 on a header did not open the rename-group overlay:\n" + s.visible()
+        for _ in range(24):      # clear the prefilled "Release steps"
+            s.send(BACKSPACE)
+            s.send(DELETE)
+        s.pump(0.4)
+        type_text(s, "Release plan")
+        s.send(ENTER)
+        s.pump(1.5)
+        v = s.visible()
+        assert s.proc.poll() is None, "group rename crashed the process"
+        assert "Release plan" in v, "the checklist was not renamed:\n" + v
+        assert "Release steps" not in v, "the pre-rename checklist name is still shown:\n" + v
+        assert "(1/3)" in v, "renaming the group wrongly changed its item progress:\n" + v
+
+        s.send(CTRL_R)           # persisted: the rename survives a refresh
+        s.pump(2.5)
+        v = s.visible()
+        assert "Release plan" in v and "Release steps" not in v, \
+            "a refresh resurrected the pre-rename checklist name:\n" + v
+        print("ok — group rename: F8 on a header renames the checklist (persists over refresh) without "
+              "disturbing its items")
+    finally:
+        s.kill()
+
+
 run_populated()
 run_empty()
 run_toggle()
 run_crud()
 run_add_cancel()
 run_delete_confirm_cleared_by_overlay()
+run_group_crud()
+run_group_rename()
