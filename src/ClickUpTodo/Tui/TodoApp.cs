@@ -2987,6 +2987,19 @@ public sealed class TodoApp
     {
         if (ActiveScreen is not null)
             return;
+        if (NativeModalSpike.Enabled)
+        {
+            // #404 spike: open Help as a native Terminal.Gui modal (a nested Application.Run) instead
+            // of the _screens-mounted HelpScreen. The native path pushes nothing to _screens, so the
+            // ActiveScreen guard above can't serialise it — TryBeginOpen claims the slot synchronously
+            // (cleared when the nested loop returns) so two buffered F1s can't stack two dialogs. The
+            // run itself is deferred out of the keypress dispatch via Application.Invoke — mirroring how
+            // ShowScreen defers teardown — so the nested run-loop is not entered re-entrantly from
+            // inside the KeyDown handler. Flag-gated; off in production.
+            if (NativeModalSpike.TryBeginOpen())
+                Application.Invoke(NativeModalSpike.RunHelpDialog);
+            return;
+        }
         ShowScreen(new HelpScreen(), static () => { });
     }
 

@@ -18,10 +18,29 @@ public sealed class HelpScreen : Screen
             Y = 0,
             Width = Dim.Fill(1),
             Height = Dim.Fill(1),
-            // The icon column mirrors the glyphs on the bottom help bar (HelpItemSets) so a footer
-            // icon can be matched to the concept it stands for. Keys come from the central Keybindings
-            // table; keep the two in sync when a binding changes.
-            Text =
+            Text = ShortcutsText,
+        };
+
+        KeyDown += (_, key) =>
+        {
+            if (key.KeyCode is KeyCode.Esc or KeyCode.Enter)
+            {
+                key.Handled = true;
+                Close();
+            }
+        };
+
+        Add(body);
+    }
+
+    /// <summary>
+    /// The keyboard-shortcut reference text, shared with the native-modal spike (#404) so the
+    /// prototype dialog renders byte-identical content to this screen. The icon column mirrors the
+    /// glyphs on the bottom help bar (HelpItemSets) so a footer icon can be matched to the concept it
+    /// stands for. Keys come from the central Keybindings table; keep the two in sync when a binding
+    /// changes.
+    /// </summary>
+    public static readonly string ShortcutsText =
                 "\n"
                 + "  Icons match the labels on the bottom help bar.\n"
                 + "\n"
@@ -76,20 +95,7 @@ public sealed class HelpScreen : Screen
                 + "  Settings, Quick Updates, the task detail, and this help open as full-window\n"
                 + "  screens; Esc returns to the task list (your cursor stays on the same task).\n"
                 + "\n"
-                + "  Esc or Enter to close this help.",
-        };
-
-        KeyDown += (_, key) =>
-        {
-            if (key.KeyCode is KeyCode.Esc or KeyCode.Enter)
-            {
-                key.Handled = true;
-                Close();
-            }
-        };
-
-        Add(body);
-    }
+                + "  Esc or Enter to close this help.";
 
     public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.Help;
 
