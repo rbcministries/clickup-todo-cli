@@ -204,6 +204,9 @@ def marshal_cancel(app, label):
     assert app.alive(), f"{label}: process died cancelling the modal:\n{v[:2000]}"
     assert FORM_MARKER not in v, f"{label}: Esc did not close the modal:\n{v[:2000]}"
     assert LIST_MARKER in v, f"{label}: task list not restored after Esc:\n{v[:2000]}"
+    # Directly assert the discard: the throwaway filter did NOT persist, so the list is still populated
+    # (had Cancel erroneously applied "…IS zzz9" the list would have emptied). "Cancel marshals nothing".
+    assert "Task 1" in v, f"{label}: list not intact after Esc — a cancelled filter appears to have applied:\n{v[:2000]}"
 
 
 def marshal_save(app, label):
@@ -225,6 +228,9 @@ def marshal_save(app, label):
     assert FORM_MARKER not in v, f"{label}: Save did not close the modal:\n{v[:2000]}"
     assert "View" in v, f"{label}: Save did not flash a view summary (result not marshalled to host):\n{v[:2000]}"
     assert LIST_MARKER in v, f"{label}: task list not restored after Save:\n{v[:2000]}"
+    # Persistent proof (not just the transient flash): the applied "Status IS zq9" matches no task, so
+    # the marshalled result visibly emptied the list — the "Task 1" row that was present is now gone.
+    assert "Task 1" not in v, f"{label}: Save's filter did not apply — 'Task 1' still listed:\n{v[:2000]}"
 
 
 def modal_stacking(app, label, native):
