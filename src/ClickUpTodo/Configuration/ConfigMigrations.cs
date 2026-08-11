@@ -10,7 +10,7 @@ namespace ClickUpTodo.Configuration;
 public static class ConfigMigrations
 {
     /// <summary>The version an up-to-date config carries once all migrations have run.</summary>
-    public const int CurrentVersion = 5;
+    public const int CurrentVersion = 6;
 
     /// <summary>Applies any migrations the config hasn't seen yet, then stamps it current.</summary>
     public static void Apply(AppConfig config)
@@ -72,6 +72,19 @@ public static class ConfigMigrations
         // showCompleted key (e.g. hand-added to an already-v5 config) is dropped rather than re-persisted.
         config.View.LegacyShowCompleted = null;
 
+        // v6 (#497): the single hard-wired claudeExecutable/extraArgs pair became a list of
+        // DispatchProviders + a chosen default. Fold the legacy pair into a single provider so an
+        // existing config dispatches byte-identically; version-gated so a user who later edits their
+        // provider list isn't re-seeded.
+        if (config.SchemaVersion < 6)
+            MigrateDispatchProviders(config.AgentDispatch);
+
+        // The dispatch legacy shims are deserialize-only: null them regardless of version so stray
+        // claudeExecutable/extraArgs keys (e.g. hand-added to an already-v6 config) are dropped rather
+        // than re-persisted forever.
+        config.AgentDispatch.LegacyClaudeExecutable = null;
+        config.AgentDispatch.LegacyExtraArgs = null;
+
         config.SchemaVersion = CurrentVersion;
     }
 
@@ -104,6 +117,37 @@ public static class ConfigMigrations
     {
         if (view.LegacyShowCompleted is { } legacy)
             view.Completed = legacy ? CompletedView.All : CompletedView.WithDone;
+    }
+
+    /// <summary>
+    /// Folds the legacy single-executable dispatch keys (#497) into a single <see cref="DispatchProvider"/>.
+    /// A config that already carries providers (a hand-authored or future config) is left untouched. A
+    /// blank/absent legacy executable coalesces to <see cref="AgentDispatchSettings.DefaultExecutable"/>,
+    /// and legacy args are trimmed with blanks dropped — so a fresh install seeds
+    /// <c>{ "Claude", "claude", [] }</c> and an existing config produces a provider equal to its old
+    /// exe/args pair, keeping <see cref="AgentDispatchSettings.ToLauncherOptions"/> byte-identical. The
+    /// shims are nulled by the caller.
+    /// </summary>
+    private static void MigrateDispatchProviders(AgentDispatchSettings dispatch)
+    {
+        if (dispatch.Providers.Count > 0)
+            return;
+
+        var exe = string.IsNullOrWhiteSpace(dispatch.LegacyClaudeExecutable)
+            ? AgentDispatchSettings.DefaultExecutable
+            : dispatch.LegacyClaudeExecutable.Trim();
+        var args = dispatch.LegacyExtraArgs is { } legacy
+            ? legacy.Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim()).ToList()
+            : [];
+
+        dispatch.Providers.Add(new DispatchProvider
+        {
+            Name = AgentDispatchSettings.DefaultProviderDisplayName,
+            Executable = exe,
+            ExtraArgs = args,
+            Kind = DispatchProviderKind.LocalCli,
+        });
+        dispatch.DefaultProviderName = AgentDispatchSettings.DefaultProviderDisplayName;
     }
 
     private static void MigratePromptPreamble(AgentDispatchSettings dispatch)
