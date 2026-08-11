@@ -337,10 +337,29 @@
         }
       }
     },
+    "/v2/checklist/{checklist_id}/checklist_item": {
+      "post": {
+        "operationId": "CreateChecklistItem",
+        "summary": "Create a new item in a checklist (E, #458) via a { name } body. ClickUp echoes the whole parent checklist wrapped as { \"checklist\": { … } } — the same envelope as the toggle/rename PUT — so the caller gets the reconciled group (the new item with its server id/orderindex, plus refreshed counts) without a read-after-write. Per-item assignee lands with G (#460); this slice sends name only.",
+        "parameters": [
+          { "name": "checklist_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateChecklistItemRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "The parent checklist under a `checklist` key, including the newly-created item and refreshed resolved/unresolved counts.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChecklistItemResponse" } } }
+          }
+        }
+      }
+    },
     "/v2/checklist/{checklist_id}/checklist_item/{checklist_item_id}": {
       "put": {
         "operationId": "UpdateChecklistItem",
-        "summary": "Update a checklist item (used here to toggle its `resolved` state — D, #457). ClickUp echoes the whole parent checklist wrapped as { \"checklist\": { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. Only `resolved` is modelled in the request; item rename / assignee / reparent land with the CRUD slices (E–G).",
+        "summary": "Update a checklist item — toggle its `resolved` state (D, #457) and/or rename it (E, #458). ClickUp echoes the whole parent checklist wrapped as { \"checklist\": { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. `resolved` and `name` are modelled; per-item assignee / reparent land with F–G.",
         "parameters": [
           { "name": "checklist_id", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "checklist_item_id", "in": "path", "required": true, "schema": { "type": "string" } }
@@ -354,6 +373,17 @@
             "description": "The updated parent checklist under a `checklist` key, including its items array and resolved/unresolved counts.",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ChecklistItemResponse" } } }
           }
+        }
+      },
+      "delete": {
+        "operationId": "DeleteChecklistItem",
+        "summary": "Delete a checklist item (E, #458). ClickUp returns an empty object, so there is no response schema — the caller keeps its optimistic local removal (revert-on-failure), exactly as DELETE /task/{id} does.",
+        "parameters": [
+          { "name": "checklist_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "checklist_item_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "The item was deleted (ClickUp returns an empty object)." }
         }
       }
     }
@@ -477,9 +507,18 @@
       },
       "UpdateChecklistItemRequest": {
         "type": "object",
-        "description": "Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457). Only 'resolved' is modelled; rename/assignee/reparent land with E–G.",
+        "description": "Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457) and the rename write (E, #458). Both fields are optional so a caller sends only what it changes: 'resolved' toggles the tick, 'name' renames the item. Assignee/reparent land with F–G.",
         "properties": {
-          "resolved": { "type": "boolean" }
+          "resolved": { "type": "boolean" },
+          "name": { "type": "string" }
+        }
+      },
+      "CreateChecklistItemRequest": {
+        "type": "object",
+        "description": "Body for POST /checklist/{checklist_id}/checklist_item — create a checklist item (E, #458). 'name' is required; per-item assignee lands with G (#460).",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" }
         }
       },
       "ChecklistItemResponse": {

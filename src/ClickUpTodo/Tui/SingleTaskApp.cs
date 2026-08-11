@@ -209,6 +209,9 @@ public sealed class SingleTaskApp
         // The root detail is added straight to the window (not through ShowScreen), so — unlike a stacked
         // child, whose flashes ShowScreen routes — it wires its own flash relay to the shared footer.
         _root.Screen.FlashRequested += (_, message) => Flash(message);
+        // The hover hint (#408) rides the same footer relay; the field is assigned just below and read when
+        // the event fires, so capturing it here is safe (mirrors the flash relay).
+        _root.Screen.HoverHintChanged += (_, hint) => _footer.SetHoverHint(hint);
 
         _footer = new ContextualFooter(_status);
 
@@ -298,7 +301,13 @@ public sealed class SingleTaskApp
             // Space on the Checklists tab (D, #457): the Checklists tab is present in single-task mode too,
             // so wire the toggle write here as well, keyed to this tab's task id.
             setChecklistResolvedAsync: (checklistId, itemId, resolved, ct) =>
-                _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct));
+                _tasks.SetChecklistItemResolvedAsync(checklistId, itemId, resolved, ct),
+            createChecklistItemAsync: (checklistId, name, ct) =>
+                _tasks.CreateChecklistItemAsync(checklistId, name, ct),
+            renameChecklistItemAsync: (checklistId, itemId, name, ct) =>
+                _tasks.RenameChecklistItemAsync(checklistId, itemId, name, ct),
+            deleteChecklistItemAsync: (checklistId, itemId, ct) =>
+                _tasks.DeleteChecklistItemAsync(checklistId, itemId, ct));
 
         var tab = new DetailTab(screen, id, task, comments);
 
@@ -617,6 +626,7 @@ public sealed class SingleTaskApp
         };
         screen.Closed += handler;
         screen.FlashRequested += (_, message) => Flash(message);
+        screen.HoverHintChanged += (_, hint) => _footer.SetHoverHint(hint);
 
         _window.Add(screen);
         UpdateHelpLine();
@@ -628,6 +638,8 @@ public sealed class SingleTaskApp
         if (!_stack.Remove(screen))
             return;
 
+        // Clear any hover hint the closing screen left on the status line (#408).
+        _footer.SetHoverHint(null);
         _window.Remove(screen);
         try
         {
