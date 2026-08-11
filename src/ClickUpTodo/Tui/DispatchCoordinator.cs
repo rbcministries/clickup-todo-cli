@@ -106,7 +106,7 @@ public static class DispatchCoordinator
         // unchanged from pre-#533) — even one configured inside the base tree — so the gate keeps the mode
         // check the old UseTaskDerived gate had, alongside the pure containment check that replaced its
         // now-defunct no-pick condition (the pre-filled field always submits as a pick). No filesystem probe.
-        var createWorkingDir = settings.WorkingDirectory == AgentWorkingDirectory.TaskDerived
+        var createWorkingDir = settings.WorkingDirectory == AgentWorkingDirectory.BaseWithTaskPrefill
             && !string.IsNullOrWhiteSpace(workingDir)
             && IsWithinBaseTree(baseDir, workingDir!);
 

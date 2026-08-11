@@ -52,7 +52,7 @@ public static class DispatchWorkingDirectoryPreFill
 
         // Derivation is task-derived-only: Home/Fixed open blank so a blank field still means "use my
         // configured mode" rather than being overridden by a derived path.
-        if (settings.WorkingDirectory != AgentWorkingDirectory.TaskDerived)
+        if (settings.WorkingDirectory != AgentWorkingDirectory.BaseWithTaskPrefill)
             return "";
 
         return TaskDerivedDefault(detail, baseDirectory, directoryExists, childDirectoryNames);
@@ -79,7 +79,7 @@ public static class DispatchWorkingDirectoryPreFill
         ArgumentNullException.ThrowIfNull(detail);
         ArgumentNullException.ThrowIfNull(settings);
 
-        if (settings.WorkingDirectory == AgentWorkingDirectory.TaskDerived)
+        if (settings.WorkingDirectory == AgentWorkingDirectory.BaseWithTaskPrefill)
             return TaskDerivedDefault(detail, baseDirectory, directoryExists, childDirectoryNames);
 
         // Home/Fixed: the configured dir, ~-expanded, exactly as Plan resolved it before #533.

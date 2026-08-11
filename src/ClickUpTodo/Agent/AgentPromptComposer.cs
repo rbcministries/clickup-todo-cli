@@ -201,11 +201,13 @@ public static class AgentPromptComposer
     }
 
     /// <summary>
-    /// The per-task output subdirectory token for the <see cref="Configuration.AgentWorkingDirectory.TaskDerived"/>
-    /// mode (#98): the task's custom id when set, else its id, reduced to a filesystem-safe token
-    /// (via the same <see cref="SafeToken"/> used for temp filenames, so separators / traversal
-    /// can't escape the base dir). The agent is told to write outputs under <c>./{token}</c> so each
-    /// task's work stays separated inside the shared base working directory.
+    /// The per-task output subdirectory token for the
+    /// <see cref="Configuration.AgentWorkingDirectory.BaseWithTaskPrefill"/> mode (#98): the task's
+    /// custom id when set, else its id, reduced to a filesystem-safe token (via the same
+    /// <see cref="SafeToken"/> used for temp filenames, so separators / traversal can't escape the base
+    /// dir). Since #533 this names the per-task <c>{base}/{token}</c> <b>directory</b> the pre-fill
+    /// derives (see <see cref="Tui.DispatchWorkingDirectoryPreFill"/>), so each task's work stays
+    /// separated inside the shared base working directory.
     /// </summary>
     public static string OutputSubdirectoryToken(TaskDetail task)
     {
