@@ -103,7 +103,7 @@ public static class Keybindings
             [(ScreenContext.MainList, KeyAction.TogglePin)] = "Ctrl+P",
             [(ScreenContext.MainList, KeyAction.Feed)] = "Ctrl+E",
             [(ScreenContext.MainList, KeyAction.Help)] = "F1",
-            [(ScreenContext.MainList, KeyAction.Settings)] = "F2",
+            [(ScreenContext.MainList, KeyAction.Settings)] = "F10",
             [(ScreenContext.MainList, KeyAction.FilterSortGroup)] = "F3",
             [(ScreenContext.MainList, KeyAction.CycleSubtasks)] = "F4",
             [(ScreenContext.MainList, KeyAction.Refresh)] = "F5",
