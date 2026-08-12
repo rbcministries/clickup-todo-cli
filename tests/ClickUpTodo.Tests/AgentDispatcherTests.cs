@@ -324,6 +324,72 @@ public sealed class AgentDispatcherTests : IDisposable
         Assert.Equal(LaunchLocation.NewWindow, launcher.Options!.LaunchLocation);
     }
 
+    // ── per-dispatch provider override (#498) ────────────────────────────────────────
+
+    [Fact]
+    public async Task DispatchAsync_ThreadsProviderOverride_ToLauncherOptions()
+    {
+        var launcher = new FakeLauncher();
+        // Constructor options are the default provider (claude); the per-dispatch pick launches codex
+        // with its own args for this one dispatch, while the provider-agnostic fields survive.
+        var options = new TerminalLauncherOptions
+        {
+            ClaudeExecutable = "claude",
+            ExtraArgs = ["--model", "opus"],
+            LaunchLocation = LaunchLocation.NewTab,
+        };
+        var dispatcher = new AgentDispatcher(launcher, options, _dir);
+
+        await dispatcher.DispatchAsync(
+            Detail(), Comments(), "go",
+            providerExecutable: "  codex  ", providerExtraArgs: ["  --yolo ", "", "x"]);
+
+        Assert.Equal("codex", launcher.Options!.ClaudeExecutable);      // trimmed
+        Assert.Equal(["--yolo", "x"], launcher.Options!.ExtraArgs);     // trimmed, blanks dropped
+        Assert.Equal(LaunchLocation.NewTab, launcher.Options!.LaunchLocation); // untouched
+    }
+
+    [Fact]
+    public async Task DispatchAsync_NoProviderOverride_KeepsConfiguredOptionsInstance()
+    {
+        var launcher = new FakeLauncher();
+        var options = new TerminalLauncherOptions { ClaudeExecutable = "claude-dev", ExtraArgs = ["--model"] };
+        var dispatcher = new AgentDispatcher(launcher, options, _dir);
+
+        // A blank/omitted provider override leaves the settings-derived options untouched — same instance.
+        await dispatcher.DispatchAsync(Detail(), Comments(), "go", providerExecutable: "   ");
+
+        Assert.Same(options, launcher.Options);
+        Assert.Equal("claude-dev", launcher.Options!.ClaudeExecutable);
+    }
+
+    [Fact]
+    public async Task DispatchBackgroundAsync_ThreadsProviderOverride_ToRunner()
+    {
+        var runner = new FakeBackgroundRunner();
+        var options = new TerminalLauncherOptions { ClaudeExecutable = "claude", ExtraArgs = ["--model", "opus"] };
+        var dispatcher = new AgentDispatcher(new FakeLauncher(), options, promptDirectory: _dir, backgroundRunner: runner);
+
+        // A one-off run honours the picked provider too (a Codex dispatch's -p run must run codex).
+        await dispatcher.DispatchBackgroundAsync(
+            Detail(), Comments(), "go", providerExecutable: "codex", providerExtraArgs: ["--exec"]);
+
+        Assert.Equal("codex", runner.Options!.ClaudeExecutable);
+        Assert.Equal(["--exec"], runner.Options!.ExtraArgs);
+    }
+
+    [Fact]
+    public async Task DispatchBackgroundAsync_NoProviderOverride_KeepsConfiguredOptionsInstance()
+    {
+        var runner = new FakeBackgroundRunner();
+        var options = new TerminalLauncherOptions { ClaudeExecutable = "claude-dev" };
+        var dispatcher = new AgentDispatcher(new FakeLauncher(), options, promptDirectory: _dir, backgroundRunner: runner);
+
+        await dispatcher.DispatchBackgroundAsync(Detail(), Comments(), "go");
+
+        Assert.Same(options, runner.Options);
+    }
+
     // ── Settings → dispatcher wiring (#91, #100) ─────────────────────────────────────
     // These mirror the glue TodoApp performs (options from ToLauncherOptions, working dir from
     // ResolveWorkingDirectory, template from settings) at the unit-testable dispatcher seam, since
