@@ -62,26 +62,31 @@ public static class AppHostLaunch
             : $"{lead} Run: {cmd}";
     }
 
-    // Destination-aware noun phrases. NewTab wording is preserved byte-identical to the retired
-    // AppTabLaunch strings so today's tab-launching hosts show exactly the same status text.
+    // Destination-aware noun phrases. The NewTab wording used to be pinned byte-identical to the retired
+    // AppTabLaunch strings, but #589 gave WezTerm/kitty/Zellij a real NewTab ladder (split → tab → window),
+    // so a NewTab request is no longer always a literal tab: a Zellij-only session opens an in-session pane,
+    // and where the tab rung isn't reachable it falls through to a window. The phrases are therefore
+    // deliberately de-pinned to a host-neutral "… where supported" (#591) so the status line never asserts a
+    // tab the host didn't open. Opened's parenthetical still names the actual surface via result.LaunchedWith
+    // (e.g. "Zellij (new pane)"), which the softened lead no longer contradicts.
     private static string OpeningPhrase(LaunchLocation destination) => destination switch
     {
         LaunchLocation.NewWindow => "a new terminal window",
         LaunchLocation.SplitPane => "a split pane",
-        _ => "a new terminal tab",
+        _ => "a new terminal tab where supported",
     };
 
     private static string OpenedPhrase(LaunchLocation destination) => destination switch
     {
         LaunchLocation.NewWindow => "a new window",
         LaunchLocation.SplitPane => "a split pane",
-        _ => "a new tab",
+        _ => "a new tab where supported",
     };
 
     private static string FallbackPhrase(LaunchLocation destination) => destination switch
     {
         LaunchLocation.NewWindow => "a terminal window",
         LaunchLocation.SplitPane => "a split pane",
-        _ => "a terminal tab",
+        _ => "a terminal tab where supported",
     };
 }
