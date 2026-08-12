@@ -300,13 +300,15 @@ public sealed class SettingsScreen : Screen
             postToCommentsButton.Text = PostToCommentsText(postToComments);
         };
 
-        // Launch location (#255): where an interactive session opens — a new window (default) or a new
-        // tab of the current terminal where the host supports it (best-effort, falls back to a window).
+        // Launch location (#255, three-way since #508): where an interactive session opens — a new
+        // window (default), a new tab, or a split pane beside the current one, each best-effort and
+        // degrading down the split → tab → window ladder where the host can't honour it. Cycles through
+        // all three via the shared DispatchPaneModel order so Settings and the Dispatch pane agree.
         var launchLocation = dispatch.LaunchLocation;
         var launchLocationButton = new Button { X = rightX, Y = 17, Text = LaunchLocationText(launchLocation) };
         launchLocationButton.Accepting += (_, _) =>
         {
-            launchLocation = launchLocation == LaunchLocation.NewWindow ? LaunchLocation.NewTab : LaunchLocation.NewWindow;
+            launchLocation = DispatchPaneModel.CycleLaunchLocation(launchLocation);
             launchLocationButton.Text = LaunchLocationText(launchLocation);
         };
 
@@ -427,11 +429,7 @@ public sealed class SettingsScreen : Screen
 
     private static string ConfirmOnExitText(bool on) => "Confirm on exit: " + (on ? "On" : "Off");
 
-    private static string LaunchLocationText(LaunchLocation l) => "Launch: " + l switch
-    {
-        LaunchLocation.NewTab => "New tab (where supported)",
-        _ => "New window",
-    };
+    private static string LaunchLocationText(LaunchLocation l) => "Launch: " + DispatchPaneModel.LaunchLocationLabel(l);
 
     private static string TryWtProfilesText(bool on) => "Try WT profiles (Windows): " + (on ? "On" : "Off");
 

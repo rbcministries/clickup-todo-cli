@@ -79,10 +79,13 @@ public sealed class TaskDetailScreen : Screen
     private readonly ListView _dirBrowser;
     private readonly DirectoryBrowserModel _browser;
     private readonly CheckBox _postToCommentsToggle;
-    // The per-dispatch launch-location toggle (#275): checked ⇒ open this session in a new tab of the
-    // current terminal (where supported), unchecked ⇒ a new window. Seeded from the persisted default
-    // and read on submit. Greyed out in one-off mode (a -p run has no terminal); see UpdateLaunchLocationEnabled.
-    private readonly CheckBox _launchLocationToggle;
+    // The per-dispatch launch-location control (#275; three-way since #508): a cycle button through
+    // New window → New tab → Split pane, each best-effort per host. A check box can't express three
+    // values, so it's a Button (cycling on Space, since the pane traps Enter for Submit). The chosen
+    // value lives in _launchLocation (a Button has no Value); seeded from the persisted default and read
+    // on submit. Greyed out in one-off mode (a -p run has no terminal); see UpdateLaunchLocationEnabled.
+    private readonly Button _launchLocationButton;
+    private LaunchLocation _launchLocation;
     // The per-dispatch provider selector (#498): a horizontal OptionSelector of the configured providers'
     // display names, shown only when there are 2+ providers (DispatchPaneModel.ProviderRowVisible) so the
     // zero-/single-provider pane is byte-identical. Null when the row isn't shown. The parallel
@@ -757,17 +760,25 @@ public sealed class TaskDetailScreen : Screen
             Text = "Post results to Comments (agent needs ClickUp MCP access)",
             Value = defaultPostToComments ? CheckState.Checked : CheckState.UnChecked,
         };
-        // Live (#275): seeded from the persisted default; checked ⇒ open this session in a new tab of
-        // the current terminal (where the host supports it), unchecked ⇒ a new window. Read on submit
-        // via DispatchPaneModel.ToLaunchLocation. It only affects interactive sessions — a one-off -p
-        // run has no terminal — so it's greyed out (and skipped by Tab) whenever one-off is checked;
-        // UpdateLaunchLocationEnabled keeps that in sync with the one-off toggle.
-        _launchLocationToggle = new CheckBox
+        // Live (#275; three-way since #508): seeded from the persisted default, cycles New window → New
+        // tab → Split pane (each best-effort per host, degrading down the split → tab → window ladder).
+        // Read on submit from _launchLocation. It only affects interactive sessions — a one-off -p run has
+        // no terminal — so it's greyed out (and skipped by Tab) whenever one-off is checked;
+        // UpdateLaunchLocationEnabled keeps that in sync with the one-off toggle. A Button, not a check
+        // box, because three values don't fit a two-state toggle: Enter is trapped by the pane for Submit,
+        // so it cycles on Space (which the pane passes through to the focused control, like the sibling
+        // check boxes' Space-toggle).
+        _launchLocation = defaultLaunchLocation;
+        _launchLocationButton = new Button
         {
             X = 1,
             Y = DispatchRowsAboveBrowser + DispatchBrowserRows + 1,
-            Text = "Open in a new tab of this terminal (interactive only; else a new window)",
-            Value = defaultLaunchLocation == LaunchLocation.NewTab ? CheckState.Checked : CheckState.UnChecked,
+            Text = LaunchLocationButtonText(_launchLocation),
+        };
+        _launchLocationButton.Accepting += (_, _) =>
+        {
+            _launchLocation = DispatchPaneModel.CycleLaunchLocation(_launchLocation);
+            _launchLocationButton.Text = LaunchLocationButtonText(_launchLocation);
         };
 
         // The per-dispatch provider selector (#498): only when there's an actual choice (2+ configured
@@ -796,8 +807,8 @@ public sealed class TaskDetailScreen : Screen
         }
 
         _dispatchControls = _providerSelector is null
-            ? [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle, _launchLocationToggle]
-            : [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle, _launchLocationToggle, _providerSelector];
+            ? [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle, _launchLocationButton]
+            : [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle, _launchLocationButton, _providerSelector];
 
         _dispatchRowsBelowBrowser = DispatchRowsBelowBrowser + (providerRowVisible ? 1 : 0);
         var paneHeight = DispatchPaneModel.PreferredHeightWithBrowser(
@@ -811,7 +822,7 @@ public sealed class TaskDetailScreen : Screen
             Height = paneHeight,
             Visible = false,
         };
-        _promptBox.Add(promptLabel, _promptField, _oneOffToggle, dirLabel, _workingDirField, browserHint, _dirBrowser, _postToCommentsToggle, _launchLocationToggle);
+        _promptBox.Add(promptLabel, _promptField, _oneOffToggle, dirLabel, _workingDirField, browserHint, _dirBrowser, _postToCommentsToggle, _launchLocationButton);
         if (providerLabel is not null && _providerSelector is not null)
             _promptBox.Add(providerLabel, _providerSelector);
         // Each dispatch control routes the pane's keys (Enter/Esc/Tab/PgUp/PgDn) via the pure
@@ -1726,7 +1737,7 @@ public sealed class TaskDetailScreen : Screen
             : AgentSessionMode.Interactive;
         var dir = _workingDirField.Text?.ToString();
         var postToComments = _postToCommentsToggle.Value == CheckState.Checked;
-        var launchLocation = DispatchPaneModel.ToLaunchLocation(_launchLocationToggle.Value == CheckState.Checked);
+        var launchLocation = _launchLocation;
         // The per-dispatch provider pick (#498): the selected provider's name when the row is shown (2+
         // providers), else null so the host launches the configured default exactly as before.
         var provider = SelectedProviderName();
@@ -1770,8 +1781,14 @@ public sealed class TaskDetailScreen : Screen
         var sessionMode = _oneOffToggle.Value == CheckState.Checked
             ? AgentSessionMode.OneOff
             : AgentSessionMode.Interactive;
-        _launchLocationToggle.Enabled = DispatchPaneModel.LaunchLocationApplies(sessionMode);
+        _launchLocationButton.Enabled = DispatchPaneModel.LaunchLocationApplies(sessionMode);
     }
+
+    /// <summary>The Dispatch pane's launch-location button label (#508): a "Launch: " prefix over the
+    /// shared <see cref="DispatchPaneModel.LaunchLocationLabel"/>, so the pane and the Settings cycle
+    /// button read identically.</summary>
+    private static string LaunchLocationButtonText(LaunchLocation location)
+        => "Launch: " + DispatchPaneModel.LaunchLocationLabel(location);
 
     /// <summary>Moves focus to the next/previous dispatch control, wrapping at both ends and skipping
     /// any control that can't currently take focus — e.g. the launch-location toggle greyed out in

@@ -83,12 +83,33 @@ public static class DispatchPaneModel
     }
 
     /// <summary>
-    /// The <see cref="LaunchLocation"/> the pane's launch-location toggle represents (#275): checked ⇒
-    /// a new tab of the current terminal (where the host supports it), unchecked ⇒ a new window (the
-    /// historical default). Pure so the toggle's read-on-submit mapping is unit-tested.
+    /// The next <see cref="LaunchLocation"/> when the launch-destination control is advanced one step
+    /// (#508): <see cref="LaunchLocation.NewWindow"/> → <see cref="LaunchLocation.NewTab"/> →
+    /// <see cref="LaunchLocation.SplitPane"/> → back to <see cref="LaunchLocation.NewWindow"/>. Shared by
+    /// the Settings "Launch:" cycle button and the per-dispatch pane's cycle button so the order and its
+    /// wraparound are single-sourced and unit-tested, rather than duplicated across two glue call sites.
+    /// A three-way cycle is why the pane's old two-state check box (#275) had to change shape: a check box
+    /// can't express the third value.
     /// </summary>
-    public static LaunchLocation ToLaunchLocation(bool newTabChecked)
-        => newTabChecked ? LaunchLocation.NewTab : LaunchLocation.NewWindow;
+    public static LaunchLocation CycleLaunchLocation(LaunchLocation current) => current switch
+    {
+        LaunchLocation.NewWindow => LaunchLocation.NewTab,
+        LaunchLocation.NewTab => LaunchLocation.SplitPane,
+        _ => LaunchLocation.NewWindow,
+    };
+
+    /// <summary>
+    /// The short human label for a <see cref="LaunchLocation"/> shown on the launch-destination controls
+    /// (#255/#508). Pure so both the Settings button and the Dispatch pane button render the same text and
+    /// it's asserted in one place. The in-place destinations note "(where supported)" — they're best-effort
+    /// and degrade down the split → tab → window ladder on a host that can't honour them.
+    /// </summary>
+    public static string LaunchLocationLabel(LaunchLocation location) => location switch
+    {
+        LaunchLocation.NewTab => "New tab (where supported)",
+        LaunchLocation.SplitPane => "Split pane (where supported)",
+        _ => "New window",
+    };
 
     /// <summary>
     /// The keys the pane intercepts. The glue classifies a Terminal.Gui <c>Key</c> into one of these;

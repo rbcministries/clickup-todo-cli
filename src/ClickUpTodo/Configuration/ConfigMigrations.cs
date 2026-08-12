@@ -26,6 +26,14 @@ public static class ConfigMigrations
         // call sites, so coalesce it back to an empty map.
         config.TaskWorkingDirectories ??= [];
 
+        // Widening the persisted LaunchLocation enum to three values (#508, split pane): an out-of-range
+        // value — a future ordinal, or a hand-edited "launchLocation": 99 — deserializes through
+        // JsonStringEnumConverter to an undefined (LaunchLocation)N without throwing, so clamp it back to
+        // the NewWindow default rather than let a bogus destination flow to the launcher. Unconditional
+        // (not version-gated) like the null-guards above, since it's a normalization, not a one-shot fold.
+        if (!Enum.IsDefined(config.AgentDispatch.LaunchLocation))
+            config.AgentDispatch.LaunchLocation = LaunchLocation.NewWindow;
+
         // v1 (#68): assignee became a first-class filter field. Seed the default "Assignee IS me" rule
         // so an existing/blank view keeps reproducing the original "my tasks" fetch. Version-gated (not
         // "seed whenever absent") so a user who deliberately clears the assignee rule to see everyone
