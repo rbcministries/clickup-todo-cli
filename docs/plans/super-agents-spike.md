@@ -184,8 +184,8 @@ Tracked by **#577** (supervised run):
 - **No `Generated/` hand-edits, no spec/API change, no Kiota regen** — this spike is docs-only.
 - **No live agent-triggering writes** in this unattended run — the outward-facing probes are deferred to a
   supervised session (#577); no scratch task was created, no agent was pinged.
-- **No private workspace content committed** — only structural facts (member count, id signs) and the
-  negative-id example already public in #492.
+- **No private workspace content committed** — no names, messages, or private content; only structural
+  facts (member count, id signs) and bare negative agent ids (`-10466700` is already public in #492).
 - **Auth quirk untouched** — v3 reuses the raw `Authorization` header (no `Bearer`).
 
 ## Summary for the epic
