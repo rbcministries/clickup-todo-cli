@@ -63,6 +63,15 @@ degrade *up* into a tab, and a degrading split already tells the truth via
   cases); `NewWindow`/`SplitPane` expectations stay byte-identical. Add a
   regression test proving `Opened(NewTab, …)` no longer contradicts a
   non-tab `LaunchedWith` (Zellij pane / window fallback).
+- `src/ClickUpTodo/Agent/TerminalLauncher.cs` — the `LaunchAppAsync`
+  CLI-not-on-PATH **Note** (`"… install the CLI so the new tab can run it."`)
+  rides the *same* app-launch status line (`AppHostLaunch.Opened` appends it),
+  so it must not hard-code "tab" either. Soften to "… the new terminal can run
+  it." (matching the sibling `LaunchAsync` note's "the new terminal" wording),
+  guarded by a `DoesNotContain("tab")` assertion on the existing app-launch
+  Note test. The hard-failure `Fail("… in a new tab.")` at `LaunchAppAsync`'s
+  no-emulator branch is left untouched — callers discard `result.Error` and it
+  never reaches the status line.
 
 ## Out of scope / non-goals
 
@@ -82,5 +91,3 @@ degrade *up* into a tab, and a degrading split already tells the truth via
 - `dotnet format --verify-no-changes`.
 - No `tui-validate` needed: no rendering, list-source, driver, or keypress code
   is touched — only status-string composition, covered by `AppHostLaunchTests`.
-</content>
-</invoke>
