@@ -80,9 +80,11 @@ internal static class ConfirmDialog
             dialog = new Dialog
             {
                 Title = $"{title} {TitleMarker}",
-                Width = Dim.Percent(70),
-                // borders (2) + message + a spacer row + the button row.
-                Height = lines.Length + 5,
+                // Near-full width, like the spike's dialogs, so a long checklist name in the message reads in
+                // full rather than clipping — the confirm must always show what is about to be deleted.
+                Width = Dim.Fill(6),
+                // borders (2) + message (+1 spare row for a wrap) + a spacer row + the button row.
+                Height = lines.Length + 6,
             };
             var built = dialog;
 
@@ -91,9 +93,12 @@ internal static class ConfirmDialog
                 X = 1,
                 Y = 0,
                 Width = Dim.Fill(1),
-                Height = lines.Length,
+                // One spare row so an over-long source line word-wraps rather than clipping vertically.
+                Height = lines.Length + 1,
                 Text = message ?? string.Empty,
             };
+            // Defence-in-depth against a very long name: wrap instead of truncating horizontally.
+            body.TextFormatter.WordWrap = true;
 
             var confirm = new Button { X = 1, Y = Pos.Bottom(body) + 1, Text = confirmLabel };
             var cancel = new Button { X = Pos.Right(confirm) + 2, Y = Pos.Bottom(body) + 1, Text = "Cancel", IsDefault = true };
