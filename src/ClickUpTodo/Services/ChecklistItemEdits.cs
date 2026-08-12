@@ -57,6 +57,34 @@ public static class ChecklistItemEdits
         IReadOnlyList<TaskChecklist> checklists, string checklistId, TaskChecklistItem item)
         => MapChecklist(checklists, checklistId, items => [.. items, item]);
 
+    /// <summary>Finds item <paramref name="itemId"/> in checklist <paramref name="checklistId"/>, searching
+    /// the flat <see cref="TaskChecklist.Items"/> list and every nested <see cref="TaskChecklistItem.Children"/>
+    /// level, or <c>null</c> when the checklist/item is absent. The rename overlay uses it to read an item's
+    /// current <see cref="TaskChecklistItem.Assignee"/> — both to seed the assignee picker and to reduce a
+    /// server-confirmed checklist to that item's single assignee after a write (#572).</summary>
+    public static TaskChecklistItem? FindItem(
+        IReadOnlyList<TaskChecklist> checklists, string checklistId, string itemId)
+    {
+        if (checklists is null)
+            return null;
+        foreach (var checklist in checklists)
+            if (string.Equals(checklist.Id, checklistId, StringComparison.Ordinal))
+                return FindInItems(checklist.Items, itemId);
+        return null;
+    }
+
+    private static TaskChecklistItem? FindInItems(IReadOnlyList<TaskChecklistItem> items, string itemId)
+    {
+        foreach (var item in items)
+        {
+            if (string.Equals(item.Id, itemId, StringComparison.Ordinal))
+                return item;
+            if (item.Children.Count > 0 && FindInItems(item.Children, itemId) is { } nested)
+                return nested;
+        }
+        return null;
+    }
+
     /// <summary>Returns a copy of <paramref name="checklists"/> with item <paramref name="itemId"/> in
     /// checklist <paramref name="checklistId"/> repositioned (G, #569): its <see cref="TaskChecklistItem.OrderIndex"/>
     /// set to <paramref name="newOrderIndex"/> and, when reparenting, its <see cref="TaskChecklistItem.ParentId"/>

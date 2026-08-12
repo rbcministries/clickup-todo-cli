@@ -46,6 +46,7 @@ F8 = b"\x1b[19~"          # rename the selected item / group (row-kind-scoped, F
 F9 = b"\x1b[20~"          # delete the selected item / group (row-kind-scoped, F, #459)
 BACKSPACE = b"\x7f"
 DELETE = b"\x1b[3~"       # forward-delete (paired with BACKSPACE to clear a field caret-agnostically)
+TAB = b"\x09"            # cycle overlay focus (name field → assignee picker → Save → Cancel), #572
 
 
 class Session:
@@ -483,6 +484,89 @@ def run_group_rename():
         s.kill()
 
 
+def run_assignee():
+    """G (#460 / #572): the rename overlay's assignee picker sets and clears a checklist item's assignee.
+    It reuses the shared AssigneeSelectorView in ImmediateApply, so a pick writes immediately, the row's
+    assignee suffix updates live, and both the set and the clear persist across a refresh.
+
+    Row layout (E2E_CHECKLISTS=1):
+        0  Release steps  (1/3)                     ← header
+        1  [x] Cut the tag                          ← unassigned (i1)
+        2  [ ] Draft release notes — Ada Lovelace   ← assigned (i2)
+        ...
+    """
+    s = Session({"E2E_CHECKLISTS": "1"})
+    try:
+        s.pump(8.0)
+        assert "Task 0" in s.visible(), "list boot failed:\n" + s.visible()
+        s.open_checklists_tab()
+
+        # Select "[x] Cut the tag" (row 1): normalise to the top header, then one DOWN.
+        for _ in range(8):
+            s.send(UP)
+            s.pump(0.1)
+        s.send(DOWN)
+        s.pump(0.3)
+        assert "[x] Cut the tag" in s.visible(), "precondition: 'Cut the tag' selected:\n" + s.visible()
+
+        # ── Set: F8 opens the rename overlay, now carrying the assignee picker ─────────────────────────
+        s.send(F8)
+        s.pump(0.9)
+        v = s.visible()
+        assert "Rename item" in v, "F8 did not open the rename overlay:\n" + v
+        assert "Assignee:" in v, "the rename overlay did not show the assignee picker (#572):\n" + v
+
+        s.send(TAB)               # name field → the assignee picker's search box
+        s.pump(0.5)
+        type_text(s, "Grace")     # type-ahead over the frequency-ranked member pool
+        # Wait out the ~1s type-ahead debounce so the list COLLAPSES to the match before Enter — otherwise
+        # Enter picks the still-highlighted top-frequent empty-state row (row 0) mid-debounce, not "Grace".
+        s.pump(1.6)
+        assert "Grace Hopper" in s.visible(), "typing 'Grace' did not surface the candidate:\n" + s.visible()
+        s.send(ENTER)             # pick the sole narrowed row (Grace Hopper) → ImmediateApply set-assignee write
+        s.pump(1.3)
+        s.send(b"\x1b")           # Esc closes the overlay (the name is unchanged, so it just closes)
+        s.pump(1.0)
+        v = s.visible()
+        assert s.proc.poll() is None, "assigning crashed the process"
+        assert "Cut the tag" in v and "Grace Hopper" in v, \
+            "the assignee suffix did not appear on the row after assigning:\n" + v
+
+        # ── Persists across a refresh (the fake persisted the assignee) ────────────────────────────────
+        s.send(CTRL_R)
+        s.pump(2.5)
+        v = s.visible()
+        assert "Cut the tag" in v and "Grace Hopper" in v, \
+            "the assignee did not persist across a refresh:\n" + v
+
+        # ── Clear: reopen on the same item (still selected); the picker seeds with Grace as a ✓ row.
+        #    Into the list (Down), Enter on the current ✓ row removes it → clear (writes null). ──────────
+        s.send(F8)
+        s.pump(0.9)
+        assert "Assignee:" in s.visible(), "reopening the rename overlay did not show the picker:\n" + s.visible()
+        s.send(TAB)               # into the picker's search box
+        s.pump(0.5)
+        s.send(DOWN)              # into the list — the seeded ✓ Grace row sits first in the empty state
+        s.pump(0.5)
+        s.send(ENTER)             # remove the current assignee → clear
+        s.pump(1.3)
+        s.send(b"\x1b")           # close
+        s.pump(1.0)
+        v = s.visible()
+        assert s.proc.poll() is None, "clearing crashed the process"
+        assert "Grace Hopper" not in v, "clearing did not remove the assignee suffix from the row:\n" + v
+
+        s.send(CTRL_R)
+        s.pump(2.5)
+        v = s.visible()
+        assert "Grace Hopper" not in v, "the cleared assignee resurrected across a refresh:\n" + v
+
+        print("ok — assignee: the rename overlay assigns 'Grace Hopper' to an item (live suffix + persistence) "
+              "and clears it back, all from the shared AssigneeSelectorView (#572)")
+    finally:
+        s.kill()
+
+
 def run_move():
     """G (#569): Shift+↓ reorders an item past its sibling; Shift+→ indents an item under its preceding
     sibling; Shift+↑ on the first item is a boundary no-op that stays on the tab. Each move persists in the
@@ -572,4 +656,5 @@ run_add_cancel()
 run_delete_confirm_cleared_by_overlay()
 run_group_crud()
 run_group_rename()
+run_assignee()
 run_move()

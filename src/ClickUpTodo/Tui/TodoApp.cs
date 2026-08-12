@@ -2132,7 +2132,15 @@ public sealed class TodoApp
                         renameChecklistAsync: (checklistId, name, ct) =>
                             _tasks.RenameChecklistAsync(checklistId, name, ct),
                         deleteChecklistAsync: (checklistId, ct) =>
-                            _tasks.DeleteChecklistAsync(checklistId, ct));
+                            _tasks.DeleteChecklistAsync(checklistId, ct),
+                        // Per-item assignee in the rename overlay (#572): the same warmed, frequency-ranked
+                        // assignee cache the other selectors use feeds the picker (as TaskAssignee); the
+                        // set/clear write closes over the resolved task id (the checklist response carries
+                        // none), exactly like setChecklistResolvedAsync above.
+                        assigneeMatch: (query, exclude) => _assignees.Match(query, exclude),
+                        assigneeTopFrequent: (n, exclude) => _assignees.TopMostFrequent(n, exclude),
+                        setChecklistItemAssigneeAsync: (checklistId, itemId, assigneeId, ct) =>
+                            _tasks.SetChecklistItemAssigneeAsync(resolvedId, checklistId, itemId, assigneeId, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the

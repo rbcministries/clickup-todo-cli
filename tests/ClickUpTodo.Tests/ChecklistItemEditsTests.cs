@@ -161,6 +161,50 @@ public sealed class ChecklistItemEditsTests
         Assert.Equal(Rows(before), Rows(ChecklistItemEdits.SetAssignee(before, "no-list", "i1", Ada)));
     }
 
+    // ── FindItem (rename-overlay assignee seed / server-confirm reduce, #572) ─────────────────────────
+
+    [Fact]
+    public void FindItem_ReturnsTopLevelItem_WithItsAssignee()
+    {
+        IReadOnlyList<TaskChecklist> checklists =
+            [List("c1", "Release", 0, new TaskChecklistItem("i1", "A", false, null, null, Ada), Item("i2", "B"))];
+
+        var found = ChecklistItemEdits.FindItem(checklists, "c1", "i1");
+
+        Assert.NotNull(found);
+        Assert.Equal("A", found!.Name);
+        Assert.Equal(Ada, found.Assignee);
+    }
+
+    [Fact]
+    public void FindItem_FindsNestedChild()
+    {
+        IReadOnlyList<TaskChecklist> checklists =
+            [List("c1", "Release", 0, Item("i1", "Parent", children: [Item("i2", "Child")]))];
+
+        Assert.Equal("Child", ChecklistItemEdits.FindItem(checklists, "c1", "i2")!.Name);
+    }
+
+    [Fact]
+    public void FindItem_IsScopedToTheNamedChecklist()
+    {
+        IReadOnlyList<TaskChecklist> checklists =
+            [List("c1", "Release", 0, Item("i1", "A")), List("c2", "QA", 1, Item("i2", "B"))];
+
+        // i2 lives in c2, so looking for it under c1 must miss (no cross-checklist match).
+        Assert.Null(ChecklistItemEdits.FindItem(checklists, "c1", "i2"));
+        Assert.Equal("B", ChecklistItemEdits.FindItem(checklists, "c2", "i2")!.Name);
+    }
+
+    [Fact]
+    public void FindItem_UnknownItemOrChecklist_ReturnsNull()
+    {
+        IReadOnlyList<TaskChecklist> checklists = [List("c1", "Release", 0, Item("i1", "A"))];
+
+        Assert.Null(ChecklistItemEdits.FindItem(checklists, "c1", "nope"));
+        Assert.Null(ChecklistItemEdits.FindItem(checklists, "no-list", "i1"));
+    }
+
     // ── Remove (delete) ───────────────────────────────────────────────────────
 
     [Fact]
