@@ -261,6 +261,12 @@ public sealed class SingleTaskApp
             defaultSessionMode: _config.AgentDispatch.DefaultSessionMode,
             defaultPostToComments: _config.AgentDispatch.DefaultPostResultsToComments,
             defaultLaunchLocation: _config.AgentDispatch.LaunchLocation,
+            // Seed the per-dispatch provider selector (#498), shared with the dashboard host: the
+            // configured providers + the F10 default + the remembered last-used pick. The pane shows the
+            // control only when there are 2+ providers.
+            providers: _config.AgentDispatch.Providers,
+            defaultProviderName: _config.AgentDispatch.DefaultProviderName,
+            lastDispatchProviderName: _config.AgentDispatch.LastDispatchProviderName,
             // Pre-fill the Dispatch working-dir field (#533): #96 cache → {base}/{Repository} match (#461)
             // → {base}/{custom-id} (#98) in task-derived mode; blank in Home/Fixed. Shared with the
             // dashboard via DispatchWorkingDirectoryPreFill so the two hosts can't drift.
@@ -560,7 +566,12 @@ public sealed class SingleTaskApp
         // reconciliation baseline (what the pre-fill would produce, #533) may consult the filesystem, so
         // it's computed here rather than in the now-pure Plan. Save only when the cache changed.
         var resolvedDefault = DispatchWorkingDirectoryPreFill.AutoDerivedDefault(tab.Task, _config.AgentDispatch, baseDir, home);
-        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, tab.TaskId, plan.ChosenDir, resolvedDefault))
+        // Persist the working-dir cache reconcile (#96) and the remembered provider pick (#498) together;
+        // each writes only when it changed (mirrors TodoApp). With 0/1 providers the provider half never
+        // saves; with 2+ the first dispatch records the seeded default once, then same-provider runs don't.
+        var cacheChanged = DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, tab.TaskId, plan.ChosenDir, resolvedDefault);
+        var providerChanged = DispatchCoordinator.RememberProvider(_config.AgentDispatch, request.Provider);
+        if (cacheChanged || providerChanged)
             _configStore.Save(_config);
 
         // One-off mode runs as a background child with output in a screen (#99); interactive opens a
