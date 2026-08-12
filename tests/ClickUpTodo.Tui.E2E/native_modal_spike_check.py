@@ -2,7 +2,7 @@
 """#404 spike A/B: F1 Help hosted as the hand-mounted _screens HelpScreen (A) vs. as a native
 Terminal.Gui Dialog run on a nested Application.Run loop (B, CLICKUP_TODO_NATIVE_MODAL=1).
 
-This is the measurement instrument for the native-modals spike (docs/plans/native-modals-spike.md).
+This is the measurement instrument for the native-modals spike (docs/plans/completed/native-modals-spike.md).
 It answers the architectural-viability questions the #402 transient-modal decision hinges on:
 
   1. Open→paint latency   — F1 until the help body is visible (A vs B).
