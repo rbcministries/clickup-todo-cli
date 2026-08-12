@@ -164,6 +164,17 @@ public sealed class TerminalCommandPlannerSplitPaneTests
         Assert.DoesNotContain(specs, s => s.DisplayName.Contains("split", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void Linux_Split_InsideWezterm_LaddersDown_SplitThenTabThenWindow()
+    {
+        // A split too narrow to survive degrades to a tab, not straight to a window (#589): inside WezTerm
+        // the ladder is split rung → new-tab rung (`cli spawn`) → its LinuxEmulators window fallback.
+        var specs = Plan(OSPlatformKind.Linux, Present("wezterm"), Split, Env(("WEZTERM_PANE", "0")));
+
+        Assert.Equal(["WezTerm (split pane)", "WezTerm (new tab)", "wezterm"], Names(specs));
+        Assert.Equal(["cli", "spawn", "--", "bash", "-lc"], specs[1].Arguments.Take(5));
+    }
+
     // ── kitty (Linux) ────────────────────────────────────────────────────────────
 
     [Fact]
@@ -194,16 +205,29 @@ public sealed class TerminalCommandPlannerSplitPaneTests
         Assert.DoesNotContain(specs, s => s.DisplayName.Contains("split", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void Linux_Split_InsideKitty_LaddersDown_SplitThenTabThenWindow()
+    {
+        // The split → tab → window ladder inside kitty (#589): split rung, then the `--type=tab` rung (also
+        // via `kitten`), then kitty's LinuxEmulators window fallback.
+        var specs = Plan(OSPlatformKind.Linux, Present("kitten", "kitty"), Split, Env(("KITTY_LISTEN_ON", "unix:/tmp/k")));
+
+        Assert.Equal(["kitty (split pane)", "kitty (new tab)", "kitty"], Names(specs));
+        Assert.Equal(["@", "launch", "--type=tab", "--cwd=current", "bash", "-lc"], specs[1].Arguments.Take(6));
+    }
+
     // ── Zellij (Linux) ───────────────────────────────────────────────────────────
 
     [Fact]
-    public void Linux_Split_InsideZellij_EmitsSplitSpec()
+    public void Linux_Split_InsideZellij_EmitsSplitSpec_ThenInSessionPaneFallback()
     {
-        var spec = Assert.Single(Plan(OSPlatformKind.Linux, Present("zellij"), Split, Env(("ZELLIJ", "0"))));
+        // Zellij has no GUI window fallback, so — like tmux's split → new-window — the split rung is
+        // followed by its in-session new-pane rung (#589), which doubles as the last-resort candidate.
+        var specs = Plan(OSPlatformKind.Linux, Present("zellij"), Split, Env(("ZELLIJ", "0")));
 
-        Assert.Equal("zellij", spec.FileName);
-        Assert.Equal("Zellij (split pane)", spec.DisplayName);
-        Assert.Equal(["action", "new-pane", "-d", "right", "--", "bash", "-lc"], spec.Arguments.Take(7));
+        Assert.Equal(["Zellij (split pane)", "Zellij (new pane)"], Names(specs));
+        Assert.Equal(["action", "new-pane", "-d", "right", "--", "bash", "-lc"], specs[0].Arguments.Take(7));
+        Assert.Equal(["action", "new-pane", "--", "bash", "-lc"], specs[1].Arguments.Take(5));
     }
 
     [Fact]
