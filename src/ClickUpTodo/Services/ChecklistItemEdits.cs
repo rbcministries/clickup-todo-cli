@@ -47,6 +47,22 @@ public static class ChecklistItemEdits
         IReadOnlyList<TaskChecklist> checklists, string checklistId, TaskChecklistItem item)
         => MapChecklist(checklists, checklistId, items => [.. items, item]);
 
+    /// <summary>Returns a copy of <paramref name="checklists"/> with item <paramref name="itemId"/> in
+    /// checklist <paramref name="checklistId"/> repositioned (G, #569): its <see cref="TaskChecklistItem.OrderIndex"/>
+    /// set to <paramref name="newOrderIndex"/> and, when reparenting, its <see cref="TaskChecklistItem.ParentId"/>
+    /// updated — to <paramref name="newParentId"/> (indent / outdent under an item), or to <c>null</c> when
+    /// <paramref name="clearParent"/> is set (outdent to top level). A plain up/down move leaves the parent
+    /// untouched (<paramref name="newParentId"/> null and <paramref name="clearParent"/> false). The item is
+    /// updated wherever it appears (flat or nested), the same recursion as <see cref="SetName"/>; the arranger
+    /// then re-projects from the new <c>ParentId</c>/<c>orderindex</c> (a ParentId pointer wins over a
+    /// Children-array position), so the optimistic row moves at once before the server-confirmed checklist
+    /// reconciles it. A value-identical no-op when the checklist/item is missing.</summary>
+    public static IReadOnlyList<TaskChecklist> Move(
+        IReadOnlyList<TaskChecklist> checklists, string checklistId, string itemId,
+        string? newParentId, double newOrderIndex, bool clearParent)
+        => MapChecklist(checklists, checklistId,
+            items => SetPositionInItems(items, itemId, newParentId, newOrderIndex, clearParent));
+
     /// <summary>Trims <paramref name="raw"/> and returns it, or <c>null</c> when it is null/empty/whitespace
     /// — the client-side reject that stops an empty create/rename before a request (mirroring the
     /// task-name rule in <c>NewTaskForm</c>).</summary>
@@ -113,6 +129,33 @@ public static class ChecklistItemEdits
             var newName = string.Equals(item.Id, itemId, StringComparison.Ordinal) ? name : item.Name;
             var newChildren = item.Children.Count > 0 ? SetNameInItems(item.Children, itemId, name) : item.Children;
             result.Add(item with { Name = newName, Children = newChildren });
+        }
+        return result;
+    }
+
+    /// <summary>Rebuilds an item list, updating the matching item's order index (and, when reparenting, its
+    /// parent) and recursing into every item's children so a nested match is updated consistently. Mirrors
+    /// <see cref="SetNameInItems"/>.</summary>
+    private static IReadOnlyList<TaskChecklistItem> SetPositionInItems(
+        IReadOnlyList<TaskChecklistItem> items, string itemId, string? newParentId, double newOrderIndex, bool clearParent)
+    {
+        var result = new List<TaskChecklistItem>(items.Count);
+        foreach (var item in items)
+        {
+            var newChildren = item.Children.Count > 0
+                ? SetPositionInItems(item.Children, itemId, newParentId, newOrderIndex, clearParent)
+                : item.Children;
+            if (string.Equals(item.Id, itemId, StringComparison.Ordinal))
+            {
+                // clearParent ⇒ null (outdent to root); an explicit newParentId ⇒ reparent; otherwise the
+                // parent is left as-is (a plain up/down move).
+                var newParentId2 = clearParent ? null : (newParentId ?? item.ParentId);
+                result.Add(item with { OrderIndex = newOrderIndex, ParentId = newParentId2, Children = newChildren });
+            }
+            else
+            {
+                result.Add(item with { Children = newChildren });
+            }
         }
         return result;
     }
