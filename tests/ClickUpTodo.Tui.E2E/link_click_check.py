@@ -12,10 +12,12 @@ Dashboard host (`TodoApp`):
   - a click while any overlay owns input — the comment composer (`Ctrl+N`), the Dispatch pane (`Ctrl+A`)
       or the description editor (`Ctrl+E`)                                → nothing.
 
-Single-task host (`SingleTaskApp`, `E2E_SINGLE_TASK=…`), which has no in-app task→task destination
-(#374), so both actions degrade to the browser and the tab stays open:
-  - plain click the **task** link  → the browser, process still alive;
-  - `Ctrl`+click it               → the browser again.
+Single-task host (`SingleTaskApp`, `E2E_SINGLE_TASK=…`): since #374 gave it in-app task→task navigation
+(the Task Tree tab + the walkable-back stack), a **task** link now opens the linked task's detail *in-app*,
+stacked over the launch task — it no longer degrades to the browser as it did before #374. `Ctrl`+click
+still follows the configured Ctrl destination (browser here, #320). The tab stays open through both:
+  - plain click the **task** link  → its detail stacked in-app (proven by Esc-depth), process still alive;
+  - `Ctrl`+click it               → the browser, process still alive.
 
 Browser launches are asserted through the harness's E2E_BROWSER_LOG recorder (one URL per line), so the
 "went to the browser" half is a file fact, not a screen guess. Navigation is asserted on the pyte screen.
@@ -211,24 +213,49 @@ def dashboard_checks():
 
 
 def single_task_checks():
-    """Single-task launch mode has no in-app task→task destination (#374), so a *task* link opens the
-    browser there — and, unlike Ctrl+B, leaves the tab running."""
+    """Single-task launch mode (#374): a *task* link opens the linked task's detail **in-app**, stacked
+    over the launch task — the walkable-back model (#401/#298), uniform with the dashboard (#291) — and
+    no longer degrades to the browser as it did before #374 (contrast #318). A **Ctrl**+click still opens
+    the browser (the configured Ctrl destination, #320), and the tab stays running through both."""
     app = App(E2E_SINGLE_TASK=SINGLE_TASK_ID)
     try:
         app.pump(8.0)
         assert app.on_detail(), "single-task mode did not boot into the detail:\n" + app.visible()
         assert app.launched() == [], f"nothing should have been launched yet: {app.launched()}"
 
-        app.click_url(TASK_URL)
-        assert app.launched() == [TASK_URL], \
-            f"a task-link click in single-task mode did not open the browser: {app.launched()}"
-        assert app.proc.poll() is None, "the single-task tab exited on a link click"
-        assert app.on_detail(), "the detail disappeared after a link click:\n" + app.visible()
+        # Since the Stream default (#106) renders comments first with the description below the fold, the
+        # seeded task link isn't on the boot frame in single-task mode — cycle to the tab that shows it,
+        # exactly as dashboard_checks() does, so the click lands wherever the current default view places
+        # the link rather than assuming it sits on the boot screen (#567).
+        assert app.cycle_to(TASK_URL), "task link not found after cycling tabs:\n" + app.visible()
 
+        # 1) Plain click the task link → its detail, stacked over the launch task (in-app, #374) — NOT the
+        #    browser. The fixture resolves the link's id to a task whose content mirrors the launch task,
+        #    so — like single_task_tree_check.py — the stack is proven by DEPTH, not screen text: no
+        #    browser launch, the tab stays alive, and a single Esc then walks back to the launch task's
+        #    detail. An *inert* click would leave nothing stacked, so that Esc would instead hit the
+        #    launch-task root and raise the #299 exit confirmation (the detail would vanish).
+        app.click_url(TASK_URL)
+        app.pump(2.5)
+        assert app.launched() == [], \
+            f"a plain task-link click in single-task mode must not open the browser (#374): {app.launched()}"
+        assert app.proc.poll() is None, "the single-task tab exited on a link click"
+        assert app.on_detail(), "the stacked task detail did not open:\n" + app.visible()
+        app.esc()  # Back: walk one task back to the launch task (NOT a quit)
+        assert app.on_detail(), \
+            "one Esc should walk back to the launch task's detail — proving a child was stacked, not " \
+            "the root exit confirmation an inert click would have left:\n" + app.visible()
+        assert "Are you sure you want to exit?" not in app.visible(), \
+            "the plain click was inert — Esc raised the root exit confirmation:\n" + app.visible()
+
+        # 2) Ctrl+click the task link → the browser (the configured Ctrl destination, #320). We are back on
+        #    the launch task's Description tab, where the link is already visible — click it directly.
+        assert app.find_url(TASK_URL), "the task link should still be visible after walking back:\n" + app.visible()
         app.click_url(TASK_URL, ctrl=True)
-        assert app.launched() == [TASK_URL, TASK_URL], \
+        assert app.launched() == [TASK_URL], \
             f"Ctrl+click in single-task mode did not open the browser: {app.launched()}"
         assert app.proc.poll() is None, "the single-task tab exited on a Ctrl+click"
+        assert app.on_detail(), "Ctrl+click should not have left the detail screen:\n" + app.visible()
     finally:
         app.kill()
 
@@ -236,4 +263,5 @@ def single_task_checks():
 dashboard_checks()
 single_task_checks()
 print("ok — Ctrl+click → browser, web click → browser, task click → stacked detail, clicks under the "
-      "composer/dispatch/editor overlays → inert, single-task mode → browser (tab stays open)")
+      "composer/dispatch/editor overlays → inert, single-task mode → plain click stacks in-app (#374) / "
+      "Ctrl+click → browser (tab stays open)")

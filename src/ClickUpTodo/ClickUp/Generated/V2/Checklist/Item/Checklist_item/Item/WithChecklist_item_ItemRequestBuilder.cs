@@ -52,10 +52,10 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Checklist.Item.Checklist_item.Item
             return await RequestAdapter.SendPrimitiveAsync<Stream>(requestInfo, default, cancellationToken).ConfigureAwait(false);
         }
         /// <summary>
-        /// Update a checklist item — toggle its `resolved` state (D, #457) and/or rename it (E, #458). ClickUp echoes the whole parent checklist wrapped as { &quot;checklist&quot;: { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. `resolved` and `name` are modelled; per-item assignee / reparent land with F–G.
+        /// Update a checklist item — toggle its `resolved` state (D, #457), rename it (E, #458), set its per-item assignee (G, #460), or reorder/reparent it (G, #569). ClickUp echoes the whole parent checklist wrapped as { &quot;checklist&quot;: { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. `resolved`, `name`, `assignee`, `orderindex` and `parent` are modelled (an explicit `assignee: null` clears the assignee; an explicit `parent: null` outdents to top level); a caller sends only the fields it changes.
         /// </summary>
         /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.Models.ChecklistItemResponse"/></returns>
-        /// <param name="body">Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457) and the rename write (E, #458). Both fields are optional so a caller sends only what it changes: &apos;resolved&apos; toggles the tick, &apos;name&apos; renames the item. Assignee/reparent land with F–G.</param>
+        /// <param name="body">Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457), the rename write (E, #458), the per-item assignee write (G, #460) and the reorder/reparent write (G, #569). Every field is optional so a caller sends only what it changes: &apos;resolved&apos; toggles the tick, &apos;name&apos; renames the item, &apos;assignee&apos; sets the single per-item assignee (a user id) — or, sent as an explicit JSON null, clears it — &apos;orderindex&apos; repositions among siblings, and &apos;parent&apos; reparents (a parent item id to indent under it, or explicit null to outdent to top level).</param>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
@@ -90,10 +90,10 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Checklist.Item.Checklist_item.Item
             return requestInfo;
         }
         /// <summary>
-        /// Update a checklist item — toggle its `resolved` state (D, #457) and/or rename it (E, #458). ClickUp echoes the whole parent checklist wrapped as { &quot;checklist&quot;: { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. `resolved` and `name` are modelled; per-item assignee / reparent land with F–G.
+        /// Update a checklist item — toggle its `resolved` state (D, #457), rename it (E, #458), set its per-item assignee (G, #460), or reorder/reparent it (G, #569). ClickUp echoes the whole parent checklist wrapped as { &quot;checklist&quot;: { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. `resolved`, `name`, `assignee`, `orderindex` and `parent` are modelled (an explicit `assignee: null` clears the assignee; an explicit `parent: null` outdents to top level); a caller sends only the fields it changes.
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
-        /// <param name="body">Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457) and the rename write (E, #458). Both fields are optional so a caller sends only what it changes: &apos;resolved&apos; toggles the tick, &apos;name&apos; renames the item. Assignee/reparent land with F–G.</param>
+        /// <param name="body">Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457), the rename write (E, #458), the per-item assignee write (G, #460) and the reorder/reparent write (G, #569). Every field is optional so a caller sends only what it changes: &apos;resolved&apos; toggles the tick, &apos;name&apos; renames the item, &apos;assignee&apos; sets the single per-item assignee (a user id) — or, sent as an explicit JSON null, clears it — &apos;orderindex&apos; repositions among siblings, and &apos;parent&apos; reparents (a parent item id to indent under it, or explicit null to outdent to top level).</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable

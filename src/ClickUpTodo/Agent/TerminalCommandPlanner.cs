@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace ClickUpTodo.Agent;
@@ -103,15 +104,23 @@ public static class TerminalCommandPlanner
     /// </summary>
     private readonly record struct InnerCommand(string Pwsh, string Posix, string? WorkingDir, bool OneOff);
 
-    // ── New-tab launch location (#255) ──────────────────────────────────────────
+    // ── In-place launch locations: new-tab (#255) and split-pane (#502/#504) ─────
     //
-    // New-tab is opt-in, interactive-only, and detection-gated per emulator: we only emit a tab spec
-    // when the user asked for a tab AND an env var proves we're inside that emulator. Otherwise we
-    // emit today's new-window spec. A one-off `-p` run never gets a tab — the issue notes it runs
-    // through the background runner with no terminal, so a tab is meaningless.
+    // Both are opt-in, interactive-only, and detection-gated per emulator: a spec is emitted only when
+    // the user asked for that location AND an env var proves we're inside a host that supports it.
+    // Otherwise the request degrades down the split → tab → window ladder (see the per-OS builders).
+    // A one-off `-p` run never gets an in-place location — it runs through the background runner with no
+    // terminal, so tab/split are meaningless there.
 
-    private static bool NewTabRequested(TerminalLauncherOptions options, bool oneOff)
-        => options.LaunchLocation == LaunchLocation.NewTab && !oneOff;
+    // The tab *rung* is wanted for an explicit new-tab request AND for a split request that degrades to a
+    // tab — so this widens the old NewTabRequested to include SplitPane. A plain NewTab request is
+    // unchanged; NewWindow still emits neither rung.
+    private static bool TabRungRequested(TerminalLauncherOptions options, bool oneOff)
+        => options.LaunchLocation is LaunchLocation.NewTab or LaunchLocation.SplitPane && !oneOff;
+
+    // The split rung is wanted only for an explicit split request (#504); it sits ahead of the tab rung.
+    private static bool SplitRequested(TerminalLauncherOptions options, bool oneOff)
+        => options.LaunchLocation == LaunchLocation.SplitPane && !oneOff;
 
     /// <summary>True if any of <paramref name="vars"/> is set to a non-blank value.</summary>
     private static bool EnvPresent(Func<string, string?> getEnv, params string[] vars)
@@ -185,8 +194,22 @@ public static class TerminalCommandPlanner
 
         // Windows Terminal is the only Windows host with a tab notion: `wt -w 0 new-tab` targets the
         // current window (vs. today's `wt new-tab`, which opens a new window). Gated on WT_SESSION so
-        // we only do it when we're actually running inside Windows Terminal.
-        var wtTab = NewTabRequested(options, oneOff) && EnvPresent(getEnv, "WT_SESSION");
+        // we only do it when we're actually running inside Windows Terminal. The rung is also wanted when
+        // a split was requested (it degrades split → tab → window).
+        var wtTab = TabRungRequested(options, oneOff) && EnvPresent(getEnv, "WT_SESSION");
+
+        // WT is also the only Windows host with a split notion: `wt -w 0 sp` splits the current pane
+        // (#502/#504). Gated on WT_SESSION + `wt` present; the split rung sits ahead of the tab/window
+        // chain. Geometry (`-V`/`-H`, `-s <fraction>`) and stay-put focus (a chained `mf previous`) are
+        // slice C (#505); the default (auto direction, even split, focus follows) is byte-identical to B.
+        // Reuses WtArgs so the profile (#462) and the `;`-delimiter escaping (#534) apply as for the tab.
+        var wtSplit = SplitRequested(options, oneOff) && exists("wt") && EnvPresent(getEnv, "WT_SESSION")
+            ? new LaunchSpec(
+                "wt",
+                WtArgs(WtSplitPrefix(options), options.WindowsTerminalProfile, command, options.SplitFocus == SplitFocus.StayPut),
+                cwd,
+                "Windows Terminal (split pane)")
+            : null;
 
         // Candidate builders keyed by the terminal they represent, in default fallback order.
         var order = new[]
@@ -209,6 +232,10 @@ public static class TerminalCommandPlanner
         if (PwshHost(exists) is { } customHost
             && CustomLaunchSpec(exists, options, [customHost, "-NoExit", "-Command", command], cwd) is { } custom)
             specs.Add(custom);
+
+        // The split rung, if requested and we're inside WT — ahead of the tab/window chain.
+        if (wtSplit is not null)
+            specs.Add(wtSplit);
 
         foreach (var terminal in chain)
         {
@@ -251,15 +278,53 @@ public static class TerminalCommandPlanner
     /// the command in two and open a bogus second tab. WT's documented escape is <c>\;</c>, which it
     /// unescapes before handing the commandline to the profile.
     /// </summary>
-    private static string[] WtArgs(IReadOnlyList<string> prefix, string? profile, string command)
+    private static string[] WtArgs(IReadOnlyList<string> prefix, string? profile, string command, bool focusRetain = false)
     {
-        string[] args = string.IsNullOrWhiteSpace(profile)
+        string[] core = string.IsNullOrWhiteSpace(profile)
             ? [.. prefix, "pwsh", "-NoExit", "-Command", command]
             : [.. prefix, "-p", profile, "pwsh", "-NoExit", "-Command", command];
-        for (var i = 0; i < args.Length; i++)
-            args[i] = EscapeWtDelimiter(args[i]);
-        return args;
+        for (var i = 0; i < core.Length; i++)
+            core[i] = EscapeWtDelimiter(core[i]);
+
+        // Stay-put focus (#505): chain a `mf previous` subcommand so WT bounces focus back to our pane
+        // after the split. The `;` is WT's subcommand separator and MUST stay literal — it is a
+        // structural token, not user data — so the focus tokens are appended *after* the escape pass
+        // above; running the `;` through EscapeWtDelimiter would turn the separator into a payload byte.
+        return focusRetain ? [.. core, ";", "mf", "previous"] : core;
     }
+
+    /// <summary>
+    /// The <c>wt sp</c> subcommand prefix for a split launch (#505): <c>-w 0 sp</c> plus the geometry —
+    /// a direction flag (<c>-V</c> beside / <c>-H</c> below; <see cref="SplitDirection.Auto"/> omits both
+    /// so WT picks by aspect ratio) and an optional <c>-s &lt;fraction&gt;</c> sizing the <b>new</b> pane.
+    /// <see cref="SplitDirection.Auto"/> with no size reproduces B's bare <c>-w 0 sp</c> exactly.
+    /// </summary>
+    private static string[] WtSplitPrefix(TerminalLauncherOptions options)
+    {
+        var args = new List<string> { "-w", "0", "sp" };
+        switch (options.SplitDirection)
+        {
+            case SplitDirection.Beside:
+                args.Add("-V");
+                break;
+            case SplitDirection.Below:
+                args.Add("-H");
+                break;
+            default:
+                // Auto: omit -V/-H so WT chooses the divider by pane aspect ratio.
+                break;
+        }
+        if (options.SplitSizePercent is { } percent)
+        {
+            args.Add("-s");
+            args.Add(WtFraction(percent));
+        }
+        return [.. args];
+    }
+
+    /// <summary>WT's <c>-s</c> takes a 0–1 fraction of the parent pane; map a 1–99 percent to it (40 → <c>0.4</c>).</summary>
+    private static string WtFraction(int percent) =>
+        (Math.Clamp(percent, 1, 99) / 100.0).ToString("0.##", CultureInfo.InvariantCulture);
 
     /// <summary>
     /// Escape Windows Terminal's subcommand delimiter in a single <c>wt</c> argument: every <c>;</c>
@@ -296,10 +361,38 @@ public static class TerminalCommandPlanner
         var windowScript = $"tell application \"Terminal\" to do script \"{AppleScriptEscape(inner)}\"";
         var windowSpec = new LaunchSpec("osascript", ["-e", windowScript], cwd, "Terminal (osascript)");
 
-        // iTerm2 has a real tab-scripting API. When the user asked for a tab and TERM_PROGRAM says
-        // we're inside iTerm, open a tab in the current window and run the command there, keeping the
-        // Terminal.app window spec after it as the fallback (macOS has no cross-emulator chain).
-        if (NewTabRequested(options, oneOff) && getEnv("TERM_PROGRAM") == "iTerm.app")
+        // iTerm2 also has a real split-scripting API (#502/#504). When a split was requested and
+        // TERM_PROGRAM says we're inside iTerm, split the current session and write the command into the
+        // new pane. The split rung sits ahead of the tab rung, which sits ahead of the window fallback.
+        if (SplitRequested(options, oneOff) && getEnv("TERM_PROGRAM") == "iTerm.app")
+        {
+            var escaped = AppleScriptEscape(inner);
+            // Direction (#505): iTerm's "split vertically" places the new session side-by-side, "split
+            // horizontally" stacks it; Auto keeps the pre-#505 side-by-side default. iTerm splits evenly
+            // (no size) and makes the new session current with no scriptable stay-put — focus follows
+            // (documented unsupported), so SplitSizePercent/SplitFocus are ignored here.
+            var splitVerb = options.SplitDirection == SplitDirection.Below
+                ? "split horizontally with default profile"
+                : "split vertically with default profile";
+            specs.Add(new LaunchSpec(
+                "osascript",
+                [
+                    "-e", "tell application \"iTerm\"",
+                    "-e", "tell current session of current window",
+                    "-e", $"set newSession to ({splitVerb})",
+                    "-e", "end tell",
+                    "-e", $"tell newSession to write text \"{escaped}\"",
+                    "-e", "end tell",
+                ],
+                cwd,
+                "iTerm2 (split pane)"));
+        }
+
+        // iTerm2 has a real tab-scripting API. When the user asked for a tab (or a split degrading to
+        // one) and TERM_PROGRAM says we're inside iTerm, open a tab in the current window and run the
+        // command there, keeping the Terminal.app window spec after it as the fallback (macOS has no
+        // cross-emulator chain).
+        if (TabRungRequested(options, oneOff) && getEnv("TERM_PROGRAM") == "iTerm.app")
         {
             var escaped = AppleScriptEscape(inner);
             specs.Add(new LaunchSpec(
@@ -327,7 +420,72 @@ public static class TerminalCommandPlanner
     {
         // <paramref name="inner"/> is the POSIX shell command run via `bash -lc` (or tmux) — built by
         // the caller (a `cd …; 'claude' …` dispatch, or an `'clickup-todo' '--task' '<id>'` app launch).
-        var tab = NewTabRequested(options, oneOff);
+        var tab = TabRungRequested(options, oneOff);
+
+        // The split rung (#502/#504): the in-place hosts with a scriptable split — tmux, WezTerm, kitty
+        // and Zellij — each gated on the env var proving we're inside it AND its executable being present,
+        // emitted only for an explicit SplitPane request. These sit *ahead* of the tab/window specs so the
+        // ladder degrades split → tab → window. Geometry (`-l %` / `--percent`) is slice C; B emits the
+        // minimal split. Ordered per #504's host table (tmux, WezTerm, kitty, Zellij); in practice these
+        // env vars are mutually exclusive, so order only matters under a nested multiplexer.
+        // Geometry (#505): direction maps to each host's own vocabulary and an optional size sits on the
+        // hosts that take one (tmux `-l %`, WezTerm `--percent`); kitty/Zellij split evenly and ignore
+        // size. Stay-put focus (#505) is best-effort: tmux `-d` and kitty `--dont-take-focus` only.
+        // Auto → the side-by-side default each host already used in B, so default options reproduce B's
+        // argv exactly.
+        var below = options.SplitDirection == SplitDirection.Below;
+        var stayPut = options.SplitFocus == SplitFocus.StayPut;
+        var splitSpecs = new List<LaunchSpec>();
+        if (SplitRequested(options, oneOff))
+        {
+            // tmux stops option parsing at `bash` (a non-option), so `-lc` reaches the shell intact —
+            // the same reason the tmux new-window spec passes `bash -lc <inner>` bare. `-h` splits
+            // side-by-side, `-v` stacks; `-l %` sizes the new pane; `-d` leaves focus in our pane.
+            if (EnvPresent(getEnv, "TMUX") && exists("tmux"))
+            {
+                var args = new List<string> { "split-window", below ? "-v" : "-h" };
+                if (options.SplitSizePercent is { } p)
+                {
+                    // `-l <n>%` (percent size) needs tmux ≥ 3.1; on an older tmux the split-window errors
+                    // and the launcher ladders on to the next candidate — acceptable best-effort sizing.
+                    args.Add("-l");
+                    args.Add($"{Math.Clamp(p, 1, 99)}%");
+                }
+                if (stayPut)
+                    args.Add("-d");
+                args.AddRange(["bash", "-lc", inner]);
+                splitSpecs.Add(new LaunchSpec("tmux", [.. args], cwd, "tmux (split pane)"));
+            }
+            if (EnvPresent(getEnv, "WEZTERM_PANE") && exists("wezterm"))
+            {
+                var args = new List<string> { "cli", "split-pane", below ? "--bottom" : "--right" };
+                if (options.SplitSizePercent is { } p)
+                {
+                    args.Add("--percent");
+                    args.Add(Math.Clamp(p, 1, 99).ToString(CultureInfo.InvariantCulture));
+                }
+                // WezTerm's `cli split-pane` has no stay-put flag — focus follows (documented unsupported).
+                args.AddRange(["--", "bash", "-lc", inner]);
+                splitSpecs.Add(new LaunchSpec("wezterm", [.. args], cwd, "WezTerm (split pane)"));
+            }
+            // kitty's gate is KITTY_LISTEN_ON — only set when `allow_remote_control` is enabled — so it
+            // probes the actual capability, not merely that kitty is running. The split runs through the
+            // `kitten` binary (`kitten @ launch`), so its presence is the exe gate. It splits evenly (no
+            // size argument); `--dont-take-focus` keeps focus in our pane.
+            if (EnvPresent(getEnv, "KITTY_LISTEN_ON") && exists("kitten"))
+            {
+                var args = new List<string> { "@", "launch", below ? "--location=hsplit" : "--location=vsplit" };
+                if (stayPut)
+                    args.Add("--dont-take-focus");
+                args.AddRange(["--cwd=current", "bash", "-lc", inner]);
+                splitSpecs.Add(new LaunchSpec("kitten", [.. args], cwd, "kitty (split pane)"));
+            }
+            // Zellij's `-d` is the *direction* flag (right/down), not a focus flag; it splits evenly and
+            // has no stay-put option — focus follows (documented unsupported).
+            if (EnvPresent(getEnv, "ZELLIJ") && exists("zellij"))
+                splitSpecs.Add(new LaunchSpec(
+                    "zellij", ["action", "new-pane", "-d", below ? "down" : "right", "--", "bash", "-lc", inner], cwd, "Zellij (split pane)"));
+        }
 
         // A user-configured custom emulator/wrapper (#385) is tried first, ahead of $TERMINAL, the probe
         // list and tmux — an explicit preference beats auto-detection. It runs `bash -lc <inner>` like
@@ -393,7 +551,9 @@ public static class TerminalCommandPlanner
                 windowSpecs.Add(tmuxSpec);
         }
 
-        return custom is null ? [.. tabSpecs, .. windowSpecs] : [custom, .. tabSpecs, .. windowSpecs];
+        return custom is null
+            ? [.. splitSpecs, .. tabSpecs, .. windowSpecs]
+            : [custom, .. splitSpecs, .. tabSpecs, .. windowSpecs];
     }
 
     /// <summary>

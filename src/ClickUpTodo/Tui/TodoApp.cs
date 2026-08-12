@@ -732,13 +732,13 @@ public sealed class TodoApp
         var command = AppLaunchCommand.ForTask(taskId);
         // A new tab of the current terminal where the host supports it (#255's LaunchLocation), honouring
         // the user's preferred-terminal setting on Windows. The options + status strings are shared with
-        // single-task mode's Ctrl+Enter (#435) via AppTabLaunch so the two hosts can't drift; the helper
+        // single-task mode's Ctrl+Enter (#435) via AppHostLaunch so the two hosts can't drift; the helper
         // deliberately doesn't use AgentDispatch.ToLauncherOptions (ClaudeExecutable/ExtraArgs are a
         // dispatch concern that doesn't apply to relaunching this app).
-        var options = AppTabLaunch.Options(
-            _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
+        var options = AppHostLaunch.Options(
+            LaunchLocation.NewTab, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
         _launchingTab = true;
-        Flash(AppTabLaunch.Opening(name));
+        Flash(AppHostLaunch.Opening(name, LaunchLocation.NewTab));
         _ = Task.Run(async () =>
         {
             try
@@ -752,7 +752,7 @@ public sealed class TodoApp
                         FlashLaunchFallback(command);
                         return;
                     }
-                    Flash(AppTabLaunch.Opened(name, result));
+                    Flash(AppHostLaunch.Opened(name, LaunchLocation.NewTab, result));
                 });
             }
             catch (Exception ex)
@@ -766,7 +766,7 @@ public sealed class TodoApp
     /// the user can open the task tab themselves. <paramref name="reason"/> names the failure when the
     /// launch threw (vs. simply finding no emulator).</summary>
     private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
-        => Flash(AppTabLaunch.Fallback(command, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+        => Flash(AppHostLaunch.Fallback(command, LaunchLocation.NewTab, TryCopyToClipboard(command.ToDisplayCommand()), reason));
 
     /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard just yields
     /// false so the caller shows the run-it-yourself form instead.</summary>
@@ -2071,6 +2071,12 @@ public sealed class TodoApp
                         // Seed the per-dispatch launch-location toggle (#275) from the persisted default
                         // (#255/#274); the user can override it per dispatch without changing the default.
                         defaultLaunchLocation: _config.AgentDispatch.LaunchLocation,
+                        // Seed the per-dispatch provider selector (#498): the configured providers plus
+                        // the F10 default and the remembered last-used pick; the pane shows the control
+                        // only when there are 2+ providers and overrides the default per dispatch.
+                        providers: _config.AgentDispatch.Providers,
+                        defaultProviderName: _config.AgentDispatch.DefaultProviderName,
+                        lastDispatchProviderName: _config.AgentDispatch.LastDispatchProviderName,
                         // Pre-fill the Dispatch working-dir field (#533): the #96 per-task cache, else a
                         // {base}/{Repository} match (#461), else the per-task {base}/{custom-id} dir (#98) —
                         // in task-derived mode; blank in Home/Fixed. Read live on each pane open so a
@@ -2115,6 +2121,10 @@ public sealed class TodoApp
                             _tasks.RenameChecklistItemAsync(checklistId, itemId, name, ct),
                         deleteChecklistItemAsync: (checklistId, itemId, ct) =>
                             _tasks.DeleteChecklistItemAsync(checklistId, itemId, ct),
+                        // Shift+arrows on the Checklists tab (G, #569): reorder / reparent the item. Pass the
+                        // resolved task id so the facade records a multi-tab nudge (#519), like the toggle.
+                        moveChecklistItemAsync: (checklistId, itemId, parentId, orderIndex, clearParent, ct) =>
+                            _tasks.MoveChecklistItemAsync(resolvedId, checklistId, itemId, parentId, orderIndex, clearParent, ct),
                         // Checklist group CRUD (F, #459): create is task-scoped (POST /task/{id}/checklist),
                         // so the host supplies the resolved task id; rename/delete take just the checklist id.
                         createChecklistAsync: (name, ct) =>
@@ -2122,7 +2132,15 @@ public sealed class TodoApp
                         renameChecklistAsync: (checklistId, name, ct) =>
                             _tasks.RenameChecklistAsync(checklistId, name, ct),
                         deleteChecklistAsync: (checklistId, ct) =>
-                            _tasks.DeleteChecklistAsync(checklistId, ct));
+                            _tasks.DeleteChecklistAsync(checklistId, ct),
+                        // Per-item assignee in the rename overlay (#572): the same warmed, frequency-ranked
+                        // assignee cache the other selectors use feeds the picker (as TaskAssignee); the
+                        // set/clear write closes over the resolved task id (the checklist response carries
+                        // none), exactly like setChecklistResolvedAsync above.
+                        assigneeMatch: (query, exclude) => _assignees.Match(query, exclude),
+                        assigneeTopFrequent: (n, exclude) => _assignees.TopMostFrequent(n, exclude),
+                        setChecklistItemAssigneeAsync: (checklistId, itemId, assigneeId, ct) =>
+                            _tasks.SetChecklistItemAssigneeAsync(resolvedId, checklistId, itemId, assigneeId, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the
@@ -2404,7 +2422,13 @@ public sealed class TodoApp
         // reconciliation baseline is what the pre-fill would produce (#533) — repo match else
         // {base}/{custom-id} — which may consult the filesystem, so it's computed here, not in pure Plan.
         var resolvedDefault = DispatchWorkingDirectoryPreFill.AutoDerivedDefault(detail, _config.AgentDispatch, baseDir, home);
-        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, detail.Id, plan.ChosenDir, resolvedDefault))
+        // Persist the working-dir cache reconcile (#96) and the remembered provider pick (#498) together —
+        // each writes only when it actually changed. With 0/1 providers (no selector shown) the provider
+        // half is always a no-op; with 2+ providers the first dispatch records the seeded default as the
+        // last-used pick (one save), and later same-provider dispatches save nothing.
+        var cacheChanged = DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, detail.Id, plan.ChosenDir, resolvedDefault);
+        var providerChanged = DispatchCoordinator.RememberProvider(_config.AgentDispatch, request.Provider);
+        if (cacheChanged || providerChanged)
             _configStore.Save(_config);
 
         // One-off mode (#94) runs claude -p as a background child of the app — no terminal window — with

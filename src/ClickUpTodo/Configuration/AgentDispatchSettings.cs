@@ -98,6 +98,18 @@ public sealed class AgentDispatchSettings
     /// </summary>
     public string DefaultProviderName { get; set; } = "";
 
+    /// <summary>
+    /// The <see cref="DispatchProvider.Name"/> of the provider the Dispatch pane's per-dispatch selector
+    /// (#498) last launched — the <b>remembered</b> pick, distinct from the F10-configured
+    /// <see cref="DefaultProviderName"/>: the pane seeds its provider control from this (falling back to
+    /// the configured default), and the host writes the chosen name back here after a dispatch so the
+    /// next one opens on it. Blank ⇒ no remembered pick, so the pane opens on
+    /// <see cref="DefaultProviderName"/> exactly as before. Absent in an old config ⇒ blank; no
+    /// migration. Left out of <see cref="IsDefault"/> because it is blank on a fresh/zero-config object
+    /// and is a UI-continuity hint, not a launch-affecting knob.
+    /// </summary>
+    public string LastDispatchProviderName { get; set; } = "";
+
     /// <summary>The executable used when a provider's <see cref="DispatchProvider.Executable"/> is blank.</summary>
     public const string DefaultExecutable = "claude";
 
@@ -209,13 +221,43 @@ public sealed class AgentDispatchSettings
     }
 
     /// <summary>
+    /// The provider a single dispatch targets given the pane's per-dispatch pick (#498): the one whose
+    /// <see cref="DispatchProvider.Name"/> equals <paramref name="name"/> (<see cref="StringComparison.Ordinal"/>,
+    /// matching <see cref="ResolveDefaultProvider"/>), else the <see cref="ResolveDefaultProvider">configured
+    /// default</see>. A blank/null <paramref name="name"/> — a dispatch that never touched the provider
+    /// control — resolves to the default, so behaviour is unchanged. An unknown name (e.g. a provider the
+    /// user deleted between opening the pane and submitting) also falls back to the default rather than
+    /// failing the launch. Never returns null; treat the result as read-only (see
+    /// <see cref="ResolveDefaultProvider"/>).
+    /// </summary>
+    public DispatchProvider ResolveProvider(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return ResolveDefaultProvider();
+        return Providers.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.Ordinal))
+            ?? ResolveDefaultProvider();
+    }
+
+    /// <summary>
     /// Projects these settings onto the launcher's <see cref="TerminalLauncherOptions"/> from the
     /// <see cref="ResolveDefaultProvider">resolved default provider</see>, coalescing a blank executable
     /// back to the <c>"claude"</c> default and copying the extra args and preference.
     /// </summary>
-    public TerminalLauncherOptions ToLauncherOptions()
+    public TerminalLauncherOptions ToLauncherOptions() => ToLauncherOptions(ResolveDefaultProvider());
+
+    /// <summary>
+    /// Projects these settings onto the launcher's <see cref="TerminalLauncherOptions"/> from a
+    /// <paramref name="provider"/> the caller chose (#498) — the pane's per-dispatch pick, or the
+    /// <see cref="ResolveDefaultProvider">default</see> for the no-arg overload. Only the provider's
+    /// executable/extra-args differ per pick; the terminal/preference/launch-location fields are
+    /// provider-agnostic and copied identically either way, so a dispatch that keeps the default
+    /// provider produces byte-identical options to the pre-#498 no-arg projection. Blank executable ⇒
+    /// <c>"claude"</c>; args trimmed and blanks dropped (the same cleaning the F2 editor's
+    /// <c>ParseExtraArgs</c> applies to typed input).
+    /// </summary>
+    public TerminalLauncherOptions ToLauncherOptions(DispatchProvider provider)
     {
-        var provider = ResolveDefaultProvider();
+        ArgumentNullException.ThrowIfNull(provider);
         return new()
         {
             ClaudeExecutable = string.IsNullOrWhiteSpace(provider.Executable) ? DefaultExecutable : provider.Executable.Trim(),

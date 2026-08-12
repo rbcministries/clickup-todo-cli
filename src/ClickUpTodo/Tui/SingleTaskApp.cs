@@ -261,6 +261,12 @@ public sealed class SingleTaskApp
             defaultSessionMode: _config.AgentDispatch.DefaultSessionMode,
             defaultPostToComments: _config.AgentDispatch.DefaultPostResultsToComments,
             defaultLaunchLocation: _config.AgentDispatch.LaunchLocation,
+            // Seed the per-dispatch provider selector (#498), shared with the dashboard host: the
+            // configured providers + the F10 default + the remembered last-used pick. The pane shows the
+            // control only when there are 2+ providers.
+            providers: _config.AgentDispatch.Providers,
+            defaultProviderName: _config.AgentDispatch.DefaultProviderName,
+            lastDispatchProviderName: _config.AgentDispatch.LastDispatchProviderName,
             // Pre-fill the Dispatch working-dir field (#533): #96 cache → {base}/{Repository} match (#461)
             // → {base}/{custom-id} (#98) in task-derived mode; blank in Home/Fixed. Shared with the
             // dashboard via DispatchWorkingDirectoryPreFill so the two hosts can't drift.
@@ -309,13 +315,32 @@ public sealed class SingleTaskApp
                 _tasks.RenameChecklistItemAsync(checklistId, itemId, name, ct),
             deleteChecklistItemAsync: (checklistId, itemId, ct) =>
                 _tasks.DeleteChecklistItemAsync(checklistId, itemId, ct),
+            // Shift+arrows on the Checklists tab (G, #569): reorder / reparent the item, keyed to this tab's
+            // task id for the multi-tab nudge (#519), like the toggle.
+            moveChecklistItemAsync: (checklistId, itemId, parentId, orderIndex, clearParent, ct) =>
+                _tasks.MoveChecklistItemAsync(id, checklistId, itemId, parentId, orderIndex, clearParent, ct),
             // Checklist group CRUD (F, #459), keyed to this tab's task id for the task-scoped create.
             createChecklistAsync: (name, ct) =>
                 _tasks.CreateChecklistAsync(id, name, ct),
             renameChecklistAsync: (checklistId, name, ct) =>
                 _tasks.RenameChecklistAsync(checklistId, name, ct),
             deleteChecklistAsync: (checklistId, ct) =>
-                _tasks.DeleteChecklistAsync(checklistId, ct));
+                _tasks.DeleteChecklistAsync(checklistId, ct),
+            // Per-item assignee in the rename overlay (#572): wired only when a host projected the assignee
+            // pool (_assignees) — the same gate the #473 mention seams use. Without it (a bare single-task
+            // launch), assigneeMatch/topFrequent/write stay null and the rename overlay is name-only,
+            // byte-identical to before, matching #572's "F-inert without a supplied AssigneeFrequencyCache".
+            // The write is keyed to this tab's task id (the checklist response carries none), like the toggle.
+            assigneeMatch: _assignees is null
+                ? null
+                : (query, exclude) => _assignees.Match(query, exclude),
+            assigneeTopFrequent: _assignees is null
+                ? null
+                : (n, exclude) => _assignees.TopMostFrequent(n, exclude),
+            setChecklistItemAssigneeAsync: _assignees is null
+                ? null
+                : (checklistId, itemId, assigneeId, ct) =>
+                    _tasks.SetChecklistItemAssigneeAsync(id, checklistId, itemId, assigneeId, ct));
 
         var tab = new DetailTab(screen, id, task, comments);
 
@@ -560,7 +585,12 @@ public sealed class SingleTaskApp
         // reconciliation baseline (what the pre-fill would produce, #533) may consult the filesystem, so
         // it's computed here rather than in the now-pure Plan. Save only when the cache changed.
         var resolvedDefault = DispatchWorkingDirectoryPreFill.AutoDerivedDefault(tab.Task, _config.AgentDispatch, baseDir, home);
-        if (DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, tab.TaskId, plan.ChosenDir, resolvedDefault))
+        // Persist the working-dir cache reconcile (#96) and the remembered provider pick (#498) together;
+        // each writes only when it changed (mirrors TodoApp). With 0/1 providers the provider half never
+        // saves; with 2+ the first dispatch records the seeded default once, then same-provider runs don't.
+        var cacheChanged = DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, tab.TaskId, plan.ChosenDir, resolvedDefault);
+        var providerChanged = DispatchCoordinator.RememberProvider(_config.AgentDispatch, request.Provider);
+        if (cacheChanged || providerChanged)
             _configStore.Save(_config);
 
         // One-off mode runs as a background child with output in a screen (#99); interactive opens a
@@ -708,7 +738,7 @@ public sealed class SingleTaskApp
     /// Ctrl+Enter from a single-task tab: opens the front-most tab's task in its own terminal tab —
     /// <c>clickup-todo --task &lt;id&gt;</c> (#301) — through the same cross-platform launcher and
     /// copy-command fallback the dashboard uses (#384), sharing the option/message helper
-    /// (<see cref="AppTabLaunch"/>) so the two hosts can't drift. Re-entrancy-guarded so a rapid second
+    /// (<see cref="AppHostLaunch"/>) so the two hosts can't drift. Re-entrancy-guarded so a rapid second
     /// press can't spawn duplicate tabs; the launch runs off the UI thread and reports back via the shared
     /// footer. Re-launching the <em>same</em> task is "a bit odd but harmless" (#384/#435) — the value is
     /// footer parity and the copy-command fallback where a tab can't be targeted.
@@ -724,10 +754,10 @@ public sealed class SingleTaskApp
         // Resolve the command before arming the guard: ForTask is pure and could throw on a blank id, and
         // doing it first means such a throw can't leave _launchingTab stuck true (mirrors TodoApp).
         var command = AppLaunchCommand.ForTask(taskId);
-        var options = AppTabLaunch.Options(
-            _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
+        var options = AppHostLaunch.Options(
+            LaunchLocation.NewTab, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
         _launchingTab = true;
-        Flash(AppTabLaunch.Opening(name));
+        Flash(AppHostLaunch.Opening(name, LaunchLocation.NewTab));
         _ = Task.Run(async () =>
         {
             try
@@ -737,7 +767,7 @@ public sealed class SingleTaskApp
                 {
                     _launchingTab = false;
                     if (result.Success)
-                        Flash(AppTabLaunch.Opened(name, result));
+                        Flash(AppHostLaunch.Opened(name, LaunchLocation.NewTab, result));
                     else
                         FlashLaunchFallback(command);
                 });
@@ -753,7 +783,7 @@ public sealed class SingleTaskApp
     /// clipboard so the user can open the task tab themselves. <paramref name="reason"/> names the failure
     /// when the launch threw (vs. simply finding no emulator to launch).</summary>
     private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
-        => Flash(AppTabLaunch.Fallback(command, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+        => Flash(AppHostLaunch.Fallback(command, LaunchLocation.NewTab, TryCopyToClipboard(command.ToDisplayCommand()), reason));
 
     /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard yields false
     /// so the caller shows the run-it-yourself form instead (mirrors TodoApp).</summary>
