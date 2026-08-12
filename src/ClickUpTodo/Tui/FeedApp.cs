@@ -398,7 +398,7 @@ public sealed class FeedApp
     /// Enter on a feed row: opens that comment's task in its own terminal tab —
     /// <c>clickup-todo --task &lt;id&gt;</c> (#301) — through the same cross-platform launcher and
     /// copy-command fallback the other hosts use (#384/#435), sharing the option/message helper
-    /// (<see cref="AppTabLaunch"/>) so the paths can't drift. Re-entrancy-guarded so a rapid second Enter
+    /// (<see cref="AppHostLaunch"/>) so the paths can't drift. Re-entrancy-guarded so a rapid second Enter
     /// can't spawn duplicate tabs; the launch runs off the UI thread and reports back on the shared footer.
     /// The launched <c>--task</c> tab titles itself from the task, so the taskId here is only the flash label.
     /// </summary>
@@ -413,10 +413,10 @@ public sealed class FeedApp
         // Resolve the command before arming the guard: ForTask is pure and could throw on a blank id, and
         // doing it first means such a throw can't leave _launchingTab stuck true (mirrors the other hosts).
         var command = AppLaunchCommand.ForTask(taskId);
-        var options = AppTabLaunch.Options(
-            _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
+        var options = AppHostLaunch.Options(
+            LaunchLocation.NewTab, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
         _launchingTab = true;
-        Flash(AppTabLaunch.Opening(taskId));
+        Flash(AppHostLaunch.Opening(taskId, LaunchLocation.NewTab));
         _ = Task.Run(async () =>
         {
             try
@@ -426,7 +426,7 @@ public sealed class FeedApp
                 {
                     _launchingTab = false;
                     if (result.Success)
-                        Flash(AppTabLaunch.Opened(taskId, result));
+                        Flash(AppHostLaunch.Opened(taskId, LaunchLocation.NewTab, result));
                     else
                         FlashLaunchFallback(command);
                 });
@@ -441,7 +441,7 @@ public sealed class FeedApp
     /// <summary>The no-terminal fallback (#301): flash the exact relaunch command and copy it to the
     /// clipboard so the user can open the task tab themselves.</summary>
     private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
-        => Flash(AppTabLaunch.Fallback(command, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+        => Flash(AppHostLaunch.Fallback(command, LaunchLocation.NewTab, TryCopyToClipboard(command.ToDisplayCommand()), reason));
 
     /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard yields false
     /// so the caller shows the run-it-yourself form instead (mirrors the other hosts).</summary>

@@ -90,6 +90,121 @@ public sealed class ChecklistItemEditsTests
         Assert.Equal(Rows(before), Rows(ChecklistItemEdits.SetName(before, "no-list", "i1", "X")));
     }
 
+    // ── SetAssignee (per-item assignee, G #460) ───────────────────────────────
+
+    private static readonly TaskAssignee Ada = new(7, "Ada Lovelace");
+
+    /// <summary>Finds an item by id anywhere in the domain tree (flat list + nested children) — the
+    /// SetAssignee transform touches the domain record, not the projected row text, so assertions read the
+    /// <see cref="TaskChecklistItem.Assignee"/> straight off the tree.</summary>
+    private static TaskChecklistItem FindItem(IReadOnlyList<TaskChecklist> checklists, string itemId)
+    {
+        TaskChecklistItem? Walk(IReadOnlyList<TaskChecklistItem> items)
+        {
+            foreach (var item in items)
+            {
+                if (item.Id == itemId)
+                    return item;
+                if (item.Children.Count > 0 && Walk(item.Children) is { } hit)
+                    return hit;
+            }
+            return null;
+        }
+        return checklists.Select(c => Walk(c.Items)).FirstOrDefault(x => x is not null)
+               ?? throw new InvalidOperationException($"item '{itemId}' not found");
+    }
+
+    [Fact]
+    public void SetAssignee_SetsTopLevelItem_LeavesSiblingUntouched()
+    {
+        IReadOnlyList<TaskChecklist> before = [List("c1", "Release", 0, Item("i1", "A"), Item("i2", "B"))];
+
+        var after = ChecklistItemEdits.SetAssignee(before, "c1", "i1", Ada);
+
+        Assert.Equal(Ada, FindItem(after, "i1").Assignee);
+        Assert.Null(FindItem(after, "i2").Assignee); // sibling untouched
+    }
+
+    [Fact]
+    public void SetAssignee_ClearsAssignee_WhenNull()
+    {
+        IReadOnlyList<TaskChecklist> before =
+            [List("c1", "Release", 0, new TaskChecklistItem("i1", "A", false, null, null, Ada))];
+        Assert.Equal(Ada, FindItem(before, "i1").Assignee); // precondition
+
+        var after = ChecklistItemEdits.SetAssignee(before, "c1", "i1", null);
+
+        Assert.Null(FindItem(after, "i1").Assignee);
+    }
+
+    [Fact]
+    public void SetAssignee_UpdatesNestedChild()
+    {
+        IReadOnlyList<TaskChecklist> before =
+            [List("c1", "Release", 0, Item("i1", "Parent", children: [Item("i2", "Child")]))];
+
+        var after = ChecklistItemEdits.SetAssignee(before, "c1", "i2", Ada);
+
+        Assert.Equal(Ada, FindItem(after, "i2").Assignee);
+        Assert.Null(FindItem(after, "i1").Assignee); // parent untouched
+    }
+
+    [Fact]
+    public void SetAssignee_UnknownItemOrChecklist_IsNoOp()
+    {
+        IReadOnlyList<TaskChecklist> before = [List("c1", "Release", 0, Item("i1", "A"))];
+
+        // Unknown item id / unknown checklist id: the target item keeps its (null) assignee and the rows
+        // are value-identical — a stray call (e.g. against a header row) can never corrupt the tree.
+        Assert.Null(FindItem(ChecklistItemEdits.SetAssignee(before, "c1", "nope", Ada), "i1").Assignee);
+        Assert.Null(FindItem(ChecklistItemEdits.SetAssignee(before, "no-list", "i1", Ada), "i1").Assignee);
+        Assert.Equal(Rows(before), Rows(ChecklistItemEdits.SetAssignee(before, "no-list", "i1", Ada)));
+    }
+
+    // ── FindItem (rename-overlay assignee seed / server-confirm reduce, #572) ─────────────────────────
+
+    [Fact]
+    public void FindItem_ReturnsTopLevelItem_WithItsAssignee()
+    {
+        IReadOnlyList<TaskChecklist> checklists =
+            [List("c1", "Release", 0, new TaskChecklistItem("i1", "A", false, null, null, Ada), Item("i2", "B"))];
+
+        var found = ChecklistItemEdits.FindItem(checklists, "c1", "i1");
+
+        Assert.NotNull(found);
+        Assert.Equal("A", found!.Name);
+        Assert.Equal(Ada, found.Assignee);
+    }
+
+    [Fact]
+    public void FindItem_FindsNestedChild()
+    {
+        IReadOnlyList<TaskChecklist> checklists =
+            [List("c1", "Release", 0, Item("i1", "Parent", children: [Item("i2", "Child")]))];
+
+        Assert.Equal("Child", ChecklistItemEdits.FindItem(checklists, "c1", "i2")!.Name);
+    }
+
+    [Fact]
+    public void FindItem_IsScopedToTheNamedChecklist()
+    {
+        IReadOnlyList<TaskChecklist> checklists =
+            [List("c1", "Release", 0, Item("i1", "A")), List("c2", "QA", 1, Item("i2", "B"))];
+
+        // i2 lives in c2, so looking for it under c1 must miss (no cross-checklist match).
+        Assert.Null(ChecklistItemEdits.FindItem(checklists, "c1", "i2"));
+        Assert.Equal("B", ChecklistItemEdits.FindItem(checklists, "c2", "i2")!.Name);
+    }
+
+    [Fact]
+    public void FindItem_UnknownItemOrChecklist_ReturnsNull()
+    {
+        IReadOnlyList<TaskChecklist> checklists = [List("c1", "Release", 0, Item("i1", "A"))];
+
+        Assert.Null(ChecklistItemEdits.FindItem(checklists, "c1", "nope"));
+        Assert.Null(ChecklistItemEdits.FindItem(checklists, "no-list", "i1"));
+    }
+
     // ── Remove (delete) ───────────────────────────────────────────────────────
 
     [Fact]
@@ -259,5 +374,74 @@ public sealed class ChecklistItemEditsTests
         // A create into an empty checklist: before has no items, after has exactly one → that one is new.
         var after = List("c1", "Release", 0, Item("i9", "Only"));
         Assert.Equal("i9", ChecklistItemEdits.NewItemId(null, after));
+    }
+
+    // ── Move (reorder / reparent, G #569) ─────────────────────────────────────
+    // (reuses the FindItem tree-search helper defined above for the SetAssignee tests)
+
+    [Fact]
+    public void Move_UpDown_SetsOrderIndex_LeavesParentUntouched()
+    {
+        IReadOnlyList<TaskChecklist> before = [List("c1", "Release", 0,
+            Item("i1", "A", orderIndex: 0), Item("i2", "B", orderIndex: 1, parentId: "i1"))];
+
+        var after = ChecklistItemEdits.Move(before, "c1", "i2", newParentId: null, newOrderIndex: 5, clearParent: false);
+
+        var moved = FindItem(after, "i2");
+        Assert.Equal(5, moved.OrderIndex);
+        Assert.Equal("i1", moved.ParentId); // untouched
+    }
+
+    [Fact]
+    public void Move_Reparent_SetsNewParent_AndOrderIndex()
+    {
+        IReadOnlyList<TaskChecklist> before = [List("c1", "Release", 0,
+            Item("i1", "A", orderIndex: 0), Item("i2", "B", orderIndex: 1))];
+
+        var after = ChecklistItemEdits.Move(before, "c1", "i2", newParentId: "i1", newOrderIndex: 2, clearParent: false);
+
+        var moved = FindItem(after, "i2");
+        Assert.Equal("i1", moved.ParentId);
+        Assert.Equal(2, moved.OrderIndex);
+        // Re-projects nested under i1.
+        var row = Rows(after).Single(r => r.ItemId == "i2");
+        Assert.Equal(1, row.Depth);
+    }
+
+    [Fact]
+    public void Move_ClearParent_OutdentsToTopLevel()
+    {
+        IReadOnlyList<TaskChecklist> before = [List("c1", "Release", 0,
+            Item("i1", "A", orderIndex: 0), Item("i2", "B", orderIndex: 0, parentId: "i1"))];
+
+        var after = ChecklistItemEdits.Move(before, "c1", "i2", newParentId: null, newOrderIndex: 1, clearParent: true);
+
+        var moved = FindItem(after, "i2");
+        Assert.Null(moved.ParentId);
+        Assert.Equal(1, moved.OrderIndex);
+        Assert.Equal(0, Rows(after).Single(r => r.ItemId == "i2").Depth); // now a root row
+    }
+
+    [Fact]
+    public void Move_UpdatesANestedChildrenArrayMatch()
+    {
+        // Nesting expressed via a Children array rather than a flat ParentId pointer.
+        IReadOnlyList<TaskChecklist> before = [List("c1", "Release", 0,
+            Item("i1", "A", orderIndex: 0, children: [Item("i1a", "child", orderIndex: 0)]))];
+
+        var after = ChecklistItemEdits.Move(before, "c1", "i1a", newParentId: null, newOrderIndex: 9, clearParent: false);
+
+        Assert.Equal(9, FindItem(after, "i1a").OrderIndex);
+    }
+
+    [Fact]
+    public void Move_MissingChecklistOrItem_IsValueIdenticalNoOp()
+    {
+        IReadOnlyList<TaskChecklist> before = [List("c1", "Release", 0, Item("i1", "A", orderIndex: 0))];
+
+        // Missing checklist: nothing matches, so i1 keeps its order index.
+        Assert.Equal(0, FindItem(ChecklistItemEdits.Move(before, "cX", "i1", null, 3, false), "i1").OrderIndex);
+        // Missing item: the tree is rebuilt but value-identical (no item matches).
+        Assert.Equal(0, FindItem(ChecklistItemEdits.Move(before, "c1", "nope", null, 3, false), "i1").OrderIndex);
     }
 }

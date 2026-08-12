@@ -99,9 +99,24 @@ public interface IClickUpClient
     Task<TaskChecklist> RenameChecklistItemAsync(string checklistId, string itemId, string name, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
 
+    /// <summary>Set (or clear, when <paramref name="assigneeId"/> is null) a checklist item's per-item
+    /// assignee (G, #460) and return the server-confirmed parent <see cref="TaskChecklist"/>.
+    /// <paramref name="taskId"/> is the owning task, used to record a multi-tab change-marker nudge (#519).
+    /// Default throwing so read-only fakes needn't implement it; <see cref="ClickUpClient"/> overrides it.
+    /// See <see cref="ClickUpClient.SetChecklistItemAssigneeAsync"/>.</summary>
+    Task<TaskChecklist> SetChecklistItemAssigneeAsync(string taskId, string checklistId, string itemId, long? assigneeId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
+
     /// <summary>Delete a checklist item (E, #458). ClickUp returns an empty body, so this is a void write.
     /// Default throwing; <see cref="ClickUpClient"/> overrides it. See <see cref="ClickUpClient.DeleteChecklistItemAsync"/>.</summary>
     Task DeleteChecklistItemAsync(string checklistId, string itemId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
+
+    /// <summary>Reorder / reparent a checklist item (G, #569) and return the server-confirmed parent
+    /// <see cref="TaskChecklist"/>. <paramref name="taskId"/> is the owning task, used to record a multi-tab
+    /// change-marker nudge (#519). Default throwing so read-only fakes needn't implement it;
+    /// <see cref="ClickUpClient"/> overrides it. See <see cref="ClickUpClient.MoveChecklistItemAsync"/>.</summary>
+    Task<TaskChecklist> MoveChecklistItemAsync(string taskId, string checklistId, string itemId, string? parentId, double orderIndex, bool clearParent, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
 
     /// <summary>Create a checklist group on a task (F, #459) and return the server-confirmed
