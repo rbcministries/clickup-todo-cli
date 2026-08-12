@@ -732,13 +732,13 @@ public sealed class TodoApp
         var command = AppLaunchCommand.ForTask(taskId);
         // A new tab of the current terminal where the host supports it (#255's LaunchLocation), honouring
         // the user's preferred-terminal setting on Windows. The options + status strings are shared with
-        // single-task mode's Ctrl+Enter (#435) via AppTabLaunch so the two hosts can't drift; the helper
+        // single-task mode's Ctrl+Enter (#435) via AppHostLaunch so the two hosts can't drift; the helper
         // deliberately doesn't use AgentDispatch.ToLauncherOptions (ClaudeExecutable/ExtraArgs are a
         // dispatch concern that doesn't apply to relaunching this app).
-        var options = AppTabLaunch.Options(
-            _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
+        var options = AppHostLaunch.Options(
+            LaunchLocation.NewTab, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
         _launchingTab = true;
-        Flash(AppTabLaunch.Opening(name));
+        Flash(AppHostLaunch.Opening(name, LaunchLocation.NewTab));
         _ = Task.Run(async () =>
         {
             try
@@ -752,7 +752,7 @@ public sealed class TodoApp
                         FlashLaunchFallback(command);
                         return;
                     }
-                    Flash(AppTabLaunch.Opened(name, result));
+                    Flash(AppHostLaunch.Opened(name, LaunchLocation.NewTab, result));
                 });
             }
             catch (Exception ex)
@@ -766,7 +766,7 @@ public sealed class TodoApp
     /// the user can open the task tab themselves. <paramref name="reason"/> names the failure when the
     /// launch threw (vs. simply finding no emulator).</summary>
     private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
-        => Flash(AppTabLaunch.Fallback(command, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+        => Flash(AppHostLaunch.Fallback(command, LaunchLocation.NewTab, TryCopyToClipboard(command.ToDisplayCommand()), reason));
 
     /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard just yields
     /// false so the caller shows the run-it-yourself form instead.</summary>
