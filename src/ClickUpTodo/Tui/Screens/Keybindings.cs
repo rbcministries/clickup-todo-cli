@@ -15,6 +15,7 @@ public enum ScreenContext
     FilterSortGroup,
     QuickUpdates,
     QuickOpen,
+    RenameTask,
     NewTask,
     PromptTemplateEditor,
     DispatchProviders,
@@ -65,6 +66,7 @@ public enum KeyAction
     OpenDetail,
     OpenInNewTab,
     NewTask,
+    RenameTask,
     QuickOpen,
     TogglePin,
     Settings,
@@ -122,6 +124,11 @@ public static class Keybindings
             [(ScreenContext.MainList, KeyAction.OpenInNewTab)] = "Ctrl+Enter",
             [(ScreenContext.MainList, KeyAction.QuickOpen)] = "Ctrl+O",
             [(ScreenContext.MainList, KeyAction.NewTask)] = "Ctrl+N",
+            // Contextual chords H (#545): F2 renames the highlighted task's title in place — B (#539)
+            // freed F2 (Settings → F10) precisely for the rename slices. The main list has no ambiguous
+            // tabs, so this is a direct MainList binding (contextual-chord-model.md §5-H); the write goes
+            // through the SetTaskNameAsync facade E (#542) landed.
+            [(ScreenContext.MainList, KeyAction.RenameTask)] = "F2",
             [(ScreenContext.MainList, KeyAction.OpenInBrowser)] = "Ctrl+B",
             [(ScreenContext.MainList, KeyAction.TogglePin)] = "Ctrl+P",
             [(ScreenContext.MainList, KeyAction.Feed)] = "Ctrl+E",
@@ -178,6 +185,13 @@ public static class Keybindings
             [(ScreenContext.QuickOpen, KeyAction.Open)] = "Enter",
             [(ScreenContext.QuickOpen, KeyAction.Help)] = "F1",
             [(ScreenContext.QuickOpen, KeyAction.Back)] = "Esc",
+
+            // ── Rename task overlay (contextual chords H, #545) ───────────────────────────────
+            // A single-line title-rename modal launched by F2 from the main list. Like the other editor
+            // screens (New Task, description editor) the table binds only Help/Back; the Save key is Enter,
+            // handled in the screen (a per-form focus key, intentionally not in the table — see KeyAction).
+            [(ScreenContext.RenameTask, KeyAction.Help)] = "F1",
+            [(ScreenContext.RenameTask, KeyAction.Back)] = "Esc",
 
             // ── New Task ──────────────────────────────────────────────────────────────────────
             [(ScreenContext.NewTask, KeyAction.Help)] = "F1",
