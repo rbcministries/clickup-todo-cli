@@ -75,9 +75,12 @@ public static class ChecklistMove
 
     /// <summary>Whether reparenting <paramref name="itemId"/> under <paramref name="newParentId"/> is legal:
     /// the target must exist in the same checklist and be neither the item itself nor one of its descendants
-    /// (a cycle). A null <paramref name="newParentId"/> (to top level) is always a legal target. Exposed as a
-    /// pure predicate so the "no reparent under a descendant" rule is directly testable, though the four
-    /// gestures never target a descendant.</summary>
+    /// (a cycle). A null <paramref name="newParentId"/> (to top level) is always a legal target.
+    /// <para><b>Not called by <see cref="Plan"/> by design</b> — the four gestures only ever reparent under a
+    /// preceding sibling (indent) or a grandparent (outdent), neither of which can be a descendant, so the
+    /// cycle is structurally impossible. This predicate exists to pin the issue's explicit "no reparent under
+    /// a descendant" rule under a direct unit test; a future gesture that reparents under an arbitrary target
+    /// should route through it.</para></summary>
     public static bool IsLegalReparentTarget(
         IReadOnlyList<TaskChecklist>? checklists, string checklistId, string itemId, string? newParentId)
     {
