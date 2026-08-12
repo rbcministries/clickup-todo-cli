@@ -165,6 +165,52 @@ public sealed class DispatchCoordinatorTests
         Assert.Equal("custom {task} template", plan.Template);
     }
 
+    // ── per-dispatch provider override (#498) ────────────────────────────────────────────────────
+
+    private static AgentDispatchSettings TwoProviderSettings() => new()
+    {
+        Providers =
+        [
+            new DispatchProvider { Name = "Claude", Executable = "claude" },
+            new DispatchProvider { Name = "Codex", Executable = "  codex  ", ExtraArgs = ["  --yolo ", "", "x"] },
+        ],
+        DefaultProviderName = "Claude",
+    };
+
+    [Fact]
+    public void Plan_ProviderPick_CarriesTheChosenProvidersCleanedExeAndArgs()
+    {
+        var request = new DispatchRequest("go", Provider: "Codex");
+
+        var plan = DispatchCoordinator.Plan(TwoProviderSettings(), request, TaskWith(), BaseDir, Home);
+
+        Assert.Equal("codex", plan.ProviderExecutable);       // trimmed
+        Assert.Equal(["--yolo", "x"], plan.ProviderExtraArgs); // trimmed, blanks dropped
+    }
+
+    [Fact]
+    public void Plan_BlankProvider_LeavesTheOverrideNull()
+    {
+        // A dispatch that never touched the pane's provider control ⇒ no override ⇒ the dispatcher's
+        // constructed default options launch unchanged (byte-identical to pre-#498).
+        var plan = DispatchCoordinator.Plan(TwoProviderSettings(), new DispatchRequest("go"), TaskWith(), BaseDir, Home);
+
+        Assert.Null(plan.ProviderExecutable);
+        Assert.Null(plan.ProviderExtraArgs);
+    }
+
+    [Fact]
+    public void Plan_UnknownProvider_FallsBackToTheDefaultProvider()
+    {
+        // A provider deleted between opening the pane and submitting resolves to the default, not a throw.
+        var request = new DispatchRequest("go", Provider: "deleted");
+
+        var plan = DispatchCoordinator.Plan(TwoProviderSettings(), request, TaskWith(), BaseDir, Home);
+
+        Assert.Equal("claude", plan.ProviderExecutable);
+        Assert.Empty(plan.ProviderExtraArgs!);
+    }
+
     [Fact]
     public void Plan_TaskDerived_NullDefaultWorkingDirectory_FallsBackToTheDefaultBaseDir_AndCreatesIt()
     {

@@ -47,6 +47,14 @@ public static class DispatchCoordinator
     /// toggle is on — non-null only for an interactive launch that matched; surfaced via
     /// <see cref="WindowsTerminalProfileNote"/>.
     /// </para>
+    /// <para>
+    /// <see cref="ProviderExecutable"/>/<see cref="ProviderExtraArgs"/> are the per-dispatch provider
+    /// override (#498): the cleaned executable + extra args of the provider the pane picked, or
+    /// <c>null</c> when the dispatch kept the configured default (a blank
+    /// <see cref="DispatchRequest.Provider"/>). Non-null ⇒ the execution flows launch that provider for
+    /// this one dispatch instead of the dispatcher's constructed default; <c>null</c> leaves the launch
+    /// byte-identical to pre-#498. Both are set together or both null.
+    /// </para>
     /// </summary>
     public readonly record struct ResolvedDispatch(
         string Prompt,
@@ -57,7 +65,9 @@ public static class DispatchCoordinator
         bool PostToComments,
         LaunchLocation LaunchLocation,
         string? ChosenDir,
-        string? WindowsTerminalProfile = null);
+        string? WindowsTerminalProfile = null,
+        string? ProviderExecutable = null,
+        IReadOnlyList<string>? ProviderExtraArgs = null);
 
     /// <summary>
     /// Resolves everything a dispatch needs from the settings + the pane's <paramref name="request"/> —
@@ -120,9 +130,25 @@ public static class DispatchCoordinator
             ? WindowsTerminalProfileMatcher.Match(wtJson, workingDir, expandEnvironment)
             : null;
 
+        // Per-dispatch provider override (#498): only when the pane picked one (a non-blank Provider).
+        // Resolve it against the settings' list and project through ToLauncherOptions so the exe/args are
+        // cleaned exactly like the default projection the dispatcher was built with. A blank Provider —
+        // every pre-#498 caller — leaves the override null, so the dispatcher uses its constructed options
+        // unchanged and the launch is byte-identical. An unknown name falls back to the default provider
+        // (ResolveProvider), so a provider deleted mid-pane can't fail the launch.
+        string? providerExecutable = null;
+        IReadOnlyList<string>? providerExtraArgs = null;
+        if (!string.IsNullOrWhiteSpace(request.Provider))
+        {
+            var providerOptions = settings.ToLauncherOptions(settings.ResolveProvider(request.Provider));
+            providerExecutable = providerOptions.ClaudeExecutable;
+            providerExtraArgs = providerOptions.ExtraArgs;
+        }
+
         return new ResolvedDispatch(
             request.Prompt, workingDir, template, createWorkingDir, oneOff,
-            request.PostToComments, request.LaunchLocation, chosenDir, wtProfile);
+            request.PostToComments, request.LaunchLocation, chosenDir, wtProfile,
+            providerExecutable, providerExtraArgs);
     }
 
     /// <summary>True when <paramref name="workingDir"/> is the base working directory or a descendant of
@@ -211,7 +237,8 @@ public static class DispatchCoordinator
                 var result = await agent.DispatchAsync(
                     detail, comments, plan.Prompt, plan.WorkingDir, plan.Template,
                     plan.OneOff, plan.PostToComments, launchLocation: plan.LaunchLocation,
-                    windowsTerminalProfile: plan.WindowsTerminalProfile);
+                    windowsTerminalProfile: plan.WindowsTerminalProfile,
+                    providerExecutable: plan.ProviderExecutable, providerExtraArgs: plan.ProviderExtraArgs);
                 // Tell the user when a #462 WT profile match launched the session under a non-default
                 // profile — otherwise a launch that looked different than expected is unexplained. The
                 // #461 Repository match no longer needs a note: the directory it chose is now visible in
@@ -267,7 +294,9 @@ public static class DispatchCoordinator
 
                 var run = await agent.DispatchBackgroundAsync(
                     detail, comments, plan.Prompt, plan.WorkingDir, plan.Template,
-                    plan.PostToComments, progress, cts.Token);
+                    plan.PostToComments, progress,
+                    providerExecutable: plan.ProviderExecutable, providerExtraArgs: plan.ProviderExtraArgs,
+                    ct: cts.Token);
                 Application.Invoke(() => { clearDispatching(); screen.ShowResult(AgentRunModel.FormatOutput(run), run.Success); });
             }
             catch (OperationCanceledException)
