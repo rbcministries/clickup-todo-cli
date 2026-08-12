@@ -351,7 +351,7 @@ public sealed class TaskDetailScreen : Screen
     private long _assigneeWriteGeneration;
 
     // The item add/rename input overlay: a bottom-anchored single-line name field + Save/Cancel (with a
-    // hidden discard-confirm row for an edited rename), hidden until F7/F8. A transient child view within
+    // hidden discard-confirm row for an edited rename), hidden until Ctrl+N/F8. A transient child view within
     // the one open screen (like the comment composer / description editor), so the single-ListView model
     // (#3) is untouched.
     private readonly FrameView _checklistItemBox;
@@ -946,7 +946,7 @@ public sealed class TaskDetailScreen : Screen
 
         // The checklist-item add/rename overlay (E, #458): a bottom-anchored FrameView with a single-line
         // name field above a Save/Cancel button row (and a hidden discard-confirm row for an edited rename),
-        // shown on F7 (add) / F8 (rename). Modelled on the description editor — Save is the default (Enter
+        // shown on Ctrl+N (add) / F8 (rename). Modelled on the description editor — Save is the default (Enter
         // submits) and Esc cancels (arming the discard confirm when a rename has unsaved edits). A single
         // line, so unlike the multi-line editors the field takes Enter as submit, not a newline. Sized on
         // show (ShowChecklistItemEditor).
@@ -1340,7 +1340,7 @@ public sealed class TaskDetailScreen : Screen
         }
 
         // Shift+↑/↓/←/→ on the Checklists tab (G, #569): reorder (↑/↓) or reparent (←outdent / →indent) the
-        // highlighted item. Guarded on the checklist ListView being front-most (like Space/F7–F9 above), so
+        // highlighted item. Guarded on the checklist ListView being front-most (like Space / Ctrl+N / F8 / F9 above), so
         // the chords stay inert on the other tabs and text panes. Shift-modified (not Alt: Windows Terminal
         // claims Alt+arrows for pane focus and Alt+Shift+arrows for pane resize) so they don't collide with
         // Ctrl+←/→ tab cycling or the bare ↑/↓ pane-scroll block below (which excludes IsShift); consumed here
@@ -2676,7 +2676,7 @@ public sealed class TaskDetailScreen : Screen
     private ChecklistRow? SelectedChecklistRow()
         => _checklistList.SelectedItem is int i && i >= 0 && i < _checklistRows.Count ? _checklistRows[i] : null;
 
-    /// <summary>F7 — add an item to the checklist the selection is in (or whose header is selected). Opens
+    /// <summary>Ctrl+N (Checklists tab) — add an item to the checklist the selection is in (or whose header is selected). Opens
     /// the bottom-anchored name overlay; the create fires on submit. Inert-but-flashed when the task has no
     /// checklist to add to (creating a checklist group is F, #459).</summary>
     private void AddChecklistItem()
