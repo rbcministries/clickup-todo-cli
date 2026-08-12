@@ -527,14 +527,18 @@ public sealed class TerminalCommandPlannerSplitPaneTests
         // The Linux split hosts run the command via `bash -lc <cmd>`, whose shell exits when the session
         // ends — closing the pane and relayouting the survivors. An interactive dispatch pane keeps it
         // open (matching WT `-NoExit` / iTerm2's session shell), so the pane behaves the same everywhere.
-        foreach (var (exe, key) in new[] { ("tmux", "TMUX"), ("wezterm", "WEZTERM_PANE"), ("zellij", "ZELLIJ") })
+        static void PersistsPane(LaunchSpec spec)
         {
-            var spec = SplitSpec(Plan(OSPlatformKind.Linux, Present(exe), Split, Env((key, "1"))));
-            Assert.Contains("session ended", spec.Arguments[^1]);
+            // Assert the full keep-alive form (a `; printf … ; read -r _` prompt), not just the phrase, so
+            // a malformed suffix that happens to mention the session couldn't pass.
+            Assert.Contains("[claude session ended", spec.Arguments[^1]);
+            Assert.EndsWith("read -r _", spec.Arguments[^1]);
         }
 
-        var kitty = SplitSpec(Plan(OSPlatformKind.Linux, Present("kitten", "kitty"), Split, Env(("KITTY_LISTEN_ON", "unix:/tmp/k"))));
-        Assert.Contains("session ended", kitty.Arguments[^1]);
+        foreach (var (exe, key) in new[] { ("tmux", "TMUX"), ("wezterm", "WEZTERM_PANE"), ("zellij", "ZELLIJ") })
+            PersistsPane(SplitSpec(Plan(OSPlatformKind.Linux, Present(exe), Split, Env((key, "1")))));
+
+        PersistsPane(SplitSpec(Plan(OSPlatformKind.Linux, Present("kitten", "kitty"), Split, Env(("KITTY_LISTEN_ON", "unix:/tmp/k")))));
     }
 
     [Fact]

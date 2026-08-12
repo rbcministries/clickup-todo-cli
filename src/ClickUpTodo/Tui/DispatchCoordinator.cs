@@ -180,6 +180,12 @@ public static class DispatchCoordinator
         string? splitDegradedReason = null;
         if (!oneOff && request.LaunchLocation == LaunchLocation.SplitPane && terminalColumns is { } cols)
         {
+            // Read the split geometry from the same projection the dispatcher's launcher options come from,
+            // so the floor judges the shape the planner will actually draw. Today both resolve to the
+            // TerminalLauncherOptions record defaults (Auto direction / even split) — ToLauncherOptions
+            // copies no split geometry. When #511 adds a user-facing split-geometry surface, that setting
+            // must feed both this Evaluate and the dispatcher's ToLauncherOptions, or the floor would judge
+            // a geometry the planner doesn't emit.
             var geometry = settings.ToLauncherOptions();
             var decision = SplitViability.Evaluate(cols, geometry.SplitDirection, geometry.SplitSizePercent);
             effectiveLaunchLocation = decision.Location;
