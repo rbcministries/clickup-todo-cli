@@ -245,6 +245,32 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task SetTaskName_RoundTripsThroughDetailFetch()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),
+            "Set CLICKUP_TOKEN and CLICKUP_TASK_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        // Preserve the original name so the test is idempotent (restore in finally).
+        var original = (await client.GetTaskDetailAsync(TaskId!)).Name;
+        var marker = $"[clickup-todo-cli test] rename round-trip — safe to overwrite ({TaskId})";
+        try
+        {
+            var confirmed = await client.SetTaskNameAsync(TaskId!, marker);
+            Assert.Equal(marker, confirmed);
+
+            // The rename is reflected on a subsequent detail fetch (read → write → re-read is lossless).
+            var reread = await client.GetTaskDetailAsync(TaskId!);
+            Assert.Equal(marker, reread.Name);
+        }
+        finally
+        {
+            // Point CLICKUP_TASK_ID at a throwaway/scratch task — this overwrites the title.
+            await client.SetTaskNameAsync(TaskId!, original);
+        }
+    }
+
+    [SkippableFact]
     public async Task AddAndRemoveTaskAssignee_ReconcileFromWriteResponse()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(TaskId),

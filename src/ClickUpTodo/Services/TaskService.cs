@@ -831,6 +831,13 @@ public sealed class TaskService(
     public Task<string?> SetTaskDescriptionAsync(string taskId, string description, CancellationToken ct = default)
         => client.SetTaskDescriptionAsync(taskId, description, ct);
 
+    /// <summary>Renames a task — sets its <c>name</c> (title) (E, #542, over the facade write) and returns
+    /// the server-confirmed value so a caller can reflect the rename without a manual refresh. <c>null</c>
+    /// and blank names are rejected by the facade. A thin passthrough, mirroring
+    /// <see cref="SetTaskDescriptionAsync"/>.</summary>
+    public Task<string?> SetTaskNameAsync(string taskId, string name, CancellationToken ct = default)
+        => client.SetTaskNameAsync(taskId, name, ct);
+
     /// <summary>Toggles (or sets) a checklist item's <c>resolved</c> state (D, #457, over the facade write)
     /// and returns the server-confirmed parent <see cref="TaskChecklist"/> so the detail view can reconcile
     /// it. <paramref name="taskId"/> is the owning task, threaded through so the facade can record a

@@ -61,6 +61,14 @@ public interface IClickUpClient
     /// delta fetches); <see cref="ClickUpClient"/> overrides it.</summary>
     Task<string?> SetTaskDescriptionAsync(string taskId, string description, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement the description write.");
+
+    /// <summary>Rename a task — set its <c>name</c> (title). <c>null</c> and blank/whitespace names are
+    /// rejected; returns the server-confirmed name from the write response. Backs the contextual
+    /// <c>F2</c>/<c>Ctrl+E</c> rename (#542). Default throwing implementation so read-only fakes needn't
+    /// implement a write path they never call (mirrors the description write); <see cref="ClickUpClient"/>
+    /// overrides it. See <see cref="ClickUpClient.SetTaskNameAsync"/>.</summary>
+    Task<string?> SetTaskNameAsync(string taskId, string name, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement the name write.");
     Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskAssignee>> RemoveTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
 

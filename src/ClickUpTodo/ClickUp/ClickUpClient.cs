@@ -380,6 +380,29 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     }
 
     /// <summary>
+    /// Rename a task — set its <c>name</c> (title) via <c>PUT /task/{id}</c> with
+    /// <c>UpdateTaskRequest { Name }</c>. Backs the contextual <c>F2</c>/<c>Ctrl+E</c> rename (E, #542)
+    /// and reuses the existing curated-spec field, so <b>no spec change / Kiota regen</b> is needed.
+    /// A <c>null</c> name is rejected (Kiota omits a null typed property, so the write would silently
+    /// no-op), and a blank/whitespace name is rejected too — ClickUp has no empty-title concept, so
+    /// this fails fast client-side rather than issuing a request the server would reject. Returns the
+    /// <b>server-confirmed</b> name from the response — the same return-the-truth contract as
+    /// <see cref="SetTaskStatusAsync"/> / <see cref="SetTaskDescriptionAsync"/>.
+    /// </summary>
+    public Task<string?> SetTaskNameAsync(string taskId, string name, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("A task name cannot be blank.", nameof(name));
+        return Guard("UpdateTask", async () =>
+        {
+            var updated = await _client.V2.Task[taskId].PutAsync(new UpdateTaskRequest { Name = name }, cancellationToken: ct);
+            Nudge(taskId, updated, NameFields);
+            return updated?.Name;
+        });
+    }
+
+    /// <summary>
     /// Add a user to a task's assignees. ClickUp's <c>PUT /task/{id}</c> takes
     /// <c>assignees: { add: [...] }</c>. Returns the task's <b>reconciled</b> assignee set from the
     /// response so a caller can update the row without a read-after-write.
@@ -933,6 +956,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
 
     // Advisory field-name hints stamped on a marker (the consumer re-fetches everything, so these are
     // diagnostics only). Static readonly so each write path shares one allocation.
+    private static readonly string[] NameFields = ["name"];
     private static readonly string[] StatusFields = ["status"];
     private static readonly string[] PriorityFields = ["priority"];
     private static readonly string[] DescriptionFields = ["description"];
