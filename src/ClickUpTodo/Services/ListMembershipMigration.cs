@@ -7,7 +7,7 @@ namespace ClickUpTodo.Services;
 /// Pure, terminal-free logic for the field/status hazard when a task's list membership changes via the
 /// <b>add/remove of additional list locations</b> ("Tasks in Multiple Lists", #237) — the writes the
 /// Quick Updates List pane (#242) and the New Task multi-list create (#241) perform. See
-/// <c>docs/plans/list-change-field-status-migration.md</c> (#365) for the API grounding.
+/// <c>docs/plans/completed/list-change-field-status-migration.md</c> (#365) for the API grounding.
 /// <para><b>Why this is the whole hazard.</b> A task in multiple lists always uses its <i>home</i>
 /// List's status, so add/remove of an <i>additional</i> location never remaps or drops the status
 /// (that is a <i>move</i>-operation concern, out of scope). Adding to a list keeps every value and

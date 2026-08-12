@@ -40,7 +40,7 @@ public sealed record ListApplyDecision(ListApplyAction Action, string? Message);
 /// <c>Flash</c> line (tied to the #3 single-focusable-pane constraint). A two-step "press remove again to
 /// confirm" keeps that model and composes cleanly with the selector's reconcile-from-server contract: the
 /// arming turn returns the membership unchanged, so the row reappears and no data is touched until the
-/// confirming turn. See <c>docs/plans/list-change-field-status-migration.md</c>.</para>
+/// confirming turn. See <c>docs/plans/completed/list-change-field-status-migration.md</c>.</para>
 /// </summary>
 public static class ListMembershipApplyPlanner
 {
