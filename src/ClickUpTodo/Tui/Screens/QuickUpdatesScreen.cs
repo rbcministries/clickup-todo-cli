@@ -43,7 +43,7 @@ namespace ClickUpTodo.Tui.Screens;
 /// would hide set Custom Field values only the removed list defines flashes a warning and requires a
 /// second remove to confirm — the host runs that field-strand preflight + arm/confirm inside the
 /// injected <c>applyList</c> callback (see <c>TodoApp.ApplyListAsync</c> and
-/// <c>docs/plans/list-change-field-status-migration.md</c>, #365).
+/// <c>docs/plans/completed/list-change-field-status-migration.md</c>, #365).
 /// </para>
 /// </summary>
 public sealed class QuickUpdatesScreen : Screen

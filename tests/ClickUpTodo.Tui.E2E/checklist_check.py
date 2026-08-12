@@ -33,6 +33,10 @@ DLL = sys.argv[1]
 CTRL_RIGHT = b"\x1b[1;5C"
 DOWN = b"\x1b[B"
 UP = b"\x1b[A"
+SHIFT_UP = b"\x1b[1;2A"     # move checklist item up (G, #569)
+SHIFT_DOWN = b"\x1b[1;2B"   # move checklist item down
+SHIFT_RIGHT = b"\x1b[1;2C"  # indent under the preceding sibling
+SHIFT_LEFT = b"\x1b[1;2D"   # outdent to the grandparent
 ENTER = b"\r"
 SPACE = b" "
 CTRL_R = b"\x12"          # refresh (alias of F5) — re-fetches detail from the fake backend
@@ -42,6 +46,7 @@ F8 = b"\x1b[19~"          # rename the selected item / group (row-kind-scoped, F
 F9 = b"\x1b[20~"          # delete the selected item / group (row-kind-scoped, F, #459)
 BACKSPACE = b"\x7f"
 DELETE = b"\x1b[3~"       # forward-delete (paired with BACKSPACE to clear a field caret-agnostically)
+TAB = b"\x09"            # cycle overlay focus (name field → assignee picker → Save → Cancel), #572
 
 
 class Session:
@@ -104,6 +109,13 @@ class Session:
             line = self.screen.display[y]
             if substr in line:
                 return line.find("[")
+        return -1
+
+    def row_of(self, substr):
+        """The screen row (y) of the first line containing substr, or -1 — for order assertions."""
+        for y in range(ROWS):
+            if substr in self.screen.display[y]:
+                return y
         return -1
 
 
@@ -472,6 +484,170 @@ def run_group_rename():
         s.kill()
 
 
+def run_assignee():
+    """G (#460 / #572): the rename overlay's assignee picker sets and clears a checklist item's assignee.
+    It reuses the shared AssigneeSelectorView in ImmediateApply, so a pick writes immediately, the row's
+    assignee suffix updates live, and both the set and the clear persist across a refresh.
+
+    Row layout (E2E_CHECKLISTS=1):
+        0  Release steps  (1/3)                     ← header
+        1  [x] Cut the tag                          ← unassigned (i1)
+        2  [ ] Draft release notes — Ada Lovelace   ← assigned (i2)
+        ...
+    """
+    s = Session({"E2E_CHECKLISTS": "1"})
+    try:
+        s.pump(8.0)
+        assert "Task 0" in s.visible(), "list boot failed:\n" + s.visible()
+        s.open_checklists_tab()
+
+        # Select "[x] Cut the tag" (row 1): normalise to the top header, then one DOWN.
+        for _ in range(8):
+            s.send(UP)
+            s.pump(0.1)
+        s.send(DOWN)
+        s.pump(0.3)
+        assert "[x] Cut the tag" in s.visible(), "precondition: 'Cut the tag' selected:\n" + s.visible()
+
+        # ── Set: F8 opens the rename overlay, now carrying the assignee picker ─────────────────────────
+        s.send(F8)
+        s.pump(0.9)
+        v = s.visible()
+        assert "Rename item" in v, "F8 did not open the rename overlay:\n" + v
+        assert "Assignee:" in v, "the rename overlay did not show the assignee picker (#572):\n" + v
+
+        s.send(TAB)               # name field → the assignee picker's search box
+        s.pump(0.5)
+        type_text(s, "Grace")     # type-ahead over the frequency-ranked member pool
+        # Wait out the ~1s type-ahead debounce so the list COLLAPSES to the match before Enter — otherwise
+        # Enter picks the still-highlighted top-frequent empty-state row (row 0) mid-debounce, not "Grace".
+        s.pump(1.6)
+        assert "Grace Hopper" in s.visible(), "typing 'Grace' did not surface the candidate:\n" + s.visible()
+        s.send(ENTER)             # pick the sole narrowed row (Grace Hopper) → ImmediateApply set-assignee write
+        s.pump(1.3)
+        s.send(b"\x1b")           # Esc closes the overlay (the name is unchanged, so it just closes)
+        s.pump(1.0)
+        v = s.visible()
+        assert s.proc.poll() is None, "assigning crashed the process"
+        assert "Cut the tag" in v and "Grace Hopper" in v, \
+            "the assignee suffix did not appear on the row after assigning:\n" + v
+
+        # ── Persists across a refresh (the fake persisted the assignee) ────────────────────────────────
+        s.send(CTRL_R)
+        s.pump(2.5)
+        v = s.visible()
+        assert "Cut the tag" in v and "Grace Hopper" in v, \
+            "the assignee did not persist across a refresh:\n" + v
+
+        # ── Clear: reopen on the same item (still selected); the picker seeds with Grace as a ✓ row.
+        #    Into the list (Down), Enter on the current ✓ row removes it → clear (writes null). ──────────
+        s.send(F8)
+        s.pump(0.9)
+        assert "Assignee:" in s.visible(), "reopening the rename overlay did not show the picker:\n" + s.visible()
+        s.send(TAB)               # into the picker's search box
+        s.pump(0.5)
+        s.send(DOWN)              # into the list — the seeded ✓ Grace row sits first in the empty state
+        s.pump(0.5)
+        s.send(ENTER)             # remove the current assignee → clear
+        s.pump(1.3)
+        s.send(b"\x1b")           # close
+        s.pump(1.0)
+        v = s.visible()
+        assert s.proc.poll() is None, "clearing crashed the process"
+        assert "Grace Hopper" not in v, "clearing did not remove the assignee suffix from the row:\n" + v
+
+        s.send(CTRL_R)
+        s.pump(2.5)
+        v = s.visible()
+        assert "Grace Hopper" not in v, "the cleared assignee resurrected across a refresh:\n" + v
+
+        print("ok — assignee: the rename overlay assigns 'Grace Hopper' to an item (live suffix + persistence) "
+              "and clears it back, all from the shared AssigneeSelectorView (#572)")
+    finally:
+        s.kill()
+
+
+def run_move():
+    """G (#569): Shift+↓ reorders an item past its sibling; Shift+→ indents an item under its preceding
+    sibling; Shift+↑ on the first item is a boundary no-op that stays on the tab. Each move persists in the
+    fake backend, so a refresh agrees.
+
+    Starting layout (E2E_CHECKLISTS=1):
+        0  Release steps  (1/3)
+        1  [x] Cut the tag
+        2  [ ] Draft release notes — Ada Lovelace
+        3    [ ] Verify the changelog
+        4  QA signoff  (1/2)
+        5  [x] Smoke test on staging
+        6  [ ] Cross-browser check
+    """
+    s = Session({"E2E_CHECKLISTS": "1"})
+    try:
+        s.pump(8.0)
+        assert "Task 0" in s.visible(), "list boot failed:\n" + s.visible()
+        s.open_checklists_tab()
+
+        # Normalise to the top header, then DOWN once → row 1 "[x] Cut the tag" (the first item).
+        for _ in range(8):
+            s.send(UP)
+            s.pump(0.1)
+        s.send(DOWN)
+        s.pump(0.3)
+
+        # ── Boundary no-op: Shift+↑ on the first item can't move up — stays on the tab, no reorder ───────
+        assert s.row_of("Cut the tag") < s.row_of("Draft release notes"), \
+            "precondition: 'Cut the tag' should start above 'Draft release notes':\n" + s.visible()
+        s.send(SHIFT_UP)
+        s.pump(0.8)
+        assert s.proc.poll() is None, "Shift+Up on the first item crashed the process"
+        v = s.visible()
+        assert "Checklists (2/5)" in v and s.row_of("Cut the tag") < s.row_of("Draft release notes"), \
+            "Shift+Up on the first item wrongly reordered or switched tabs:\n" + v
+
+        # ── Shift+↓ moves "Cut the tag" below "Draft release notes" ─────────────────────────────────────
+        s.send(SHIFT_DOWN)
+        s.pump(1.5)
+        v = s.visible()
+        assert s.proc.poll() is None, "Shift+Down crashed the process"
+        assert s.row_of("Draft release notes") < s.row_of("Cut the tag"), \
+            "Shift+Down did not reorder 'Cut the tag' below 'Draft release notes':\n" + v
+        assert "Checklists (2/5)" in v, "reorder wrongly changed the aggregate:\n" + v
+
+        # Persists across a refresh (the fake applied the orderindex write; the echo agrees).
+        s.send(CTRL_R)
+        s.pump(2.5)
+        v = s.visible()
+        assert s.row_of("Draft release notes") < s.row_of("Cut the tag"), \
+            "a refresh reverted the reorder:\n" + v
+
+        # ── Shift+→ indents "Cross-browser check" under "Smoke test on staging" (its preceding sibling) ──
+        smoke_col = s.glyph_col("Smoke test on staging")
+        assert s.glyph_col("Cross-browser check") == smoke_col, \
+            "precondition: 'Cross-browser check' should start at top level (same glyph col as its sibling):\n" + s.visible()
+        for _ in range(15):       # drive the selection to the last row ("Cross-browser check"); clamps there
+            s.send(DOWN)
+            s.pump(0.06)
+        s.send(SHIFT_RIGHT)
+        s.pump(1.5)
+        v = s.visible()
+        assert s.proc.poll() is None, "Shift+Right crashed the process"
+        after_col = s.glyph_col("Cross-browser check")
+        assert after_col > smoke_col, \
+            f"Shift+Right did not indent 'Cross-browser check' under 'Smoke test' (glyph col {after_col} vs sibling {smoke_col}):\n" + v
+        assert "Checklists (2/5)" in v, "indent wrongly changed the aggregate:\n" + v
+
+        # Persists across a refresh (the fake reparented it under the sibling's children).
+        s.send(CTRL_R)
+        s.pump(2.5)
+        assert s.glyph_col("Cross-browser check") > s.glyph_col("Smoke test on staging"), \
+            "a refresh reverted the indent:\n" + s.visible()
+
+        print("ok — move: Shift+↑ on the first item is an inert boundary no-op; Shift+↓ reorders an item past "
+              "its sibling and Shift+→ indents one under its preceding sibling; both persist over a refresh")
+    finally:
+        s.kill()
+
+
 run_populated()
 run_empty()
 run_toggle()
@@ -480,3 +656,5 @@ run_add_cancel()
 run_delete_confirm_cleared_by_overlay()
 run_group_crud()
 run_group_rename()
+run_assignee()
+run_move()
