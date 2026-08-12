@@ -1009,6 +1009,24 @@ public sealed class TerminalLauncherTests
     }
 
     [Fact]
+    public void NewWindow_Linux_ModernHosts_EmitNoTabRung_JustTheWindow()
+    {
+        // A NewWindow request must not trip the new in-place tab rungs (#589): the `if (tab && …)` gate is
+        // false for NewWindow, so WezTerm/kitty emit only their LinuxEmulators window spec.
+        var window = new TerminalLauncherOptions { LaunchLocation = LaunchLocation.NewWindow };
+
+        var wezterm = TerminalCommandPlanner.Plan(
+            OSPlatformKind.Linux, Present("wezterm"), Env(("WEZTERM_PANE", "0")), PromptFile, null, window);
+        Assert.DoesNotContain(wezterm, s => s.DisplayName.Contains("new tab", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("wezterm", Assert.Single(wezterm).DisplayName);
+
+        var kitty = TerminalCommandPlanner.Plan(
+            OSPlatformKind.Linux, Present("kitten", "kitty"), Env(("KITTY_LISTEN_ON", "unix:/tmp/k")), PromptFile, null, window);
+        Assert.DoesNotContain(kitty, s => s.DisplayName.Contains("new tab", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("kitty", Assert.Single(kitty).DisplayName);
+    }
+
+    [Fact]
     public void NewTab_Linux_ModernHosts_BakeWorkingDirectoryIntoTheCommand()
     {
         // The baked-in `cd … && …` (#252) must ride along on the new WezTerm/kitty/Zellij tab commands too.
