@@ -473,4 +473,92 @@ public sealed class TerminalCommandPlannerSplitPaneTests
         SameAsB(OSPlatformKind.Linux, Present("zellij"), Env(("ZELLIJ", "0")));
         SameAsB(OSPlatformKind.MacOS, Present("osascript"), Env(("TERM_PROGRAM", "iTerm.app")));
     }
+
+    // ── Dispatch into a pane: #461 working directory, never --duplicate (#515, slice J) ──────────
+
+    [Fact]
+    public void Linux_Split_BakesTheWorkingDirectoryIntoThePayload()
+    {
+        // #461 gives dispatch a real project directory; the split pane must land there. The mechanism is
+        // the command-prefix `cd '<dir>' &&` (WT/tmux/… hand off to a shell that ignores the launcher cwd),
+        // exactly as the tab/window paths — the split reuses the same payload, so the dir rides along.
+        var spec = SplitSpec(Plan(OSPlatformKind.Linux, Present("tmux"), Split, Env(("TMUX", "1")), cwd: "/proj/repo"));
+
+        Assert.Contains("cd '/proj/repo' &&", spec.Arguments[^1]);
+    }
+
+    [Fact]
+    public void Windows_Split_BakesTheWorkingDirectoryIntoThePayload()
+    {
+        var spec = SplitSpec(Plan(OSPlatformKind.Windows, Present("wt", "pwsh"), Split, Env(("WT_SESSION", "1")), cwd: "C:\\work"));
+
+        // The Set-Location prefix lands the session in the dir (its trailing `;` is escaped to `\;` by
+        // WtArgs, #534; the path content is untouched).
+        Assert.Contains("Set-Location -LiteralPath 'C:\\work'", spec.Arguments[^1]);
+    }
+
+    [Fact]
+    public void Split_NeverUsesDuplicate_OnAnyHost()
+    {
+        // A dispatch pane must carry an explicit directory/profile, never `wt --duplicate`/`-D` (or any
+        // host's duplicate), which would inherit *our* pane's profile and directory and defeat #461.
+        static void NoDuplicate(IReadOnlyList<LaunchSpec> specs)
+        {
+            foreach (var s in specs)
+            {
+                Assert.DoesNotContain("--duplicate", s.Arguments);
+                Assert.DoesNotContain("-D", s.Arguments);
+            }
+        }
+
+        NoDuplicate(Plan(OSPlatformKind.Windows, Present("wt", "pwsh"), Split, Env(("WT_SESSION", "1")), cwd: "C:\\work"));
+        NoDuplicate(Plan(OSPlatformKind.Linux, Present("tmux"), Split, Env(("TMUX", "1")), cwd: "/proj/repo"));
+        NoDuplicate(Plan(OSPlatformKind.Linux, Present("wezterm"), Split, Env(("WEZTERM_PANE", "0")), cwd: "/proj/repo"));
+        NoDuplicate(Plan(OSPlatformKind.Linux, Present("kitten", "kitty"), Split, Env(("KITTY_LISTEN_ON", "unix:/tmp/k")), cwd: "/proj/repo"));
+        NoDuplicate(Plan(OSPlatformKind.Linux, Present("zellij"), Split, Env(("ZELLIJ", "0")), cwd: "/proj/repo"));
+        NoDuplicate(Plan(OSPlatformKind.MacOS, Present("osascript"), Split, Env(("TERM_PROGRAM", "iTerm.app")), cwd: "/proj/repo"));
+    }
+
+    // ── Dispatch into a pane: pane lifetime persists across platforms (#515, slice J) ────────────
+
+    [Fact]
+    public void Linux_Split_PersistsThePaneAfterTheSessionEnds()
+    {
+        // The Linux split hosts run the command via `bash -lc <cmd>`, whose shell exits when the session
+        // ends — closing the pane and relayouting the survivors. An interactive dispatch pane keeps it
+        // open (matching WT `-NoExit` / iTerm2's session shell), so the pane behaves the same everywhere.
+        foreach (var (exe, key) in new[] { ("tmux", "TMUX"), ("wezterm", "WEZTERM_PANE"), ("zellij", "ZELLIJ") })
+        {
+            var spec = SplitSpec(Plan(OSPlatformKind.Linux, Present(exe), Split, Env((key, "1"))));
+            Assert.Contains("session ended", spec.Arguments[^1]);
+        }
+
+        var kitty = SplitSpec(Plan(OSPlatformKind.Linux, Present("kitten", "kitty"), Split, Env(("KITTY_LISTEN_ON", "unix:/tmp/k"))));
+        Assert.Contains("session ended", kitty.Arguments[^1]);
+    }
+
+    [Fact]
+    public void Linux_Split_DegradationRungs_DoNotPersist()
+    {
+        // Only the actual split payload is suffixed with the keep-alive; the tmux new-window degradation
+        // rung keeps the plain command, so a SplitPane request that falls through to a tab/window stays
+        // byte-identical to a NewTab one (the invariant Split_OnPaneIncapableHost also pins).
+        var specs = Plan(OSPlatformKind.Linux, Present("tmux"), Split, Env(("TMUX", "1")));
+
+        var window = specs.Single(s => s.DisplayName == "tmux (new window)");
+        Assert.DoesNotContain("session ended", window.Arguments[^1]);
+    }
+
+    [Fact]
+    public void AppLaunch_Split_DoesNotPersistThePane()
+    {
+        // An app-host split opens a long-running TUI that owns its pane; closing on exit is its natural
+        // lifetime (mirroring PosixAppCommand), so no keep-alive is appended for an app launch.
+        var command = new AppLaunchCommand("clickup-todo", ["--task", "86abc"]);
+
+        var spec = SplitSpec(TerminalCommandPlanner.PlanAppLaunch(
+            OSPlatformKind.Linux, Present("tmux"), Env(("TMUX", "1")), command, Split));
+
+        Assert.DoesNotContain("session ended", spec.Arguments[^1]);
+    }
 }

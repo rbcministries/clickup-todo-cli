@@ -578,7 +578,12 @@ public sealed class SingleTaskApp
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
-        var plan = DispatchCoordinator.Plan(_config.AgentDispatch, request, tab.Task, _config.DefaultWorkingDirectory, home);
+        // Live terminal width feeds the split-pane viability floor (#515): a SplitPane dispatch degrades
+        // to a tab when the resulting pane would be too narrow (the repeated-dispatch case). Null off a
+        // live driver (headless) self-disables the floor, leaving the launch location as requested.
+        var plan = DispatchCoordinator.Plan(
+            _config.AgentDispatch, request, tab.Task, _config.DefaultWorkingDirectory, home,
+            terminalColumns: Application.Driver?.Cols);
 
         // Persist an explicit non-default working-dir pick for this task (#96) so the next dispatch
         // pre-fills it; accepting the auto-derived pre-fill (or clearing the field) clears the entry. The
