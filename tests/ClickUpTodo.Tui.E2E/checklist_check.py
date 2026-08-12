@@ -33,10 +33,10 @@ DLL = sys.argv[1]
 CTRL_RIGHT = b"\x1b[1;5C"
 DOWN = b"\x1b[B"
 UP = b"\x1b[A"
-ALT_UP = b"\x1b[1;3A"     # move checklist item up (G, #569)
-ALT_DOWN = b"\x1b[1;3B"   # move checklist item down
-ALT_RIGHT = b"\x1b[1;3C"  # indent under the preceding sibling
-ALT_LEFT = b"\x1b[1;3D"   # outdent to the grandparent
+SHIFT_UP = b"\x1b[1;2A"     # move checklist item up (G, #569)
+SHIFT_DOWN = b"\x1b[1;2B"   # move checklist item down
+SHIFT_RIGHT = b"\x1b[1;2C"  # indent under the preceding sibling
+SHIFT_LEFT = b"\x1b[1;2D"   # outdent to the grandparent
 ENTER = b"\r"
 SPACE = b" "
 CTRL_R = b"\x12"          # refresh (alias of F5) — re-fetches detail from the fake backend
@@ -484,8 +484,8 @@ def run_group_rename():
 
 
 def run_move():
-    """G (#569): Alt+↓ reorders an item past its sibling; Alt+→ indents an item under its preceding
-    sibling; Alt+↑ on the first item is a boundary no-op that stays on the tab. Each move persists in the
+    """G (#569): Shift+↓ reorders an item past its sibling; Shift+→ indents an item under its preceding
+    sibling; Shift+↑ on the first item is a boundary no-op that stays on the tab. Each move persists in the
     fake backend, so a refresh agrees.
 
     Starting layout (E2E_CHECKLISTS=1):
@@ -510,23 +510,23 @@ def run_move():
         s.send(DOWN)
         s.pump(0.3)
 
-        # ── Boundary no-op: Alt+↑ on the first item can't move up — stays on the tab, no reorder ───────
+        # ── Boundary no-op: Shift+↑ on the first item can't move up — stays on the tab, no reorder ───────
         assert s.row_of("Cut the tag") < s.row_of("Draft release notes"), \
             "precondition: 'Cut the tag' should start above 'Draft release notes':\n" + s.visible()
-        s.send(ALT_UP)
+        s.send(SHIFT_UP)
         s.pump(0.8)
-        assert s.proc.poll() is None, "Alt+Up on the first item crashed the process"
+        assert s.proc.poll() is None, "Shift+Up on the first item crashed the process"
         v = s.visible()
         assert "Checklists (2/5)" in v and s.row_of("Cut the tag") < s.row_of("Draft release notes"), \
-            "Alt+Up on the first item wrongly reordered or switched tabs:\n" + v
+            "Shift+Up on the first item wrongly reordered or switched tabs:\n" + v
 
-        # ── Alt+↓ moves "Cut the tag" below "Draft release notes" ─────────────────────────────────────
-        s.send(ALT_DOWN)
+        # ── Shift+↓ moves "Cut the tag" below "Draft release notes" ─────────────────────────────────────
+        s.send(SHIFT_DOWN)
         s.pump(1.5)
         v = s.visible()
-        assert s.proc.poll() is None, "Alt+Down crashed the process"
+        assert s.proc.poll() is None, "Shift+Down crashed the process"
         assert s.row_of("Draft release notes") < s.row_of("Cut the tag"), \
-            "Alt+Down did not reorder 'Cut the tag' below 'Draft release notes':\n" + v
+            "Shift+Down did not reorder 'Cut the tag' below 'Draft release notes':\n" + v
         assert "Checklists (2/5)" in v, "reorder wrongly changed the aggregate:\n" + v
 
         # Persists across a refresh (the fake applied the orderindex write; the echo agrees).
@@ -536,20 +536,20 @@ def run_move():
         assert s.row_of("Draft release notes") < s.row_of("Cut the tag"), \
             "a refresh reverted the reorder:\n" + v
 
-        # ── Alt+→ indents "Cross-browser check" under "Smoke test on staging" (its preceding sibling) ──
+        # ── Shift+→ indents "Cross-browser check" under "Smoke test on staging" (its preceding sibling) ──
         smoke_col = s.glyph_col("Smoke test on staging")
         assert s.glyph_col("Cross-browser check") == smoke_col, \
             "precondition: 'Cross-browser check' should start at top level (same glyph col as its sibling):\n" + s.visible()
         for _ in range(15):       # drive the selection to the last row ("Cross-browser check"); clamps there
             s.send(DOWN)
             s.pump(0.06)
-        s.send(ALT_RIGHT)
+        s.send(SHIFT_RIGHT)
         s.pump(1.5)
         v = s.visible()
-        assert s.proc.poll() is None, "Alt+Right crashed the process"
+        assert s.proc.poll() is None, "Shift+Right crashed the process"
         after_col = s.glyph_col("Cross-browser check")
         assert after_col > smoke_col, \
-            f"Alt+Right did not indent 'Cross-browser check' under 'Smoke test' (glyph col {after_col} vs sibling {smoke_col}):\n" + v
+            f"Shift+Right did not indent 'Cross-browser check' under 'Smoke test' (glyph col {after_col} vs sibling {smoke_col}):\n" + v
         assert "Checklists (2/5)" in v, "indent wrongly changed the aggregate:\n" + v
 
         # Persists across a refresh (the fake reparented it under the sibling's children).
@@ -558,8 +558,8 @@ def run_move():
         assert s.glyph_col("Cross-browser check") > s.glyph_col("Smoke test on staging"), \
             "a refresh reverted the indent:\n" + s.visible()
 
-        print("ok — move: Alt+↑ on the first item is an inert boundary no-op; Alt+↓ reorders an item past "
-              "its sibling and Alt+→ indents one under its preceding sibling; both persist over a refresh")
+        print("ok — move: Shift+↑ on the first item is an inert boundary no-op; Shift+↓ reorders an item past "
+              "its sibling and Shift+→ indents one under its preceding sibling; both persist over a refresh")
     finally:
         s.kill()
 

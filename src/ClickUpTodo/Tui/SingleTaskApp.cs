@@ -712,7 +712,7 @@ public sealed class SingleTaskApp
     /// Ctrl+Enter from a single-task tab: opens the front-most tab's task in its own terminal tab —
     /// <c>clickup-todo --task &lt;id&gt;</c> (#301) — through the same cross-platform launcher and
     /// copy-command fallback the dashboard uses (#384), sharing the option/message helper
-    /// (<see cref="AppTabLaunch"/>) so the two hosts can't drift. Re-entrancy-guarded so a rapid second
+    /// (<see cref="AppHostLaunch"/>) so the two hosts can't drift. Re-entrancy-guarded so a rapid second
     /// press can't spawn duplicate tabs; the launch runs off the UI thread and reports back via the shared
     /// footer. Re-launching the <em>same</em> task is "a bit odd but harmless" (#384/#435) — the value is
     /// footer parity and the copy-command fallback where a tab can't be targeted.
@@ -728,10 +728,10 @@ public sealed class SingleTaskApp
         // Resolve the command before arming the guard: ForTask is pure and could throw on a blank id, and
         // doing it first means such a throw can't leave _launchingTab stuck true (mirrors TodoApp).
         var command = AppLaunchCommand.ForTask(taskId);
-        var options = AppTabLaunch.Options(
-            _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
+        var options = AppHostLaunch.Options(
+            LaunchLocation.NewTab, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
         _launchingTab = true;
-        Flash(AppTabLaunch.Opening(name));
+        Flash(AppHostLaunch.Opening(name, LaunchLocation.NewTab));
         _ = Task.Run(async () =>
         {
             try
@@ -741,7 +741,7 @@ public sealed class SingleTaskApp
                 {
                     _launchingTab = false;
                     if (result.Success)
-                        Flash(AppTabLaunch.Opened(name, result));
+                        Flash(AppHostLaunch.Opened(name, LaunchLocation.NewTab, result));
                     else
                         FlashLaunchFallback(command);
                 });
@@ -757,7 +757,7 @@ public sealed class SingleTaskApp
     /// clipboard so the user can open the task tab themselves. <paramref name="reason"/> names the failure
     /// when the launch threw (vs. simply finding no emulator to launch).</summary>
     private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
-        => Flash(AppTabLaunch.Fallback(command, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+        => Flash(AppHostLaunch.Fallback(command, LaunchLocation.NewTab, TryCopyToClipboard(command.ToDisplayCommand()), reason));
 
     /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard yields false
     /// so the caller shows the run-it-yourself form instead (mirrors TodoApp).</summary>

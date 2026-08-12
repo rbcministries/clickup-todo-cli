@@ -346,6 +346,24 @@ every other scenario see the fixed launch-task name. `TerminalTitleTests` pins t
 `ForTask`/`Retitle` formatting + decision in CI; these checks are the proof the title reaches the
 terminal at launch and again on refresh.
 
+**`dispatch_dir_browser_seed_check.py`** — Dispatch pane working-dir browser seeding (#559, coverage #564):
+opens the Ctrl+A Dispatch pane on a task whose working-dir pre-fill resolves to an **existing** directory
+and asserts the file-tree browser seeds to the target's parent with the target highlighted, plus the
+degrade path. The `dispatch-seed` scenario (`E2E_DISPATCH_SEED=1`) stands up a real base working dir on
+disk (`{base}/WTPROJECTS/{SEEDTARGET,SIBLINGONE,SIBLINGTWO}` + base-root siblings `AAAROOTKID`/`ZZZROOTKID`)
+and seeds the #96 per-task cache to the nested `SEEDTARGET`. Two legs, each its own boot:
+
+```bash
+timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/dispatch_dir_browser_seed_check.py $DLL
+```
+
+Self-contained (the check sets its own env per leg). Expected: two `ok —` lines — **seeded** (the field
+carries `…/WTPROJECTS/SEEDTARGET`, the browser shows the parent-of-target listing with `SEEDTARGET`
+highlighted) and **degrade** (`…_DEGRADE=1`: the non-existent `{base}/{taskId}` pre-fill is preserved and
+the browser opens at the base root with `..` highlighted — today's behaviour). `DirectoryBrowserModel.SeedTo`
+/ `DispatchWorkingDirectoryPreFill` are unit-tested in CI; this is the rendered end-to-end proof. Invisible
+to the `detail_check.py` A/B (the pane is hidden until Ctrl+A and the scenario is inert without its env).
+
 ## Pitfalls (violating these produced false "the TUI can't be tested" conclusions)
 
 - **Answer the terminal's queries or nothing ever renders.** Terminal.Gui's ANSI driver

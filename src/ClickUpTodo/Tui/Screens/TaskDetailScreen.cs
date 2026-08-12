@@ -1207,15 +1207,16 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
-        // Alt+↑/↓/←/→ on the Checklists tab (G, #569): reorder (↑/↓) or reparent (←outdent / →indent) the
+        // Shift+↑/↓/←/→ on the Checklists tab (G, #569): reorder (↑/↓) or reparent (←outdent / →indent) the
         // highlighted item. Guarded on the checklist ListView being front-most (like Space/F7–F9 above), so
-        // the chords stay inert on the other tabs and text panes. Alt-modified so they don't collide with
-        // Ctrl+←/→ tab cycling or the bare ↑/↓ pane-scroll block below (which excludes IsAlt); consumed here
+        // the chords stay inert on the other tabs and text panes. Shift-modified (not Alt: Windows Terminal
+        // claims Alt+arrows for pane focus and Alt+Shift+arrows for pane resize) so they don't collide with
+        // Ctrl+←/→ tab cycling or the bare ↑/↓ pane-scroll block below (which excludes IsShift); consumed here
         // before they could reach NavSafeTabs, so a boundary / illegal move is a no-op that never switches
         // tabs. The pure ChecklistMove decides legality — an illegal move flashes and issues no request.
-        if (key.IsAlt && !key.IsCtrl && !key.IsShift && ReferenceEquals(_tabs.Value, _checklistList))
+        if (key.IsShift && !key.IsCtrl && !key.IsAlt && ReferenceEquals(_tabs.Value, _checklistList))
         {
-            var code = key.KeyCode & ~KeyCode.AltMask;
+            var code = key.KeyCode & ~KeyCode.ShiftMask;
             if (code is KeyCode.CursorUp or KeyCode.CursorDown or KeyCode.CursorLeft or KeyCode.CursorRight)
             {
                 key.Handled = true;
@@ -2530,7 +2531,15 @@ public sealed class TaskDetailScreen : Screen
     }
 
     /// <summary>F8 — rename the selected item. Opens the name overlay pre-filled; the rename fires on
-    /// submit. A header/empty-state row is inert-but-flashed.</summary>
+    /// submit. A header/empty-state row is inert-but-flashed.
+    /// <para><b>Assignee hook (G, #460 → #572):</b> per the #538 decision, the per-item <em>assignee</em>
+    /// belongs in this same rename surface (which migrates to the <c>F2</c>/<c>Ctrl+E</c> rename modal under
+    /// #537/#541), not a standalone chord. The write path is already landed — set/clear via
+    /// <see cref="ClickUpTodo.Services.TaskService.SetChecklistItemAssigneeAsync"/> (a <c>long?</c> user id;
+    /// <c>null</c> clears) with the optimistic <see cref="ClickUpTodo.Services.ChecklistItemEdits.SetAssignee"/>
+    /// transform + reconcile/revert. #572 adds the assignee control to this modal (a shared
+    /// <c>AssigneeSelectorView</c> specialisation over the frequency-ranked member pool) and threads the write
+    /// delegate + pool from the hosts.</para></summary>
     private void RenameSelectedChecklistItem()
     {
         if (_renameChecklistItemAsync is null)

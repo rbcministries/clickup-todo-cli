@@ -90,6 +90,77 @@ public sealed class ChecklistItemEditsTests
         Assert.Equal(Rows(before), Rows(ChecklistItemEdits.SetName(before, "no-list", "i1", "X")));
     }
 
+    // ── SetAssignee (per-item assignee, G #460) ───────────────────────────────
+
+    private static readonly TaskAssignee Ada = new(7, "Ada Lovelace");
+
+    /// <summary>Finds an item by id anywhere in the domain tree (flat list + nested children) — the
+    /// SetAssignee transform touches the domain record, not the projected row text, so assertions read the
+    /// <see cref="TaskChecklistItem.Assignee"/> straight off the tree.</summary>
+    private static TaskChecklistItem FindItem(IReadOnlyList<TaskChecklist> checklists, string itemId)
+    {
+        TaskChecklistItem? Walk(IReadOnlyList<TaskChecklistItem> items)
+        {
+            foreach (var item in items)
+            {
+                if (item.Id == itemId)
+                    return item;
+                if (item.Children.Count > 0 && Walk(item.Children) is { } hit)
+                    return hit;
+            }
+            return null;
+        }
+        return checklists.Select(c => Walk(c.Items)).FirstOrDefault(x => x is not null)
+               ?? throw new InvalidOperationException($"item '{itemId}' not found");
+    }
+
+    [Fact]
+    public void SetAssignee_SetsTopLevelItem_LeavesSiblingUntouched()
+    {
+        IReadOnlyList<TaskChecklist> before = [List("c1", "Release", 0, Item("i1", "A"), Item("i2", "B"))];
+
+        var after = ChecklistItemEdits.SetAssignee(before, "c1", "i1", Ada);
+
+        Assert.Equal(Ada, FindItem(after, "i1").Assignee);
+        Assert.Null(FindItem(after, "i2").Assignee); // sibling untouched
+    }
+
+    [Fact]
+    public void SetAssignee_ClearsAssignee_WhenNull()
+    {
+        IReadOnlyList<TaskChecklist> before =
+            [List("c1", "Release", 0, new TaskChecklistItem("i1", "A", false, null, null, Ada))];
+        Assert.Equal(Ada, FindItem(before, "i1").Assignee); // precondition
+
+        var after = ChecklistItemEdits.SetAssignee(before, "c1", "i1", null);
+
+        Assert.Null(FindItem(after, "i1").Assignee);
+    }
+
+    [Fact]
+    public void SetAssignee_UpdatesNestedChild()
+    {
+        IReadOnlyList<TaskChecklist> before =
+            [List("c1", "Release", 0, Item("i1", "Parent", children: [Item("i2", "Child")]))];
+
+        var after = ChecklistItemEdits.SetAssignee(before, "c1", "i2", Ada);
+
+        Assert.Equal(Ada, FindItem(after, "i2").Assignee);
+        Assert.Null(FindItem(after, "i1").Assignee); // parent untouched
+    }
+
+    [Fact]
+    public void SetAssignee_UnknownItemOrChecklist_IsNoOp()
+    {
+        IReadOnlyList<TaskChecklist> before = [List("c1", "Release", 0, Item("i1", "A"))];
+
+        // Unknown item id / unknown checklist id: the target item keeps its (null) assignee and the rows
+        // are value-identical — a stray call (e.g. against a header row) can never corrupt the tree.
+        Assert.Null(FindItem(ChecklistItemEdits.SetAssignee(before, "c1", "nope", Ada), "i1").Assignee);
+        Assert.Null(FindItem(ChecklistItemEdits.SetAssignee(before, "no-list", "i1", Ada), "i1").Assignee);
+        Assert.Equal(Rows(before), Rows(ChecklistItemEdits.SetAssignee(before, "no-list", "i1", Ada)));
+    }
+
     // ── Remove (delete) ───────────────────────────────────────────────────────
 
     [Fact]
@@ -262,22 +333,7 @@ public sealed class ChecklistItemEditsTests
     }
 
     // ── Move (reorder / reparent, G #569) ─────────────────────────────────────
-
-    private static TaskChecklistItem FindItem(IReadOnlyList<TaskChecklist> checklists, string itemId)
-    {
-        TaskChecklistItem? Walk(IReadOnlyList<TaskChecklistItem> items)
-        {
-            foreach (var item in items)
-            {
-                if (item.Id == itemId)
-                    return item;
-                if (Walk(item.Children) is { } found)
-                    return found;
-            }
-            return null;
-        }
-        return Walk(checklists.Single().Items)!;
-    }
+    // (reuses the FindItem tree-search helper defined above for the SetAssignee tests)
 
     [Fact]
     public void Move_UpDown_SetsOrderIndex_LeavesParentUntouched()

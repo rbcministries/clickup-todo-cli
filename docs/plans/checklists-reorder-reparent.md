@@ -21,17 +21,18 @@ endpoint.
 
 ## Design
 
-### Chords (`Alt+↑ / ↓ / ←/→`)
+### Chords (`Shift+↑ / ↓ / ←/→`)
 
-`Alt+↑`/`Alt+↓` move the highlighted item up/down among its siblings; `Alt+←`/`Alt+→`
+`Shift+↑`/`Shift+↓` move the highlighted item up/down among its siblings; `Shift+←`/`Shift+→`
 outdent/indent it. Chosen because they read as movement and sit clear of the Detail
 screen's existing arrow gestures:
 
 - `Ctrl+←`/`Ctrl+→` = tab cycle (`DetailTabNav`) — a different modifier.
 - Bare `↑`/`↓` = pane scroll / tree selection (`TaskDetailScreen` claims these in `OnKey`,
-  and that block already excludes `key.IsAlt`, so `Alt`+arrows fall through to a new
-  checklist-tab handler placed above it).
-- `NavSafeTabs` only neutralises the bare `Command.Up/Down/Left/Right`; `Alt`+arrows are
+  and that block already excludes `key.IsShift`, so `Shift`+arrows fall through to a new
+  checklist-tab handler placed above it). `Shift` also avoids Windows Terminal's own
+  `Alt`+arrow (pane focus) and `Alt+Shift`+arrow (pane resize) bindings.
+- `NavSafeTabs` only neutralises the bare `Command.Up/Down/Left/Right`; `Shift`+arrows are
   distinct key codes and are consumed by `OnKey` before they could bubble to the tab
   control, so a boundary move is a consumed no-op, never a tab switch.
 
@@ -99,7 +100,7 @@ assignee PR #568 — additive on both sides; whichever merges second re-runs the
 2. **Pure computation** — `ChecklistMove` + `ChecklistMoveTests` (each gesture, every
    legality rule, arranger round-trip).
 3. **Optimistic transform** — `ChecklistItemEdits.Move` + tests.
-4. **TUI** — `Alt`+arrow handler, `Keybindings` table entries, both `HelpLine` Detail sets,
+4. **TUI** — `Shift`+arrow handler, `Keybindings` table entries, both `HelpLine` Detail sets,
    `#355` cross-check green.
 5. **tui-validate** — extend `checklist_check.py` (move + indent, asserting rendered
    order/indent); `tab_boundary_check.py` regression.
