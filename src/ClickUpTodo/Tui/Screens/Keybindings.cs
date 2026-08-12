@@ -65,6 +65,10 @@ public enum KeyAction
     AddChecklistItem,
     RenameChecklistItem,
     DeleteChecklistItem,
+    MoveChecklistItemUp,
+    MoveChecklistItemDown,
+    OutdentChecklistItem,
+    IndentChecklistItem,
     NewChecklist,
 
     // Quick Updates.
@@ -122,6 +126,10 @@ public static class Keybindings
             [(ScreenContext.Detail, KeyAction.AddChecklistItem)] = "F7",
             [(ScreenContext.Detail, KeyAction.RenameChecklistItem)] = "F8",
             [(ScreenContext.Detail, KeyAction.DeleteChecklistItem)] = "F9",
+            [(ScreenContext.Detail, KeyAction.MoveChecklistItemUp)] = "Alt+CursorUp",
+            [(ScreenContext.Detail, KeyAction.MoveChecklistItemDown)] = "Alt+CursorDown",
+            [(ScreenContext.Detail, KeyAction.OutdentChecklistItem)] = "Alt+CursorLeft",
+            [(ScreenContext.Detail, KeyAction.IndentChecklistItem)] = "Alt+CursorRight",
             [(ScreenContext.Detail, KeyAction.NewChecklist)] = "Ctrl+G",
             [(ScreenContext.Detail, KeyAction.OpenInBrowser)] = "Ctrl+B",
             [(ScreenContext.Detail, KeyAction.QuickUpdate)] = "Ctrl+U",

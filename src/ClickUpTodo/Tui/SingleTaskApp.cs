@@ -309,6 +309,10 @@ public sealed class SingleTaskApp
                 _tasks.RenameChecklistItemAsync(checklistId, itemId, name, ct),
             deleteChecklistItemAsync: (checklistId, itemId, ct) =>
                 _tasks.DeleteChecklistItemAsync(checklistId, itemId, ct),
+            // Alt+arrows on the Checklists tab (G, #569): reorder / reparent the item, keyed to this tab's
+            // task id for the multi-tab nudge (#519), like the toggle.
+            moveChecklistItemAsync: (checklistId, itemId, parentId, orderIndex, clearParent, ct) =>
+                _tasks.MoveChecklistItemAsync(id, checklistId, itemId, parentId, orderIndex, clearParent, ct),
             // Checklist group CRUD (F, #459), keyed to this tab's task id for the task-scoped create.
             createChecklistAsync: (name, ct) =>
                 _tasks.CreateChecklistAsync(id, name, ct),
