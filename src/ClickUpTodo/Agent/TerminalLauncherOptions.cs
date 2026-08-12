@@ -41,6 +41,46 @@ public enum LaunchLocation
 }
 
 /// <summary>
+/// Which way a <see cref="LaunchLocation.SplitPane"/> divides the current pane (#505, slice C). Expressed
+/// once here and mapped to each host's own vocabulary by <see cref="TerminalCommandPlanner"/> (WT
+/// <c>-V</c>/<c>-H</c>, tmux <c>-h</c>/<c>-v</c>, WezTerm <c>--right</c>/<c>--bottom</c>, kitty
+/// <c>vsplit</c>/<c>hsplit</c>, Zellij <c>right</c>/<c>down</c>, iTerm <c>split vertically</c>/
+/// <c>horizontally</c>).
+/// </summary>
+public enum SplitDirection
+{
+    /// <summary>
+    /// Let the host choose by pane aspect ratio where it can — Windows Terminal omits <c>-V</c>/<c>-H</c>
+    /// (the issue's recommended default, right on both a wide and a tall monitor). Hosts with no auto fall
+    /// back to <see cref="Beside"/>, keeping the pre-#505 side-by-side split byte-identical.
+    /// </summary>
+    Auto,
+
+    /// <summary>Side by side — a vertical divider, the new pane to the right.</summary>
+    Beside,
+
+    /// <summary>Stacked — a horizontal divider, the new pane beneath.</summary>
+    Below,
+}
+
+/// <summary>
+/// Whether a <see cref="LaunchLocation.SplitPane"/> keeps focus in the current pane after splitting
+/// (#505, slice C). Best-effort per host capability: the planner appends the documented stay-put token
+/// only on the hosts that support one (Windows Terminal <c>mf previous</c>, tmux <c>-d</c>, kitty
+/// <c>--dont-take-focus</c>) and leaves it a documented no-op elsewhere (WezTerm, Zellij, iTerm2), rather
+/// than faking it. Driven by launch intent: an ambient <c>--feed</c> sidebar wants <see cref="StayPut"/>;
+/// a <c>--task</c>/<c>--chat</c>/dispatch pane wants <see cref="FollowPane"/> (the default).
+/// </summary>
+public enum SplitFocus
+{
+    /// <summary>Let focus move to the new pane (default; the host's own behaviour, today's).</summary>
+    FollowPane,
+
+    /// <summary>Keep focus in the current pane where the host supports it; a no-op where it doesn't.</summary>
+    StayPut,
+}
+
+/// <summary>
 /// Configuration for <see cref="ITerminalLauncher"/>. Intentionally lean for this slice (issue #25):
 /// it must work with zero config (all defaults). The full settings surface — preferred terminal,
 /// custom <c>claude</c> path/args, working directory, prompt-template — is wired to
@@ -72,6 +112,30 @@ public sealed record TerminalLauncherOptions
     /// terminal where the host supports it. Ignored for one-off runs (which have no terminal).
     /// </summary>
     public LaunchLocation LaunchLocation { get; init; } = LaunchLocation.NewWindow;
+
+    /// <summary>
+    /// Which way a <see cref="LaunchLocation.SplitPane"/> divides the current pane (#505):
+    /// <see cref="SplitDirection.Auto"/> (default — WT aspect-ratio auto, else side-by-side),
+    /// <see cref="SplitDirection.Beside"/> or <see cref="SplitDirection.Below"/>. Ignored unless the
+    /// request is a split. The default emits byte-identical argv to the pre-#505 split.
+    /// </summary>
+    public SplitDirection SplitDirection { get; init; } = SplitDirection.Auto;
+
+    /// <summary>
+    /// The <b>new</b> pane's share of the parent for a <see cref="LaunchLocation.SplitPane"/>, as a
+    /// percentage (#505), where the host takes a size — Windows Terminal (<c>-s</c> fraction), tmux
+    /// (<c>-l %</c>), WezTerm (<c>--percent</c>). Best-effort: kitty, Zellij and iTerm2 split evenly with
+    /// no size argument, so this is silently ignored there. <c>null</c> (default) leaves the host's even
+    /// split. Clamped to 1–99 when emitted.
+    /// </summary>
+    public int? SplitSizePercent { get; init; }
+
+    /// <summary>
+    /// Whether a <see cref="LaunchLocation.SplitPane"/> keeps focus in the current pane (#505):
+    /// <see cref="SplitFocus.FollowPane"/> (default, today's behaviour) or <see cref="SplitFocus.StayPut"/>
+    /// (best-effort per host — WT/tmux/kitty only). Ignored unless the request is a split.
+    /// </summary>
+    public SplitFocus SplitFocus { get; init; } = SplitFocus.FollowPane;
 
     /// <summary>
     /// The Windows Terminal profile (a <c>guid</c> or <c>name</c>) to launch under when the "Try to use
