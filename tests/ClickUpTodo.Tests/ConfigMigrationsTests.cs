@@ -49,6 +49,31 @@ public sealed class ConfigMigrationsTests : IDisposable
     }
 
     [Fact]
+    public void Apply_OutOfRangeLaunchLocation_DegradesToNewWindow()
+    {
+        // Widening the persisted LaunchLocation enum (#508): a future ordinal / hand-edited
+        // "launchLocation": 99 deserializes to an undefined (LaunchLocation)N without throwing, so Apply
+        // must clamp it back to the NewWindow default rather than let a bogus destination reach the launcher.
+        var config = new AppConfig { AgentDispatch = new AgentDispatchSettings { LaunchLocation = (LaunchLocation)99 } };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(LaunchLocation.NewWindow, config.AgentDispatch.LaunchLocation);
+    }
+
+    [Theory]
+    [InlineData(LaunchLocation.NewTab)]
+    [InlineData(LaunchLocation.SplitPane)] // the widened third value is a defined name ⇒ preserved
+    public void Apply_ValidLaunchLocation_IsPreserved(LaunchLocation location)
+    {
+        var config = new AppConfig { AgentDispatch = new AgentDispatchSettings { LaunchLocation = location } };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.Equal(location, config.AgentDispatch.LaunchLocation);
+    }
+
+    [Fact]
     public void Apply_NullTaskWorkingDirectories_CoalescedToEmptyMap()
     {
         // A hand-edited config.json with "taskWorkingDirectories": null deserializes to null (the

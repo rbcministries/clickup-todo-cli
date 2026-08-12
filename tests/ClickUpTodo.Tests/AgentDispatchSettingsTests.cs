@@ -151,6 +151,12 @@ public sealed class AgentDispatchSettingsTests
     public void ToLauncherOptions_DefaultsLaunchLocationToNewWindow()
         => Assert.Equal(LaunchLocation.NewWindow, new AgentDispatchSettings().ToLauncherOptions().LaunchLocation);
 
+    [Theory]
+    [InlineData(LaunchLocation.NewTab)]
+    [InlineData(LaunchLocation.SplitPane)] // #508: the widened third value flows through to the launcher
+    public void ToLauncherOptions_CarriesLaunchLocation(LaunchLocation location)
+        => Assert.Equal(location, new AgentDispatchSettings { LaunchLocation = location }.ToLauncherOptions().LaunchLocation);
+
     [Fact]
     public void ToLauncherOptions_ParsesCustomTerminalCommandIntoTokens()
     {

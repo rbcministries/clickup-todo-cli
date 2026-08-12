@@ -86,8 +86,25 @@ public sealed class DispatchPaneModelTests
         => Assert.Equal(expected, DispatchPaneModel.LaunchLocationApplies(mode));
 
     [Theory]
-    [InlineData(true, LaunchLocation.NewTab)]   // checked ⇒ new tab of the current terminal
-    [InlineData(false, LaunchLocation.NewWindow)] // unchecked ⇒ the historical new-window default
-    public void ToLaunchLocation_MapsCheckedStateToLocation(bool newTabChecked, LaunchLocation expected)
-        => Assert.Equal(expected, DispatchPaneModel.ToLaunchLocation(newTabChecked));
+    [InlineData(LaunchLocation.NewWindow, LaunchLocation.NewTab)]
+    [InlineData(LaunchLocation.NewTab, LaunchLocation.SplitPane)]
+    [InlineData(LaunchLocation.SplitPane, LaunchLocation.NewWindow)] // wraps back to the default
+    public void CycleLaunchLocation_AdvancesThroughAllThree_AndWraps(LaunchLocation current, LaunchLocation expected)
+        => Assert.Equal(expected, DispatchPaneModel.CycleLaunchLocation(current));
+
+    [Fact]
+    public void CycleLaunchLocation_ThreeSteps_ReturnsToStart()
+    {
+        var l = LaunchLocation.NewWindow;
+        for (var i = 0; i < 3; i++)
+            l = DispatchPaneModel.CycleLaunchLocation(l);
+        Assert.Equal(LaunchLocation.NewWindow, l);
+    }
+
+    [Theory]
+    [InlineData(LaunchLocation.NewWindow, "New window")]
+    [InlineData(LaunchLocation.NewTab, "New tab (where supported)")]
+    [InlineData(LaunchLocation.SplitPane, "Split pane (where supported)")]
+    public void LaunchLocationLabel_NamesEachDestination(LaunchLocation location, string expected)
+        => Assert.Equal(expected, DispatchPaneModel.LaunchLocationLabel(location));
 }
