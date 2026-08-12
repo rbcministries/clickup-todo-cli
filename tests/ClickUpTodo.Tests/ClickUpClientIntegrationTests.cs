@@ -687,7 +687,8 @@ public sealed class ClickUpClientIntegrationTests
             Assert.True(
                 clearedField?.Value is null
                 || clearedField.Value.Value.ValueKind == JsonValueKind.Null
-                || string.IsNullOrEmpty(clearedField.Value.Value.GetString()),
+                || (clearedField.Value.Value.ValueKind == JsonValueKind.String
+                    && string.IsNullOrEmpty(clearedField.Value.Value.GetString())),
                 "a cleared custom field should read back with no value.");
         }
         finally
