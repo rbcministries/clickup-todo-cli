@@ -83,6 +83,16 @@ public sealed class TaskDetailScreen : Screen
     // current terminal (where supported), unchecked ⇒ a new window. Seeded from the persisted default
     // and read on submit. Greyed out in one-off mode (a -p run has no terminal); see UpdateLaunchLocationEnabled.
     private readonly CheckBox _launchLocationToggle;
+    // The per-dispatch provider selector (#498): a horizontal OptionSelector of the configured providers'
+    // display names, shown only when there are 2+ providers (DispatchPaneModel.ProviderRowVisible) so the
+    // zero-/single-provider pane is byte-identical. Null when the row isn't shown. The parallel
+    // _providers list maps the selector's index back to a provider name on submit.
+    private readonly OptionSelector? _providerSelector;
+    private readonly IReadOnlyList<DispatchProvider> _providers;
+    // The effective below-browser row count (#498): the base two toggles plus the provider selector row
+    // when it's shown. Both the ctor's initial sizing and ShowPrompt's per-open re-clamp read this so the
+    // pane is sized tall enough for the extra row (ShowPrompt would otherwise clip it on every open).
+    private readonly int _dispatchRowsBelowBrowser;
     // Guards the working-dir field against the browser's selection-follows-cursor sync while the pane
     // is being (re)opened: pre-fill writes the per-task cached dir (#96) into the field, then resetting
     // the browser fires ValueChanged, which would otherwise immediately clobber that pre-fill with the
@@ -298,6 +308,10 @@ public sealed class TaskDetailScreen : Screen
     private readonly Func<string, string, CancellationToken, Task<TaskChecklist>>? _createChecklistItemAsync;
     private readonly Func<string, string, string, CancellationToken, Task<TaskChecklist>>? _renameChecklistItemAsync;
     private readonly Func<string, string, CancellationToken, Task>? _deleteChecklistItemAsync;
+    // Reorder / reparent an item (G, #569), owned by the host; null ⇒ inert. Args: (checklistId, itemId,
+    // newParentId, newOrderIndex, clearParent). Returns the server-confirmed parent checklist so the
+    // optimistic move is reconciled, like rename.
+    private readonly Func<string, string, string?, double, bool, CancellationToken, Task<TaskChecklist>>? _moveChecklistItemAsync;
     // Checklist group CRUD (F, #459), owned by the host like the item writes above; null ⇒ inert. Create
     // takes just the name (the host closes over the owning task id, since POST /task/{id}/checklist is
     // task-scoped and the response carries only the checklist); rename takes the checklist id; both return
@@ -519,6 +533,9 @@ public sealed class TaskDetailScreen : Screen
         AgentSessionMode defaultSessionMode = AgentSessionMode.Interactive,
         bool defaultPostToComments = false,
         LaunchLocation defaultLaunchLocation = LaunchLocation.NewWindow,
+        IReadOnlyList<DispatchProvider>? providers = null,
+        string? defaultProviderName = null,
+        string? lastDispatchProviderName = null,
         Func<string>? workingDirectoryPreFill = null,
         Func<string, CancellationToken, Task<CommentItem>>? postCommentAsync = null,
         Func<string, string, CancellationToken, Task<CommentItem>>? postReplyAsync = null,
@@ -533,6 +550,7 @@ public sealed class TaskDetailScreen : Screen
         Func<string, string, CancellationToken, Task<TaskChecklist>>? createChecklistItemAsync = null,
         Func<string, string, string, CancellationToken, Task<TaskChecklist>>? renameChecklistItemAsync = null,
         Func<string, string, CancellationToken, Task>? deleteChecklistItemAsync = null,
+        Func<string, string, string?, double, bool, CancellationToken, Task<TaskChecklist>>? moveChecklistItemAsync = null,
         Func<string, CancellationToken, Task<TaskChecklist>>? createChecklistAsync = null,
         Func<string, string, CancellationToken, Task<TaskChecklist>>? renameChecklistAsync = null,
         Func<string, CancellationToken, Task>? deleteChecklistAsync = null,
@@ -557,6 +575,7 @@ public sealed class TaskDetailScreen : Screen
         _createChecklistItemAsync = createChecklistItemAsync;
         _renameChecklistItemAsync = renameChecklistItemAsync;
         _deleteChecklistItemAsync = deleteChecklistItemAsync;
+        _moveChecklistItemAsync = moveChecklistItemAsync;
         _createChecklistAsync = createChecklistAsync;
         _renameChecklistAsync = renameChecklistAsync;
         _deleteChecklistAsync = deleteChecklistAsync;
@@ -564,6 +583,7 @@ public sealed class TaskDetailScreen : Screen
         _assigneeTopFrequent = assigneeTopFrequent;
         _setChecklistItemAssigneeAsync = setChecklistItemAssigneeAsync;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
+        _providers = providers ?? [];
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
         Title = task.Name.Length > 60 ? task.Name[..59] + "…" : task.Name;
@@ -750,10 +770,38 @@ public sealed class TaskDetailScreen : Screen
             Value = defaultLaunchLocation == LaunchLocation.NewTab ? CheckState.Checked : CheckState.UnChecked,
         };
 
-        _dispatchControls = [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle, _launchLocationToggle];
+        // The per-dispatch provider selector (#498): only when there's an actual choice (2+ configured
+        // providers). A new bottom row below the launch-location toggle — a horizontal OptionSelector of
+        // the providers' display names, seeded to the remembered pick (else the configured default, else
+        // the first) via the pure DispatchPaneModel.InitialProviderIndex. With 0/1 providers the row is
+        // omitted and the pane renders byte-identically to the pre-#498 layout.
+        var providerRowVisible = DispatchPaneModel.ProviderRowVisible(_providers.Count);
+        Label? providerLabel = null;
+        if (providerRowVisible)
+        {
+            var providerRowY = DispatchRowsAboveBrowser + DispatchBrowserRows + 2;
+            providerLabel = new Label { X = 1, Y = providerRowY, Text = "Agent:" };
+            var lastUsedIndex = IndexOfProvider(lastDispatchProviderName);
+            var defaultIndex = IndexOfProvider(defaultProviderName);
+            _providerSelector = new OptionSelector
+            {
+                X = 9,
+                Y = providerRowY,
+                Width = Dim.Fill(1),
+                Height = 1,
+                Orientation = Orientation.Horizontal,
+                Labels = [.. _providers.Select(p => p.Name)],
+                Value = DispatchPaneModel.InitialProviderIndex(_providers.Count, lastUsedIndex, defaultIndex),
+            };
+        }
 
+        _dispatchControls = _providerSelector is null
+            ? [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle, _launchLocationToggle]
+            : [_promptField, _oneOffToggle, _workingDirField, _dirBrowser, _postToCommentsToggle, _launchLocationToggle, _providerSelector];
+
+        _dispatchRowsBelowBrowser = DispatchRowsBelowBrowser + (providerRowVisible ? 1 : 0);
         var paneHeight = DispatchPaneModel.PreferredHeightWithBrowser(
-            DispatchRowsAboveBrowser, DispatchBrowserRows, DispatchRowsBelowBrowser);
+            DispatchRowsAboveBrowser, DispatchBrowserRows, _dispatchRowsBelowBrowser);
         _promptBox = new FrameView
         {
             Title = "Dispatch to Claude — Enter submit · Tab next · Esc cancel",
@@ -764,6 +812,8 @@ public sealed class TaskDetailScreen : Screen
             Visible = false,
         };
         _promptBox.Add(promptLabel, _promptField, _oneOffToggle, dirLabel, _workingDirField, browserHint, _dirBrowser, _postToCommentsToggle, _launchLocationToggle);
+        if (providerLabel is not null && _providerSelector is not null)
+            _promptBox.Add(providerLabel, _providerSelector);
         // Each dispatch control routes the pane's keys (Enter/Esc/Tab/PgUp/PgDn) via the pure
         // DispatchPaneModel; other keys fall through so typing/Space-toggle keep working. The browser
         // gets its own handler so Enter/→/← navigate it instead of submitting the dispatch (#95).
@@ -1252,6 +1302,30 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // Shift+↑/↓/←/→ on the Checklists tab (G, #569): reorder (↑/↓) or reparent (←outdent / →indent) the
+        // highlighted item. Guarded on the checklist ListView being front-most (like Space/F7–F9 above), so
+        // the chords stay inert on the other tabs and text panes. Shift-modified (not Alt: Windows Terminal
+        // claims Alt+arrows for pane focus and Alt+Shift+arrows for pane resize) so they don't collide with
+        // Ctrl+←/→ tab cycling or the bare ↑/↓ pane-scroll block below (which excludes IsShift); consumed here
+        // before they could reach NavSafeTabs, so a boundary / illegal move is a no-op that never switches
+        // tabs. The pure ChecklistMove decides legality — an illegal move flashes and issues no request.
+        if (key.IsShift && !key.IsCtrl && !key.IsAlt && ReferenceEquals(_tabs.Value, _checklistList))
+        {
+            var code = key.KeyCode & ~KeyCode.ShiftMask;
+            if (code is KeyCode.CursorUp or KeyCode.CursorDown or KeyCode.CursorLeft or KeyCode.CursorRight)
+            {
+                key.Handled = true;
+                MoveSelectedChecklistItem(code switch
+                {
+                    KeyCode.CursorUp => ChecklistMoveKind.Up,
+                    KeyCode.CursorDown => ChecklistMoveKind.Down,
+                    KeyCode.CursorLeft => ChecklistMoveKind.Outdent,
+                    _ => ChecklistMoveKind.Indent,
+                });
+                return;
+            }
+        }
+
         // Ctrl+G creates a new checklist group on the task (F, #459). Guarded to the Checklists tab being
         // front-most (like the chords above) and to the prompt being closed; available even on the empty-state
         // row (a task with no checklists), which is how the first checklist is created. A Ctrl-chord (not a
@@ -1653,10 +1727,39 @@ public sealed class TaskDetailScreen : Screen
         var dir = _workingDirField.Text?.ToString();
         var postToComments = _postToCommentsToggle.Value == CheckState.Checked;
         var launchLocation = DispatchPaneModel.ToLaunchLocation(_launchLocationToggle.Value == CheckState.Checked);
+        // The per-dispatch provider pick (#498): the selected provider's name when the row is shown (2+
+        // providers), else null so the host launches the configured default exactly as before.
+        var provider = SelectedProviderName();
         HidePrompt();
         // A stray Enter shouldn't launch a session — only dispatch when something was typed.
         if (!string.IsNullOrWhiteSpace(text))
-            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, sessionMode, dir, postToComments, launchLocation));
+            AgentDispatchRequested?.Invoke(this, new DispatchRequest(text, sessionMode, dir, postToComments, launchLocation, provider));
+    }
+
+    /// <summary>The display name of the provider the pane's selector currently points at (#498), or null
+    /// when the provider row isn't shown (fewer than two configured providers) — in which case the host
+    /// dispatches the configured default provider. Clamped defensively to the provider list.</summary>
+    private string? SelectedProviderName()
+    {
+        if (_providerSelector is null)
+            return null;
+        var index = _providerSelector.Value ?? 0;
+        return index >= 0 && index < _providers.Count ? _providers[index].Name : null;
+    }
+
+    /// <summary>Index of the provider named <paramref name="name"/> in <see cref="_providers"/>
+    /// (<see cref="StringComparison.Ordinal"/>, matching the resolver), or -1 when blank/absent — the
+    /// seed inputs the pure <see cref="DispatchPaneModel.InitialProviderIndex"/> consumes (#498).</summary>
+    private int IndexOfProvider(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return -1;
+        for (var i = 0; i < _providers.Count; i++)
+        {
+            if (string.Equals(_providers[i].Name, name, StringComparison.Ordinal))
+                return i;
+        }
+        return -1;
     }
 
     /// <summary>Greys the launch-location toggle (#275) in/out to match the session mode: a one-off
@@ -1781,7 +1884,7 @@ public sealed class TaskDetailScreen : Screen
         // prompt row + borders always survive; the bottom controls (browser, post-to-Comments) clip first.
         var height = DispatchPaneModel.ClampHeight(
             DispatchPaneModel.PreferredHeightWithBrowser(
-                DispatchRowsAboveBrowser, DispatchBrowserRows, DispatchRowsBelowBrowser),
+                DispatchRowsAboveBrowser, DispatchBrowserRows, _dispatchRowsBelowBrowser),
             Viewport.Height, minTabRows: 3);
         _promptBox.Height = height;
         _promptBox.Y = Pos.AnchorEnd(height);
@@ -3078,6 +3181,89 @@ public sealed class TaskDetailScreen : Screen
             }
         });
     }
+
+    /// <summary>Shift+arrows (G, #569): reorder / reparent the highlighted checklist item. The pure
+    /// <see cref="ChecklistMove"/> decides legality and the exact <c>orderindex</c>/<c>parent</c> write; an
+    /// illegal / boundary move flashes and issues no request. A legal move applies optimistically
+    /// (<see cref="ChecklistItemEdits.Move"/>) → off-thread PUT → reconcile with the server-confirmed
+    /// checklist, or revert to the exact prior tree + flash on failure — the rename discipline, snapshotting
+    /// the whole tree so the revert is the exact prior order.</summary>
+    private void MoveSelectedChecklistItem(ChecklistMoveKind kind)
+    {
+        if (_moveChecklistItemAsync is null)
+            return;
+        if (_checklistWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (SelectedChecklistRow() is not { IsHeader: false, ItemId: { } itemId } row)
+        {
+            RequestFlash("Select a checklist item to move — headers can't be moved.");
+            return;
+        }
+
+        var checklistId = row.ChecklistId;
+        if (ChecklistMove.Plan(_task.Checklists, checklistId, itemId, kind) is not { } plan)
+        {
+            RequestFlash(MoveBlockedMessage(kind));
+            return;
+        }
+
+        var snapshot = _task.Checklists;
+        _checklistWriteInFlight = true;
+        _pendingChecklistEdit = cls =>
+            ChecklistItemEdits.Move(cls, checklistId, itemId, plan.NewParentId, plan.NewOrderIndex, plan.ClearParent);
+        UpdateData(
+            _task with
+            {
+                Checklists = ChecklistItemEdits.Move(_task.Checklists, checklistId, itemId, plan.NewParentId, plan.NewOrderIndex, plan.ClearParent),
+            },
+            _comments);
+        // Keep the selection on the moved item so a run of moves keeps operating on it.
+        SelectChecklistItemById(checklistId, itemId);
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                var server = await _moveChecklistItemAsync(
+                    checklistId, itemId, plan.NewParentId, plan.NewOrderIndex, plan.ClearParent, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null;
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = ReplaceChecklist(_task.Checklists, server) }, _comments);
+                    SelectChecklistItemById(checklistId, itemId);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null; // cleared first so the revert isn't re-applied.
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = snapshot }, _comments);
+                    SelectChecklistItemById(checklistId, itemId);
+                    RequestFlash($"Could not move item: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>The flash for an illegal / boundary move (<see cref="ChecklistMove.Plan"/> returned null),
+    /// worded per gesture so the user knows why nothing happened.</summary>
+    private static string MoveBlockedMessage(ChecklistMoveKind kind) => kind switch
+    {
+        ChecklistMoveKind.Up => "Already at the top of its group.",
+        ChecklistMoveKind.Down => "Already at the bottom of its group.",
+        ChecklistMoveKind.Indent => "Nothing to indent under — it's the first item in its group.",
+        _ => "Already at the top level.",
+    };
 
     /// <summary>Optimistic rename: set the name locally → off-thread PUT → reconcile with the server
     /// checklist, or revert to the prior name + flash on failure.</summary>

@@ -29,9 +29,18 @@ namespace ClickUpTodo.Tui.Screens;
 /// <c>AgentDispatchSettings.LaunchLocation</c> default without changing it. Only meaningful for an
 /// interactive <see cref="SessionMode"/>; a one-off run has no terminal, so the host ignores it there.
 /// </param>
+/// <param name="Provider">
+/// The <see cref="Configuration.DispatchProvider.Name"/> of the provider this one dispatch targets
+/// (#498), overriding the configured default (<c>AgentDispatchSettings.DefaultProviderName</c>)
+/// without changing it — the same per-dispatch-override shape as <see cref="LaunchLocation"/>.
+/// Null/blank ⇒ the configured default provider, so a dispatch that never touches the pane's provider
+/// control launches exactly as before. Resolved against the settings' provider list in
+/// <see cref="Tui.DispatchCoordinator.Plan"/>; an unknown name falls back to the default.
+/// </param>
 public sealed record DispatchRequest(
     string Prompt,
     AgentSessionMode SessionMode = AgentSessionMode.Interactive,
     string? WorkingDirectory = null,
     bool PostToComments = false,
-    LaunchLocation LaunchLocation = LaunchLocation.NewWindow);
+    LaunchLocation LaunchLocation = LaunchLocation.NewWindow,
+    string? Provider = null);

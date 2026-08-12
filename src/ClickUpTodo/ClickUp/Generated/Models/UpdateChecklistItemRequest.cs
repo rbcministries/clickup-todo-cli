@@ -8,7 +8,7 @@ using System;
 namespace ClickUpTodo.ClickUp.Generated.Models
 {
     /// <summary>
-    /// Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457), the rename write (E, #458) and the per-item assignee write (G, #460). Every field is optional so a caller sends only what it changes: &apos;resolved&apos; toggles the tick, &apos;name&apos; renames the item, &apos;assignee&apos; sets the single per-item assignee (a user id) — or, sent as an explicit JSON null, clears it. Reparent/reorder (&apos;parent&apos;/&apos;orderindex&apos;) land with the deferred reorder half of G.
+    /// Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457), the rename write (E, #458), the per-item assignee write (G, #460) and the reorder/reparent write (G, #569). Every field is optional so a caller sends only what it changes: &apos;resolved&apos; toggles the tick, &apos;name&apos; renames the item, &apos;assignee&apos; sets the single per-item assignee (a user id) — or, sent as an explicit JSON null, clears it — &apos;orderindex&apos; repositions among siblings, and &apos;parent&apos; reparents (a parent item id to indent under it, or explicit null to outdent to top level).
     /// </summary>
     [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
     public partial class UpdateChecklistItemRequest : IAdditionalDataHolder, IParsable
@@ -24,6 +24,16 @@ namespace ClickUpTodo.ClickUp.Generated.Models
 #nullable restore
 #else
         public string Name { get; set; }
+#endif
+        /// <summary>The orderindex property</summary>
+        public double? Orderindex { get; set; }
+        /// <summary>The parent property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public string? Parent { get; set; }
+#nullable restore
+#else
+        public string Parent { get; set; }
 #endif
         /// <summary>The resolved property</summary>
         public bool? Resolved { get; set; }
@@ -54,6 +64,8 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             {
                 { "assignee", n => { Assignee = n.GetLongValue(); } },
                 { "name", n => { Name = n.GetStringValue(); } },
+                { "orderindex", n => { Orderindex = n.GetDoubleValue(); } },
+                { "parent", n => { Parent = n.GetStringValue(); } },
                 { "resolved", n => { Resolved = n.GetBoolValue(); } },
             };
         }
@@ -66,6 +78,8 @@ namespace ClickUpTodo.ClickUp.Generated.Models
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
             writer.WriteLongValue("assignee", Assignee);
             writer.WriteStringValue("name", Name);
+            writer.WriteDoubleValue("orderindex", Orderindex);
+            writer.WriteStringValue("parent", Parent);
             writer.WriteBoolValue("resolved", Resolved);
             writer.WriteAdditionalData(AdditionalData);
         }
