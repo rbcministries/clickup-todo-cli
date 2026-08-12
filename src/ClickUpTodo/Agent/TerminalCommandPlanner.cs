@@ -310,7 +310,9 @@ public static class TerminalCommandPlanner
             case SplitDirection.Below:
                 args.Add("-H");
                 break;
-                // Auto: omit — WT chooses by pane aspect ratio.
+            default:
+                // Auto: omit -V/-H so WT chooses the divider by pane aspect ratio.
+                break;
         }
         if (options.SplitSizePercent is { } percent)
         {
@@ -444,6 +446,8 @@ public static class TerminalCommandPlanner
                 var args = new List<string> { "split-window", below ? "-v" : "-h" };
                 if (options.SplitSizePercent is { } p)
                 {
+                    // `-l <n>%` (percent size) needs tmux ≥ 3.1; on an older tmux the split-window errors
+                    // and the launcher ladders on to the next candidate — acceptable best-effort sizing.
                     args.Add("-l");
                     args.Add($"{Math.Clamp(p, 1, 99)}%");
                 }

@@ -45,6 +45,11 @@ public static class SplitViability
     /// floor. A side-by-side split divides the columns; both resulting panes host a TUI, so the binding
     /// width is the narrower of the two (<c>min(new, ours)</c>). At or above the floor the request stays a
     /// split; below it, it degrades to <see cref="LaunchLocation.NewTab"/> with a reason.
+    ///
+    /// <see cref="SplitDirection.Auto"/> is treated as side-by-side here — the conservative choice, since a
+    /// side-by-side split is the one that can produce unusably narrow panes. On Windows Terminal a real
+    /// <c>Auto</c> split may instead <i>stack</i> (full width, always viable) by aspect ratio, so this can
+    /// refuse a WT-auto stack that would in fact have fit; erring toward a tab is the safe direction.
     /// </summary>
     public static Decision Evaluate(
         int terminalColumns,
