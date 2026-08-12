@@ -90,4 +90,47 @@ public sealed class DispatchPaneModelTests
     [InlineData(false, LaunchLocation.NewWindow)] // unchecked ⇒ the historical new-window default
     public void ToLaunchLocation_MapsCheckedStateToLocation(bool newTabChecked, LaunchLocation expected)
         => Assert.Equal(expected, DispatchPaneModel.ToLaunchLocation(newTabChecked));
+
+    // ── per-dispatch provider selector (#498) ─────────────────────────────────────────
+
+    [Theory]
+    [InlineData(DispatchPaneModel.DispatchOption.WorkingDirectory)]
+    [InlineData(DispatchPaneModel.DispatchOption.SessionMode)]
+    [InlineData(DispatchPaneModel.DispatchOption.LaunchLocation)]
+    public void DispatchOptionApplies_LocalCli_EveryOptionApplies(DispatchPaneModel.DispatchOption option)
+        // A local CLI provider runs a real terminal process, so every pane option is meaningful.
+        => Assert.True(DispatchPaneModel.DispatchOptionApplies(DispatchProviderKind.LocalCli, option));
+
+    [Theory]
+    [InlineData(DispatchPaneModel.DispatchOption.WorkingDirectory)]
+    [InlineData(DispatchPaneModel.DispatchOption.SessionMode)]
+    [InlineData(DispatchPaneModel.DispatchOption.LaunchLocation)]
+    public void DispatchOptionApplies_NonLocalKind_LocalProcessOptionsDoNotApply(DispatchPaneModel.DispatchOption option)
+    {
+        // A hypothetical future non-local kind (a hosted agent, #491) has no local process, so the pane
+        // greys out every one of today's options. Cast an out-of-range value to stand in for that kind
+        // until one exists in the enum — the predicate must not special-case it as LocalCli.
+        var nonLocalKind = (DispatchProviderKind)1;
+        Assert.NotEqual(DispatchProviderKind.LocalCli, nonLocalKind);
+        Assert.False(DispatchPaneModel.DispatchOptionApplies(nonLocalKind, option));
+    }
+
+    [Theory]
+    [InlineData(0, false)]
+    [InlineData(1, false)] // one provider ⇒ no choice ⇒ pane byte-identical to pre-#498
+    [InlineData(2, true)]
+    [InlineData(5, true)]
+    public void ProviderRowVisible_OnlyWithTwoOrMoreProviders(int providerCount, bool expected)
+        => Assert.Equal(expected, DispatchPaneModel.ProviderRowVisible(providerCount));
+
+    [Theory]
+    [InlineData(3, 2, 0, 2)]   // a valid remembered pick wins
+    [InlineData(3, -1, 1, 1)]  // no remembered pick ⇒ the configured default
+    [InlineData(3, 5, 1, 1)]   // remembered index out of range (deleted provider) ⇒ default
+    [InlineData(3, -1, -1, 0)] // neither known ⇒ first row
+    [InlineData(3, 4, 9, 0)]   // both out of range ⇒ first row
+    [InlineData(0, 1, 1, 0)]   // no providers ⇒ 0
+    public void InitialProviderIndex_PrefersLastUsedThenDefaultThenFirst(
+        int count, int lastUsedIndex, int defaultIndex, int expected)
+        => Assert.Equal(expected, DispatchPaneModel.InitialProviderIndex(count, lastUsedIndex, defaultIndex));
 }

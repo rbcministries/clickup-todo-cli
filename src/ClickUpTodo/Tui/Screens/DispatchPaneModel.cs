@@ -22,6 +22,66 @@ public static class DispatchPaneModel
     public static bool LaunchLocationApplies(AgentSessionMode sessionMode)
         => sessionMode == AgentSessionMode.Interactive;
 
+    /// <summary>A per-dispatch option the pane offers, for the provider-applicability rule (#498).</summary>
+    public enum DispatchOption
+    {
+        /// <summary>The working-directory field + file-tree browser (#95).</summary>
+        WorkingDirectory,
+
+        /// <summary>The one-off/interactive session-mode toggle (#94).</summary>
+        SessionMode,
+
+        /// <summary>The new-window/new-tab launch-location toggle (#275).</summary>
+        LaunchLocation,
+    }
+
+    /// <summary>
+    /// Whether a pane <paramref name="option"/> is meaningful for a provider of the given
+    /// <paramref name="kind"/> (#498) — the generalization of <see cref="LaunchLocationApplies"/> from
+    /// the one launch-location rule to a per-provider "which options apply" predicate. Every option the
+    /// pane offers today (working directory, session mode, launch location) needs a <b>local terminal
+    /// process</b> to be meaningful, and only a <see cref="DispatchProviderKind.LocalCli"/> provider has
+    /// one; a future non-local kind (a hosted agent, epic #491) supports none of them, so the pane greys
+    /// those controls out and any value they carry is ignored downstream — the same contract
+    /// <see cref="LaunchLocationApplies"/> established for one-off runs. <paramref name="option"/> stays
+    /// in the signature so a later kind that supports <em>some</em> options can refine this per option
+    /// rather than all-or-nothing. Pure so the enable/disable rule is unit-tested rather than buried in
+    /// the CI-untestable glue.
+    /// </summary>
+    public static bool DispatchOptionApplies(DispatchProviderKind kind, DispatchOption option)
+    {
+        var needsLocalProcess = option is DispatchOption.WorkingDirectory
+            or DispatchOption.SessionMode or DispatchOption.LaunchLocation;
+        return !needsLocalProcess || kind == DispatchProviderKind.LocalCli;
+    }
+
+    /// <summary>
+    /// Whether the pane shows its provider-selector control (#498): only when there are <b>two or more</b>
+    /// configured providers, i.e. an actual choice to make. With zero or one provider there is nothing to
+    /// pick, so the row is omitted and the pane renders byte-identically to the pre-#498 layout (the
+    /// zero-config invariant). Pure so the show/hide rule is unit-tested.
+    /// </summary>
+    public static bool ProviderRowVisible(int providerCount) => providerCount >= 2;
+
+    /// <summary>
+    /// The row the provider selector opens on (#498): the <paramref name="lastUsedIndex"/> remembered
+    /// pick when it is a valid row, else the configured <paramref name="defaultIndex"/> when valid, else
+    /// the first row. <paramref name="count"/> is the number of providers; a non-positive count returns 0
+    /// (nothing to select). Callers resolve the two indices by locating the last-used / default provider
+    /// name in the list (or -1 when absent), so a deleted/renamed remembered provider cleanly falls back
+    /// to the default. Pure so the seed rule is unit-tested rather than inlined in the glue.
+    /// </summary>
+    public static int InitialProviderIndex(int count, int lastUsedIndex, int defaultIndex)
+    {
+        if (count <= 0)
+            return 0;
+        if (lastUsedIndex >= 0 && lastUsedIndex < count)
+            return lastUsedIndex;
+        if (defaultIndex >= 0 && defaultIndex < count)
+            return defaultIndex;
+        return 0;
+    }
+
     /// <summary>
     /// The <see cref="LaunchLocation"/> the pane's launch-location toggle represents (#275): checked ⇒
     /// a new tab of the current terminal (where the host supports it), unchecked ⇒ a new window (the
