@@ -312,6 +312,16 @@ public sealed class TaskDetailScreen : Screen
     // mid-write (the _pendingChecklistToggle discipline, generalized to add/rename/delete): the provisional
     // insert, the new name, or the removal stays authoritative until the write settles and clears it.
     private Func<IReadOnlyList<TaskChecklist>, IReadOnlyList<TaskChecklist>>? _pendingChecklistEdit;
+    // The per-item assignee, set from the rename overlay (#572), owned by the host like the item writes
+    // above. The match / top-frequent pair projects the frequency-ranked workspace-member pool
+    // (AssigneeFrequencyCache) as TaskAssignee; the write sets (user id) or clears (null) the item's
+    // assignee and returns the server-confirmed parent checklist. All three null (the single-task launch
+    // without a projected cache) ⇒ no assignee control — the rename overlay stays name-only.
+    private readonly Func<string, ISet<long>, IReadOnlyList<TaskAssignee>>? _assigneeMatch;
+    private readonly Func<int, ISet<long>, IReadOnlyList<TaskAssignee>>? _assigneeTopFrequent;
+    private readonly Func<string, string, long?, CancellationToken, Task<TaskChecklist>>? _setChecklistItemAssigneeAsync;
+    private bool AssigneeControlAvailable =>
+        _assigneeMatch is not null && _assigneeTopFrequent is not null && _setChecklistItemAssigneeAsync is not null;
 
     // The item add/rename input overlay: a bottom-anchored single-line name field + Save/Cancel (with a
     // hidden discard-confirm row for an edited rename), hidden until F7/F8. A transient child view within
@@ -320,7 +330,14 @@ public sealed class TaskDetailScreen : Screen
     private readonly FrameView _checklistItemBox;
     private readonly TextField _checklistItemEditor;
     private readonly Label _checklistItemConfirm;
+    private readonly Label _checklistItemAssigneeLabel;
     private readonly View[] _checklistItemControls;
+    // The rename overlay's assignee selector (#572): built fresh on each Rename open (re-seeded with that
+    // item's current assignee, since the shared selector has no reset) and disposed on hide; null in the
+    // other overlay kinds and when no member pool is supplied. While shown, the focus ring is widened to
+    // include it — a transient control inside the modal, so the single-ListView model (#3) is untouched.
+    private AssigneeSelectorView? _checklistItemAssignees;
+    private View[] _checklistItemFocusRing = [];
     // What the open overlay will do on submit, and against which target.
     private ChecklistItemEditKind _checklistItemEditKind;
     private string _checklistItemTargetChecklistId = "";
@@ -339,6 +356,12 @@ public sealed class TaskDetailScreen : Screen
     // The overlay's ideal height: the single-line field + the confirm row + the Save/Cancel button row +
     // the top/bottom frame border. Clamped on show so it degrades gracefully on a short terminal.
     private const int ChecklistItemEditorPreferredHeight = 1 + 1 + 1 + 2;
+    // The Rename overlay grown to hold the assignee control (#572): the name field + an "Assignee:" label
+    // + the selector (search box over a few candidate rows) + the confirm row + the Save/Cancel row + the
+    // frame border. Clamped on show like the compact variant.
+    private const int ChecklistItemAssigneeSelectorRows = 6;
+    private const int ChecklistItemAssigneeEditorPreferredHeight =
+        1 + 1 + ChecklistItemAssigneeSelectorRows + 1 + 1 + 2;
 
     /// <summary>What the checklist name overlay will do on submit: add or rename an item (E, #458), or
     /// create or rename a checklist group (F, #459). The two group kinds reuse the same single-line overlay.</summary>
@@ -502,7 +525,10 @@ public sealed class TaskDetailScreen : Screen
         Func<string, string, CancellationToken, Task>? deleteChecklistItemAsync = null,
         Func<string, CancellationToken, Task<TaskChecklist>>? createChecklistAsync = null,
         Func<string, string, CancellationToken, Task<TaskChecklist>>? renameChecklistAsync = null,
-        Func<string, CancellationToken, Task>? deleteChecklistAsync = null)
+        Func<string, CancellationToken, Task>? deleteChecklistAsync = null,
+        Func<string, ISet<long>, IReadOnlyList<TaskAssignee>>? assigneeMatch = null,
+        Func<int, ISet<long>, IReadOnlyList<TaskAssignee>>? assigneeTopFrequent = null,
+        Func<string, string, long?, CancellationToken, Task<TaskChecklist>>? setChecklistItemAssigneeAsync = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
@@ -524,6 +550,9 @@ public sealed class TaskDetailScreen : Screen
         _createChecklistAsync = createChecklistAsync;
         _renameChecklistAsync = renameChecklistAsync;
         _deleteChecklistAsync = deleteChecklistAsync;
+        _assigneeMatch = assigneeMatch;
+        _assigneeTopFrequent = assigneeTopFrequent;
+        _setChecklistItemAssigneeAsync = setChecklistItemAssigneeAsync;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
@@ -851,12 +880,16 @@ public sealed class TaskDetailScreen : Screen
         // line, so unlike the multi-line editors the field takes Enter as submit, not a newline. Sized on
         // show (ShowChecklistItemEditor).
         _checklistItemEditor = new TextField { X = 1, Y = 0, Width = Dim.Fill(1) };
+        // The assignee label sits between the name field and the selector; both are shown only in the
+        // Rename-with-a-pool variant (#572) and stay hidden/inert otherwise (byte-identical compact overlay).
+        _checklistItemAssigneeLabel = new Label { X = 1, Y = 1, Text = "Assignee:", Visible = false };
         _checklistItemConfirm = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = "" };
         var checklistSaveButton = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
         var checklistCancelButton = new Button { X = Pos.Right(checklistSaveButton) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
         checklistSaveButton.Accepting += (_, _) => SubmitChecklistItemEditor();
         checklistCancelButton.Accepting += (_, _) => CancelChecklistItemEditor();
         _checklistItemControls = [_checklistItemEditor, checklistSaveButton, checklistCancelButton];
+        _checklistItemFocusRing = _checklistItemControls;
         _checklistItemBox = new FrameView
         {
             Title = "New item — Enter save · Esc cancel",
@@ -866,7 +899,7 @@ public sealed class TaskDetailScreen : Screen
             Height = ChecklistItemEditorPreferredHeight,
             Visible = false,
         };
-        _checklistItemBox.Add(_checklistItemEditor, _checklistItemConfirm, checklistSaveButton, checklistCancelButton);
+        _checklistItemBox.Add(_checklistItemEditor, _checklistItemAssigneeLabel, _checklistItemConfirm, checklistSaveButton, checklistCancelButton);
         foreach (var control in _checklistItemControls)
             control.KeyDown += OnChecklistItemKey;
 
@@ -2843,15 +2876,68 @@ public sealed class TaskDetailScreen : Screen
         _checklistItemConfirm.Text = "";
         _checklistItemEditor.Text = initialText;
         _checklistItemBox.Title = title;
-        var height = DispatchPaneModel.ClampHeight(ChecklistItemEditorPreferredHeight, Viewport.Height, minTabRows: 3);
+
+        // The rename overlay grows an assignee picker (#572) when a member pool is supplied; the other kinds
+        // (add an item, create/rename a group) stay the compact name-only overlay, byte-identical to before.
+        var withAssignee = kind == ChecklistItemEditKind.Rename && itemId is not null && AssigneeControlAvailable;
+        ShowChecklistItemAssignees(withAssignee ? checklistId : null, withAssignee ? itemId : null);
+        var preferred = withAssignee ? ChecklistItemAssigneeEditorPreferredHeight : ChecklistItemEditorPreferredHeight;
+
+        var height = DispatchPaneModel.ClampHeight(preferred, Viewport.Height, minTabRows: 3);
         _checklistItemBox.Height = height;
         _checklistItemBox.Y = Pos.AnchorEnd(height);
         _checklistItemBox.Visible = true;
         _checklistItemEditor.SetFocus();
     }
 
+    /// <summary>Builds (or tears down) the rename overlay's assignee picker (#572). With a checklist/item id
+    /// it creates a <em>fresh</em> <see cref="AssigneeSelectorView"/> seeded with the item's current assignee
+    /// (the shared selector has no reset, so a reused overlay rebuilds it), in
+    /// <see cref="SelectorMode.ImmediateApply"/> so a pick writes through <see cref="ApplyChecklistItemAssignee"/>
+    /// and single-select falls out of the server reconcile; it shows the "Assignee:" label and widens the Tab
+    /// focus ring to include the picker. With nulls it disposes any prior picker and restores the compact,
+    /// name-only ring.</summary>
+    private void ShowChecklistItemAssignees(string? checklistId, string? itemId)
+    {
+        // Tear down any prior picker first, so a reused overlay never stacks two selectors.
+        if (_checklistItemAssignees is { } existing)
+        {
+            _checklistItemBox.Remove(existing);
+            existing.Dispose();
+            _checklistItemAssignees = null;
+        }
+        if (checklistId is null || itemId is null)
+        {
+            _checklistItemAssigneeLabel.Visible = false;
+            _checklistItemFocusRing = _checklistItemControls;
+            return;
+        }
+
+        var current = ChecklistItemEdits.FindItem(_task.Checklists, checklistId, itemId)?.Assignee;
+        var selector = new AssigneeSelectorView(
+            _assigneeMatch!,
+            _assigneeTopFrequent!,
+            initialSelected: current is null ? null : [current],
+            lockedDefault: null,
+            mode: SelectorMode.ImmediateApply,
+            applyAsync: (toggleKind, person, ct) => ApplyChecklistItemAssignee(checklistId, itemId, toggleKind, person, ct))
+        {
+            X = 1,
+            Y = 2, // below the name field (Y=0) and the "Assignee:" label (Y=1)
+            Width = Dim.Fill(1),
+            Height = Dim.Fill(2), // leave the confirm row (AnchorEnd 2) and the Save/Cancel row (AnchorEnd 1)
+        };
+        selector.Flash += (_, message) => RequestFlash(message);
+        selector.KeyDown += OnChecklistItemKey; // Tab/Esc/F1/Ctrl+Enter routed like the other overlay controls
+        _checklistItemAssignees = selector;
+        _checklistItemBox.Add(selector);
+        _checklistItemAssigneeLabel.Visible = true;
+        // Tab ring: name field → assignee picker → Save → Cancel (Save/Cancel are the base ring's [1]/[2]).
+        _checklistItemFocusRing = [_checklistItemEditor, selector, _checklistItemControls[1], _checklistItemControls[2]];
+    }
+
     /// <summary>Closes the name overlay and returns focus to the front-most tab, clearing any pending
-    /// discard confirm.</summary>
+    /// discard confirm and disposing the rename overlay's assignee picker (#572).</summary>
     private void HideChecklistItemEditor()
     {
         if (!_checklistItemBox.Visible)
@@ -2859,6 +2945,7 @@ public sealed class TaskDetailScreen : Screen
         _checklistItemBox.Visible = false;
         _checklistItemPendingDiscard = false;
         _checklistItemConfirm.Text = "";
+        ShowChecklistItemAssignees(null, null); // dispose the picker + restore the compact focus ring
         FocusCurrentPane();
     }
 
@@ -3015,6 +3102,52 @@ public sealed class TaskDetailScreen : Screen
         });
     }
 
+    /// <summary>The rename overlay's assignee picker write (#572), driven by the selector in
+    /// <see cref="SelectorMode.ImmediateApply"/>: optimistically reflect the pick on the row
+    /// (<see cref="ChecklistItemEdits.SetAssignee"/>), write set (user id) / clear (null) through the host,
+    /// then reconcile the row from the server checklist and return the item's <em>single</em> confirmed
+    /// assignee so the selector's own reconcile collapses its selection to one — picking a second person
+    /// replaces the first, single-select via server truth with no fork. On failure revert the row to the
+    /// pre-write snapshot and rethrow, so the selector runs its own revert + flashes. Awaited by the selector
+    /// off the UI thread, so every <c>_task</c> mutation is marshalled back onto it.</summary>
+    private async Task<IReadOnlyList<TaskAssignee>> ApplyChecklistItemAssignee(
+        string checklistId, string itemId, ToggleKind kind, TaskAssignee person, CancellationToken ct)
+    {
+        var assigneeId = kind == ToggleKind.Added ? (long?)person.Id : null;
+        var optimistic = kind == ToggleKind.Added ? person : null;
+        var snapshot = _task.Checklists;
+
+        Application.Invoke(() =>
+        {
+            if (_disposed)
+                return;
+            UpdateData(_task with { Checklists = ChecklistItemEdits.SetAssignee(_task.Checklists, checklistId, itemId, optimistic) }, _comments);
+        });
+
+        try
+        {
+            var server = await _setChecklistItemAssigneeAsync!(checklistId, itemId, assigneeId, ct).ConfigureAwait(false);
+            Application.Invoke(() =>
+            {
+                if (_disposed)
+                    return;
+                UpdateData(_task with { Checklists = ReplaceChecklist(_task.Checklists, server) }, _comments);
+            });
+            var confirmed = ChecklistItemEdits.FindItem([server], checklistId, itemId)?.Assignee;
+            return confirmed is null ? [] : [confirmed];
+        }
+        catch
+        {
+            Application.Invoke(() =>
+            {
+                if (_disposed)
+                    return;
+                UpdateData(_task with { Checklists = snapshot }, _comments);
+            });
+            throw; // the selector reverts its own selection and flashes via _applyFailureMessage.
+        }
+    }
+
     /// <summary>Handles keys while the checklist name overlay has focus: a pending discard confirm answers
     /// first; then Tab cycles the field/buttons, F1 opens Help, Esc cancels, and Enter (field-focused) or
     /// Ctrl+Enter submits. Everything else falls through so typing works.</summary>
@@ -3058,13 +3191,15 @@ public sealed class TaskDetailScreen : Screen
         }
     }
 
-    /// <summary>Moves focus to the next/previous overlay control, wrapping at both ends.</summary>
+    /// <summary>Moves focus to the next/previous overlay control, wrapping at both ends. The ring widens to
+    /// include the assignee picker while the rename overlay shows it (#572).</summary>
     private void MoveChecklistItemFocus(bool forward)
     {
-        var current = Array.FindIndex(_checklistItemControls, static c => c.HasFocus);
+        var ring = _checklistItemFocusRing;
+        var current = Array.FindIndex(ring, static c => c.HasFocus);
         if (current < 0)
             current = 0;
-        _checklistItemControls[DispatchPaneModel.NextFocus(current, _checklistItemControls.Length, forward)].SetFocus();
+        ring[DispatchPaneModel.NextFocus(current, ring.Length, forward)].SetFocus();
     }
 
     /// <summary>Selects the checklist row at <paramref name="index"/> when it is in range.</summary>

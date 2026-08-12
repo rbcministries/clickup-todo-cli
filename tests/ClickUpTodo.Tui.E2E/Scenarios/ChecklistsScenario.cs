@@ -60,9 +60,11 @@ internal sealed class ChecklistsScenario : IE2EScenario
         new(HttpMethod.Delete, "checklist/{checklistId}", DeleteChecklist, 1),
     ];
 
-    /// <summary>PUT: the toggle-resolved (D #457) and rename (E #458) write. Parses whichever of
-    /// <c>{"resolved":bool}</c> / <c>{"name":string}</c> the body carries, mutates that item in the DOM, and
-    /// echoes <c>{ "checklist": … }</c> exactly as ClickUp does.</summary>
+    /// <summary>PUT: the toggle-resolved (D #457), rename (E #458) and assignee (G #460 / #572) write.
+    /// Parses whichever of <c>{"resolved":bool}</c> / <c>{"name":string}</c> / <c>{"assignee":id|null}</c> the
+    /// body carries, mutates that item in the DOM, and echoes <c>{ "checklist": … }</c> exactly as ClickUp
+    /// does — an assignee set becomes a <c>{ id, username }</c> user object resolved from the workspace
+    /// members, a null clears it.</summary>
     private async Task<HttpResponseMessage> ChecklistItemPut(HttpRequestMessage request, string path, string query, CancellationToken ct)
     {
         var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
@@ -78,6 +80,8 @@ internal sealed class ChecklistsScenario : IE2EScenario
                         SetItemResolved(checklist["items"] as JsonArray, itemId, resolved);
                     if (FakeClickUp.ParseName(reqBody) is { } name)
                         SetItemName(checklist["items"] as JsonArray, itemId, name);
+                    if (TryParseAssignee(reqBody, out var assigneeId))
+                        SetItemAssignee(checklist["items"] as JsonArray, itemId, assigneeId);
                     RecomputeCounts(checklist);
                     break;
                 }
@@ -236,6 +240,65 @@ internal sealed class ChecklistsScenario : IE2EScenario
         {
             return false;
         }
+    }
+
+    /// <summary>Parses a <c>{"assignee": id|null}</c> body (G #460 / #572). Returns true when the property is
+    /// present, with <paramref name="assigneeId"/> the numeric user id for a set or <c>null</c> for a clear;
+    /// false (and ignored) when the body carries no <c>assignee</c> (a plain resolve/rename write).</summary>
+    private static bool TryParseAssignee(string requestBody, out long? assigneeId)
+    {
+        assigneeId = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            if (!doc.RootElement.TryGetProperty("assignee", out var a))
+                return false;
+            if (a.ValueKind == JsonValueKind.Null)
+                return true; // clear
+            if (a.ValueKind == JsonValueKind.Number && a.TryGetInt64(out var id))
+            {
+                assigneeId = id;
+                return true; // set
+            }
+            return false;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Sets (a <c>{ id, username }</c> user object, username resolved from the workspace members) or
+    /// clears (<c>null</c>) the item's <c>assignee</c>, searching nested children — mirroring how ClickUp
+    /// echoes a resolved user object on the checklist it returns.</summary>
+    private static bool SetItemAssignee(JsonArray? items, string itemId, long? assigneeId)
+    {
+        if (items is null)
+            return false;
+        foreach (var node in items)
+        {
+            if (node is not JsonObject item)
+                continue;
+            if (item["id"]?.GetValue<string>() == itemId)
+            {
+                item["assignee"] = assigneeId is { } id
+                    ? new JsonObject { ["id"] = id, ["username"] = MemberName(id) }
+                    : null;
+                return true;
+            }
+            if (SetItemAssignee(item["children"] as JsonArray, itemId, assigneeId))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>The workspace-member display name for a user id (the id itself if unknown).</summary>
+    private static string MemberName(long id)
+    {
+        foreach (var m in FakeClickUp.Members)
+            if (m.Id == id)
+                return m.Name;
+        return id.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>The checklist id from a create path <c>/v2/checklist/{id}/checklist_item</c> (no item id).</summary>

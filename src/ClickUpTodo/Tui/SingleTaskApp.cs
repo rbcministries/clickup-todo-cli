@@ -315,7 +315,22 @@ public sealed class SingleTaskApp
             renameChecklistAsync: (checklistId, name, ct) =>
                 _tasks.RenameChecklistAsync(checklistId, name, ct),
             deleteChecklistAsync: (checklistId, ct) =>
-                _tasks.DeleteChecklistAsync(checklistId, ct));
+                _tasks.DeleteChecklistAsync(checklistId, ct),
+            // Per-item assignee in the rename overlay (#572): wired only when a host projected the assignee
+            // pool (_assignees) — the same gate the #473 mention seams use. Without it (a bare single-task
+            // launch), assigneeMatch/topFrequent/write stay null and the rename overlay is name-only,
+            // byte-identical to before, matching #572's "F-inert without a supplied AssigneeFrequencyCache".
+            // The write is keyed to this tab's task id (the checklist response carries none), like the toggle.
+            assigneeMatch: _assignees is null
+                ? null
+                : (query, exclude) => _assignees.Match(query, exclude),
+            assigneeTopFrequent: _assignees is null
+                ? null
+                : (n, exclude) => _assignees.TopMostFrequent(n, exclude),
+            setChecklistItemAssigneeAsync: _assignees is null
+                ? null
+                : (checklistId, itemId, assigneeId, ct) =>
+                    _tasks.SetChecklistItemAssigneeAsync(id, checklistId, itemId, assigneeId, ct));
 
         var tab = new DetailTab(screen, id, task, comments);
 
