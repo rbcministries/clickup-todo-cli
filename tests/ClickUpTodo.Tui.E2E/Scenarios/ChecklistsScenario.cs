@@ -60,9 +60,9 @@ internal sealed class ChecklistsScenario : IE2EScenario
         new(HttpMethod.Delete, "checklist/{checklistId}", DeleteChecklist, 1),
     ];
 
-    /// <summary>PUT: the toggle-resolved (D #457) and rename (E #458) write. Parses whichever of
-    /// <c>{"resolved":bool}</c> / <c>{"name":string}</c> the body carries, mutates that item in the DOM, and
-    /// echoes <c>{ "checklist": … }</c> exactly as ClickUp does.</summary>
+    /// <summary>PUT: the toggle-resolved (D #457), rename (E #458) and reorder/reparent (G #569) write. Parses
+    /// whichever of <c>{"resolved":bool}</c> / <c>{"name":string}</c> / <c>{"orderindex":num,"parent":…}</c> the
+    /// body carries, mutates that item in the DOM, and echoes <c>{ "checklist": … }</c> exactly as ClickUp does.</summary>
     private async Task<HttpResponseMessage> ChecklistItemPut(HttpRequestMessage request, string path, string query, CancellationToken ct)
     {
         var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
@@ -78,6 +78,7 @@ internal sealed class ChecklistsScenario : IE2EScenario
                         SetItemResolved(checklist["items"] as JsonArray, itemId, resolved);
                     if (FakeClickUp.ParseName(reqBody) is { } name)
                         SetItemName(checklist["items"] as JsonArray, itemId, name);
+                    ApplyMove(checklist, itemId, reqBody);
                     RecomputeCounts(checklist);
                     break;
                 }
@@ -311,6 +312,138 @@ internal sealed class ChecklistsScenario : IE2EScenario
                 return true;
             }
             if (RemoveItem(item["children"] as JsonArray, itemId))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>Applies a reorder/reparent write (G #569) to the DOM: an <c>orderindex</c> alone repositions
+    /// the item among its siblings in place (the app's arranger re-sorts by it); a <c>parent</c> field detaches
+    /// the item (with its subtree) and re-homes it — under the named parent's <c>children</c>, or, when
+    /// <c>parent</c> is explicit-null, at the checklist's top level. A body with neither is a no-op here.</summary>
+    private static void ApplyMove(JsonObject checklist, string itemId, string requestBody)
+    {
+        var items = checklist["items"] as JsonArray;
+        var (orderPresent, orderIndex) = TryParseOrderIndex(requestBody);
+        var (parentPresent, parentId) = ParseParentField(requestBody);
+
+        if (parentPresent)
+        {
+            if (DetachItem(items, itemId) is not { } node)
+                return;
+            if (orderPresent)
+                node["orderindex"] = orderIndex;
+            var top = checklist["items"] as JsonArray ?? [];
+            checklist["items"] = top;
+            if (parentId is null)
+            {
+                node.Remove("parent"); // outdent to top level — drop any parent pointer.
+                top.Add(node);
+            }
+            else if (FindItem(top, parentId) is { } parent)
+            {
+                node["parent"] = parentId;
+                var children = parent["children"] as JsonArray;
+                if (children is null)
+                    parent["children"] = children = [];
+                children.Add(node);
+            }
+            else
+            {
+                top.Add(node); // parent vanished — fall back to top level rather than dropping the item.
+            }
+        }
+        else if (orderPresent)
+        {
+            SetItemOrderIndex(items, itemId, orderIndex);
+        }
+    }
+
+    private static (bool Present, double Value) TryParseOrderIndex(string requestBody)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            if (doc.RootElement.TryGetProperty("orderindex", out var o)
+                && o.ValueKind == JsonValueKind.Number && o.TryGetDouble(out var v))
+                return (true, v);
+        }
+        catch (JsonException)
+        {
+        }
+        return (false, 0);
+    }
+
+    private static (bool Present, string? Value) ParseParentField(string requestBody)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            if (doc.RootElement.TryGetProperty("parent", out var p))
+            {
+                if (p.ValueKind == JsonValueKind.Null)
+                    return (true, null);
+                if (p.ValueKind == JsonValueKind.String)
+                    return (true, p.GetString());
+            }
+        }
+        catch (JsonException)
+        {
+        }
+        return (false, null);
+    }
+
+    /// <summary>Removes the item (searching nested children) from wherever it sits and returns the detached
+    /// node so the caller can re-home it; null when not found.</summary>
+    private static JsonObject? DetachItem(JsonArray? items, string itemId)
+    {
+        if (items is null)
+            return null;
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (items[i] is not JsonObject item)
+                continue;
+            if (item["id"]?.GetValue<string>() == itemId)
+            {
+                items.RemoveAt(i); // detaches the node (its Parent becomes null) so it can be re-added.
+                return item;
+            }
+            if (DetachItem(item["children"] as JsonArray, itemId) is { } found)
+                return found;
+        }
+        return null;
+    }
+
+    private static JsonObject? FindItem(JsonArray? items, string itemId)
+    {
+        if (items is null)
+            return null;
+        foreach (var node in items)
+        {
+            if (node is not JsonObject item)
+                continue;
+            if (item["id"]?.GetValue<string>() == itemId)
+                return item;
+            if (FindItem(item["children"] as JsonArray, itemId) is { } found)
+                return found;
+        }
+        return null;
+    }
+
+    private static bool SetItemOrderIndex(JsonArray? items, string itemId, double orderIndex)
+    {
+        if (items is null)
+            return false;
+        foreach (var node in items)
+        {
+            if (node is not JsonObject item)
+                continue;
+            if (item["id"]?.GetValue<string>() == itemId)
+            {
+                item["orderindex"] = orderIndex;
+                return true;
+            }
+            if (SetItemOrderIndex(item["children"] as JsonArray, itemId, orderIndex))
                 return true;
         }
         return false;
