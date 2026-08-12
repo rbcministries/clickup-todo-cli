@@ -80,9 +80,10 @@ internal sealed class DefaultScenario : IE2EScenario
         return FakeClickUp.OkAsync("{}");
     }
 
-    /// <summary>The default /task/{id} PUT (#217): an assignee add/remove or a description edit mutates the
-    /// shared state; either way echo the task reflecting the current state so the write response reconciles.
-    /// Status/priority PUTs carry neither, so they leave the state untouched and echo the current detail.</summary>
+    /// <summary>The default /task/{id} PUT (#217/#545): an assignee add/remove, a description edit or a name
+    /// rename mutates the shared state; either way echo the task reflecting the current state so the write
+    /// response reconciles. Status/priority PUTs carry none of these, so they leave the state untouched and
+    /// echo the current detail.</summary>
     private static async Task<HttpResponseMessage> TaskPut(FakeClickUp b, HttpRequestMessage request, string path, CancellationToken ct)
     {
         var reqBody = request.Content is { } content ? await content.ReadAsStringAsync(ct) : "";
@@ -91,6 +92,7 @@ internal sealed class DefaultScenario : IE2EScenario
         {
             b.ApplyAssigneeMutation(reqBody);
             b.ApplyDescriptionMutation(reqBody);
+            b.ApplyNameMutation(reqBody);
             body = b.DetailJson(FakeClickUp.LastSegment(path));
         }
         return FakeClickUp.Ok(body);
