@@ -2631,7 +2631,7 @@ public sealed class TodoApp
     /// <see cref="ListMembershipMigration.StrandedFieldsOnRemove"/>. When nothing would be stranded it
     /// writes silently; when set values only the removed list defines would be hidden it flashes them and
     /// <b>arms</b> a second-press confirmation, returning the membership unchanged so the row re-shows.
-    /// The confirming press writes. See <c>docs/plans/list-change-field-status-migration.md</c>.</para>
+    /// The confirming press writes. See <c>docs/plans/completed/list-change-field-status-migration.md</c>.</para>
     /// <para>Flashes (home-guard / arm) are marshalled to the UI thread; unlike
     /// <see cref="ApplyAssigneeAsync"/> the main-list row shows only the home list, so there is no host
     /// row to reconcile.</para>
