@@ -40,8 +40,11 @@ mean different things per Task Detail tab:
 | Key      | Comments tab        | Checklists tab            | Task Tree tab        | Description / Other / Stream |
 | -------- | ------------------- | ------------------------- | -------------------- | ---------------------------- |
 | `Ctrl+N` | new **comment**     | new **checklist item**    | (default: comment)   | (default: comment)           |
-| `F2`     | *alias `Ctrl+E`*    | rename **checklist item** | rename **task**      | *alias `Ctrl+E`*             |
+| `F2`     | *alias `Ctrl+E`* (edit) | **edit item** — name **+ assignee** (#572) | rename **task** title | *alias `Ctrl+E`* (edit) |
 | `Delete` | (later: delete comment) | delete **checklist item** | —                | —                            |
+
+`F2` is written "edit" not "rename" deliberately — see §3: it opens the *edit surface* for the
+highlighted thing, of which renaming is one facet.
 
 Today that scoping is done *informally*, entirely inside Task Detail's monolithic hand-rolled
 `OnKey` (`src/ClickUpTodo/Tui/Screens/TaskDetailScreen.cs:1085-1426`) — **Detail was never migrated to
@@ -188,31 +191,51 @@ migrate Detail wholesale, but that is **not required** by this epic and should n
 Extend `HelpItemSets.DetailFooter(...)` (`HelpLine.cs:321-330`) with the front-most `DetailSubContext`
 so the base (non-overlay) Detail set is chosen per tab, driven by `DetailBindings(sub)`:
 
-- Comments → `Ctrl+N ➕Comment`, `Ctrl+T ↩Reply`, `F2 ✏Rename`.
-- Checklists → `Ctrl+N ➕Item`, `F2 ✏Rename`, `Delete 🗑Delete`, `Space ☐Toggle`.
-- Task Tree → `F2 ✏Rename`, plus the existing `F6`/`Ctrl+Enter` tree hints.
-- Default (Description/Other/Stream) → `Ctrl+N ➕Comment`, `F2 ✏Rename`.
+- Comments → `Ctrl+N ➕Comment`, `Ctrl+T ↩Reply`, `F2 ✏Edit` (aliases `Ctrl+E`).
+- Checklists → `Ctrl+N ➕Item`, `F2 ✏Edit` (name + assignee, #572), `Delete 🗑Delete`, `Space ☐Toggle`.
+- Task Tree → `F2 ✏Rename` (title only), plus the existing `F6`/`Ctrl+Enter` tree hints.
+- Default (Description/Other/Stream) → `Ctrl+N ➕Comment`, `F2 ✏Edit` (aliases `Ctrl+E`).
+
+The `F2` label is **Edit** wherever the surface edits more than a title (checklist item, and the
+`Ctrl+E`-alias tabs) and **Rename** only where a title is the sole editable facet (Task Tree) — §3.
 
 The overlay sets (composer / editor / picker) keep their existing top precedence — an open overlay
 still owns the footer, unchanged.
 
-## 3. Decision 2 — F2 ⇄ Ctrl+E in Task Detail
+## 3. Decision 2 — F2 ⇄ Ctrl+E in Task Detail: "Rename / Edit"
 
-**F2 means "Rename" everywhere in Detail**, realized two ways:
+The #538 comment phrases it as "`F2` renames the highlighted item," but the operative meaning is
+**broader than a title-only rename, and it must be** — because the surface `F2`/`Ctrl+E` opens is an
+*edit* surface, not a rename box. For a checklist item, **#572** puts a per-item **assignee** control
+*inside the same modal as the name field*, so the one `F2` gesture edits **name + assignee** (and is the
+natural home for any future per-item field). So the honest framing is:
 
-- **On a tab with a highlighted renameable thing** — Checklists (the item; header row → the group) and
-  Task Tree (the highlighted task) — **F2 renames that thing**. It is a *distinct* action
-  (`RenameChecklistItem`, or `RenameTask` targeting the highlighted tree node).
-- **On every other tab** (Comments / Description / Other / Stream), there is no per-row item, so
-  **F2 is a pure alias of `Ctrl+E`** — same handler, same footer target. `Ctrl+E` remains
-  `EditDescription`; slice **E** additionally gives `Ctrl+E` the ability to **rename the current
-  task's title** (the API already accepts `UpdateTaskRequest.name`, so slice E adds only a
-  `SetTaskNameAsync` facade + `TaskService` passthrough — **no spec change / Kiota regen**). F2's alias
-  inherits whatever `Ctrl+E` does.
+> **`F2` = "Rename / Edit" the highlighted thing** — it opens the edit surface for whatever is in front
+> of you. *Rename* is the label where a name/title is the only editable facet; *Edit* where the surface
+> carries more.
 
-So `Ctrl+E` is **not** replaced by F2; F2 is the convention-named front door ("F2 = Rename") that maps
-onto `Ctrl+E`'s capability where no sub-item is selected, and onto the item/task rename where one is.
-This keeps the #290 convention (F2 = Rename) while leaving `Ctrl+E` exactly as users know it.
+Realized three ways, by what the highlighted thing's edit surface holds:
+
+- **Checklists tab → edit the item** (`RenameChecklistItem`; header row → the group). The modal edits
+  the item **name + assignee** (#572), so its footer/label reads **Edit**, not Rename. (The action's
+  code name is still `RenameChecklistItem` from #458; slice D/#572 may rename it to `EditChecklistItem`
+  to match — a cosmetic code change, not a model change. The *token* and *sub-context slot* are what
+  this note fixes.)
+- **Task Tree tab → rename the task** (`RenameTask` targeting the highlighted node). Here the only
+  editable facet is the **title**, so *Rename* is accurate.
+- **Every other tab** (Comments / Description / Other / Stream) — no per-row item, so **`F2` is a pure
+  alias of `Ctrl+E`**, the existing **edit** chord. `Ctrl+E` remains `EditDescription`; slice **E**
+  additionally gives `Ctrl+E` the ability to **rename the current task's title** (the API already
+  accepts `UpdateTaskRequest.name`, so slice E adds only a `SetTaskNameAsync` facade + `TaskService`
+  passthrough — **no spec change / Kiota regen**). `F2`'s alias inherits whatever `Ctrl+E` does — which
+  is why these tabs also read **Edit**, not Rename.
+
+This is exactly *why* the convention-named `F2` (= Rename) can alias `Ctrl+E` (= Edit description)
+without contradiction: **both are "edit the contextual thing," and rename is one facet of edit.**
+`Ctrl+E` is **not** replaced by `F2`; `F2` is the convention front door that maps onto `Ctrl+E`'s
+capability where no sub-item is selected, and onto the item/task edit where one is. This keeps the #290
+convention (`F2` = Rename) as the *mnemonic* while being honest that the surface behind it edits more
+than a name wherever the context offers more (checklist item = name + assignee, #572).
 
 ## 4. Decision 3 — modals: native Terminal.Gui
 
@@ -246,7 +269,9 @@ promotion (it lands the first real modal); G reuses it.
   activation table + `ResolveDetail`; route `Ctrl+N` through it (Comments → comment, Checklists → item).
   Retire the `F7` handler branch.
 - **D (#541)** — retarget `RenameChecklistItem` token `F8 → F2`; `Delete` handled in F. After C/D/F,
-  **no `F7`/`F8`/`F9` binding remains** anywhere.
+  **no `F7`/`F8`/`F9` binding remains** anywhere. `F2` here opens the item **edit** modal (name today;
+  **#572** adds the assignee field into that same modal), so label it **Edit** and consider renaming the
+  action `RenameChecklistItem → EditChecklistItem` (§3) — cosmetic, coordinate with #572.
 - **E (#542)** — add `KeyAction.RenameTask` (token `F2`) + `SetTaskNameAsync` facade; wire F2 on the
   non-item tabs as the `Ctrl+E` alias and give `Ctrl+E` task-title rename.
 - **F (#543)** — retarget `DeleteChecklistItem` token `F9 → Delete`; promote the native-modal spike to
@@ -272,7 +297,7 @@ be **updated, not weakened**, to assert the stronger sub-context invariant:
   `FooterFor(Detail) => HelpItemSets.Detail`, a single set. Generalize the Detail row to quantify over
   `DetailSubContext`: for each sub-context, the sub-context's footer set must show every *active*
   action's token. This keeps "footer ⊇ table" at the finer sub-context granularity, so the Comments
-  footer proves `Ctrl+N ➕Comment` and the Checklists footer proves `Ctrl+N ➕Item` and `F2 ✏Rename`
+  footer proves `Ctrl+N ➕Comment` and the Checklists footer proves `Ctrl+N ➕Item` and `F2 ✏Edit`
   independently.
 - `AllBindingsOfAnAction_ShareOneKey` (`:37-48`) still holds unchanged — each *action* keeps one token
   (`AddChecklistItem` is only ever `Ctrl+N`; the sharing is across actions, which this test allows).
