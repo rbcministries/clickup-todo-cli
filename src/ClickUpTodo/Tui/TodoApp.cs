@@ -2411,7 +2411,9 @@ public sealed class TodoApp
         // {base}/{custom-id} — which may consult the filesystem, so it's computed here, not in pure Plan.
         var resolvedDefault = DispatchWorkingDirectoryPreFill.AutoDerivedDefault(detail, _config.AgentDispatch, baseDir, home);
         // Persist the working-dir cache reconcile (#96) and the remembered provider pick (#498) together —
-        // each is a no-op unless it actually changed, so a default dispatch saves nothing.
+        // each writes only when it actually changed. With 0/1 providers (no selector shown) the provider
+        // half is always a no-op; with 2+ providers the first dispatch records the seeded default as the
+        // last-used pick (one save), and later same-provider dispatches save nothing.
         var cacheChanged = DispatchCoordinator.ReconcileCache(_config.TaskWorkingDirectories, detail.Id, plan.ChosenDir, resolvedDefault);
         var providerChanged = DispatchCoordinator.RememberProvider(_config.AgentDispatch, request.Provider);
         if (cacheChanged || providerChanged)
