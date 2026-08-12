@@ -110,6 +110,46 @@ public sealed class ClickUpClientChecklistWriteTests
     }
 
     [Fact]
+    public async Task SetChecklistItemAssignee_SendsPutWithAssigneeId_AndMapsResponse()
+    {
+        var handler = new CapturingHandler(ChecklistResponse);
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var updated = await client.SetChecklistItemAssigneeAsync("t1", "c1", "i2", assigneeId: 42);
+
+        // Request: PUT to the checklist-item endpoint with an { assignee: 42 } body — a JSON number, and
+        // no name/resolved (only the changed field is sent, like the rename write).
+        Assert.Equal(HttpMethod.Put, handler.Method);
+        Assert.Contains("/v2/checklist/c1/checklist_item/i2", handler.RequestUri);
+        var body = handler.Body!.RootElement;
+        Assert.Equal(JsonValueKind.Number, body.GetProperty("assignee").ValueKind);
+        Assert.Equal(42, body.GetProperty("assignee").GetInt64());
+        Assert.False(body.TryGetProperty("name", out _));
+        Assert.False(body.TryGetProperty("resolved", out _));
+
+        // Response mapped back to the domain TaskChecklist (container fields + items via ChecklistReader).
+        Assert.Equal("c1", updated.Id);
+        Assert.Equal(2, updated.Items.Count);
+    }
+
+    [Fact]
+    public async Task SetChecklistItemAssignee_ClearSendsExplicitJsonNull()
+    {
+        var handler = new CapturingHandler(ChecklistResponse);
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        // A null assigneeId clears the assignee — ClickUp reads an explicit `"assignee": null` as "clear",
+        // so the body must carry the key with a JSON null (not omit it, which would leave it untouched).
+        await client.SetChecklistItemAssigneeAsync("t1", "c1", "i2", assigneeId: null);
+
+        Assert.Equal(HttpMethod.Put, handler.Method);
+        Assert.Contains("/v2/checklist/c1/checklist_item/i2", handler.RequestUri);
+        var body = handler.Body!.RootElement;
+        Assert.True(body.TryGetProperty("assignee", out var assignee), "clear must send the assignee key");
+        Assert.Equal(JsonValueKind.Null, assignee.ValueKind);
+    }
+
+    [Fact]
     public async Task DeleteChecklistItem_SendsDeleteToItemEndpoint_WithNoBody()
     {
         var handler = new CapturingHandler("{}");

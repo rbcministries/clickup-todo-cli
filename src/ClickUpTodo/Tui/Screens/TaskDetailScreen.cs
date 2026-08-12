@@ -2501,7 +2501,15 @@ public sealed class TaskDetailScreen : Screen
     }
 
     /// <summary>F8 — rename the selected item. Opens the name overlay pre-filled; the rename fires on
-    /// submit. A header/empty-state row is inert-but-flashed.</summary>
+    /// submit. A header/empty-state row is inert-but-flashed.
+    /// <para><b>Assignee hook (G, #460 → #572):</b> per the #538 decision, the per-item <em>assignee</em>
+    /// belongs in this same rename surface (which migrates to the <c>F2</c>/<c>Ctrl+E</c> rename modal under
+    /// #537/#541), not a standalone chord. The write path is already landed — set/clear via
+    /// <see cref="ClickUpTodo.Services.TaskService.SetChecklistItemAssigneeAsync"/> (a <c>long?</c> user id;
+    /// <c>null</c> clears) with the optimistic <see cref="ClickUpTodo.Services.ChecklistItemEdits.SetAssignee"/>
+    /// transform + reconcile/revert. #572 adds the assignee control to this modal (a shared
+    /// <c>AssigneeSelectorView</c> specialisation over the frequency-ranked member pool) and threads the write
+    /// delegate + pool from the hosts.</para></summary>
     private void RenameSelectedChecklistItem()
     {
         if (_renameChecklistItemAsync is null)

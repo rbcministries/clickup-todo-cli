@@ -848,6 +848,14 @@ public sealed class TaskService(
     public Task<TaskChecklist> RenameChecklistItemAsync(string checklistId, string itemId, string name, CancellationToken ct = default)
         => client.RenameChecklistItemAsync(checklistId, itemId, name, ct);
 
+    /// <summary>Sets (or clears, when <paramref name="assigneeId"/> is null) a checklist item's per-item
+    /// assignee (G, #460, over the facade write) and returns the server-confirmed parent
+    /// <see cref="TaskChecklist"/> so the detail view can reconcile it. <paramref name="taskId"/> is threaded
+    /// through so the facade can record a multi-tab change-marker nudge (#519). Thin passthrough, mirroring
+    /// <see cref="SetChecklistItemResolvedAsync"/>.</summary>
+    public Task<TaskChecklist> SetChecklistItemAssigneeAsync(string taskId, string checklistId, string itemId, long? assigneeId, CancellationToken ct = default)
+        => client.SetChecklistItemAssigneeAsync(taskId, checklistId, itemId, assigneeId, ct);
+
     /// <summary>Deletes a checklist item (E, #458, over the facade write). ClickUp returns an empty body,
     /// so this is a void write; the caller keeps its optimistic local removal. Thin passthrough.</summary>
     public Task DeleteChecklistItemAsync(string checklistId, string itemId, CancellationToken ct = default)
