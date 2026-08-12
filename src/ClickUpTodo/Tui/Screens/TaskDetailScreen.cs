@@ -3004,7 +3004,7 @@ public sealed class TaskDetailScreen : Screen
         });
     }
 
-    /// <summary>Alt+arrows (G, #569): reorder / reparent the highlighted checklist item. The pure
+    /// <summary>Shift+arrows (G, #569): reorder / reparent the highlighted checklist item. The pure
     /// <see cref="ChecklistMove"/> decides legality and the exact <c>orderindex</c>/<c>parent</c> write; an
     /// illegal / boundary move flashes and issues no request. A legal move applies optimistically
     /// (<see cref="ChecklistItemEdits.Move"/>) → off-thread PUT → reconcile with the server-confirmed
