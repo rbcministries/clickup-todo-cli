@@ -174,6 +174,34 @@ public sealed class HelpLineTests
             HelpItemSets.Detail,
             HelpItemSets.DetailFooter(commentComposerVisible: false, descriptionEditorVisible: false, replyPickerVisible: false, hasTaskTree: false));
 
+    // #540: on the Checklists tab the shared Ctrl+N item is relabelled to the add-item action it fires
+    // there, and the retired F7 add-item hint is gone from the base sets.
+    [Fact]
+    public void DetailFooter_ChecklistsTab_LabelsCtrlNAsAddItem_AndDropsF7()
+    {
+        var footer = HelpItemSets.DetailFooter(
+            commentComposerVisible: false, descriptionEditorVisible: false, replyPickerVisible: false,
+            hasTaskTree: true, sub: DetailSubContext.Checklists);
+
+        var ctrlN = footer.Single(i => i.IsAction && i.ActionKey == "Ctrl+N");
+        Assert.Equal("➕ item", ctrlN.Label);
+        Assert.DoesNotContain(footer, i => i.ActionKey == "F7");
+    }
+
+    // On every non-Checklists tab the shared Ctrl+N keeps the comment-composer label — and the set is the
+    // very same reference the tree-present/absent branch returns, so the common path allocates nothing.
+    [Fact]
+    public void DetailFooter_NonChecklistTab_LabelsCtrlNAsComment_AndReusesTheBaseSet()
+    {
+        var footer = HelpItemSets.DetailFooter(
+            commentComposerVisible: false, descriptionEditorVisible: false, replyPickerVisible: false,
+            hasTaskTree: true, sub: DetailSubContext.Comments);
+
+        Assert.Same(HelpItemSets.DetailWithTaskTree, footer);
+        var ctrlN = footer.Single(i => i.IsAction && i.ActionKey == "Ctrl+N");
+        Assert.Equal("➕Comment", ctrlN.Label);
+    }
+
     // #325: while the @-mention picker is overlaid on the composer, the footer shows only the picker's
     // keys — and the picker branch wins over the composer's (it sits on top of it).
     [Fact]

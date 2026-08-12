@@ -992,6 +992,7 @@ public sealed class TaskDetailScreen : Screen
     public override IReadOnlyList<HelpItem> HelpItems =>
         HelpItemSets.DetailFooter(
             _commentBox.Visible, _descriptionBox.Visible, _replyPickerBox.Visible, _treeList is not null,
+            CurrentDetailSubContext(),
             _mentionBox?.Visible == true, _checklistItemBox.Visible);
 
     public override void OnShown()
@@ -1194,6 +1195,17 @@ public sealed class TaskDetailScreen : Screen
         => string.Join("\n", lines.Select(l => string.Concat(l.Runs.Select(r => r.Text))))
            + "\n\u0000\n" + customFieldsBody;
 
+    /// <summary>The front-most tab as a <see cref="DetailSubContext"/> (contextual chords C, #540) —
+    /// the seam that makes <c>Ctrl+N</c> contextual and that the per-tab footer reads. Reference-compares
+    /// <c>_tabs.Value</c> against the checklist / tree / comments panes (the same comparison the checklist
+    /// chord blocks and the tree Enter/F6 blocks use); every text pane falls back to
+    /// <see cref="DetailSubContext.Default"/>.</summary>
+    private DetailSubContext CurrentDetailSubContext()
+        => ReferenceEquals(_tabs.Value, _checklistList) ? DetailSubContext.Checklists
+            : _treeList is not null && ReferenceEquals(_tabs.Value, _treeList) ? DetailSubContext.TaskTree
+            : ReferenceEquals(_tabs.Value, _commentsPane) ? DetailSubContext.Comments
+            : DetailSubContext.Default;
+
     private void OnKey(object? sender, Key key)
     {
         // While the comment composer (#216) or the description editor (#217) is open it owns the
@@ -1282,21 +1294,35 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
-        // Checklist CRUD (E, #458 items; F, #459 groups), guarded to the Checklists tab being front-most
-        // (like Space above), so the chords on the other tabs / text panes stay inert. F7 adds an item; F8/F9
-        // are row-kind-scoped — on a checklist-header row they rename / delete the whole group (F), on an item
-        // row they rename / delete the item (E). The chords are shown in the Detail footer sets unconditionally
-        // (as Space is), but act only here — the same shape D used for the toggle. Group create is Ctrl+G below.
+        // Contextual "new" chord (C, #540): Ctrl+N adds a checklist item on the Checklists tab — the add
+        // path retired from #458's F7. On every other tab Ctrl+N instead opens the comment composer (the
+        // generic Ctrl+N block far below), which this block leaves untouched by only firing when the #537
+        // sub-context table resolves Ctrl+N to AddChecklistItem — i.e. only on the Checklists tab. Routing
+        // the decision through Keybindings.ResolveDetail keeps dispatch and the per-tab footer label in
+        // lock-step. Guarded on the prompt being closed (like the chords below); AddChecklistItem self-
+        // guards the no-callback / no-checklist / write-in-flight cases. The "Ctrl+N" literal mirrors the
+        // KeyCode.N test on the same line — both name the one physical chord this block claims.
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.N && !_promptBox.Visible
+            && Keybindings.ResolveDetail(CurrentDetailSubContext(), "Ctrl+N") == KeyAction.AddChecklistItem)
+        {
+            key.Handled = true;
+            AddChecklistItem();
+            return;
+        }
+
+        // Checklist rename / delete (E, #458 items; F, #459 groups), guarded to the Checklists tab being
+        // front-most (like Space above), so the chords on the other tabs / text panes stay inert. F8/F9 are
+        // row-kind-scoped — on a checklist-header row they rename / delete the whole group (F), on an item
+        // row they rename / delete the item (E). The chords are shown in the Checklists footer, but act only
+        // here — the same shape D used for the toggle. Add is the contextual Ctrl+N above; group create is
+        // Ctrl+G below. (F7/F8/F9 move to Ctrl+N / F2 / Delete across #540/#541/#543; only F7 has moved so far.)
         if (ReferenceEquals(_tabs.Value, _checklistList)
-            && key.KeyCode is KeyCode.F7 or KeyCode.F8 or KeyCode.F9)
+            && key.KeyCode is KeyCode.F8 or KeyCode.F9)
         {
             key.Handled = true;
             var onHeader = SelectedChecklistRow() is { IsHeader: true };
             switch (key.KeyCode)
             {
-                case KeyCode.F7:
-                    AddChecklistItem();
-                    break;
                 case KeyCode.F8:
                     if (onHeader)
                         RenameSelectedChecklistGroup();

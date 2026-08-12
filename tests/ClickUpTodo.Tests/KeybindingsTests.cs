@@ -144,4 +144,74 @@ public sealed class KeybindingsTests
         Assert.DoesNotContain(KeyAction.DispatchToClaude, mainList);
         Assert.DoesNotContain(KeyAction.EditDescription, mainList);
     }
+
+    // ── Contextual chords C (#540): the Task Detail sub-context layer ────────────────────────────────
+
+    public static readonly TheoryData<DetailSubContext> DetailSubContexts =
+        [.. Enum.GetValues<DetailSubContext>()];
+
+    // The crux of #540: the "new" chord resolves to the checklist add on the Checklists tab and to the
+    // comment composer on every other tab. AddChecklistItem and AddComment share the token in the base
+    // table; the sub-context is what disambiguates which is live.
+    [Fact]
+    public void ResolveDetail_CtrlN_IsAddChecklistItem_OnChecklistsTab_AndAddComment_Elsewhere()
+    {
+        Assert.Equal(KeyAction.AddChecklistItem, Keybindings.ResolveDetail(DetailSubContext.Checklists, "Ctrl+N"));
+        Assert.Equal(KeyAction.AddComment, Keybindings.ResolveDetail(DetailSubContext.Comments, "Ctrl+N"));
+        Assert.Equal(KeyAction.AddComment, Keybindings.ResolveDetail(DetailSubContext.TaskTree, "Ctrl+N"));
+        Assert.Equal(KeyAction.AddComment, Keybindings.ResolveDetail(DetailSubContext.Default, "Ctrl+N"));
+    }
+
+    // #540 retargets the #458 stopgap: the add-item chord is now Ctrl+N (shared with AddComment), and F7
+    // is bound to nothing anywhere. Pinned so a later slice can't silently resurrect F7.
+    [Fact]
+    public void AddChecklistItem_IsCtrlN_AndNoBindingUsesF7()
+    {
+        Assert.Equal("Ctrl+N", Keybindings.Token(ScreenContext.Detail, KeyAction.AddChecklistItem));
+        Assert.DoesNotContain(Keybindings.All, e => e.Value == "F7");
+    }
+
+    // The anti-collision invariant the whole sub-context model rests on (contextual-chord-model.md §2.2):
+    // within one sub-context no token resolves to two live actions — otherwise ResolveDetail would be
+    // ambiguous and the footer could advertise one meaning while dispatch fired another.
+    [Theory]
+    [MemberData(nameof(DetailSubContexts))]
+    public void DetailBindings_HaveNoTokenCollision_WithinASubContext(DetailSubContext sub)
+    {
+        var tokens = Keybindings.DetailBindings(sub).Select(b => b.Token).ToList();
+        Assert.Equal(tokens.Count, tokens.Distinct().Count());
+    }
+
+    // ResolveDetail round-trips DetailBindings: every live binding resolves back to its own action, and a
+    // token no sub-context action binds resolves to null (a chord that tab doesn't own is inert).
+    [Theory]
+    [MemberData(nameof(DetailSubContexts))]
+    public void ResolveDetail_RoundTripsEveryLiveBinding_AndIsNullForAnUnboundToken(DetailSubContext sub)
+    {
+        foreach (var (action, token) in Keybindings.DetailBindings(sub))
+            Assert.Equal(action, Keybindings.ResolveDetail(sub, token));
+
+        Assert.Null(Keybindings.ResolveDetail(sub, "F24"));
+    }
+
+    // The display side never drifts from the sub-context table — the #540 generalisation of
+    // Footer_ShowsTheTableKey_ForEveryBinding. Every live (action, token) in a sub-context is shown on
+    // that sub-context's Task Detail footer under the same token, for both the tree-present and
+    // tree-absent footer variants; this is what proves the Ctrl+N label is right per tab.
+    [Theory]
+    [MemberData(nameof(DetailSubContexts))]
+    public void DetailFooter_PerSubContext_ShowsEveryLiveBinding(DetailSubContext sub)
+    {
+        foreach (var hasTaskTree in new[] { false, true })
+        {
+            var footer = HelpItemSets.DetailFooter(
+                commentComposerVisible: false, descriptionEditorVisible: false, replyPickerVisible: false,
+                hasTaskTree: hasTaskTree, sub: sub);
+
+            foreach (var (action, token) in Keybindings.DetailBindings(sub))
+                Assert.True(
+                    footer.Any(i => i.IsAction && i.ActionKey == token),
+                    $"{sub} footer (hasTaskTree={hasTaskTree}) should show {action} under '{token}'");
+        }
+    }
 }
