@@ -24,7 +24,7 @@ public sealed class SplitViabilityTests
     }
 
     [Fact]
-    public void NarrowTerminal_EvenSplit_DegradesToTab_WithReason()
+    public void NarrowTerminal_EvenSplit_DegradesToTab_WithHostAgnosticReason()
     {
         // 100 cols, even → two 50-col panes, below the 60 floor → degrade.
         var d = SplitViability.Evaluate(100, SplitDirection.Beside);
@@ -35,7 +35,10 @@ public sealed class SplitViabilityTests
         Assert.NotNull(d.Reason);
         Assert.Contains("50", d.Reason);
         Assert.Contains("60", d.Reason);
-        Assert.Contains("tab", d.Reason, StringComparison.OrdinalIgnoreCase);
+        // The reason names the split problem but must NOT promise a "tab": the NewTab fallback isn't a tab
+        // on every host (e.g. Zellij opens an in-session pane, #589), so the message stays host-agnostic.
+        Assert.Contains("narrow", d.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("tab", d.Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

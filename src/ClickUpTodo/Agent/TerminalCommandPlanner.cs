@@ -551,6 +551,33 @@ public static class TerminalCommandPlanner
                 windowSpecs.Add(tmuxSpec);
         }
 
+        // In-place *tab* rungs for the modern hosts that have a scriptable "new surface in this session"
+        // verb but no portable emulator `--tab` flag (#589): WezTerm (`cli spawn`), kitty (`kitten @ launch
+        // --type=tab`) and Zellij (`action new-pane`). Each is gated on the same in-session env probe as its
+        // split rung (so we only target a host we're actually inside) and joins the tab specs when a tab was
+        // requested — an explicit NewTab, or a SplitPane degrading down the split → tab → window ladder
+        // (`tab` is true for both). Without these, a NewTab inside WezTerm/kitty fell through to a detached
+        // *window* and a Zellij-only session produced no candidate at all.
+        //
+        // WezTerm and kitty are in LinuxEmulators, so their window spec already follows as the fallback and
+        // the rung is tab-only. Zellij has no GUI window (it isn't in LinuxEmulators and a Zellij-only
+        // session has no emulator on PATH), so — like tmux's new-window — its new-pane does double duty as
+        // the last-resort candidate when a tab wasn't requested, guaranteeing a Zellij-only session never
+        // yields an empty candidate list. Zellij's `action new-tab` can't carry a command (only a layout can)
+        // and the planner writes no files, so an in-session new *pane* is the honest in-place surface here.
+        if (tab && EnvPresent(getEnv, "WEZTERM_PANE") && exists("wezterm"))
+            tabSpecs.Add(new LaunchSpec("wezterm", ["cli", "spawn", "--", "bash", "-lc", inner], cwd, "WezTerm (new tab)"));
+        if (tab && EnvPresent(getEnv, "KITTY_LISTEN_ON") && exists("kitten"))
+            tabSpecs.Add(new LaunchSpec("kitten", ["@", "launch", "--type=tab", "--cwd=current", "bash", "-lc", inner], cwd, "kitty (new tab)"));
+        if (EnvPresent(getEnv, "ZELLIJ") && exists("zellij"))
+        {
+            var zellijSpec = new LaunchSpec("zellij", ["action", "new-pane", "--", "bash", "-lc", inner], cwd, "Zellij (new pane)");
+            if (tab)
+                tabSpecs.Add(zellijSpec);
+            else
+                windowSpecs.Add(zellijSpec);
+        }
+
         return custom is null
             ? [.. splitSpecs, .. tabSpecs, .. windowSpecs]
             : [custom, .. splitSpecs, .. tabSpecs, .. windowSpecs];

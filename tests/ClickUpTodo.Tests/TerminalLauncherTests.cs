@@ -921,6 +921,108 @@ public sealed class TerminalLauncherTests
     }
 
     [Fact]
+    public void NewTab_Linux_Wezterm_SpawnsTab_WhenInsideWezterm_AheadOfWindowFallback()
+    {
+        // WezTerm has no portable `--tab` flag but a scriptable `cli spawn` that opens a tab in the current
+        // window (#589). Gated on WEZTERM_PANE; wezterm is in LinuxEmulators, so its window spec follows.
+        var specs = PlanTab(OSPlatformKind.Linux, Present("wezterm"), Env(("WEZTERM_PANE", "0")));
+
+        Assert.Equal("WezTerm (new tab)", specs[0].DisplayName);
+        Assert.Equal("wezterm", specs[0].FileName);
+        Assert.Equal(["cli", "spawn", "--", "bash", "-lc"], specs[0].Arguments.Take(5));
+        Assert.Contains(specs, s => s.DisplayName == "wezterm"); // window fallback retained
+    }
+
+    [Fact]
+    public void NewTab_Linux_Wezterm_FallsBackToWindow_WhenNotInsideWezterm()
+    {
+        // WEZTERM_PANE unset — no in-session spawn; keep today's window spec (via the `start --` prefix).
+        var specs = PlanTab(OSPlatformKind.Linux, Present("wezterm"), NoEnv);
+
+        Assert.DoesNotContain(specs, s => s.DisplayName.Contains("new tab", StringComparison.OrdinalIgnoreCase));
+        var window = Assert.Single(specs);
+        Assert.Equal("wezterm", window.DisplayName);
+        Assert.Equal(["start", "--", "bash", "-lc"], window.Arguments.Take(4));
+    }
+
+    [Fact]
+    public void NewTab_Linux_Kitty_LaunchesTab_ViaKitten_WhenRemoteControlEnabled()
+    {
+        // kitty opens a tab via `kitten @ launch --type=tab` (#589), gated on KITTY_LISTEN_ON (the same
+        // `allow_remote_control` probe as its split) plus the `kitten` binary.
+        var specs = PlanTab(OSPlatformKind.Linux, Present("kitten", "kitty"), Env(("KITTY_LISTEN_ON", "unix:/tmp/k")));
+
+        Assert.Equal("kitty (new tab)", specs[0].DisplayName);
+        Assert.Equal("kitten", specs[0].FileName);
+        Assert.Equal(["@", "launch", "--type=tab", "--cwd=current", "bash", "-lc"], specs[0].Arguments.Take(6));
+        Assert.Contains(specs, s => s.DisplayName == "kitty"); // window fallback retained
+    }
+
+    [Fact]
+    public void NewTab_Linux_Kitty_FallsBackToWindow_WhenNoRemoteControl()
+    {
+        // kitten present but KITTY_LISTEN_ON unset — the honest gate: no remote control, no tab.
+        var specs = PlanTab(OSPlatformKind.Linux, Present("kitten", "kitty"), NoEnv);
+
+        Assert.DoesNotContain(specs, s => s.DisplayName.Contains("new tab", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(specs, s => s.DisplayName == "kitty");
+    }
+
+    [Fact]
+    public void NewTab_Linux_Kitty_FallsBackToWindow_WhenKittenAbsent()
+    {
+        // KITTY_LISTEN_ON set and `kitty` present, but the `kitten` binary the tab runs through is not.
+        var specs = PlanTab(OSPlatformKind.Linux, Present("kitty"), Env(("KITTY_LISTEN_ON", "unix:/tmp/k")));
+
+        Assert.DoesNotContain(specs, s => s.DisplayName.Contains("new tab", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(specs, s => s.DisplayName == "kitty");
+    }
+
+    [Fact]
+    public void NewTab_Linux_Zellij_OpensInSessionPane_WhenInsideZellij()
+    {
+        // Zellij has no window concept and `action new-tab` can't carry a command, so a NewTab opens an
+        // in-session new pane (#589). In a Zellij-only session it's the sole candidate.
+        var spec = Assert.Single(PlanTab(OSPlatformKind.Linux, Present("zellij"), Env(("ZELLIJ", "0"))));
+
+        Assert.Equal("Zellij (new pane)", spec.DisplayName);
+        Assert.Equal("zellij", spec.FileName);
+        Assert.Equal(["action", "new-pane", "--", "bash", "-lc"], spec.Arguments.Take(5));
+    }
+
+    [Fact]
+    public void ZellijOnlySession_AlwaysYieldsACandidate_ForEveryLaunchLocation()
+    {
+        // AC (#589): a Zellij-only session (no tmux, no GUI emulator on PATH) must never produce an empty
+        // candidate list — for a window, a tab, or a split request alike.
+        Func<string, string?> zellij = k => k == "ZELLIJ" ? "0" : null;
+
+        foreach (var location in new[] { LaunchLocation.NewWindow, LaunchLocation.NewTab, LaunchLocation.SplitPane })
+        {
+            var specs = TerminalCommandPlanner.Plan(
+                OSPlatformKind.Linux, Present("zellij"), zellij, PromptFile, null,
+                new TerminalLauncherOptions { LaunchLocation = location });
+
+            Assert.NotEmpty(specs);
+            Assert.All(specs, s => Assert.Equal("zellij", s.FileName));
+        }
+    }
+
+    [Fact]
+    public void NewTab_Linux_ModernHosts_BakeWorkingDirectoryIntoTheCommand()
+    {
+        // The baked-in `cd … && …` (#252) must ride along on the new WezTerm/kitty/Zellij tab commands too.
+        var wezterm = PlanTab(OSPlatformKind.Linux, Present("wezterm"), Env(("WEZTERM_PANE", "0")), "/work/dir")[0];
+        Assert.Contains("cd '/work/dir' && 'claude'", wezterm.Arguments[^1]);
+
+        var kitty = PlanTab(OSPlatformKind.Linux, Present("kitten", "kitty"), Env(("KITTY_LISTEN_ON", "unix:/tmp/k")), "/work/dir")[0];
+        Assert.Contains("cd '/work/dir' && 'claude'", kitty.Arguments[^1]);
+
+        var zellij = PlanTab(OSPlatformKind.Linux, Present("zellij"), Env(("ZELLIJ", "0")), "/work/dir")[0];
+        Assert.Contains("cd '/work/dir' && 'claude'", zellij.Arguments[^1]);
+    }
+
+    [Fact]
     public void NewTab_Linux_XTerminalEmulator_StaysWindowOnly_NoPortableTabFlag()
     {
         // Generic alias: even with a tab preference and a detection env present, keep the window form.

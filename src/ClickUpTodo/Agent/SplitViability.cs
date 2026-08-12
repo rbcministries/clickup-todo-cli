@@ -11,9 +11,11 @@ namespace ClickUpTodo.Agent;
 /// <i>when</i> one is worth making. The caller (the split gesture, epic #502 E/F/J) supplies the live
 /// terminal width, calls <see cref="Evaluate"/>, and feeds the returned <see cref="Decision.Location"/>
 /// to the planner — a viable request stays <see cref="LaunchLocation.SplitPane"/>; a non-viable one comes
-/// back <see cref="LaunchLocation.NewTab"/> and the planner emits exactly today's tab specs. The
-/// <see cref="Decision.Reason"/> is a ready-to-flash line so the degradation reads as deliberate rather
-/// than a silently-failed split.
+/// back <see cref="LaunchLocation.NewTab"/> and the planner emits that host's NewTab ladder (a real tab
+/// where the host has one, else its nearest in-place surface or a window — see
+/// <see cref="TerminalCommandPlanner"/>). The <see cref="Decision.Reason"/> is a ready-to-flash line so the
+/// degradation reads as deliberate rather than a silently-failed split; it stays host-agnostic (it doesn't
+/// promise a "tab", since the NewTab fallback isn't a tab on every host, e.g. Zellij's in-session pane).
 /// </summary>
 public static class SplitViability
 {
@@ -76,6 +78,6 @@ public static class SplitViability
             LaunchLocation.NewTab,
             Degraded: true,
             resulting,
-            $"Terminal too narrow to split ({resulting}-column panes; need {minPaneColumns}) — opened a tab instead.");
+            $"Terminal too narrow to split ({resulting}-column panes; need {minPaneColumns}) — opening elsewhere instead.");
     }
 }
