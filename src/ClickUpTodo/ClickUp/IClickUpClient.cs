@@ -112,6 +112,13 @@ public interface IClickUpClient
     Task DeleteChecklistItemAsync(string checklistId, string itemId, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
 
+    /// <summary>Reorder / reparent a checklist item (G, #569) and return the server-confirmed parent
+    /// <see cref="TaskChecklist"/>. <paramref name="taskId"/> is the owning task, used to record a multi-tab
+    /// change-marker nudge (#519). Default throwing so read-only fakes needn't implement it;
+    /// <see cref="ClickUpClient"/> overrides it. See <see cref="ClickUpClient.MoveChecklistItemAsync"/>.</summary>
+    Task<TaskChecklist> MoveChecklistItemAsync(string taskId, string checklistId, string itemId, string? parentId, double orderIndex, bool clearParent, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement checklist-item writes.");
+
     /// <summary>Create a checklist group on a task (F, #459) and return the server-confirmed
     /// <see cref="TaskChecklist"/> (a new empty group). Default throwing so read-only fakes needn't
     /// implement it; <see cref="ClickUpClient"/> overrides it. See <see cref="ClickUpClient.CreateChecklistAsync"/>.</summary>

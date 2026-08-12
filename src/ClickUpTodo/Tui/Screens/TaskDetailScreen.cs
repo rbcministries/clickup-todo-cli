@@ -308,6 +308,10 @@ public sealed class TaskDetailScreen : Screen
     private readonly Func<string, string, CancellationToken, Task<TaskChecklist>>? _createChecklistItemAsync;
     private readonly Func<string, string, string, CancellationToken, Task<TaskChecklist>>? _renameChecklistItemAsync;
     private readonly Func<string, string, CancellationToken, Task>? _deleteChecklistItemAsync;
+    // Reorder / reparent an item (G, #569), owned by the host; null ⇒ inert. Args: (checklistId, itemId,
+    // newParentId, newOrderIndex, clearParent). Returns the server-confirmed parent checklist so the
+    // optimistic move is reconciled, like rename.
+    private readonly Func<string, string, string?, double, bool, CancellationToken, Task<TaskChecklist>>? _moveChecklistItemAsync;
     // Checklist group CRUD (F, #459), owned by the host like the item writes above; null ⇒ inert. Create
     // takes just the name (the host closes over the owning task id, since POST /task/{id}/checklist is
     // task-scoped and the response carries only the checklist); rename takes the checklist id; both return
@@ -513,6 +517,7 @@ public sealed class TaskDetailScreen : Screen
         Func<string, string, CancellationToken, Task<TaskChecklist>>? createChecklistItemAsync = null,
         Func<string, string, string, CancellationToken, Task<TaskChecklist>>? renameChecklistItemAsync = null,
         Func<string, string, CancellationToken, Task>? deleteChecklistItemAsync = null,
+        Func<string, string, string?, double, bool, CancellationToken, Task<TaskChecklist>>? moveChecklistItemAsync = null,
         Func<string, CancellationToken, Task<TaskChecklist>>? createChecklistAsync = null,
         Func<string, string, CancellationToken, Task<TaskChecklist>>? renameChecklistAsync = null,
         Func<string, CancellationToken, Task>? deleteChecklistAsync = null)
@@ -534,6 +539,7 @@ public sealed class TaskDetailScreen : Screen
         _createChecklistItemAsync = createChecklistItemAsync;
         _renameChecklistItemAsync = renameChecklistItemAsync;
         _deleteChecklistItemAsync = deleteChecklistItemAsync;
+        _moveChecklistItemAsync = moveChecklistItemAsync;
         _createChecklistAsync = createChecklistAsync;
         _renameChecklistAsync = renameChecklistAsync;
         _deleteChecklistAsync = deleteChecklistAsync;
@@ -1243,6 +1249,30 @@ public sealed class TaskDetailScreen : Screen
                     break;
             }
             return;
+        }
+
+        // Shift+↑/↓/←/→ on the Checklists tab (G, #569): reorder (↑/↓) or reparent (←outdent / →indent) the
+        // highlighted item. Guarded on the checklist ListView being front-most (like Space/F7–F9 above), so
+        // the chords stay inert on the other tabs and text panes. Shift-modified (not Alt: Windows Terminal
+        // claims Alt+arrows for pane focus and Alt+Shift+arrows for pane resize) so they don't collide with
+        // Ctrl+←/→ tab cycling or the bare ↑/↓ pane-scroll block below (which excludes IsShift); consumed here
+        // before they could reach NavSafeTabs, so a boundary / illegal move is a no-op that never switches
+        // tabs. The pure ChecklistMove decides legality — an illegal move flashes and issues no request.
+        if (key.IsShift && !key.IsCtrl && !key.IsAlt && ReferenceEquals(_tabs.Value, _checklistList))
+        {
+            var code = key.KeyCode & ~KeyCode.ShiftMask;
+            if (code is KeyCode.CursorUp or KeyCode.CursorDown or KeyCode.CursorLeft or KeyCode.CursorRight)
+            {
+                key.Handled = true;
+                MoveSelectedChecklistItem(code switch
+                {
+                    KeyCode.CursorUp => ChecklistMoveKind.Up,
+                    KeyCode.CursorDown => ChecklistMoveKind.Down,
+                    KeyCode.CursorLeft => ChecklistMoveKind.Outdent,
+                    _ => ChecklistMoveKind.Indent,
+                });
+                return;
+            }
         }
 
         // Ctrl+G creates a new checklist group on the task (F, #459). Guarded to the Checklists tab being
@@ -3046,6 +3076,89 @@ public sealed class TaskDetailScreen : Screen
             }
         });
     }
+
+    /// <summary>Shift+arrows (G, #569): reorder / reparent the highlighted checklist item. The pure
+    /// <see cref="ChecklistMove"/> decides legality and the exact <c>orderindex</c>/<c>parent</c> write; an
+    /// illegal / boundary move flashes and issues no request. A legal move applies optimistically
+    /// (<see cref="ChecklistItemEdits.Move"/>) → off-thread PUT → reconcile with the server-confirmed
+    /// checklist, or revert to the exact prior tree + flash on failure — the rename discipline, snapshotting
+    /// the whole tree so the revert is the exact prior order.</summary>
+    private void MoveSelectedChecklistItem(ChecklistMoveKind kind)
+    {
+        if (_moveChecklistItemAsync is null)
+            return;
+        if (_checklistWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (SelectedChecklistRow() is not { IsHeader: false, ItemId: { } itemId } row)
+        {
+            RequestFlash("Select a checklist item to move — headers can't be moved.");
+            return;
+        }
+
+        var checklistId = row.ChecklistId;
+        if (ChecklistMove.Plan(_task.Checklists, checklistId, itemId, kind) is not { } plan)
+        {
+            RequestFlash(MoveBlockedMessage(kind));
+            return;
+        }
+
+        var snapshot = _task.Checklists;
+        _checklistWriteInFlight = true;
+        _pendingChecklistEdit = cls =>
+            ChecklistItemEdits.Move(cls, checklistId, itemId, plan.NewParentId, plan.NewOrderIndex, plan.ClearParent);
+        UpdateData(
+            _task with
+            {
+                Checklists = ChecklistItemEdits.Move(_task.Checklists, checklistId, itemId, plan.NewParentId, plan.NewOrderIndex, plan.ClearParent),
+            },
+            _comments);
+        // Keep the selection on the moved item so a run of moves keeps operating on it.
+        SelectChecklistItemById(checklistId, itemId);
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                var server = await _moveChecklistItemAsync(
+                    checklistId, itemId, plan.NewParentId, plan.NewOrderIndex, plan.ClearParent, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null;
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = ReplaceChecklist(_task.Checklists, server) }, _comments);
+                    SelectChecklistItemById(checklistId, itemId);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _checklistWriteInFlight = false;
+                    _pendingChecklistEdit = null; // cleared first so the revert isn't re-applied.
+                    if (_disposed)
+                        return;
+                    UpdateData(_task with { Checklists = snapshot }, _comments);
+                    SelectChecklistItemById(checklistId, itemId);
+                    RequestFlash($"Could not move item: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>The flash for an illegal / boundary move (<see cref="ChecklistMove.Plan"/> returned null),
+    /// worded per gesture so the user knows why nothing happened.</summary>
+    private static string MoveBlockedMessage(ChecklistMoveKind kind) => kind switch
+    {
+        ChecklistMoveKind.Up => "Already at the top of its group.",
+        ChecklistMoveKind.Down => "Already at the bottom of its group.",
+        ChecklistMoveKind.Indent => "Nothing to indent under — it's the first item in its group.",
+        _ => "Already at the top level.",
+    };
 
     /// <summary>Optimistic rename: set the name locally → off-thread PUT → reconcile with the server
     /// checklist, or revert to the prior name + flash on failure.</summary>

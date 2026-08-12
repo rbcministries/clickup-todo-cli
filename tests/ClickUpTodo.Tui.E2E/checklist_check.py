@@ -33,6 +33,10 @@ DLL = sys.argv[1]
 CTRL_RIGHT = b"\x1b[1;5C"
 DOWN = b"\x1b[B"
 UP = b"\x1b[A"
+SHIFT_UP = b"\x1b[1;2A"     # move checklist item up (G, #569)
+SHIFT_DOWN = b"\x1b[1;2B"   # move checklist item down
+SHIFT_RIGHT = b"\x1b[1;2C"  # indent under the preceding sibling
+SHIFT_LEFT = b"\x1b[1;2D"   # outdent to the grandparent
 ENTER = b"\r"
 SPACE = b" "
 CTRL_R = b"\x12"          # refresh (alias of F5) — re-fetches detail from the fake backend
@@ -104,6 +108,13 @@ class Session:
             line = self.screen.display[y]
             if substr in line:
                 return line.find("[")
+        return -1
+
+    def row_of(self, substr):
+        """The screen row (y) of the first line containing substr, or -1 — for order assertions."""
+        for y in range(ROWS):
+            if substr in self.screen.display[y]:
+                return y
         return -1
 
 
@@ -472,6 +483,87 @@ def run_group_rename():
         s.kill()
 
 
+def run_move():
+    """G (#569): Shift+↓ reorders an item past its sibling; Shift+→ indents an item under its preceding
+    sibling; Shift+↑ on the first item is a boundary no-op that stays on the tab. Each move persists in the
+    fake backend, so a refresh agrees.
+
+    Starting layout (E2E_CHECKLISTS=1):
+        0  Release steps  (1/3)
+        1  [x] Cut the tag
+        2  [ ] Draft release notes — Ada Lovelace
+        3    [ ] Verify the changelog
+        4  QA signoff  (1/2)
+        5  [x] Smoke test on staging
+        6  [ ] Cross-browser check
+    """
+    s = Session({"E2E_CHECKLISTS": "1"})
+    try:
+        s.pump(8.0)
+        assert "Task 0" in s.visible(), "list boot failed:\n" + s.visible()
+        s.open_checklists_tab()
+
+        # Normalise to the top header, then DOWN once → row 1 "[x] Cut the tag" (the first item).
+        for _ in range(8):
+            s.send(UP)
+            s.pump(0.1)
+        s.send(DOWN)
+        s.pump(0.3)
+
+        # ── Boundary no-op: Shift+↑ on the first item can't move up — stays on the tab, no reorder ───────
+        assert s.row_of("Cut the tag") < s.row_of("Draft release notes"), \
+            "precondition: 'Cut the tag' should start above 'Draft release notes':\n" + s.visible()
+        s.send(SHIFT_UP)
+        s.pump(0.8)
+        assert s.proc.poll() is None, "Shift+Up on the first item crashed the process"
+        v = s.visible()
+        assert "Checklists (2/5)" in v and s.row_of("Cut the tag") < s.row_of("Draft release notes"), \
+            "Shift+Up on the first item wrongly reordered or switched tabs:\n" + v
+
+        # ── Shift+↓ moves "Cut the tag" below "Draft release notes" ─────────────────────────────────────
+        s.send(SHIFT_DOWN)
+        s.pump(1.5)
+        v = s.visible()
+        assert s.proc.poll() is None, "Shift+Down crashed the process"
+        assert s.row_of("Draft release notes") < s.row_of("Cut the tag"), \
+            "Shift+Down did not reorder 'Cut the tag' below 'Draft release notes':\n" + v
+        assert "Checklists (2/5)" in v, "reorder wrongly changed the aggregate:\n" + v
+
+        # Persists across a refresh (the fake applied the orderindex write; the echo agrees).
+        s.send(CTRL_R)
+        s.pump(2.5)
+        v = s.visible()
+        assert s.row_of("Draft release notes") < s.row_of("Cut the tag"), \
+            "a refresh reverted the reorder:\n" + v
+
+        # ── Shift+→ indents "Cross-browser check" under "Smoke test on staging" (its preceding sibling) ──
+        smoke_col = s.glyph_col("Smoke test on staging")
+        assert s.glyph_col("Cross-browser check") == smoke_col, \
+            "precondition: 'Cross-browser check' should start at top level (same glyph col as its sibling):\n" + s.visible()
+        for _ in range(15):       # drive the selection to the last row ("Cross-browser check"); clamps there
+            s.send(DOWN)
+            s.pump(0.06)
+        s.send(SHIFT_RIGHT)
+        s.pump(1.5)
+        v = s.visible()
+        assert s.proc.poll() is None, "Shift+Right crashed the process"
+        after_col = s.glyph_col("Cross-browser check")
+        assert after_col > smoke_col, \
+            f"Shift+Right did not indent 'Cross-browser check' under 'Smoke test' (glyph col {after_col} vs sibling {smoke_col}):\n" + v
+        assert "Checklists (2/5)" in v, "indent wrongly changed the aggregate:\n" + v
+
+        # Persists across a refresh (the fake reparented it under the sibling's children).
+        s.send(CTRL_R)
+        s.pump(2.5)
+        assert s.glyph_col("Cross-browser check") > s.glyph_col("Smoke test on staging"), \
+            "a refresh reverted the indent:\n" + s.visible()
+
+        print("ok — move: Shift+↑ on the first item is an inert boundary no-op; Shift+↓ reorders an item past "
+              "its sibling and Shift+→ indents one under its preceding sibling; both persist over a refresh")
+    finally:
+        s.kill()
+
+
 run_populated()
 run_empty()
 run_toggle()
@@ -480,3 +572,4 @@ run_add_cancel()
 run_delete_confirm_cleared_by_overlay()
 run_group_crud()
 run_group_rename()
+run_move()
