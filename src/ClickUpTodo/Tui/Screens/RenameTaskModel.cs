@@ -27,14 +27,16 @@ public static class RenameTaskModel
     /// <summary>
     /// Classifies a rename submit: trims <paramref name="input"/>, returning <see cref="Outcome.Blank"/>
     /// for empty/whitespace, <see cref="Outcome.Unchanged"/> when it matches <paramref name="originalName"/>
-    /// (ordinal), and <see cref="Outcome.Rename"/> otherwise with the trimmed value.
+    /// (both trimmed, ordinal), and <see cref="Outcome.Rename"/> otherwise with the trimmed value. The
+    /// original is trimmed on the comparison too, so pressing Enter on a title that merely carries stray
+    /// surrounding whitespace is a no-op rather than a needless normalize-only write.
     /// </summary>
     public static Result Classify(string? input, string originalName)
     {
         var trimmed = (input ?? string.Empty).Trim();
         if (trimmed.Length == 0)
             return new Result(Outcome.Blank, string.Empty);
-        if (string.Equals(trimmed, originalName, StringComparison.Ordinal))
+        if (string.Equals(trimmed, (originalName ?? string.Empty).Trim(), StringComparison.Ordinal))
             return new Result(Outcome.Unchanged, trimmed);
         return new Result(Outcome.Rename, trimmed);
     }

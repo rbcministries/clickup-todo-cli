@@ -42,6 +42,16 @@ public sealed class RenameTaskModelTests
             RenameTaskModel.Outcome.Unchanged,
             RenameTaskModel.Classify("  Ship the release  ", "Ship the release").Outcome);
 
+    // The original is trimmed on the comparison too: pressing Enter on a title that itself carries stray
+    // surrounding whitespace (unedited, or edited only in the padding) is a no-op, not a normalize-only write.
+    [Theory]
+    [InlineData("  Ship the release  ")]
+    [InlineData("Ship the release")]
+    public void Classify_PaddedOriginal_IsUnchanged_WhenTrimmedTextMatches(string input)
+        => Assert.Equal(
+            RenameTaskModel.Outcome.Unchanged,
+            RenameTaskModel.Classify(input, "  Ship the release  ").Outcome);
+
     [Fact]
     public void Classify_DifferentText_IsRename_AndTrimmed()
     {
