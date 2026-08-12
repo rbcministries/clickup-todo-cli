@@ -47,7 +47,10 @@ public sealed class AgentDispatcher
     /// default. It only affects interactive launches (a one-off run has no terminal).
     /// <paramref name="windowsTerminalProfile"/> (the #462 match) launches this session under that
     /// Windows Terminal profile (<c>wt … -p</c>) so it inherits the profile's appearance/environment;
-    /// blank/null leaves the launch unchanged.
+    /// blank/null leaves the launch unchanged. <paramref name="providerExecutable"/> /
+    /// <paramref name="providerExtraArgs"/> (the #498 per-dispatch provider pick) override the executable
+    /// and extra args for this one launch — a Codex dispatch runs <c>codex</c> instead of the default
+    /// <c>claude</c>; a blank executable leaves both untouched (the constructor <c>_options</c> default).
     /// </summary>
     public async Task<AgentDispatchResult> DispatchAsync(
         TaskDetail task,
@@ -59,6 +62,8 @@ public sealed class AgentDispatcher
         bool postToComments = false,
         LaunchLocation? launchLocation = null,
         string? windowsTerminalProfile = null,
+        string? providerExecutable = null,
+        IReadOnlyList<string>? providerExtraArgs = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
@@ -67,11 +72,13 @@ public sealed class AgentDispatcher
         // Per-dispatch overrides on this launch's options; each null/blank leaves the settings-derived
         // _options untouched. #275: the launch location. #462: the matched Windows Terminal profile
         // (computed from the resolved directory, so it can't live on the directory-agnostic _options).
+        // #498: the picked provider's executable + extra args.
         var options = _options;
         if (launchLocation is { } loc)
             options = options with { LaunchLocation = loc };
         if (!string.IsNullOrWhiteSpace(windowsTerminalProfile))
             options = options with { WindowsTerminalProfile = windowsTerminalProfile };
+        options = WithProviderOverride(options, providerExecutable, providerExtraArgs);
         var result = await _launcher.LaunchAsync(promptFile, workingDir, options, oneOff, ct).ConfigureAwait(false);
         return new AgentDispatchResult(result.Success, FormatStatus(task.Name, result), promptFile, result.LaunchedWith);
     }
@@ -98,19 +105,44 @@ public sealed class AgentDispatcher
         string? template = null,
         bool postToComments = false,
         IProgress<string>? progress = null,
+        string? providerExecutable = null,
+        IReadOnlyList<string>? providerExtraArgs = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(task);
 
         var promptFile = AgentPromptComposer.WritePromptFile(task, comments ?? [], userPrompt, _promptDirectory, template, postToComments);
+        // #498: a one-off run honours the picked provider too — a Codex dispatch's -p run must run codex.
+        // A blank executable leaves _options untouched, so every pre-#498 caller is unchanged.
+        var options = WithProviderOverride(_options, providerExecutable, providerExtraArgs);
         try
         {
-            return await _backgroundRunner.RunAsync(promptFile, workingDir, _options, progress, ct).ConfigureAwait(false);
+            return await _backgroundRunner.RunAsync(promptFile, workingDir, options, progress, ct).ConfigureAwait(false);
         }
         finally
         {
             TryDeletePromptFile(promptFile);
         }
+    }
+
+    /// <summary>
+    /// Applies the #498 per-dispatch provider pick to a launch's options: when
+    /// <paramref name="providerExecutable"/> is non-blank, replaces the executable (trimmed) and the
+    /// extra args (trimmed, blanks dropped — the same cleaning <c>AgentDispatchSettings.ToLauncherOptions</c>
+    /// applies, so a value that already came through <c>Plan</c> is idempotent). A blank/null executable
+    /// is a strict no-op, leaving <paramref name="options"/> as the dispatcher's constructed default so
+    /// pre-#498 callers are byte-identical.
+    /// </summary>
+    private static TerminalLauncherOptions WithProviderOverride(
+        TerminalLauncherOptions options, string? providerExecutable, IReadOnlyList<string>? providerExtraArgs)
+    {
+        if (string.IsNullOrWhiteSpace(providerExecutable))
+            return options;
+        return options with
+        {
+            ClaudeExecutable = providerExecutable.Trim(),
+            ExtraArgs = [.. (providerExtraArgs ?? []).Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim())],
+        };
     }
 
     /// <summary>Best-effort delete of the background path's temp prompt file (it has been read into the

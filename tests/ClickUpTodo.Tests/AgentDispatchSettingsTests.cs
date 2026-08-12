@@ -114,6 +114,52 @@ public sealed class AgentDispatchSettingsTests
     public void IsDefault_TreatsBlankCustomTerminalCommandAsDefault(string cmd)
         => Assert.True(new AgentDispatchSettings { CustomTerminalCommand = cmd }.IsDefault);
 
+    // ── ResolveProvider (per-dispatch pick, #498) ──────────────────────────────────
+
+    private static AgentDispatchSettings TwoProviders() => new()
+    {
+        Providers =
+        [
+            new DispatchProvider { Name = "A", Executable = "a" },
+            new DispatchProvider { Name = "B", Executable = "b" },
+        ],
+        DefaultProviderName = "A",
+    };
+
+    [Fact]
+    public void ResolveProvider_PicksTheNamedProvider()
+        => Assert.Equal("b", TwoProviders().ResolveProvider("B").Executable);
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ResolveProvider_BlankName_ResolvesTheConfiguredDefault(string? name)
+        // A dispatch that never touched the provider control (blank pick) launches the default — "A".
+        => Assert.Equal("a", TwoProviders().ResolveProvider(name).Executable);
+
+    [Fact]
+    public void ResolveProvider_UnknownName_FallsBackToDefault()
+        // A provider the user deleted between opening the pane and submitting ⇒ the default, not a throw.
+        => Assert.Equal("a", TwoProviders().ResolveProvider("deleted").Executable);
+
+    [Fact]
+    public void ResolveProvider_EmptyList_SynthesizesClaudeDefault()
+        => Assert.Equal("claude", new AgentDispatchSettings().ResolveProvider("anything").Executable);
+
+    // ── LastDispatchProviderName ───────────────────────────────────────────────────
+
+    [Fact]
+    public void LastDispatchProviderName_DefaultsBlank_AndDoesNotDisturbIsDefault()
+    {
+        var s = new AgentDispatchSettings();
+        Assert.Equal("", s.LastDispatchProviderName);
+        Assert.True(s.IsDefault);
+        // A remembered pick is a UI-continuity hint, not a launch-affecting knob: it doesn't flip IsDefault.
+        s.LastDispatchProviderName = "B";
+        Assert.True(s.IsDefault);
+    }
+
     // ── ToLauncherOptions ──────────────────────────────────────────────────────────
 
     [Fact]
@@ -156,6 +202,37 @@ public sealed class AgentDispatchSettingsTests
     [InlineData(LaunchLocation.SplitPane)] // #508: the widened third value flows through to the launcher
     public void ToLauncherOptions_CarriesLaunchLocation(LaunchLocation location)
         => Assert.Equal(location, new AgentDispatchSettings { LaunchLocation = location }.ToLauncherOptions().LaunchLocation);
+
+    [Fact]
+    public void ToLauncherOptions_Provider_ProjectsTheGivenProvider_NotTheDefault()
+    {
+        // The per-dispatch overload (#498) projects the *passed* provider even when it isn't the default,
+        // while still copying the provider-agnostic terminal/preference/launch-location fields.
+        var s = new AgentDispatchSettings
+        {
+            Providers =
+            [
+                new DispatchProvider { Name = "A", Executable = "a", ExtraArgs = ["--a"] },
+                new DispatchProvider { Name = "B", Executable = "  b  ", ExtraArgs = ["  --b ", "", "x"] },
+            ],
+            DefaultProviderName = "A",
+            PreferredTerminal = PreferredTerminal.Pwsh,
+            LaunchLocation = LaunchLocation.NewTab,
+        };
+
+        var opts = s.ToLauncherOptions(s.ResolveProvider("B"));
+
+        Assert.Equal("b", opts.ClaudeExecutable);          // trimmed
+        Assert.Equal(["--b", "x"], opts.ExtraArgs);        // trimmed, blanks dropped
+        Assert.Equal(PreferredTerminal.Pwsh, opts.Preferred);
+        Assert.Equal(LaunchLocation.NewTab, opts.LaunchLocation);
+    }
+
+    [Fact]
+    public void ToLauncherOptions_Provider_BlankExecutable_CoalescesToClaude()
+        => Assert.Equal(
+            "claude",
+            new AgentDispatchSettings().ToLauncherOptions(new DispatchProvider { Executable = "  " }).ClaudeExecutable);
 
     [Fact]
     public void ToLauncherOptions_ParsesCustomTerminalCommandIntoTokens()

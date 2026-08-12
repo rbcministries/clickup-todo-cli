@@ -407,7 +407,7 @@
     "/v2/checklist/{checklist_id}/checklist_item/{checklist_item_id}": {
       "put": {
         "operationId": "UpdateChecklistItem",
-        "summary": "Update a checklist item — toggle its `resolved` state (D, #457), rename it (E, #458), and/or set its per-item assignee (G, #460). ClickUp echoes the whole parent checklist wrapped as { \"checklist\": { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. `resolved`, `name` and `assignee` are modelled (an explicit `assignee: null` clears the assignee); reparent/reorder land with the deferred reorder half of G.",
+        "summary": "Update a checklist item — toggle its `resolved` state (D, #457), rename it (E, #458), set its per-item assignee (G, #460), or reorder/reparent it (G, #569). ClickUp echoes the whole parent checklist wrapped as { \"checklist\": { … } }, so the caller gets the reconciled group (progress counts + items) without a read-after-write. `resolved`, `name`, `assignee`, `orderindex` and `parent` are modelled (an explicit `assignee: null` clears the assignee; an explicit `parent: null` outdents to top level); a caller sends only the fields it changes.",
         "parameters": [
           { "name": "checklist_id", "in": "path", "required": true, "schema": { "type": "string" } },
           { "name": "checklist_item_id", "in": "path", "required": true, "schema": { "type": "string" } }
@@ -555,11 +555,14 @@
       },
       "UpdateChecklistItemRequest": {
         "type": "object",
-        "description": "Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457), the rename write (E, #458) and the per-item assignee write (G, #460). Every field is optional so a caller sends only what it changes: 'resolved' toggles the tick, 'name' renames the item, 'assignee' sets the single per-item assignee (a user id) — or, sent as an explicit JSON null, clears it. Reparent/reorder ('parent'/'orderindex') land with the deferred reorder half of G.",
+        "description": "Body for PUT /checklist/{checklist_id}/checklist_item/{checklist_item_id} — the toggle-resolved write (D, #457), the rename write (E, #458), the per-item assignee write (G, #460) and the reorder/reparent write (G, #569). Every field is optional so a caller sends only what it changes: 'resolved' toggles the tick, 'name' renames the item, 'assignee' sets the single per-item assignee (a user id) — or, sent as an explicit JSON null, clears it — 'orderindex' repositions among siblings, and 'parent' reparents (a parent item id to indent under it, or explicit null to outdent to top level).",
         "properties": {
           "resolved": { "type": "boolean" },
           "name": { "type": "string" },
-          "assignee": { "type": "integer", "format": "int64", "nullable": true }
+          "assignee": { "type": "integer", "format": "int64", "nullable": true },
+          "orderindex": { "type": "number" },
+          "parent": { "type": "string", "nullable": true }
+
         }
       },
       "CreateChecklistItemRequest": {
