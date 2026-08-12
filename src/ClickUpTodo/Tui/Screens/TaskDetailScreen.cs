@@ -322,6 +322,16 @@ public sealed class TaskDetailScreen : Screen
     private readonly Func<string, string, long?, CancellationToken, Task<TaskChecklist>>? _setChecklistItemAssigneeAsync;
     private bool AssigneeControlAvailable =>
         _assigneeMatch is not null && _assigneeTopFrequent is not null && _setChecklistItemAssigneeAsync is not null;
+    // The optimistic overlay for an in-flight assignee write (#572), kept in its OWN slot — like
+    // _pendingChecklistToggle, and deliberately separate from _pendingChecklistEdit — so it survives a
+    // refresh AND a concurrent name rename's whole-checklist reconcile: UpdateData re-applies it (field-
+    // scoped, touching only the assignee) onto any task landing mid-write, so neither a poll nor a rename
+    // can drop the just-picked assignee. The assignee write intentionally does NOT take _checklistWriteInFlight
+    // (that would silently block a name Save issued right after a pick); it stays independent and field-scoped.
+    private Func<IReadOnlyList<TaskChecklist>, IReadOnlyList<TaskChecklist>>? _pendingChecklistAssignee;
+    // Monotonic assignee-write generation: an out-of-order response can't reconcile stale state over a newer
+    // pick (mirrors SelectorView._applyGeneration). Bumped per write; only the latest clears/reverts the slot.
+    private long _assigneeWriteGeneration;
 
     // The item add/rename input overlay: a bottom-anchored single-line name field + Save/Cancel (with a
     // hidden discard-confirm row for an edited rename), hidden until F7/F8. A transient child view within
@@ -975,6 +985,14 @@ public sealed class TaskDetailScreen : Screen
         // resurrect a just-deleted item. Cleared when the write settles, so the next refresh carries truth.
         if (_pendingChecklistEdit is { } edit)
             task = task with { Checklists = edit(task.Checklists) };
+
+        // Likewise for an in-flight per-item assignee write (#572): re-apply the field-scoped optimistic
+        // SetAssignee onto the refresh (or onto a concurrent name rename's whole-checklist reconcile that
+        // routed through here), so a poll landing mid-write can't revert the just-picked assignee. Its own
+        // slot, so it composes with — never overwrites — the toggle/edit overlays above. Cleared when the
+        // assignee write settles.
+        if (_pendingChecklistAssignee is { } assigneeEdit)
+            task = task with { Checklists = assigneeEdit(task.Checklists) };
 
         _task = task;
         _comments = comments;
@@ -3104,45 +3122,58 @@ public sealed class TaskDetailScreen : Screen
 
     /// <summary>The rename overlay's assignee picker write (#572), driven by the selector in
     /// <see cref="SelectorMode.ImmediateApply"/>: optimistically reflect the pick on the row
-    /// (<see cref="ChecklistItemEdits.SetAssignee"/>), write set (user id) / clear (null) through the host,
-    /// then reconcile the row from the server checklist and return the item's <em>single</em> confirmed
-    /// assignee so the selector's own reconcile collapses its selection to one — picking a second person
-    /// replaces the first, single-select via server truth with no fork. On failure revert the row to the
-    /// pre-write snapshot and rethrow, so the selector runs its own revert + flashes. Awaited by the selector
-    /// off the UI thread, so every <c>_task</c> mutation is marshalled back onto it.</summary>
+    /// (<see cref="ChecklistItemEdits.SetAssignee"/>, held in the <see cref="_pendingChecklistAssignee"/>
+    /// overlay so a refresh / concurrent rename can't drop it), write set (user id) / clear (null) through
+    /// the host, then clear the overlay on success and return the picked person so the selector's reconcile
+    /// collapses its selection to that one — picking a second person replaces the first, single-select with
+    /// no fork. On failure revert the item's assignee to its pre-write value (field-scoped, so a concurrent
+    /// name edit is preserved) and rethrow, so the selector runs its own revert + flashes.
+    /// <para>Two deliberate choices: (1) the write uses <see cref="CancellationToken.None"/>, never the
+    /// selector's token — the picker is rebuilt per overlay-open and disposed on close, which cancels its
+    /// token, so binding the PUT to it would abort (and silently revert) a pick the user made right before
+    /// closing. (2) A monotonic generation guards the settle so an out-of-order response can't clear a newer
+    /// pick's overlay. Awaited by the selector off the UI thread, so every <c>_task</c> mutation is
+    /// marshalled back onto it.</para></summary>
     private async Task<IReadOnlyList<TaskAssignee>> ApplyChecklistItemAssignee(
         string checklistId, string itemId, ToggleKind kind, TaskAssignee person, CancellationToken ct)
     {
-        var assigneeId = kind == ToggleKind.Added ? (long?)person.Id : null;
-        var optimistic = kind == ToggleKind.Added ? person : null;
-        var snapshot = _task.Checklists;
+        _ = ct; // see the doc-comment: the write must NOT be tied to the selector's (dispose-cancelled) token.
+        var isSet = kind == ToggleKind.Added;
+        var optimistic = isSet ? person : null;
+        // The item's assignee before this pick — the field-scoped revert target on failure. Read off the UI
+        // thread from the immutable _task snapshot (a reference read of an immutable record).
+        var before = ChecklistItemEdits.FindItem(_task.Checklists, checklistId, itemId)?.Assignee;
+        var myGeneration = Interlocked.Increment(ref _assigneeWriteGeneration);
 
         Application.Invoke(() =>
         {
-            if (_disposed)
+            if (_disposed || Volatile.Read(ref _assigneeWriteGeneration) != myGeneration)
                 return;
+            _pendingChecklistAssignee = cls => ChecklistItemEdits.SetAssignee(cls, checklistId, itemId, optimistic);
             UpdateData(_task with { Checklists = ChecklistItemEdits.SetAssignee(_task.Checklists, checklistId, itemId, optimistic) }, _comments);
         });
 
         try
         {
-            var server = await _setChecklistItemAssigneeAsync!(checklistId, itemId, assigneeId, ct).ConfigureAwait(false);
+            await _setChecklistItemAssigneeAsync!(checklistId, itemId, isSet ? person.Id : null, CancellationToken.None).ConfigureAwait(false);
             Application.Invoke(() =>
             {
-                if (_disposed)
-                    return;
-                UpdateData(_task with { Checklists = ReplaceChecklist(_task.Checklists, server) }, _comments);
+                // Only the latest write owns the slot; a superseded write leaves the newer pick's overlay be.
+                if (Volatile.Read(ref _assigneeWriteGeneration) == myGeneration)
+                    _pendingChecklistAssignee = null; // the optimistic value is now server truth; the row already shows it.
             });
-            var confirmed = ChecklistItemEdits.FindItem([server], checklistId, itemId)?.Assignee;
-            return confirmed is null ? [] : [confirmed];
+            // Return the picked person (not the server echo, which can carry a blank display name for a
+            // bare-id payload) so the selector's Reconcile keeps a named, single selection.
+            return isSet ? [person] : [];
         }
         catch
         {
             Application.Invoke(() =>
             {
-                if (_disposed)
+                if (_disposed || Volatile.Read(ref _assigneeWriteGeneration) != myGeneration)
                     return;
-                UpdateData(_task with { Checklists = snapshot }, _comments);
+                _pendingChecklistAssignee = null;
+                UpdateData(_task with { Checklists = ChecklistItemEdits.SetAssignee(_task.Checklists, checklistId, itemId, before) }, _comments);
             });
             throw; // the selector reverts its own selection and flashes via _applyFailureMessage.
         }
