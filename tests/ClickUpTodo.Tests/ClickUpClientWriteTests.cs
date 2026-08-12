@@ -167,6 +167,54 @@ public sealed class ClickUpClientWriteTests
         Assert.Null(handler.Method); // never hit the transport
     }
 
+    [Fact]
+    public async Task SetTaskName_SendsStringName_AndReturnsServerConfirmedName()
+    {
+        // Distinct request name vs response name proves the return is read back from the response,
+        // not an echo of the argument.
+        var handler = new CapturingHandler("""{ "id": "t1", "name": "server confirmed name" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var confirmed = await client.SetTaskNameAsync("t1", "new name");
+
+        Assert.Equal(HttpMethod.Put, handler.Method);
+        Assert.Contains("/v2/task/t1", handler.RequestUri);
+        var name = handler.Body!.RootElement.GetProperty("name");
+        Assert.Equal(JsonValueKind.String, name.ValueKind);
+        Assert.Equal("new name", name.GetString());
+        Assert.False(handler.Body.RootElement.TryGetProperty("status", out _), "a name write must not touch status.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("priority", out _), "a name write must not touch priority.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("description", out _), "a name write must not touch description.");
+        Assert.False(handler.Body.RootElement.TryGetProperty("assignees", out _), "a name write must not touch assignees.");
+        Assert.Equal("server confirmed name", confirmed);
+    }
+
+    [Fact]
+    public async Task SetTaskName_NullArgument_Throws_BeforeAnyRequest()
+    {
+        var handler = new CapturingHandler("""{ "id": "t1" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() => client.SetTaskNameAsync("t1", null!));
+
+        Assert.Null(handler.Method); // never hit the transport
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task SetTaskName_BlankArgument_Throws_BeforeAnyRequest(string blank)
+    {
+        // ClickUp has no empty-title concept, so a blank name fails fast client-side rather than
+        // issuing a PUT the server would reject.
+        var handler = new CapturingHandler("""{ "id": "t1" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => client.SetTaskNameAsync("t1", blank));
+
+        Assert.Null(handler.Method); // never hit the transport
+    }
+
     /// <summary>Records the outgoing request (method, URI, parsed JSON body) and returns a canned body.</summary>
     private sealed class CapturingHandler(string responseBody) : HttpMessageHandler
     {
