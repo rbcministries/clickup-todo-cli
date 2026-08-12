@@ -204,7 +204,6 @@ public static class HelpItemSets
         new("Ctrl+O", "🗁 by ID"),
         new("␣", "☑ toggle", Chord: "Space"),
         new("Ctrl+G", "➕ list"),
-        new("F7", "➕ item"),
         new("F8", "✏ rename"),
         new("F9", "🗑 delete"),
         new("Shift+↑", "move", Chord: "Shift+CursorUp"),
@@ -237,7 +236,6 @@ public static class HelpItemSets
         new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
         new("␣", "☑ toggle", Chord: "Space"),
         new("Ctrl+G", "➕ list"),
-        new("F7", "➕ item"),
         new("F8", "✏ rename"),
         new("F9", "🗑 delete"),
         new("Shift+↑", "move", Chord: "Shift+CursorUp"),
@@ -325,17 +323,34 @@ public static class HelpItemSets
     /// is present (its F6 badge cycle #415, and the Ctrl+Enter new-tab gesture #384/#435): present →
     /// <see cref="DetailWithTaskTree"/>, absent → <see cref="Detail"/>. Both the dashboard and single-task
     /// launch mode (since #374) supply a tree loader, so both get <see cref="DetailWithTaskTree"/>;
-    /// <see cref="Detail"/> is the no-tree-loader case.</summary>
+    /// <see cref="Detail"/> is the no-tree-loader case.
+    /// <para>
+    /// The non-overlay set also varies by the front-most <paramref name="sub"/> tab (contextual chords C,
+    /// #540): the single <c>Ctrl+N</c> item reads <c>➕ item</c> on the Checklists tab (where the chord
+    /// adds a checklist item) and <c>➕Comment</c> on every other tab (where it opens the comment
+    /// composer) — the footer label thus tracks what the shared chord actually does, resolved from the
+    /// same <see cref="Keybindings.ResolveDetail"/> table the dispatch consults. The retired <c>F7</c>
+    /// add-item hint is gone.
+    /// </para></summary>
     public static IReadOnlyList<HelpItem> DetailFooter(
         bool commentComposerVisible, bool descriptionEditorVisible, bool replyPickerVisible, bool hasTaskTree,
+        DetailSubContext sub = DetailSubContext.Default,
         bool mentionPickerVisible = false, bool checklistItemEditorVisible = false) =>
         mentionPickerVisible ? DetailMentionPicker
         : commentComposerVisible ? DetailCommentComposer
         : descriptionEditorVisible ? DetailDescriptionEditor
         : replyPickerVisible ? DetailReplyPicker
         : checklistItemEditorVisible ? DetailChecklistItemEditor
-        : hasTaskTree ? DetailWithTaskTree
-        : Detail;
+        : WithContextualNewLabel(hasTaskTree ? DetailWithTaskTree : Detail, sub);
+
+    /// <summary>Relabels the single shared <c>Ctrl+N</c> item to match what the chord does on the
+    /// front-most tab (contextual chords C, #540): <c>➕ item</c> on the Checklists tab, otherwise the
+    /// list's own <c>➕Comment</c> label. Returns the set unchanged for every non-Checklists tab, so the
+    /// common case allocates nothing new.</summary>
+    private static IReadOnlyList<HelpItem> WithContextualNewLabel(IReadOnlyList<HelpItem> set, DetailSubContext sub)
+        => sub != DetailSubContext.Checklists
+            ? set
+            : [.. set.Select(i => i is { IsAction: true, Key: "Ctrl+N" } ? i with { Label = "➕ item" } : i)];
 
     /// <summary>The settings screen (F2).</summary>
     public static readonly IReadOnlyList<HelpItem> Settings =

@@ -41,7 +41,7 @@ ENTER = b"\r"
 SPACE = b" "
 CTRL_R = b"\x12"          # refresh (alias of F5) — re-fetches detail from the fake backend
 CTRL_G = b"\x07"          # new checklist group (F, #459)
-F7 = b"\x1b[18~"          # add checklist item (E, #458)
+CTRL_N = b"\x0e"           # add checklist item on the Checklists tab (C, #540; ASCII 14, retired F7)
 F8 = b"\x1b[19~"          # rename the selected item / group (row-kind-scoped, F, #459)
 F9 = b"\x1b[20~"          # delete the selected item / group (row-kind-scoped, F, #459)
 BACKSPACE = b"\x7f"
@@ -251,7 +251,7 @@ def type_text(s, text):
 
 
 def run_crud():
-    """E (#458): F7 add → F8 rename → F9 delete, an item CRUD round-trip that returns the checklist to
+    """E (#458): Ctrl+N add → F8 rename → F9 delete, an item CRUD round-trip that returns the checklist to
     its starting counts, driven against the mutable fake backend (which persists each write).
 
     Starting layout / aggregate (E2E_CHECKLISTS=1): Release steps (1/3), QA signoff (1/2) → (2/5).
@@ -270,10 +270,10 @@ def run_crud():
         s.pump(0.3)
         assert "Checklists (2/5)" in s.visible(), "precondition: aggregate should start at (2/5):\n" + s.visible()
 
-        # ── Add (F7): open the name overlay, type a name, Enter ───────────────────────────────────────
-        s.send(F7)
+        # ── Add (Ctrl+N): open the name overlay, type a name, Enter ───────────────────────────────────────
+        s.send(CTRL_N)
         s.pump(0.8)
-        assert "New item" in s.visible(), "F7 did not open the add-item overlay:\n" + s.visible()
+        assert "New item" in s.visible(), "Ctrl+N did not open the add-item overlay:\n" + s.visible()
         type_text(s, "Ship the release")
         s.send(ENTER)
         s.pump(1.5)
@@ -318,7 +318,7 @@ def run_crud():
         assert "Checklists (2/5)" in v and "Publish v2" not in v, \
             "a refresh resurrected the deleted item or wrong counts:\n" + v
 
-        print("ok — CRUD: F7 adds an item (2/6), F8 renames it, F9+Y deletes it back to (2/5); persists over refresh")
+        print("ok — CRUD: Ctrl+N adds an item (2/6), F8 renames it, F9+Y deletes it back to (2/5); persists over refresh")
     finally:
         s.kill()
 
@@ -333,7 +333,7 @@ def run_add_cancel():
         for _ in range(8):
             s.send(UP)
             s.pump(0.1)
-        s.send(F7)
+        s.send(CTRL_N)
         s.pump(0.8)
         type_text(s, "Should not persist")
         s.send(b"\x1b")           # Esc — add cancels immediately (no discard confirm for a new item)
@@ -347,7 +347,7 @@ def run_add_cancel():
 
 
 def run_delete_confirm_cleared_by_overlay():
-    """E (#458) regression: arming the delete confirm (F9) then opening the add overlay (F7) must cancel
+    """E (#458) regression: arming the delete confirm (F9) then opening the add overlay (Ctrl+N) must cancel
     the armed delete, so a later Enter can't silently delete the once-targeted item."""
     s = Session({"E2E_CHECKLISTS": "1"})
     try:
@@ -364,7 +364,7 @@ def run_delete_confirm_cleared_by_overlay():
         s.send(F9)                # arm the delete confirm for the selected item
         s.pump(0.6)
         assert "Delete" in s.visible(), "F9 did not arm the delete confirm:\n" + s.visible()
-        s.send(F7)                # open the add overlay — this must cancel the armed delete
+        s.send(CTRL_N)                # open the add overlay — this must cancel the armed delete
         s.pump(0.6)
         s.send(b"\x1b")           # Esc: cancel the add overlay (creates nothing)
         s.pump(0.6)
@@ -373,14 +373,14 @@ def run_delete_confirm_cleared_by_overlay():
         v = s.visible()
         assert "[x] Cut the tag" in v, "opening the add overlay left a delete armed — Enter deleted an item:\n" + v
         assert "Checklists (2/5)" in v, "an item was unexpectedly deleted (aggregate changed):\n" + v
-        print("ok — delete-confirm cleared: F9 then F7 cancels the armed delete; a later Enter is inert")
+        print("ok — delete-confirm cleared: F9 then Ctrl+N cancels the armed delete; a later Enter is inert")
     finally:
         s.kill()
 
 
 def run_group_crud():
     """F (#459): checklist GROUP CRUD on a task that starts with no checklists (E2E_CHECKLISTS_EMPTY seeds
-    the mutable DOM empty). Ctrl+G create a group -> F7 add an item to it -> F9+Enter on its header delete
+    the mutable DOM empty). Ctrl+G create a group -> Ctrl+N add an item to it -> F9+Enter on its header delete
     the group, returning to the empty state. Each write persists in the fake backend, so a refresh agrees."""
     s = Session({"E2E_CHECKLISTS_EMPTY": "1"})
     try:
@@ -403,10 +403,10 @@ def run_group_crud():
         assert "No checklists on this task." not in v, "empty state should be gone after create:\n" + v
         assert "(0/0)" in v, "the new empty checklist header should show (0/0):\n" + v
 
-        # ── Add an item to it (F7): the new group's header is selected, so F7 adds into that group ─────
-        s.send(F7)
+        # ── Add an item to it (Ctrl+N): the new group's header is selected, so Ctrl+N adds into that group ─────
+        s.send(CTRL_N)
         s.pump(0.8)
-        assert "New item" in s.visible(), "F7 did not open the add-item overlay on the new group:\n" + s.visible()
+        assert "New item" in s.visible(), "Ctrl+N did not open the add-item overlay on the new group:\n" + s.visible()
         type_text(s, "Ship it")
         s.send(ENTER)
         s.pump(1.5)
@@ -437,7 +437,7 @@ def run_group_crud():
         assert "No checklists on this task." in v and "Release steps" not in v, \
             "a refresh resurrected the deleted group:\n" + v
 
-        print("ok — group CRUD: Ctrl+G creates a checklist, F7 adds an item (0/1), F9+Enter on the header "
+        print("ok — group CRUD: Ctrl+G creates a checklist, Ctrl+N adds an item (0/1), F9+Enter on the header "
               "deletes the group back to the empty state; persists over refresh")
     finally:
         s.kill()

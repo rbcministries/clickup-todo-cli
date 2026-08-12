@@ -25,6 +25,23 @@ public enum ScreenContext
 }
 
 /// <summary>
+/// The front-most Task Detail tab, as a keybinding sub-context (contextual chords C, #540; the model
+/// recorded in slice A, <c>docs/plans/contextual-chord-model.md</c>). It is what lets one chord mean
+/// different things per tab — <c>Ctrl+N</c> adds a checklist item on <see cref="Checklists"/> but opens
+/// the comment composer on the others — while the base <see cref="Keybindings"/> map stays the single
+/// source of each action's token. <see cref="Default"/> covers Stream / Description / Other and is the
+/// fallback for any tab without an override. Tab-scoped and orthogonal to the punted launch-mode
+/// dimension (#296); kept Detail-specific until a second screen needs sub-contexts.
+/// </summary>
+public enum DetailSubContext
+{
+    Default,
+    Comments,
+    Checklists,
+    TaskTree,
+}
+
+/// <summary>
 /// The command / navigation actions the central keybinding table governs (#355). These are the
 /// cross-screen and per-context <em>command</em> shortcuts — the ones that appear on the contextual
 /// help footer. Per-form focus keys (in-form <c>Tab</c>/<c>Space</c>, the New-Task/editor <c>Save</c>
@@ -123,7 +140,10 @@ public static class Keybindings
             [(ScreenContext.Detail, KeyAction.ReplyToComment)] = "Ctrl+T",
             [(ScreenContext.Detail, KeyAction.EditDescription)] = "Ctrl+E",
             [(ScreenContext.Detail, KeyAction.ToggleChecklistItem)] = "Space",
-            [(ScreenContext.Detail, KeyAction.AddChecklistItem)] = "F7",
+            // Contextual chords C (#540): the "new" chord is now shared with AddComment (both "Ctrl+N")
+            // and disambiguated by the front Task Detail tab (see DetailSubContext / ResolveDetail below).
+            // Retargeted from the #458 stopgap F7, which is now unbound.
+            [(ScreenContext.Detail, KeyAction.AddChecklistItem)] = "Ctrl+N",
             [(ScreenContext.Detail, KeyAction.RenameChecklistItem)] = "F8",
             [(ScreenContext.Detail, KeyAction.DeleteChecklistItem)] = "F9",
             [(ScreenContext.Detail, KeyAction.MoveChecklistItemUp)] = "Shift+CursorUp",
@@ -214,4 +234,85 @@ public static class Keybindings
     /// <summary>The actions bound in <paramref name="context"/>.</summary>
     public static IEnumerable<KeyAction> ActionsFor(ScreenContext context)
         => Map.Keys.Where(k => k.Context == context).Select(k => k.Action);
+
+    // ── Task Detail sub-context activation (contextual chords C, #540) ──────────────────────────────
+    //
+    // The base Map above owns the *token for an action*; this layer owns *which action is live per Task
+    // Detail tab*. It only needs to list the actions whose live-ness depends on the front tab — the ones
+    // that share a token with another action (today just Ctrl+N: AddComment vs AddChecklistItem) or are
+    // physically scoped to one tab (the checklist chords, already guarded to the Checklists ListView in
+    // TaskDetailScreen). Context-wide Detail actions (DispatchToClaude, ReplyToComment, EditDescription,
+    // OpenInBrowser, QuickUpdate, Refresh, Help, Back) resolve unconditionally and are folded in by
+    // DetailBindings rather than repeated per tab.
+    private static readonly IReadOnlyList<KeyAction> DetailContextWideActions =
+    [
+        KeyAction.DispatchToClaude,
+        KeyAction.ReplyToComment,
+        KeyAction.EditDescription,
+        KeyAction.OpenInBrowser,
+        KeyAction.QuickUpdate,
+        KeyAction.Refresh,
+        KeyAction.Help,
+        KeyAction.Back,
+    ];
+
+    private static readonly IReadOnlyDictionary<DetailSubContext, IReadOnlyList<KeyAction>> DetailTabActions =
+        new Dictionary<DetailSubContext, IReadOnlyList<KeyAction>>
+        {
+            [DetailSubContext.Comments] = [KeyAction.AddComment],
+            [DetailSubContext.Checklists] =
+            [
+                KeyAction.AddChecklistItem,
+                KeyAction.RenameChecklistItem,
+                KeyAction.DeleteChecklistItem,
+                KeyAction.ToggleChecklistItem,
+                KeyAction.MoveChecklistItemUp,
+                KeyAction.MoveChecklistItemDown,
+                KeyAction.OutdentChecklistItem,
+                KeyAction.IndentChecklistItem,
+                KeyAction.NewChecklist,
+            ],
+            [DetailSubContext.TaskTree] = [KeyAction.AddComment],
+            [DetailSubContext.Default] = [KeyAction.AddComment],
+        };
+
+    /// <summary>The tab-scoped actions live in <paramref name="sub"/> (falling back to
+    /// <see cref="DetailSubContext.Default"/>'s set for a tab with no explicit entry).</summary>
+    private static IReadOnlyList<KeyAction> DetailTabActionsFor(DetailSubContext sub)
+        => DetailTabActions.TryGetValue(sub, out var actions) ? actions : DetailTabActions[DetailSubContext.Default];
+
+    /// <summary>
+    /// The <see cref="KeyAction"/> the front-most Task Detail tab binds <paramref name="token"/> to, or
+    /// <c>null</c> when the tab binds nothing to it (contextual chords C, #540). Resolves against the
+    /// sub-context's live tab-scoped actions plus the context-wide ones, each mapped back to its
+    /// base-<see cref="Map"/> token. Both the hand-rolled dispatch in <c>TaskDetailScreen.OnKey</c> and
+    /// the per-tab footer (<see cref="HelpItemSets.DetailFooter"/>) consult this seam so a chord and its
+    /// footer label can't drift.
+    /// <para>
+    /// Anti-collision invariant: within one sub-context no token maps to two live actions (so
+    /// <c>Ctrl+N</c> → exactly <see cref="KeyAction.AddChecklistItem"/> on the Checklists tab and exactly
+    /// <see cref="KeyAction.AddComment"/> elsewhere). <see cref="KeybindingsTests"/> pins it.
+    /// </para>
+    /// </summary>
+    public static KeyAction? ResolveDetail(DetailSubContext sub, string token)
+    {
+        foreach (var (action, bound) in DetailBindings(sub))
+            if (bound == token)
+                return action;
+        return null;
+    }
+
+    /// <summary>
+    /// The live <c>(action, token)</c> pairs for Task Detail sub-context <paramref name="sub"/>
+    /// (contextual chords C, #540): the tab-scoped actions live on that tab plus the context-wide Detail
+    /// actions, each resolved to its base-<see cref="Map"/> token. This is what the per-tab footer
+    /// renders and what the #355 cross-check asserts the footer against.
+    /// </summary>
+    public static IEnumerable<(KeyAction Action, string Token)> DetailBindings(DetailSubContext sub)
+    {
+        foreach (var action in DetailTabActionsFor(sub))
+            yield return (action, Token(ScreenContext.Detail, action));
+        foreach (var action in DetailContextWideActions)
+            yield return (action, Token(ScreenContext.Detail, action));
+    }
 }
