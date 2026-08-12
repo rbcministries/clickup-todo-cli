@@ -113,6 +113,17 @@ public sealed class DispatchStatusLineTests
         Assert.Equal(DegradeReason + " " + coreWithNote + ProfileClause(Profile), status);
     }
 
+    [Fact]
+    public void Degradation_Leads_AndProfileIsSuppressed_OnANonWtHost()
+    {
+        // Degradation + profile both supplied, but the (degraded) launch used a non-WT terminal: the
+        // reason still leads, and the profile clause is omitted (a profile matched on directory alone
+        // never applied to a non-WT host).
+        var status = DispatchStatusLine.Compose(CoreOkNonWt, launched: true, "gnome-terminal", DegradeReason, Profile);
+        Assert.Equal(DegradeReason + " " + CoreOkNonWt, status);
+        Assert.DoesNotContain("profile", status, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ── Failure short-circuits: no degradation, no profile, whatever facts are supplied ───────────
 
     [Fact]
@@ -121,6 +132,15 @@ public sealed class DispatchStatusLineTests
         // Nothing opened, so "too narrow, opening elsewhere" and "under profile X" would both describe a
         // launch that never happened — both are suppressed.
         var status = DispatchStatusLine.Compose(CoreFail, launched: false, launchedWith: null, DegradeReason, Profile);
+        Assert.Equal(CoreFail, status);
+    }
+
+    [Fact]
+    public void Failure_SuppressesTheProfile_EvenWhenLaunchedWithLooksLikeAWtHost()
+    {
+        // launched:false is the sole arbiter — a stray non-null launchedWith (even a WT-shaped one) on a
+        // failed launch must not resurrect the profile clause or the degradation lead.
+        var status = DispatchStatusLine.Compose(CoreFail, launched: false, "Windows Terminal", DegradeReason, Profile);
         Assert.Equal(CoreFail, status);
     }
 
