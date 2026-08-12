@@ -43,7 +43,11 @@ public static class TerminalCommandPlanner
                 PwshCommand(promptFilePath, workingDir, options, oneOff),
                 PosixCommand(promptFilePath, workingDir, options, oneOff),
                 workingDir,
-                oneOff),
+                oneOff,
+                // A dispatch into an actual split pane keeps the POSIX shell alive so the pane persists
+                // after the session ends (#515) — see PosixSplitPaneKeepAlive. Consumed only in the
+                // Linux split branches, which already require !oneOff, so it never affects a one-off.
+                KeepSplitPaneAlive: !oneOff),
             options);
 
     /// <summary>
@@ -88,7 +92,7 @@ public static class TerminalCommandPlanner
         {
             OSPlatformKind.Windows => PlanWindows(exists, getEnv, inner.Pwsh, inner.WorkingDir, options, inner.OneOff),
             OSPlatformKind.MacOS => PlanMacOS(exists, getEnv, inner.Posix, inner.WorkingDir, options, inner.OneOff),
-            OSPlatformKind.Linux => PlanLinux(exists, getEnv, inner.Posix, inner.WorkingDir, options, inner.OneOff),
+            OSPlatformKind.Linux => PlanLinux(exists, getEnv, inner.Posix, inner.WorkingDir, options, inner.OneOff, inner.KeepSplitPaneAlive),
             _ => [],
         };
 
@@ -101,8 +105,15 @@ public static class TerminalCommandPlanner
     /// supplies the plain executable payloads with no working dir and <c>OneOff = false</c>. Both payloads
     /// are built eagerly by the caller — they are pure, I/O-free string construction, so building the one
     /// the target OS won't use is a harmless discarded string.
+    /// <para>
+    /// <paramref name="KeepSplitPaneAlive"/> asks the Linux split branches to persist the pane after the
+    /// session ends (#515) — a dispatch sets it (an interactive dispatch pane should linger showing its
+    /// output), an app launch leaves it <c>false</c> (the TUI owns the pane and closing on exit is its
+    /// natural lifetime). Honoured only in an actual split, which already requires <c>!OneOff</c>.
+    /// </para>
     /// </summary>
-    private readonly record struct InnerCommand(string Pwsh, string Posix, string? WorkingDir, bool OneOff);
+    private readonly record struct InnerCommand(
+        string Pwsh, string Posix, string? WorkingDir, bool OneOff, bool KeepSplitPaneAlive = false);
 
     // ── In-place launch locations: new-tab (#255) and split-pane (#502/#504) ─────
     //
@@ -416,7 +427,7 @@ public static class TerminalCommandPlanner
     // ── Linux: honor $TERMINAL, else probe common emulators ──
 
     private static IReadOnlyList<LaunchSpec> PlanLinux(
-        Func<string, bool> exists, Func<string, string?> getEnv, string inner, string? cwd, TerminalLauncherOptions options, bool oneOff)
+        Func<string, bool> exists, Func<string, string?> getEnv, string inner, string? cwd, TerminalLauncherOptions options, bool oneOff, bool keepSplitPaneAlive = false)
     {
         // <paramref name="inner"/> is the POSIX shell command run via `bash -lc` (or tmux) — built by
         // the caller (a `cd …; 'claude' …` dispatch, or an `'clickup-todo' '--task' '<id>'` app launch).
@@ -438,6 +449,14 @@ public static class TerminalCommandPlanner
         var splitSpecs = new List<LaunchSpec>();
         if (SplitRequested(options, oneOff))
         {
+            // A dispatch into an actual split pane persists after the session ends (#515): these hosts run
+            // the command via `bash -lc <cmd>`, whose shell exits when the command finishes — closing the
+            // pane and relayouting the survivors. Appending the keep-alive holds the pane open, matching
+            // Windows Terminal's `-NoExit` and iTerm2's session shell (both already persist). Only the
+            // *split* payload is suffixed; the tab/window degradation rungs below keep the plain `inner`,
+            // so a SplitPane request that falls through to a tab is still byte-identical to a NewTab one.
+            var splitInner = keepSplitPaneAlive ? inner + PosixSplitPaneKeepAlive : inner;
+
             // tmux stops option parsing at `bash` (a non-option), so `-lc` reaches the shell intact —
             // the same reason the tmux new-window spec passes `bash -lc <inner>` bare. `-h` splits
             // side-by-side, `-v` stacks; `-l %` sizes the new pane; `-d` leaves focus in our pane.
@@ -453,7 +472,7 @@ public static class TerminalCommandPlanner
                 }
                 if (stayPut)
                     args.Add("-d");
-                args.AddRange(["bash", "-lc", inner]);
+                args.AddRange(["bash", "-lc", splitInner]);
                 splitSpecs.Add(new LaunchSpec("tmux", [.. args], cwd, "tmux (split pane)"));
             }
             if (EnvPresent(getEnv, "WEZTERM_PANE") && exists("wezterm"))
@@ -465,7 +484,7 @@ public static class TerminalCommandPlanner
                     args.Add(Math.Clamp(p, 1, 99).ToString(CultureInfo.InvariantCulture));
                 }
                 // WezTerm's `cli split-pane` has no stay-put flag — focus follows (documented unsupported).
-                args.AddRange(["--", "bash", "-lc", inner]);
+                args.AddRange(["--", "bash", "-lc", splitInner]);
                 splitSpecs.Add(new LaunchSpec("wezterm", [.. args], cwd, "WezTerm (split pane)"));
             }
             // kitty's gate is KITTY_LISTEN_ON — only set when `allow_remote_control` is enabled — so it
@@ -477,14 +496,14 @@ public static class TerminalCommandPlanner
                 var args = new List<string> { "@", "launch", below ? "--location=hsplit" : "--location=vsplit" };
                 if (stayPut)
                     args.Add("--dont-take-focus");
-                args.AddRange(["--cwd=current", "bash", "-lc", inner]);
+                args.AddRange(["--cwd=current", "bash", "-lc", splitInner]);
                 splitSpecs.Add(new LaunchSpec("kitten", [.. args], cwd, "kitty (split pane)"));
             }
             // Zellij's `-d` is the *direction* flag (right/down), not a focus flag; it splits evenly and
             // has no stay-put option — focus follows (documented unsupported).
             if (EnvPresent(getEnv, "ZELLIJ") && exists("zellij"))
                 splitSpecs.Add(new LaunchSpec(
-                    "zellij", ["action", "new-pane", "-d", below ? "down" : "right", "--", "bash", "-lc", inner], cwd, "Zellij (split pane)"));
+                    "zellij", ["action", "new-pane", "-d", below ? "down" : "right", "--", "bash", "-lc", splitInner], cwd, "Zellij (split pane)"));
         }
 
         // A user-configured custom emulator/wrapper (#385) is tried first, ahead of $TERMINAL, the probe
@@ -656,6 +675,19 @@ public static class TerminalCommandPlanner
     /// </summary>
     private const string PosixKeepAlive =
         "; printf '\\n[claude -p finished - press Enter to close] '; read -r _";
+
+    /// <summary>
+    /// Appended to an interactive dispatch's POSIX command when it launches into an actual split pane
+    /// (#515), so the pane persists after the session ends rather than the <c>bash -lc</c> shell exiting
+    /// and the pane closing — which would relayout the surviving panes the moment <c>claude</c> quits.
+    /// Mirrors Windows Terminal's <c>-NoExit</c> and iTerm2's own session shell (both already persist), so
+    /// a dispatch pane behaves the same on every host. Applied only to the Linux <c>bash -lc</c> split
+    /// hosts (tmux/WezTerm/kitty/Zellij) and only to the split payload — the tab/window degradation rungs
+    /// keep the un-suffixed command, so a SplitPane request that falls through to a tab stays byte-identical
+    /// to a NewTab one. No prompt content enters here — it stays file-indirected.
+    /// </summary>
+    private const string PosixSplitPaneKeepAlive =
+        "; printf '\\n[claude session ended - press Enter to close] '; read -r _";
 
     // ── Escaping helpers ──
 

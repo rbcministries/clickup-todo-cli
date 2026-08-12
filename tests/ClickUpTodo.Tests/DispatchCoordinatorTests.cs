@@ -328,6 +328,105 @@ public sealed class DispatchCoordinatorTests
         Assert.Null(DispatchCoordinator.WindowsTerminalProfileNote(noMatch, "Windows Terminal"));
     }
 
+    // ── Split-pane viability floor (#505/#515, slice J) ──────────────────────────────────────────
+
+    [Fact]
+    public void Plan_SplitPane_WideTerminal_StaysASplit_NoReason()
+    {
+        var settings = new AgentDispatchSettings();
+        var request = new DispatchRequest("go", LaunchLocation: LaunchLocation.SplitPane);
+
+        // 200 cols, even side-by-side (default Auto geometry) → two 100-col panes, above the 60 floor.
+        var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home, terminalColumns: 200);
+
+        Assert.Equal(LaunchLocation.SplitPane, plan.LaunchLocation);
+        Assert.Null(plan.SplitDegradedReason);
+    }
+
+    [Fact]
+    public void Plan_SplitPane_NarrowTerminal_DegradesToTab_WithReason()
+    {
+        var settings = new AgentDispatchSettings();
+        var request = new DispatchRequest("go", LaunchLocation: LaunchLocation.SplitPane);
+
+        // 100 cols, even → two 50-col panes, below the 60 floor → degrade to a tab. This is the
+        // "panes accumulate" / repeated-dispatch case: each split shrinks the width the next one sees,
+        // so the floor is what stops the Nth dispatch producing an unusable pane.
+        var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home, terminalColumns: 100);
+
+        Assert.Equal(LaunchLocation.NewTab, plan.LaunchLocation);
+        Assert.NotNull(plan.SplitDegradedReason);
+        Assert.Contains("tab", plan.SplitDegradedReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Plan_SplitPane_NoTerminalWidth_LeavesTheSplitUntouched()
+    {
+        // Every pre-#515 caller passes no width (the default) — and a headless context has no live
+        // driver — so the floor self-disables and the launch location is byte-identical to the request.
+        var settings = new AgentDispatchSettings();
+        var request = new DispatchRequest("go", LaunchLocation: LaunchLocation.SplitPane);
+
+        var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home);
+
+        Assert.Equal(LaunchLocation.SplitPane, plan.LaunchLocation);
+        Assert.Null(plan.SplitDegradedReason);
+    }
+
+    [Fact]
+    public void Plan_SplitPane_OneOff_NeverEvaluatesTheFloor()
+    {
+        // A one-off claude -p run has no terminal, so an in-place location is meaningless — the floor must
+        // not fire even on a narrow terminal (it stays the requested value, and the host ignores it).
+        var settings = new AgentDispatchSettings();
+        var request = new DispatchRequest("go", SessionMode: AgentSessionMode.OneOff, LaunchLocation: LaunchLocation.SplitPane);
+
+        var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home, terminalColumns: 40);
+
+        Assert.True(plan.OneOff);
+        Assert.Equal(LaunchLocation.SplitPane, plan.LaunchLocation);
+        Assert.Null(plan.SplitDegradedReason);
+    }
+
+    [Theory]
+    [InlineData(LaunchLocation.NewTab)]
+    [InlineData(LaunchLocation.NewWindow)]
+    public void Plan_NonSplitRequest_NeverDegrades_EvenOnANarrowTerminal(LaunchLocation location)
+    {
+        // The floor only ever downgrades an interactive SplitPane → NewTab; a NewTab/NewWindow request is
+        // left exactly as asked, whatever the width.
+        var settings = new AgentDispatchSettings();
+        var request = new DispatchRequest("go", LaunchLocation: location);
+
+        var plan = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home, terminalColumns: 20);
+
+        Assert.Equal(location, plan.LaunchLocation);
+        Assert.Null(plan.SplitDegradedReason);
+    }
+
+    [Fact]
+    public void Plan_SplitPane_DegradingToTab_DoesNotPerturbTheWorkingDirectory()
+    {
+        // The viability floor reads only the requested launch location — it must not touch the #461 /
+        // #96 directory resolution, so a degraded split keeps the exact same working dir / ChosenDir a
+        // viable one would have.
+        var settings = new AgentDispatchSettings();
+        var inTree = Path.Combine(BaseDir, "ABC-12");
+        var request = new DispatchRequest("go", WorkingDirectory: inTree, LaunchLocation: LaunchLocation.SplitPane);
+
+        var viable = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home, terminalColumns: 200);
+        var degraded = DispatchCoordinator.Plan(settings, request, TaskWith(), BaseDir, Home, terminalColumns: 100);
+
+        Assert.Equal(LaunchLocation.SplitPane, viable.LaunchLocation);
+        Assert.Equal(LaunchLocation.NewTab, degraded.LaunchLocation);
+        // The launch-location degradation aside, everything directory-related is identical.
+        Assert.Equal(viable.WorkingDir, degraded.WorkingDir);
+        Assert.Equal(inTree, degraded.WorkingDir);
+        Assert.Equal(viable.ChosenDir, degraded.ChosenDir);
+        Assert.Equal(inTree, degraded.ChosenDir);
+        Assert.Equal(viable.CreateWorkingDir, degraded.CreateWorkingDir);
+    }
+
     // ── Cache reconciliation (#96), now with the host-supplied AutoDerivedDefault baseline ───────
 
     [Fact]

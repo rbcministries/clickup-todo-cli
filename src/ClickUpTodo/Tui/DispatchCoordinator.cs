@@ -55,6 +55,16 @@ public static class DispatchCoordinator
     /// this one dispatch instead of the dispatcher's constructed default; <c>null</c> leaves the launch
     /// byte-identical to pre-#498. Both are set together or both null.
     /// </para>
+    /// <para>
+    /// <see cref="SplitDegradedReason"/> is the split-pane viability outcome (#505/#515, slice J):
+    /// non-null only when a <see cref="LaunchLocation.SplitPane"/> dispatch was downgraded to a
+    /// <see cref="LaunchLocation.NewTab"/> because the resulting pane would fall below the readable-width
+    /// floor (<see cref="Agent.SplitViability"/>). In that case <see cref="LaunchLocation"/> already
+    /// carries the degraded <c>NewTab</c> value and this holds a ready-to-flash reason so the tab reads as
+    /// deliberate rather than a silently-ignored split. <c>null</c> whenever the launch location was
+    /// honoured as requested (the common case, and every dispatch that didn't supply a live terminal
+    /// width).
+    /// </para>
     /// </summary>
     public readonly record struct ResolvedDispatch(
         string Prompt,
@@ -67,7 +77,8 @@ public static class DispatchCoordinator
         string? ChosenDir,
         string? WindowsTerminalProfile = null,
         string? ProviderExecutable = null,
-        IReadOnlyList<string>? ProviderExtraArgs = null);
+        IReadOnlyList<string>? ProviderExtraArgs = null,
+        string? SplitDegradedReason = null);
 
     /// <summary>
     /// Resolves everything a dispatch needs from the settings + the pane's <paramref name="request"/> —
@@ -83,6 +94,15 @@ public static class DispatchCoordinator
     /// <see cref="ResolvedDispatch.CreateWorkingDir"/> containment flag (create when inside the base tree),
     /// not by the mode.
     /// </para>
+    /// <para>
+    /// <paramref name="terminalColumns"/> is the live width of the terminal the app occupies (the host
+    /// passes <c>Application.Driver?.Cols</c>; <c>null</c> in a headless/unit context). It is used only to
+    /// apply the split-pane viability floor (#505/#515): an interactive
+    /// <see cref="LaunchLocation.SplitPane"/> request whose resulting pane would fall below the readable
+    /// width degrades to <see cref="LaunchLocation.NewTab"/>, recorded on
+    /// <see cref="ResolvedDispatch.SplitDegradedReason"/>. When it is <c>null</c>, or the request isn't an
+    /// interactive split, the launch location is passed through unchanged.
+    /// </para>
     /// </summary>
     public static ResolvedDispatch Plan(
         AgentDispatchSettings settings,
@@ -91,7 +111,8 @@ public static class DispatchCoordinator
         string? defaultWorkingDirectory,
         string home,
         Func<string?>? loadWindowsTerminalSettings = null,
-        Func<string, string>? expandEnvironment = null)
+        Func<string, string>? expandEnvironment = null,
+        int? terminalColumns = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(request);
@@ -145,10 +166,36 @@ public static class DispatchCoordinator
             providerExtraArgs = providerOptions.ExtraArgs;
         }
 
+        // Split-pane viability (#505/#515, slice J): a dispatch into a split pane is only worth making
+        // when the resulting pane clears the readable-width floor. Dispatch is repeatable, so each split
+        // subdivides a finite width — the fourth dispatch from one window is an unusable pane — so the
+        // floor is decided here, before planning, because the planner (TerminalCommandPlanner) has no
+        // notion of the live terminal size. Only an interactive SplitPane request with a supplied width
+        // is ever evaluated; a one-off (no terminal), a NewTab/NewWindow request, or a caller that didn't
+        // pass a width (every pre-#515 caller, and the headless/test path) passes through untouched, so
+        // the launch location stays byte-identical to pre-#515. The geometry comes from the settings'
+        // launcher projection (SplitDirection/SplitSizePercent — Auto/null today, so an even side-by-side
+        // split), which tracks a future geometry settings surface (#511) for free.
+        var effectiveLaunchLocation = request.LaunchLocation;
+        string? splitDegradedReason = null;
+        if (!oneOff && request.LaunchLocation == LaunchLocation.SplitPane && terminalColumns is { } cols)
+        {
+            // Read the split geometry from the same projection the dispatcher's launcher options come from,
+            // so the floor judges the shape the planner will actually draw. Today both resolve to the
+            // TerminalLauncherOptions record defaults (Auto direction / even split) — ToLauncherOptions
+            // copies no split geometry. When #511 adds a user-facing split-geometry surface, that setting
+            // must feed both this Evaluate and the dispatcher's ToLauncherOptions, or the floor would judge
+            // a geometry the planner doesn't emit.
+            var geometry = settings.ToLauncherOptions();
+            var decision = SplitViability.Evaluate(cols, geometry.SplitDirection, geometry.SplitSizePercent);
+            effectiveLaunchLocation = decision.Location;
+            splitDegradedReason = decision.Reason;
+        }
+
         return new ResolvedDispatch(
             request.Prompt, workingDir, template, createWorkingDir, oneOff,
-            request.PostToComments, request.LaunchLocation, chosenDir, wtProfile,
-            providerExecutable, providerExtraArgs);
+            request.PostToComments, effectiveLaunchLocation, chosenDir, wtProfile,
+            providerExecutable, providerExtraArgs, splitDegradedReason);
     }
 
     /// <summary>True when <paramref name="workingDir"/> is the base working directory or a descendant of
@@ -262,7 +309,10 @@ public static class DispatchCoordinator
                 // profile — otherwise a launch that looked different than expected is unexplained. The
                 // #461 Repository match no longer needs a note: the directory it chose is now visible in
                 // the pre-filled working-dir field, which explains itself (#533 decision 5).
-                var status = result.StatusMessage + (WindowsTerminalProfileNote(plan, result.LaunchedWith) ?? "");
+                // When the split-pane viability floor (#505/#515) downgraded the request to a tab, lead
+                // with its reason so the tab reads as a deliberate degradation, not a dropped choice.
+                var degraded = plan.SplitDegradedReason is { } reason ? reason + " " : "";
+                var status = degraded + result.StatusMessage + (WindowsTerminalProfileNote(plan, result.LaunchedWith) ?? "");
                 Application.Invoke(() => report(status));
             }
             catch (Exception ex)

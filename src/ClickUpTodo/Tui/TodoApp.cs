@@ -2415,7 +2415,13 @@ public sealed class TodoApp
         var agent = _agent;
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var baseDir = SettingsForm.ResolveDefaultWorkingDirectory(_config.DefaultWorkingDirectory, home);
-        var plan = DispatchCoordinator.Plan(_config.AgentDispatch, request, detail, _config.DefaultWorkingDirectory, home);
+        // Feed the live terminal width so a SplitPane dispatch degrades to a tab when the resulting pane
+        // would be too narrow (#515) — the repeated-dispatch "panes accumulate" case, since each split
+        // shrinks the width the next one sees. Null off a live driver (headless), which self-disables the
+        // floor and leaves the launch location untouched.
+        var plan = DispatchCoordinator.Plan(
+            _config.AgentDispatch, request, detail, _config.DefaultWorkingDirectory, home,
+            terminalColumns: Application.Driver?.Cols);
 
         // Remember an explicit non-default pick for this task (#96) so the next dispatch pre-fills it;
         // accepting the auto-derived pre-fill unchanged (or clearing the field) clears the entry. The
