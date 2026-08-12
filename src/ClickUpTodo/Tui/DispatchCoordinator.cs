@@ -210,6 +210,25 @@ public static class DispatchCoordinator
         => DispatchWorkingDirectoryCache.Update(cache, taskId, chosenDir, resolvedDefault);
 
     /// <summary>
+    /// Remembers the pane's per-dispatch provider pick (#498) on <paramref name="settings"/>, mutating
+    /// <see cref="AgentDispatchSettings.LastDispatchProviderName"/> in place and returning <c>true</c>
+    /// only when it changed — so the host persists <c>config.json</c> exactly when needed, mirroring
+    /// <see cref="ReconcileCache"/>. A blank/null <paramref name="pickedProviderName"/> (a dispatch that
+    /// never touched the provider control — every single-provider host) is a no-op, as is re-picking the
+    /// already-remembered provider. Pure/testable; the host calls it alongside the working-dir cache
+    /// reconcile after each dispatch.
+    /// </summary>
+    public static bool RememberProvider(AgentDispatchSettings settings, string? pickedProviderName)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        if (string.IsNullOrWhiteSpace(pickedProviderName)
+            || string.Equals(settings.LastDispatchProviderName, pickedProviderName, StringComparison.Ordinal))
+            return false;
+        settings.LastDispatchProviderName = pickedProviderName;
+        return true;
+    }
+
+    /// <summary>
     /// Launches an interactive terminal session for <paramref name="detail"/> off the UI thread, then
     /// reports the outcome status text through <paramref name="report"/> (invoked on the UI thread). The
     /// host's <paramref name="report"/> clears its re-entrancy guard and flashes the message. A launch

@@ -391,4 +391,35 @@ public sealed class DispatchCoordinatorTests
         Assert.True(DispatchCoordinator.ReconcileCache(cache, "9xyz", plan.ChosenDir, baseline));
         Assert.False(cache.ContainsKey("9xyz"));
     }
+
+    // ── RememberProvider (persist the last-used pick, #498) ───────────────────────────────────────
+
+    [Fact]
+    public void RememberProvider_StoresANewPick_AndReturnsChanged()
+    {
+        var settings = new AgentDispatchSettings();
+        Assert.True(DispatchCoordinator.RememberProvider(settings, "Codex"));
+        Assert.Equal("Codex", settings.LastDispatchProviderName);
+    }
+
+    [Fact]
+    public void RememberProvider_RePickingTheRememberedProvider_IsANoOp()
+    {
+        var settings = new AgentDispatchSettings { LastDispatchProviderName = "Codex" };
+        Assert.False(DispatchCoordinator.RememberProvider(settings, "Codex"));
+        Assert.Equal("Codex", settings.LastDispatchProviderName);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void RememberProvider_BlankPick_IsANoOp_AndLeavesTheRememberedValue(string? pick)
+    {
+        // A dispatch that never touched the provider control (single-provider host) must not clobber the
+        // remembered pick.
+        var settings = new AgentDispatchSettings { LastDispatchProviderName = "Codex" };
+        Assert.False(DispatchCoordinator.RememberProvider(settings, pick));
+        Assert.Equal("Codex", settings.LastDispatchProviderName);
+    }
 }
