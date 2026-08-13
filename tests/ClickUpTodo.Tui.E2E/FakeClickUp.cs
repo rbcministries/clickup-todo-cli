@@ -90,6 +90,12 @@ internal sealed class FakeClickUp : HttpMessageHandler
     internal string Description { get; set; } =
         "Call Center training Thursday, June 25th\n\nOn My Account - we need to display the Primary and Active addresses while suppressing the others.  During the demo, it was noticed that a large amount of addresses on that test account were displaying.\n\nFeel free to consult with Phil as needed\n\nParent ticket: https://app.clickup.com/t/86a1b2c3d for the full thread";
 
+    /// <summary>The task's current title, mutated by a name PUT (#545, the F2 rename) so the write
+    /// response — and later detail GETs — echo the renamed title, mirroring <see cref="Description"/>.
+    /// The default is the fixed detail name every other check has always seen. Read/written under
+    /// <see cref="Gate"/>.</summary>
+    internal string Name { get; set; } = "My Account - Address display  (EA-7221)";
+
     // ── Dispatch ────────────────────────────────────────────────────────────────────────────────────────
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
@@ -287,8 +293,9 @@ internal sealed class FakeClickUp : HttpMessageHandler
         lock (Gate)
         {
             var description = JsonSerializer.Serialize(Description);
+            var name = JsonSerializer.Serialize(Name);
             return $$"""
-            {"id":"{{id}}","name":"My Account - Address display  (EA-7221)","status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(Assignees)}}],"locations":[{{LocationsJson()}}],"checklists":[],"description":{{description}}}
+            {"id":"{{id}}","name":{{name}},"status":{"status":"in review","color":"#a875ff"},"list":{"id":"plist","name":"Personal Tasks"},"url":"https://app.clickup.com/t/{{id}}","date_updated":"1700000000000","assignees":[{{AssigneesJson(Assignees)}}],"locations":[{{LocationsJson()}}],"checklists":[],"description":{{description}}}
             """;
         }
     }
@@ -406,6 +413,26 @@ internal sealed class FakeClickUp : HttpMessageHandler
         catch (JsonException)
         {
             // A non-JSON / unexpected body is not this fake's concern — leave the description untouched.
+        }
+    }
+
+    /// <summary>Applies a name PUT body (<c>{"name":"..."}</c>) to <see cref="Name"/> so the write response
+    /// — and later detail GETs — echo the renamed title (#545, the F2 rename). A body without a string
+    /// <c>name</c> (a status/priority/assignee/description PUT) leaves it untouched. Call under
+    /// <see cref="Gate"/>.</summary>
+    internal void ApplyNameMutation(string requestBody)
+    {
+        if (string.IsNullOrWhiteSpace(requestBody))
+            return;
+        try
+        {
+            using var doc = JsonDocument.Parse(requestBody);
+            if (doc.RootElement.TryGetProperty("name", out var n) && n.ValueKind == JsonValueKind.String)
+                Name = n.GetString() ?? Name;
+        }
+        catch (JsonException)
+        {
+            // A non-JSON / unexpected body is not this fake's concern — leave the name untouched.
         }
     }
 

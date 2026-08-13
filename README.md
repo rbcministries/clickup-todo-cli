@@ -136,6 +136,7 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `Ctrl+E`      | 🔔   | Toggle the mentions & comments feed                          |
 | `F1`          | ℹ    | Show help + full shortcut list                                |
 | `F10`         | ⚙    | Settings                                                      |
+| `F2`          | ✏    | Rename the focused task's title                               |
 | `F3`          | ⧩ ▼▲ ⛚ | Filter / sort / group                                      |
 | `F4`          |      | Cycle the subtasks view                                       |
 | `F5`          | ↻    | Refresh now (`Ctrl+R` is an alias)                           |

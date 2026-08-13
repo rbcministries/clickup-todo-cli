@@ -271,6 +271,38 @@
         }
       }
     },
+    "/v2/task/{task_id}/field/{field_id}": {
+      "post": {
+        "operationId": "SetCustomFieldValue",
+        "summary": "Set a Custom Field's value on an existing task (#587). The body is `{ \"value\": … }`, where `value` is polymorphic — its shape depends on the field type (string for text/url/email, number for number/currency, a bool for a checkbox, an option id for a drop-down, an array of option ids for labels, etc.). ClickUp returns an empty object, so there is no response schema — the caller keeps its optimistic local edit (revert-on-failure), exactly as DELETE /task/{id} does.",
+        "parameters": [
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "field_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SetCustomFieldValueRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "The value was set (ClickUp returns an empty object)." }
+        }
+      },
+      "delete": {
+        "operationId": "RemoveCustomFieldValue",
+        "summary": "Clear a Custom Field's value on an existing task (#587). ClickUp returns an empty object, so there is no response schema — the caller keeps its optimistic local removal (revert-on-failure).",
+        "parameters": [
+          { "name": "task_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "field_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "The value was cleared (ClickUp returns an empty object)." }
+        }
+      }
+    },
     "/v2/task/{task_id}/comment": {
       "get": {
         "operationId": "GetTaskComments",
@@ -735,6 +767,10 @@
           "priority": { "type": "integer", "format": "int32", "nullable": true },
           "due_date": { "type": "integer", "format": "int64", "nullable": true }
         }
+      },
+      "SetCustomFieldValueRequest": {
+        "type": "object",
+        "description": "Body for POST /task/{task_id}/field/{field_id} (#587). ClickUp's `value` is polymorphic (its shape depends on the field type), so it is not modelled as a typed property; the facade writes it through the additional-data bag as a Kiota UntypedNode, the same loosely-typed-value pattern CreateTaskRequest's `custom_fields` uses — no rigid property, no spec churn per field type."
       }
     }
   }

@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace ClickUpTodo.ClickUp;
 
 /// <summary>
@@ -69,6 +71,21 @@ public interface IClickUpClient
     /// overrides it. See <see cref="ClickUpClient.SetTaskNameAsync"/>.</summary>
     Task<string?> SetTaskNameAsync(string taskId, string name, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement the name write.");
+
+    /// <summary>Set a Custom Field's value on an existing task (#587) — <c>value</c> is a neutral
+    /// <see cref="JsonElement"/> whose JSON kind is preserved through the write. A blank
+    /// <paramref name="fieldId"/> is rejected. Default throwing implementation so read-only fakes needn't
+    /// implement a write they never call (mirrors the other writes); <see cref="ClickUpClient"/> overrides
+    /// it. See <see cref="ClickUpClient.SetTaskCustomFieldAsync"/>.</summary>
+    Task SetTaskCustomFieldAsync(string taskId, string fieldId, JsonElement value, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement custom-field writes.");
+
+    /// <summary>Clear a Custom Field's value on an existing task (#587) — the clear counterpart to
+    /// <see cref="SetTaskCustomFieldAsync"/>. Default throwing as above; <see cref="ClickUpClient"/>
+    /// overrides it. See <see cref="ClickUpClient.ClearTaskCustomFieldAsync"/>.</summary>
+    Task ClearTaskCustomFieldAsync(string taskId, string fieldId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement custom-field writes.");
+
     Task<IReadOnlyList<TaskAssignee>> AddTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskAssignee>> RemoveTaskAssigneeAsync(string taskId, long userId, CancellationToken ct = default);
 

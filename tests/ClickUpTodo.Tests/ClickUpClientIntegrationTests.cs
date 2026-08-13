@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClickUpTodo.ClickUp;
 
 namespace ClickUpTodo.Tests;
@@ -685,5 +686,52 @@ public sealed class ClickUpClientIntegrationTests
         var ex = await Assert.ThrowsAsync<ClickUpApiException>(() => client.GetMeAsync());
 
         Assert.True(ex.IsAuthFailure);
+    }
+
+    [SkippableFact]
+    public async Task SetAndClearCustomField_RoundTripsOnAnExistingTask()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(ListId),
+            "Set CLICKUP_TOKEN and CLICKUP_LIST_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        // Need a text-like field on the list to write a safe, free-form string value into (a drop-down /
+        // labels field would need a real option id). Skip cleanly if the list has none.
+        var fields = await client.GetListCustomFieldsAsync(ListId!);
+        var textField = fields.FirstOrDefault(f =>
+            string.Equals(f.Type, "text", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(f.Type, "short_text", StringComparison.OrdinalIgnoreCase));
+        Skip.If(textField is null, "CLICKUP_LIST_ID has no text/short_text custom field to round-trip.");
+
+        // A throwaway task so the write never touches real data; the finally deletes it.
+        var name = "[clickup-todo-cli test] custom-field write — safe to delete";
+        var created = await client.CreateTaskAsync(ListId!, new NewTaskRequest { Name = name });
+        try
+        {
+            var written = $"cf-roundtrip-{Guid.NewGuid():N}";
+
+            // Set → re-fetch → the value round-trips through the detail read.
+            await client.SetTaskCustomFieldAsync(created.Id, textField!.Id, JsonSerializer.SerializeToElement(written));
+            var afterSet = await client.GetTaskDetailAsync(created.Id);
+            var setField = afterSet.CustomFields.FirstOrDefault(f => f.Id == textField.Id);
+            Assert.NotNull(setField);
+            Assert.Equal(written, setField!.Value?.GetString());
+
+            // Clear → re-fetch → the value is gone (dropped from the values list, or read back null/empty).
+            await client.ClearTaskCustomFieldAsync(created.Id, textField.Id);
+            var afterClear = await client.GetTaskDetailAsync(created.Id);
+            var clearedField = afterClear.CustomFields.FirstOrDefault(f => f.Id == textField.Id);
+            Assert.True(
+                clearedField?.Value is null
+                || clearedField.Value.Value.ValueKind == JsonValueKind.Null
+                || (clearedField.Value.Value.ValueKind == JsonValueKind.String
+                    && string.IsNullOrEmpty(clearedField.Value.Value.GetString())),
+                "a cleared custom field should read back with no value.");
+        }
+        finally
+        {
+            if (!string.IsNullOrWhiteSpace(created.Id))
+                await client.DeleteTaskAsync(created.Id);
+        }
     }
 }

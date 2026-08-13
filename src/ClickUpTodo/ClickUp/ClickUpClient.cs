@@ -403,6 +403,53 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     }
 
     /// <summary>
+    /// Set a Custom Field's value on an <b>existing</b> task (#587) via
+    /// <c>POST /task/{task_id}/field/{field_id}</c> with a <c>{ value }</c> body. Custom-field values
+    /// were previously writable only at create time (<see cref="CreateTaskAsync"/> / #368); this is the
+    /// per-task edit path the Task-Detail Other tab (§2/§3, deferred) will drive. <paramref name="value"/>
+    /// is a neutral <see cref="JsonElement"/> (as produced by the pure <c>CustomFieldValueSerializer</c>):
+    /// its JSON kind — string, number, bool, an option id, or an array of option ids — is preserved through
+    /// the real generated client + Kiota serializer. Because ClickUp's <c>value</c> is polymorphic per
+    /// field type, it rides on the request's additional-data bag as a Kiota <c>UntypedNode</c> (the same
+    /// loosely-typed-value shape <see cref="CreateTaskAsync"/> uses for <c>custom_fields</c>) rather than a
+    /// rigid typed property. A blank <paramref name="fieldId"/> is rejected up front (an id is required to
+    /// address the field). ClickUp returns an empty body, so — like the checklist writes — the confirmed
+    /// (2xx) write records a change-marker nudge (#294) keyed by <paramref name="taskId"/> with a null
+    /// server date, so a tab holding the task always re-fetches.
+    /// </summary>
+    public Task SetTaskCustomFieldAsync(string taskId, string fieldId, JsonElement value, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(fieldId))
+            throw new ArgumentException("A custom field id is required to set its value.", nameof(fieldId));
+        return Guard("SetCustomFieldValue", async () =>
+        {
+            var request = new SetCustomFieldValueRequest();
+            request.AdditionalData["value"] = ToUntyped(value);
+            using var _ = await _client.V2.Task[taskId].Field[fieldId].PostAsync(request, cancellationToken: ct);
+            // Reached only on a 2xx (a non-2xx throws in Guard above) — the confirmed-write nudge (#294).
+            _changeMarkers.Record(taskId, serverDateUpdatedMs: null, CustomFieldFields);
+        });
+    }
+
+    /// <summary>
+    /// Clear a Custom Field's value on an existing task (#587) via
+    /// <c>DELETE /task/{task_id}/field/{field_id}</c> — the clear counterpart to
+    /// <see cref="SetTaskCustomFieldAsync"/>. ClickUp returns an empty body; a blank
+    /// <paramref name="fieldId"/> is rejected up front, and a confirmed write records the same null-date
+    /// change-marker nudge (#294) keyed by <paramref name="taskId"/>.
+    /// </summary>
+    public Task ClearTaskCustomFieldAsync(string taskId, string fieldId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(fieldId))
+            throw new ArgumentException("A custom field id is required to clear its value.", nameof(fieldId));
+        return Guard("RemoveCustomFieldValue", async () =>
+        {
+            using var _ = await _client.V2.Task[taskId].Field[fieldId].DeleteAsync(cancellationToken: ct);
+            _changeMarkers.Record(taskId, serverDateUpdatedMs: null, CustomFieldFields);
+        });
+    }
+
+    /// <summary>
     /// Add a user to a task's assignees. ClickUp's <c>PUT /task/{id}</c> takes
     /// <c>assignees: { add: [...] }</c>. Returns the task's <b>reconciled</b> assignee set from the
     /// response so a caller can update the row without a read-after-write.
@@ -982,6 +1029,7 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     private static readonly string[] CommentFields = ["comment"];
     private static readonly string[] ListsFields = ["lists"];
     private static readonly string[] ChecklistFields = ["checklist"];
+    private static readonly string[] CustomFieldFields = ["custom_fields"];
 
     /// <summary>
     /// Records a change-marker nudge for a confirmed <c>PUT /task</c> write (#294), carrying the
