@@ -269,6 +269,42 @@ public sealed class KeybindingsTests
     public void NoBinding_UsesTheRetired458FunctionKeys(string retiredKey)
         => Assert.DoesNotContain(Keybindings.All, e => e.Value == retiredKey);
 
+    // #587 §3 (Other-tab custom-field editing): Space resolves to ToggleCustomField on the Other tab and to
+    // ToggleChecklistItem on the Checklists tab — the same "Space" token, disambiguated by sub-context exactly
+    // as Ctrl+N's AddComment/AddChecklistItem and Delete's DeleteComment/DeleteChecklistItem are. Space stays
+    // inert (null) on the comment/description/tree tabs, which carry no per-row toggleable item.
+    [Fact]
+    public void ResolveDetail_Space_IsToggleCustomField_OnOtherTab_ChecklistItem_OnChecklists_InertElsewhere()
+    {
+        Assert.Equal(KeyAction.ToggleCustomField, Keybindings.ResolveDetail(DetailSubContext.Other, "Space"));
+        Assert.Equal(KeyAction.ToggleChecklistItem, Keybindings.ResolveDetail(DetailSubContext.Checklists, "Space"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Default, "Space"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Comments, "Space"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Stream, "Space"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.TaskTree, "Space"));
+
+        // The two Space actions share the token; the sub-context is what keeps exactly one live per tab.
+        Assert.Equal("Space", Keybindings.Token(ScreenContext.Detail, KeyAction.ToggleCustomField));
+        Assert.Equal("Space", Keybindings.Token(ScreenContext.Detail, KeyAction.ToggleChecklistItem));
+    }
+
+    // #587 §3: Enter resolves to EditCustomField on the Other tab (open the value editor) and is inert on
+    // every other Detail tab (where Enter follows a focused link / has no custom field to edit). Enter is the
+    // Open key in other ScreenContexts (list / quick-open / feed), so AllBindingsOfAnAction_ShareOneKey still
+    // holds — EditCustomField itself uses only Enter.
+    [Fact]
+    public void ResolveDetail_Enter_IsEditCustomField_OnOtherTab_InertElsewhere()
+    {
+        Assert.Equal(KeyAction.EditCustomField, Keybindings.ResolveDetail(DetailSubContext.Other, "Enter"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Default, "Enter"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Comments, "Enter"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Stream, "Enter"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Checklists, "Enter"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.TaskTree, "Enter"));
+
+        Assert.Equal("Enter", Keybindings.Token(ScreenContext.Detail, KeyAction.EditCustomField));
+    }
+
     // The anti-collision invariant the whole sub-context model rests on (contextual-chord-model.md §2.2):
     // within one sub-context no token resolves to two live actions — otherwise ResolveDetail would be
     // ambiguous and the footer could advertise one meaning while dispatch fired another.

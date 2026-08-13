@@ -204,7 +204,13 @@ public static class HelpItemSets
         new("Ctrl+B", "🌐"),
         new("Ctrl+U", "quick update"),
         new("Ctrl+O", "🗁 by ID"),
+        // ␣ toggle serves the Checklists tab's item-tick AND the Other tab's checkbox-field toggle (#587 §3),
+        // disambiguated by the front tab via Keybindings.ResolveDetail (Space → ToggleChecklistItem on
+        // Checklists, ToggleCustomField on Other). ↩ value is the Other tab's Enter → open the value editor
+        // for a text-like custom field (EditCustomField); on the other tabs Enter is inert here / follows a
+        // focused link, exactly as the checklist-only chords below already sit in this shared union set.
         new("␣", "☑ toggle", Chord: "Space"),
+        new("↩", "✏ value", Chord: "Enter"),
         new("Ctrl+G", "➕ list"),
         // F2 ✏ edit serves BOTH F2-bound gestures, disambiguated by the front tab via
         // Keybindings.ResolveDetail: the checklist item/group edit on the Checklists tab (D, #541; labelled
@@ -244,7 +250,11 @@ public static class HelpItemSets
         new("Ctrl+O", "🗁 by ID"),
         new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
         new("Ctrl+Alt+↩", "split pane", Chord: "Ctrl+Alt+Enter"),
+        // ␣ toggle / ↩ value serve the Other tab's checkbox toggle + value editor (#587 §3) as well as the
+        // Checklists tab's item tick, disambiguated per front tab by Keybindings.ResolveDetail — see the
+        // Detail set above.
         new("␣", "☑ toggle", Chord: "Space"),
+        new("↩", "✏ value", Chord: "Enter"),
         new("Ctrl+G", "➕ list"),
         // F2 ✏ edit serves both F2 gestures (checklist item/group edit, D #541/#601; Task Tree node rename,
         // H #545), resolved per front tab by Keybindings.ResolveDetail — see the Detail set above. "Edit" is
@@ -348,6 +358,18 @@ public static class HelpItemSets
         new("Esc", "cancel"),
     ];
 
+    /// <summary>The Other-tab custom-field value editor overlay (#587 §3): a single-line value field opened
+    /// by Enter on a text-like custom field, whose own keys are Enter to save and Esc to cancel (arming a
+    /// discard confirm on an edited value); F1 opens Help. Mirrors <see cref="DetailChecklistItemEditor"/> so
+    /// the footer advertises only what the overlay does — otherwise a click on an inert command hint would
+    /// re-raise its chord into the field (#436).</summary>
+    public static readonly IReadOnlyList<HelpItem> DetailCustomFieldEditor =
+    [
+        new("↩", "save", Chord: "Enter"),
+        new("F1", "ℹ"),
+        new("Esc", "cancel"),
+    ];
+
     /// <summary>Picks the Task Detail footer set for the current overlay state (#436). Pure so the
     /// branch order is unit-testable — the <see cref="TaskDetailScreen.HelpItems"/> property that calls
     /// it lives on a Terminal.Gui view and can't run in CI. The mention picker (#325), comment composer,
@@ -370,13 +392,14 @@ public static class HelpItemSets
         bool commentComposerVisible, bool descriptionEditorVisible, bool replyPickerVisible, bool hasTaskTree,
         DetailSubContext sub = DetailSubContext.Default,
         bool mentionPickerVisible = false, bool checklistItemEditorVisible = false,
-        bool deletePickerVisible = false) =>
+        bool deletePickerVisible = false, bool customFieldEditorVisible = false) =>
         mentionPickerVisible ? DetailMentionPicker
         : commentComposerVisible ? DetailCommentComposer
         : descriptionEditorVisible ? DetailDescriptionEditor
         : replyPickerVisible ? DetailReplyPicker
         : deletePickerVisible ? DetailDeletePicker
         : checklistItemEditorVisible ? DetailChecklistItemEditor
+        : customFieldEditorVisible ? DetailCustomFieldEditor
         : WithContextualNewLabel(hasTaskTree ? DetailWithTaskTree : Detail, sub);
 
     /// <summary>Relabels the single shared <c>Ctrl+N</c> item to match what the chord does on the

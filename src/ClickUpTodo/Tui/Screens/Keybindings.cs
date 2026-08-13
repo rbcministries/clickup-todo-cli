@@ -44,6 +44,12 @@ public enum DetailSubContext
     Stream,
     Checklists,
     TaskTree,
+
+    /// <summary>The Other tab (#587 §3): its own sub-context because <c>Space</c> toggles a checkbox
+    /// custom field and <c>Enter</c> opens the value editor there — chords inert on every other non-item
+    /// tab. Splitting it out of <see cref="Default"/> keeps those two chords live only where a custom field
+    /// can be edited.</summary>
+    Other,
 }
 
 /// <summary>
@@ -95,6 +101,12 @@ public enum KeyAction
     OutdentChecklistItem,
     IndentChecklistItem,
     NewChecklist,
+
+    // Task Detail — Other tab custom-field editing (#587 §3). Both share their token with another action,
+    // disambiguated by the Other sub-context: ToggleCustomField shares "Space" with ToggleChecklistItem,
+    // EditCustomField shares "Enter" with the list/quick-open Open actions in other contexts.
+    ToggleCustomField,
+    EditCustomField,
 
     // Quick Updates.
     Apply,
@@ -193,6 +205,14 @@ public static class Keybindings
             [(ScreenContext.Detail, KeyAction.OutdentChecklistItem)] = "Shift+CursorLeft",
             [(ScreenContext.Detail, KeyAction.IndentChecklistItem)] = "Shift+CursorRight",
             [(ScreenContext.Detail, KeyAction.NewChecklist)] = "Ctrl+G",
+            // Contextual chords, Other tab (#587 §3): Space toggles the highlighted checkbox custom field
+            // and Enter opens the value editor for a text-like field. Both are live only on the Other
+            // sub-context (see DetailTabActions below): Space is shared with ToggleChecklistItem (Checklists
+            // tab) and Enter is otherwise the list/quick-open Open key in different ScreenContexts, so
+            // AllBindingsOfAnAction_ShareOneKey holds (each action keeps one token) and no token resolves to
+            // two live actions within any one sub-context.
+            [(ScreenContext.Detail, KeyAction.ToggleCustomField)] = "Space",
+            [(ScreenContext.Detail, KeyAction.EditCustomField)] = "Enter",
             [(ScreenContext.Detail, KeyAction.OpenInBrowser)] = "Ctrl+B",
             [(ScreenContext.Detail, KeyAction.QuickUpdate)] = "Ctrl+U",
             [(ScreenContext.Detail, KeyAction.Refresh)] = "F5",
@@ -339,6 +359,11 @@ public static class Keybindings
             // inert on every other Task Detail tab (where a rename has no highlighted node — that is the
             // #542 alias question, deliberately not decided here).
             [DetailSubContext.TaskTree] = [KeyAction.AddComment, KeyAction.RenameTask],
+            // The Other tab keeps Ctrl+N → comment (like Default) and adds the two custom-field edit chords
+            // (#587 §3): Space toggles a checkbox field, Enter opens the value editor. Listed here, not
+            // context-wide, so Space/Enter stay inert on every other tab (where no custom-field row exists);
+            // Space still resolves to ToggleChecklistItem on the Checklists tab via that sub-context's set.
+            [DetailSubContext.Other] = [KeyAction.AddComment, KeyAction.ToggleCustomField, KeyAction.EditCustomField],
             [DetailSubContext.Default] = [KeyAction.AddComment],
         };
 
