@@ -213,6 +213,29 @@ public sealed class ClickUpClientCreateTaskTests
         Assert.Equal("parent42", created.ParentId);
     }
 
+    [Fact]
+    public async Task CreateTask_ParentAndCustomFields_CoexistWithoutInterference()
+    {
+        // parent and custom_fields both ride on the request's additional-data bag; a task can be both a
+        // subtask and carry field values at create time, and neither key must clobber the other.
+        var handler = new CapturingHandler("""{ "id": "sub1", "name": "N", "parent": "p1" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await client.CreateTaskAsync("list1", new NewTaskRequest
+        {
+            Name = "N",
+            ParentTaskId = "p1",
+            CustomFields = [new CustomFieldValue("cf_text", JsonSerializer.SerializeToElement("hello"))],
+        });
+
+        var body = handler.Body!.RootElement;
+        Assert.Equal("p1", body.GetProperty("parent").GetString());
+        var custom = body.GetProperty("custom_fields");
+        Assert.Equal(1, custom.GetArrayLength());
+        Assert.Equal("cf_text", custom[0].GetProperty("id").GetString());
+        Assert.Equal("hello", custom[0].GetProperty("value").GetString());
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
