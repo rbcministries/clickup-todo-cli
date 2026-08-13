@@ -108,6 +108,10 @@ public static class CustomFieldActivation
         };
     }
 
+    // Renders a date field at day granularity (yyyy-MM-dd, UTC). An unedited save is protected by the
+    // caller's ordinal dirty-check against this seed, so no silent corruption; but a user who edits a
+    // time-bearing ClickUp date field saves it back at midnight (the time-of-day is dropped). Acceptable
+    // within the §3 text-editor scope — a time-of-day picker would be its own follow-up.
     private static string SeedDate(JsonElement v)
     {
         long? ms = v.ValueKind switch

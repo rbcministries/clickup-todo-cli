@@ -3149,6 +3149,11 @@ public sealed class TaskDetailScreen : Screen
     {
         if (_setTaskCustomFieldAsync is null)
             return;
+        if (_customFieldWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
         if (SelectedCustomField() is not { } field)
         {
             RequestFlash("Select a custom field to edit.");
@@ -3171,6 +3176,13 @@ public sealed class TaskDetailScreen : Screen
     {
         if (_setTaskCustomFieldAsync is null)
             return;
+        // A write is in flight — don't open the editor or fire a second write over it; flash and leave the
+        // current state, mirroring ToggleSelectedChecklistItem's "Still updating…" guard.
+        if (_customFieldWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
         if (SelectedCustomField() is not { } field)
         {
             RequestFlash("Select a custom field to edit.");
@@ -3329,17 +3341,21 @@ public sealed class TaskDetailScreen : Screen
         var result = CustomFieldValueSerializer.Build(definition, new CustomFieldEntry { Text = text });
         switch (result.Outcome)
         {
-            case CustomFieldWriteOutcome.Error when result.Error is { } message:
-                RequestFlash(message);
-                return; // keep the overlay open so the user can fix the value
             case CustomFieldWriteOutcome.Value when result.Value is { } written:
                 HideCustomFieldEditor();
                 ApplyCustomFieldWrite(fieldId, written.Value, $"Updated {label}");
                 break;
-            default: // Skip — an empty submit clears the field
+            case CustomFieldWriteOutcome.Skip:
+                // An empty submit clears the field. Only the text-like types open this editor, so a Skip here
+                // means empty input (never a mis-serialised option/checkbox — those don't reach the editor).
                 HideCustomFieldEditor();
                 ApplyCustomFieldWrite(fieldId, value: null, $"Cleared {label}");
                 break;
+            default:
+                // Error (or any unexpected/incomplete outcome): keep the overlay open so the user can fix the
+                // value rather than silently clearing it (guards a null-message Error from falling to a clear).
+                RequestFlash(result.Error ?? "That value isn't valid.");
+                return;
         }
     }
 
