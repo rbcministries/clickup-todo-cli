@@ -198,6 +198,43 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task DeleteComment_RemovesTheCommentFromTheTask()
+    {
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(ListId),
+            "Set CLICKUP_TOKEN and CLICKUP_LIST_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        // A throwaway task carries the comment round-trip so nothing is left on a real task; both the
+        // comment (via the delete under test) and the task (in the finally) are cleaned up.
+        var created = await client.CreateTaskAsync(ListId!, new NewTaskRequest
+        {
+            Name = "[clickup-todo-cli test] delete-comment round-trip — safe to delete",
+            Description = "Created by the DeleteComment integration test.",
+        });
+        try
+        {
+            var posted = await client.CreateTaskCommentAsync(created.Id, "throwaway comment — safe to delete (#594)");
+            Assert.False(string.IsNullOrWhiteSpace(posted.Id));
+
+            // The comment is present on the task before the delete...
+            var before = await client.GetTaskCommentsAsync(created.Id);
+            Assert.Contains(before, c => string.Equals(c.Id, posted.Id, StringComparison.Ordinal));
+
+            // ...the author (us) may delete it, so the write succeeds...
+            await client.DeleteCommentAsync(posted.Id);
+
+            // ...and it's gone on a re-read (empty body ⇒ the caller re-fetches to confirm the removal).
+            var after = await client.GetTaskCommentsAsync(created.Id);
+            Assert.DoesNotContain(after, c => string.Equals(c.Id, posted.Id, StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (!string.IsNullOrWhiteSpace(created.Id))
+                await client.DeleteTaskAsync(created.Id);
+        }
+    }
+
+    [SkippableFact]
     public async Task SetTaskStatus_ReturnsConfirmedStatusFromWriteResponse()
     {
         Skip.If(

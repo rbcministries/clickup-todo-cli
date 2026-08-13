@@ -151,7 +151,12 @@ public static class Keybindings
             // and disambiguated by the front Task Detail tab (see DetailSubContext / ResolveDetail below).
             // Retargeted from the #458 stopgap F7, which is now unbound.
             [(ScreenContext.Detail, KeyAction.AddChecklistItem)] = "Ctrl+N",
-            [(ScreenContext.Detail, KeyAction.RenameChecklistItem)] = "F8",
+            // Contextual chords D (#541): rename moves off the #458 stopgap F8 to the conventional F2
+            // (= Rename, #290). F8 is now unbound; the checklist item / group rename is F2 on the
+            // Checklists tab (see DetailSubContext / ResolveDetail below). No collision — F2 is otherwise
+            // RenameTask in MainList only (slice H, #545), a different ScreenContext, and RenameChecklistItem
+            // is the sole F2-bound action in any Detail sub-context. After C/D/F no F7/F8/F9 binding remains.
+            [(ScreenContext.Detail, KeyAction.RenameChecklistItem)] = "F2",
             // Contextual chords F (#543): delete moves off the #458 stopgap F9 to the conventional
             // Delete key, behind a confirmation. F9 is now unbound; the checklist item / group delete
             // is Delete on the Checklists tab (see DetailSubContext / ResolveDetail below).

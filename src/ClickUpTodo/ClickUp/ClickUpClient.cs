@@ -1006,6 +1006,24 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
         });
     }
 
+    /// <summary>
+    /// Delete a comment or reply (<c>DELETE /comment/{comment_id}</c>, #594 — the deferred comment half of
+    /// the contextual-Delete slice #543). ClickUp returns an empty body, so there is nothing to map — the
+    /// caller keeps its optimistic local removal (revert-on-failure), exactly as
+    /// <see cref="DeleteChecklistAsync"/> does. Only the comment's <b>author</b> may delete it; a delete of
+    /// someone else's comment comes back as a permission error, surfaced (like every other write) as a
+    /// caught <see cref="ClickUpApiException"/> so the caller can revert the optimistic removal and flash it.
+    /// A blank <paramref name="commentId"/> is rejected at the boundary before any transport call.
+    /// </summary>
+    public Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(commentId);
+        return Guard("DeleteComment", async () =>
+        {
+            using var _ = await _client.V2.Comment[commentId].DeleteAsync(cancellationToken: ct);
+        });
+    }
+
     // ── Change-marker nudges (#294) ─────────────────────────────────────────
 
     // Advisory field-name hints stamped on a marker (the consumer re-fetches everything, so these are
