@@ -83,8 +83,9 @@ public sealed class TodoApp
     // Interactive-only, so a plain field (not rebuilt on F2 like _agent); the tab launch reads the
     // preferred-terminal setting at call time.
     private readonly ITerminalLauncher _tabLauncher;
-    // True while a new-tab launch is in flight, so a rapid second Ctrl+Enter can't spawn duplicate tabs.
-    // UI-thread-only (set in LaunchTaskInNewTab, cleared via Application.Invoke), like _dispatching.
+    // True while an app-host launch (new tab #301 or split pane #507) is in flight, so a rapid second
+    // Ctrl+Enter / Ctrl+Alt+Enter can't spawn duplicate launches. UI-thread-only (set in LaunchAppForTask,
+    // cleared via Application.Invoke), like _dispatching.
     private bool _launchingTab;
     // True while a feed / detail auto- or manual refresh fetch is outstanding, so ticks coalesce
     // instead of piling up when a fan-out outlasts the cadence. UI-thread-only (like _dispatching).
@@ -536,6 +537,7 @@ public sealed class TodoApp
             .On(KeyAction.OpenDetail, OpenDetail)
             .On(KeyAction.QuickOpen, OpenQuickOpen)         // #303
             .On(KeyAction.OpenInNewTab, () => LaunchTaskInNewTab(CurrentTask()))   // #301
+            .On(KeyAction.OpenInSplitPane, () => LaunchTaskInSplitPane(CurrentTask()))   // #507 (epic #502 E)
             .On(KeyAction.NewTask, OpenNewTask)             // #213
             .On(KeyAction.RenameTask, RenameCurrentTask)    // #545 (contextual chords H)
             .On(KeyAction.OpenInBrowser, OpenInBrowser)
@@ -698,48 +700,73 @@ public sealed class TodoApp
     /// <summary>
     /// The main list's Ctrl+Enter / Ctrl+Left-Click — open <paramref name="task"/> in its own terminal
     /// tab (#301). A null task (header/spacer row) no-ops, and it only fires from the list itself (no
-    /// screen stacked over it); the actual launch is <see cref="LaunchAppTabForTask"/>, shared with Task
+    /// screen stacked over it); the actual launch is <see cref="LaunchAppForTask"/>, shared with Task
     /// Detail's Ctrl+Enter (#384).
     /// </summary>
     private void LaunchTaskInNewTab(TaskItem? task)
     {
         if (task is null || ActiveScreen is not null)
             return;
-        LaunchAppTabForTask(task.Id, task.Name);
+        LaunchAppForTask(task.Id, task.Name, LaunchLocation.NewTab);
     }
 
     /// <summary>
-    /// The core new-terminal-tab launch shared by the main list's Ctrl+Enter / Ctrl+Left-Click gesture
-    /// (#301, via <see cref="LaunchTaskInNewTab"/>) and Task Detail's Ctrl+Enter (#384): resolves how to
-    /// relaunch this app (<see cref="AppLaunchCommand.ForTask(string)"/>) and hands it to the shared
-    /// cross-platform launcher off the UI thread, preferring a new tab of the current terminal (falling
-    /// back to a new window per emulator support). On success the status line names the terminal; when no
-    /// emulator can be launched it flashes the exact command and copies it to the clipboard so the user
-    /// can run it themselves (the documented fallback). Re-entrancy-guarded so a rapid second gesture
-    /// can't spawn duplicate tabs. Unlike the list wrapper it does <b>not</b> guard on
-    /// <see cref="ActiveScreen"/>: the detail path launches while the detail screen is front-most, exactly
-    /// as Quick Updates (Ctrl+U) stacks over the detail.
+    /// The main list's Ctrl+Alt+Enter — open <paramref name="task"/> in a split pane beside the current
+    /// one (#507, epic #502 E), the split-pane sibling of <see cref="LaunchTaskInNewTab"/>. Same
+    /// null-task / no-stacked-screen guard; the launch is the shared <see cref="LaunchAppForTask"/> with
+    /// <see cref="LaunchLocation.SplitPane"/> (which degrades to a tab where the host can't split or the
+    /// pane would be too narrow — see the viability floor there).
     /// </summary>
-    private void LaunchAppTabForTask(string taskId, string name)
+    private void LaunchTaskInSplitPane(TaskItem? task)
+    {
+        if (task is null || ActiveScreen is not null)
+            return;
+        LaunchAppForTask(task.Id, task.Name, LaunchLocation.SplitPane);
+    }
+
+    /// <summary>
+    /// The core app-host relaunch shared by the main list's Ctrl+Enter / Ctrl+Alt+Enter (#301/#507, via
+    /// <see cref="LaunchTaskInNewTab"/> / <see cref="LaunchTaskInSplitPane"/>) and Task Detail's gestures
+    /// (#384/#507): resolves how to relaunch this app (<see cref="AppLaunchCommand.ForTask(string)"/>) and
+    /// hands it to the shared cross-platform launcher off the UI thread, opening at
+    /// <paramref name="destination"/> (a new tab, or a split pane beside the current one) where the host
+    /// supports it, falling back down the split → tab → window ladder otherwise. On success the status line
+    /// names the terminal and the surface it actually used; when no emulator can be launched it flashes the
+    /// exact command and copies it to the clipboard so the user can run it themselves (the documented
+    /// fallback). Re-entrancy-guarded so a rapid second gesture can't spawn duplicate launches. Unlike the
+    /// list wrapper it does <b>not</b> guard on <see cref="ActiveScreen"/>: the detail path launches while
+    /// the detail screen is front-most, exactly as Quick Updates (Ctrl+U) stacks over the detail.
+    /// </summary>
+    private void LaunchAppForTask(string taskId, string name, LaunchLocation destination)
     {
         if (_launchingTab)
         {
-            Flash("A task tab is already opening…");
+            Flash("A task launch is already in flight…");
             return;
         }
 
         // Resolve the command before arming the re-entrancy guard: ForTask is pure and could in principle
         // throw (a blank id), and doing it first means such a throw can't leave _launchingTab stuck true.
         var command = AppLaunchCommand.ForTask(taskId);
-        // A new tab of the current terminal where the host supports it (#255's LaunchLocation), honouring
-        // the user's preferred-terminal setting on Windows. The options + status strings are shared with
-        // single-task mode's Ctrl+Enter (#435) via AppHostLaunch so the two hosts can't drift; the helper
-        // deliberately doesn't use AgentDispatch.ToLauncherOptions (ClaudeExecutable/ExtraArgs are a
-        // dispatch concern that doesn't apply to relaunching this app).
-        var options = AppHostLaunch.Options(
-            LaunchLocation.NewTab, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
+        // The destination (a new tab / split pane) of the current terminal where the host supports it
+        // (#255/#502 LaunchLocation), honouring the user's preferred-terminal setting on Windows. The
+        // options + status strings are shared with single-task mode (#435/#507) via AppHostLaunch so the
+        // two hosts can't drift; the helper deliberately doesn't use AgentDispatch.ToLauncherOptions
+        // (ClaudeExecutable/ExtraArgs are a dispatch concern that doesn't apply to relaunching this app).
+        // Split-pane viability floor (#505/#515, slice C): a split into an unreadably narrow pane is worse
+        // than a tab, so a SplitPane request degrades to a tab before launch when the live terminal
+        // (Application.Driver?.Cols — null off a live driver) is too narrow — the planner has no notion of
+        // width, so the shared AppHostLaunch seam decides (mirroring DispatchCoordinator, and keeping the
+        // two hosts from drifting). NewTab/NewWindow and the headless path pass through byte-identical; the
+        // decision's reason is appended to the success flash so the degrade reads as deliberate (#507).
+        var (options, degradeReason) = AppHostLaunch.ApplyViabilityFloor(
+            AppHostLaunch.Options(
+                destination, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand),
+            Application.Driver?.Cols);
+        var effective = options.LaunchLocation;
+
         _launchingTab = true;
-        Flash(AppHostLaunch.Opening(name, LaunchLocation.NewTab));
+        Flash(AppHostLaunch.Opening(name, effective));
         _ = Task.Run(async () =>
         {
             try
@@ -750,24 +777,31 @@ public sealed class TodoApp
                     _launchingTab = false;
                     if (!result.Success)
                     {
-                        FlashLaunchFallback(command);
+                        FlashLaunchFallback(command, effective);
                         return;
                     }
-                    Flash(AppHostLaunch.Opened(name, LaunchLocation.NewTab, result));
+                    var opened = AppHostLaunch.Opened(name, effective, result);
+                    Flash(degradeReason is null ? opened : $"{opened} {degradeReason}");
                 });
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => { _launchingTab = false; FlashLaunchFallback(command, ErrorText.Short(ex)); });
+                Application.Invoke(() => { _launchingTab = false; FlashLaunchFallback(command, effective, ErrorText.Short(ex)); });
             }
         });
     }
 
+    /// <summary>Compatibility shim for the callers that always open a new tab (Ctrl+O by-id open, the
+    /// detail new-tab subscriber): a thin pass-through to <see cref="LaunchAppForTask"/> with
+    /// <see cref="LaunchLocation.NewTab"/>.</summary>
+    private void LaunchAppTabForTask(string taskId, string name)
+        => LaunchAppForTask(taskId, name, LaunchLocation.NewTab);
+
     /// <summary>The no-terminal fallback (#301): flash the exact command and copy it to the clipboard so
-    /// the user can open the task tab themselves. <paramref name="reason"/> names the failure when the
-    /// launch threw (vs. simply finding no emulator).</summary>
-    private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
-        => Flash(AppHostLaunch.Fallback(command, LaunchLocation.NewTab, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+    /// the user can open the task at <paramref name="destination"/> themselves. <paramref name="reason"/>
+    /// names the failure when the launch threw (vs. simply finding no emulator).</summary>
+    private void FlashLaunchFallback(AppLaunchCommand command, LaunchLocation destination, string? reason = null)
+        => Flash(AppHostLaunch.Fallback(command, destination, TryCopyToClipboard(command.ToDisplayCommand()), reason));
 
     /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard just yields
     /// false so the caller shows the run-it-yourself form instead.</summary>
@@ -2129,6 +2163,9 @@ public sealed class TodoApp
                         // Ctrl+T (#330) replies into a comment's thread; the screen owns the target picker
                         // + reply-mode composer + optimistic nested append/revert, the host owns the write.
                         postReplyAsync: (commentId, text, ct) => _tasks.CreateThreadedCommentAsync(commentId, text, ct),
+                        // Delete on the Comments/Stream tab (#594) removes a comment; the screen owns the
+                        // target picker + confirmation + optimistic removal/revert, the host owns the write.
+                        deleteCommentAsync: (commentId, ct) => _tasks.DeleteCommentAsync(commentId, ct),
                         // Ctrl+E (#217) edits the plain-text description; the screen owns the editor +
                         // dirty-check + in-place reflection, the host owns the off-thread ClickUp write.
                         setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(resolvedId, text, ct),
@@ -2201,6 +2238,9 @@ public sealed class TodoApp
                     // F6 on the Task Tree tab (#415) cycles the tree's badge display just like the main
                     // list; the host owns the flip/persist so both surfaces share one BadgeDisplay.
                     screen.CycleBadgeDisplayRequested += (_, _) => CycleTreeBadgeDisplay(screen);
+                    // F2 on the Task Tree tab (H, #545) renames the highlighted node's task title, reusing
+                    // the same RenameTaskScreen overlay + SetTaskNameAsync write as the main-list F2 rename.
+                    screen.RenameTreeTaskRequested += (_, req) => ShowTreeRename(screen, req);
                     // Ctrl+O quick-opens another task from within the detail (#353), stacked over it; the
                     // resolved Task Detail opens over this one, so Esc walks back through them.
                     screen.QuickOpenRequested += (_, _) => OpenQuickOpenFromScreen();
@@ -2210,6 +2250,11 @@ public sealed class TodoApp
                     // label, read live so a mid-view refresh that renamed the task is reflected (mirrors
                     // OpenQuickUpdatesForDetail reading the screen's current task).
                     screen.OpenInNewTabRequested += (_, _) => LaunchAppTabForTask(resolvedId, screen.Task.Name);
+                    // Ctrl+Alt+Enter opens this task in a split pane beside the current one (#507) — the
+                    // split-pane sibling of the new-tab gesture above, reusing the exact launcher (with B's
+                    // degradation ladder + C's viability floor) and the copy-command fallback. Same live
+                    // screen.Task.Name status label, so a mid-view rename is reflected.
+                    screen.OpenInSplitPaneRequested += (_, _) => LaunchAppForTask(resolvedId, screen.Task.Name, LaunchLocation.SplitPane);
                     // Clicking a link in a text pane (#318): a task link opens in-app, anything else (and
                     // any Ctrl+click) in the browser.
                     screen.LinkActivationRequested += (_, request) => ActivateLink(request);
@@ -2871,10 +2916,25 @@ public sealed class TodoApp
     // latest commit regardless of the order the responses arrive in.
     private int _statusCommitGen;
     private int _priorityCommitGen;
-    // The same monotonic-generation guard for F2 renames (#545): the overlay is one-shot, but a
-    // background refresh can still land between a rename's optimistic apply and its confirm, so a
-    // superseded continuation is dropped exactly as the status/priority commits do.
-    private int _nameCommitGen;
+    // The same monotonic-generation guard for F2 renames (#545), but keyed PER TASK ID: the overlay is
+    // one-shot, yet a background refresh can land between a rename's optimistic apply and its confirm, and
+    // — since the main-list rename and the Task Tree rename (which can target a different task, from a
+    // stacked detail) are both fire-and-forget after the modal closes — two renames of DIFFERENT tasks can
+    // be in flight at once. A single global counter would let the later one's generation cancel the
+    // earlier task's revert/confirm, stranding its row on an un-persisted optimistic name. Keying by task
+    // id keeps a same-task re-rename superseding correctly while leaving a different task's write alone.
+    private readonly Dictionary<string, int> _nameCommitGen = [];
+
+    /// <summary>Bumps and returns the rename generation for <paramref name="taskId"/> (see
+    /// <see cref="_nameCommitGen"/>): the token a write continuation checks with
+    /// <see cref="IsCurrentNameCommit"/> to drop itself when a newer rename of the same task superseded it.</summary>
+    private int NextNameCommitGen(string taskId)
+        => _nameCommitGen[taskId] = _nameCommitGen.GetValueOrDefault(taskId) + 1;
+
+    /// <summary>Whether <paramref name="gen"/> is still the current rename generation for
+    /// <paramref name="taskId"/> — false once a newer rename of that same task superseded it.</summary>
+    private bool IsCurrentNameCommit(string taskId, int gen)
+        => _nameCommitGen.GetValueOrDefault(taskId) == gen;
 
     /// <summary>
     /// Applies a Quick Updates status commit for <paramref name="taskId"/>: move the ✓ optimistically,
@@ -3013,7 +3073,7 @@ public sealed class TodoApp
             Flash("This task is no longer in the list — not renamed.");
             return;
         }
-        var gen = ++_nameCommitGen;
+        var gen = NextNameCommitGen(taskId);
         var previousName = task.Name;
 
         UpdateTaskRow(task with { Name = newName }, sending: true, wholesale: true);
@@ -3026,7 +3086,7 @@ public sealed class TodoApp
                 var confirmed = await _tasks.SetTaskNameAsync(taskId, newName);
                 Application.Invoke(() =>
                 {
-                    if (gen != _nameCommitGen)
+                    if (!IsCurrentNameCommit(taskId, gen))
                         return; // a newer rename superseded this one
                     var final = confirmed ?? newName;
                     if (QuickUpdatesTaskById(taskId) is { } t)
@@ -3038,10 +3098,82 @@ public sealed class TodoApp
             {
                 Application.Invoke(() =>
                 {
-                    if (gen != _nameCommitGen)
+                    if (!IsCurrentNameCommit(taskId, gen))
                         return;
                     if (QuickUpdatesTaskById(taskId) is { } t)
                         UpdateTaskRow(t with { Name = previousName }, sending: false, wholesale: true); // revert
+                    Flash($"Could not rename: {ErrorText.Short(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>
+    /// F2 on the Task Tree tab (contextual chords H, #545): rename the highlighted node's task. Opens the
+    /// same single-line <see cref="RenameTaskScreen"/> the main list uses, stacked over the detail screen
+    /// (like Quick-Updates-from-detail), pre-filled with the node's current title; on a confirmed submit
+    /// applies the rename through <see cref="ApplyTreeRename(TaskDetailScreen, string, string, string)"/>.
+    /// The overlay itself only collects the edit (its <see cref="RenameTaskModel"/> already rejected a
+    /// blank title and dropped an unchanged one), mirroring <see cref="RenameCurrentTask"/>.
+    /// </summary>
+    private void ShowTreeRename(TaskDetailScreen origin, TreeTaskRenameRequest req)
+    {
+        var screen = new RenameTaskScreen(req.CurrentName);
+        ShowScreen(screen, () =>
+        {
+            if (screen.Result is { } newName)
+                ApplyTreeRename(origin, req.TaskId, req.CurrentName, newName);
+        });
+    }
+
+    /// <summary>
+    /// Applies a Task-Tree-tab rename commit for <paramref name="taskId"/> (contextual chords H, #545):
+    /// optimistically reflects the new title on the detail screen's tree row (and its header when the node
+    /// is the current task) and — when the task is also in the main-list snapshot — on the list row behind
+    /// it, then an off-thread <see cref="TaskService.SetTaskNameAsync"/> write, confirming with the server's
+    /// returned title or reverting on failure. A subtree node can be outside the main-list snapshot, so the
+    /// list update is best-effort (<see cref="QuickUpdatesTaskById"/> null ⇒ tree-only). Shares the
+    /// per-task <see cref="_nameCommitGen"/> supersede guard with <see cref="ApplyRename"/>, so a stacked
+    /// tree rename of one task and a main-list rename of another don't cancel each other's continuation.
+    /// Mirrors <see cref="ApplyRename"/>.
+    /// </summary>
+    private void ApplyTreeRename(TaskDetailScreen origin, string taskId, string previousName, string newName)
+    {
+        var gen = NextNameCommitGen(taskId);
+
+        if (_screens.Contains(origin))
+            origin.ApplyTreeRename(taskId, newName);
+        if (QuickUpdatesTaskById(taskId) is { } listTask)
+            UpdateTaskRow(listTask with { Name = newName }, sending: true, wholesale: true);
+        Flash($"Renaming to '{newName}'…");
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var confirmed = await _tasks.SetTaskNameAsync(taskId, newName);
+                Application.Invoke(() =>
+                {
+                    if (!IsCurrentNameCommit(taskId, gen))
+                        return; // a newer rename superseded this one
+                    var final = confirmed ?? newName;
+                    if (_screens.Contains(origin))
+                        origin.ApplyTreeRename(taskId, final);
+                    if (QuickUpdatesTaskById(taskId) is { } t)
+                        UpdateTaskRow(t with { Name = final }, sending: false, wholesale: true);
+                    Flash($"Renamed to '{final}'.");
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    if (!IsCurrentNameCommit(taskId, gen))
+                        return;
+                    if (_screens.Contains(origin))
+                        origin.ApplyTreeRename(taskId, previousName); // revert
+                    if (QuickUpdatesTaskById(taskId) is { } t)
+                        UpdateTaskRow(t with { Name = previousName }, sending: false, wholesale: true);
                     Flash($"Could not rename: {ErrorText.Short(ex)}");
                 });
             }

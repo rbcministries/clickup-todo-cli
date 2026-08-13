@@ -269,7 +269,9 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
     /// endpoint's shape, unlike the add/rem of an update). Any <see cref="NewTaskRequest.CustomFields"/>
     /// (#368) are sent as ClickUp's <c>custom_fields: [{ id, value }]</c> array (loosely typed, so carried
     /// on <c>AdditionalData</c> as an <see cref="UntypedNode"/> tree — no spec change); an empty set sends
-    /// no key.
+    /// no key. A non-blank <see cref="NewTaskRequest.ParentTaskId"/> (#544) creates the task as a
+    /// <b>subtask</b> — sent as ClickUp's top-level <c>parent</c> string on the same additional-data bag
+    /// (no spec change / regen); null/blank sends no key and creates a top-level task.
     /// </summary>
     public Task<TaskItem> CreateTaskAsync(string listId, NewTaskRequest task, CancellationToken ct = default)
     {
@@ -300,6 +302,11 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
                         ["value"] = ToUntyped(f.Value),
                     })));
             }
+            // Subtask parent (#544): ClickUp's top-level `parent` is a plain string, so — like
+            // custom_fields above — it rides on AdditionalData rather than a generated typed property
+            // (no spec change / regen). Blank ⇒ no key ⇒ a top-level task, exactly as before.
+            if (!string.IsNullOrWhiteSpace(task.ParentTaskId))
+                request.AdditionalData["parent"] = new UntypedString(task.ParentTaskId);
             var created = await _client.V2.List[listId].Task.PostAsync(request, cancellationToken: ct)
                 ?? throw new InvalidOperationException($"ClickUp returned no task for the create in list '{listId}'.");
             return Map(created);

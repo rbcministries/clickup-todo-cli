@@ -172,6 +172,7 @@ public static class HelpItemSets
         new("↩", "detail", Chord: "Enter"),
         new("Ctrl+O", "🗁 by ID"),
         new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
+        new("Ctrl+Alt+↩", "split pane", Chord: "Ctrl+Alt+Enter"),
         new("Ctrl+N", "➕"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+P", "📌"),
@@ -205,6 +206,12 @@ public static class HelpItemSets
         new("Ctrl+O", "🗁 by ID"),
         new("␣", "☑ toggle", Chord: "Space"),
         new("Ctrl+G", "➕ list"),
+        // F2 ✏ edit serves BOTH F2-bound gestures, disambiguated by the front tab via
+        // Keybindings.ResolveDetail: the checklist item/group edit on the Checklists tab (D, #541; labelled
+        // Edit since #572 put the assignee control in that modal, so the surface edits name + assignee — #601)
+        // and the highlighted node's task-title rename on the Task Tree tab (H, #545). "Edit" is the umbrella
+        // (rename is one facet of edit — contextual-chord-model §3); one hint, since the footer isn't split
+        // per sub-context yet. F8 (the #458 stopgap) is retired.
         new("F2", "✏ edit"),
         new("Del", "🗑 delete", Chord: "Delete"),
         new("Shift+↑", "move", Chord: "Shift+CursorUp"),
@@ -217,11 +224,12 @@ public static class HelpItemSets
     ];
 
     /// <summary>The task detail view when the Task Tree tab is present (#291): <see cref="Detail"/> plus
-    /// the tab's F6 badge-display cycle (#415, mirroring the main list's F6) and the Ctrl+Enter "open this
-    /// task in a new terminal tab" gesture (#384/#435, the detail counterpart of the list's #301 gesture).
-    /// Both hosts carry it: the dashboard-hosted detail, and — since #374 gave single-task launch mode the
-    /// Task Tree tab too — single-task mode. The leaner <see cref="Detail"/> set (neither F6 nor Ctrl+Enter)
-    /// is only used when no tree loader was supplied.</summary>
+    /// the tab's F6 badge-display cycle (#415, mirroring the main list's F6), the Ctrl+Enter "open this
+    /// task in a new terminal tab" gesture (#384/#435, the detail counterpart of the list's #301 gesture)
+    /// and its Ctrl+Alt+Enter split-pane sibling (#507, epic #502 E — open the task in a pane beside this
+    /// one). Both hosts carry it: the dashboard-hosted detail, and — since #374 gave single-task launch mode
+    /// the Task Tree tab too — single-task mode. The leaner <see cref="Detail"/> set (neither F6 nor the
+    /// launch gestures) is only used when no tree loader was supplied.</summary>
     public static readonly IReadOnlyList<HelpItem> DetailWithTaskTree =
     [
         new("Ctrl+←/→", "switch tab", IsAction: false),
@@ -235,8 +243,12 @@ public static class HelpItemSets
         new("Ctrl+U", "quick update"),
         new("Ctrl+O", "🗁 by ID"),
         new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
+        new("Ctrl+Alt+↩", "split pane", Chord: "Ctrl+Alt+Enter"),
         new("␣", "☑ toggle", Chord: "Space"),
         new("Ctrl+G", "➕ list"),
+        // F2 ✏ edit serves both F2 gestures (checklist item/group edit, D #541/#601; Task Tree node rename,
+        // H #545), resolved per front tab by Keybindings.ResolveDetail — see the Detail set above. "Edit" is
+        // the umbrella (rename is a facet of edit — §3). F8 is retired.
         new("F2", "✏ edit"),
         new("Del", "🗑 delete", Chord: "Delete"),
         new("Shift+↑", "move", Chord: "Shift+CursorUp"),
@@ -304,6 +316,17 @@ public static class HelpItemSets
         new("Esc", "cancel"),
     ];
 
+    /// <summary>The Task Detail comment-delete picker overlay (Delete on the Comments/Stream tab, #594): a list
+    /// of the task's deletable comments whose own keys are ↑/↓ to choose, Enter to arm the delete confirm and
+    /// Esc to cancel. Mirrors <see cref="DetailReplyPicker"/> so the footer advertises only what the picker
+    /// does — otherwise a click on an inert command hint re-raises its chord (#436).</summary>
+    public static readonly IReadOnlyList<HelpItem> DetailDeletePicker =
+    [
+        new("↑/↓", "choose", IsAction: false),
+        new("Enter", "delete"),
+        new("Esc", "cancel"),
+    ];
+
     /// <summary>The Checklists-tab item add/rename input overlay (E, #458): a single-line name field whose
     /// own keys are Enter to submit and Esc to cancel (arming a discard confirm on an edited rename).
     /// Mirrors <see cref="DetailCommentComposer"/> so the footer advertises only what the overlay does —
@@ -330,7 +353,7 @@ public static class HelpItemSets
     /// it lives on a Terminal.Gui view and can't run in CI. The mention picker (#325), comment composer,
     /// reply-target picker (#330) and description editor overlays are checked in a fixed order: the mention
     /// picker sits over the composer so it wins when both are up, then the composer, then the description
-    /// editor, then the reply picker. When no overlay is open the set depends on whether the Task Tree tab
+    /// editor, then the reply picker, then the comment-delete picker (#594). When no overlay is open the set depends on whether the Task Tree tab
     /// is present (its F6 badge cycle #415, and the Ctrl+Enter new-tab gesture #384/#435): present →
     /// <see cref="DetailWithTaskTree"/>, absent → <see cref="Detail"/>. Both the dashboard and single-task
     /// launch mode (since #374) supply a tree loader, so both get <see cref="DetailWithTaskTree"/>;
@@ -346,11 +369,13 @@ public static class HelpItemSets
     public static IReadOnlyList<HelpItem> DetailFooter(
         bool commentComposerVisible, bool descriptionEditorVisible, bool replyPickerVisible, bool hasTaskTree,
         DetailSubContext sub = DetailSubContext.Default,
-        bool mentionPickerVisible = false, bool checklistItemEditorVisible = false) =>
+        bool mentionPickerVisible = false, bool checklistItemEditorVisible = false,
+        bool deletePickerVisible = false) =>
         mentionPickerVisible ? DetailMentionPicker
         : commentComposerVisible ? DetailCommentComposer
         : descriptionEditorVisible ? DetailDescriptionEditor
         : replyPickerVisible ? DetailReplyPicker
+        : deletePickerVisible ? DetailDeletePicker
         : checklistItemEditorVisible ? DetailChecklistItemEditor
         : WithContextualNewLabel(hasTaskTree ? DetailWithTaskTree : Detail, sub);
 

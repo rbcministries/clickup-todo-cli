@@ -70,4 +70,14 @@ public static class StateKeys
     /// <c>closed.json</c> in the file backend.
     /// </summary>
     public const string Closed = "closed";
+
+    /// <summary>
+    /// The local Super Agent directory (#494) — the discovered-layer <c>name → negative id</c> registry
+    /// <see cref="Services.AgentDirectoryCache"/> warms from on launch, standing in for ClickUp's missing
+    /// agent-enumeration endpoint. Each entry carries its capture timestamp so a persisted id expires
+    /// after the registry's TTL (a stale id points at nothing once the agent is recreated). Scoped to one
+    /// workspace; a mismatch is a clean miss. The hand-pinned config seed is separate (it lives in
+    /// <see cref="AppConfig"/>). Maps to <c>agentDirectories.json</c> in the file backend.
+    /// </summary>
+    public const string AgentDirectories = "agentDirectories";
 }

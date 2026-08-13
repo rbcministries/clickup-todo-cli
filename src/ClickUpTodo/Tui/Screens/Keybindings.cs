@@ -30,14 +30,18 @@ public enum ScreenContext
 /// recorded in slice A, <c>docs/plans/contextual-chord-model.md</c>). It is what lets one chord mean
 /// different things per tab — <c>Ctrl+N</c> adds a checklist item on <see cref="Checklists"/> but opens
 /// the comment composer on the others — while the base <see cref="Keybindings"/> map stays the single
-/// source of each action's token. <see cref="Default"/> covers Stream / Description / Other and is the
-/// fallback for any tab without an override. Tab-scoped and orthogonal to the punted launch-mode
-/// dimension (#296); kept Detail-specific until a second screen needs sub-contexts.
+/// source of each action's token. <see cref="Comments"/> and <see cref="Stream"/> are the two comment-
+/// bearing tabs — both bind <c>Delete</c> to the comment-delete picker (#594), which is why the Stream tab
+/// gets its own value rather than falling under <see cref="Default"/>. <see cref="Default"/> covers
+/// Description / Other (no comments, so <c>Delete</c> stays inert there) and is the fallback for any tab
+/// without an override. Tab-scoped and orthogonal to the punted launch-mode dimension (#296); kept
+/// Detail-specific until a second screen needs sub-contexts.
 /// </summary>
 public enum DetailSubContext
 {
     Default,
     Comments,
+    Stream,
     Checklists,
     TaskTree,
 }
@@ -65,6 +69,7 @@ public enum KeyAction
     // Main list commands.
     OpenDetail,
     OpenInNewTab,
+    OpenInSplitPane,
     NewTask,
     RenameTask,
     QuickOpen,
@@ -79,6 +84,7 @@ public enum KeyAction
     DispatchToClaude,
     AddComment,
     ReplyToComment,
+    DeleteComment,
     EditDescription,
     ToggleChecklistItem,
     AddChecklistItem,
@@ -122,6 +128,12 @@ public static class Keybindings
             [(ScreenContext.MainList, KeyAction.QuickUpdate)] = "Ctrl+U",
             [(ScreenContext.MainList, KeyAction.OpenDetail)] = "Enter",
             [(ScreenContext.MainList, KeyAction.OpenInNewTab)] = "Ctrl+Enter",
+            // Split-pane epic E (#507): open the selected task in a split pane beside the current one — a
+            // sibling launch mode of OpenInNewTab, not a mode of it (#502). Ctrl+Alt+Enter parses to a
+            // distinct KeyCode (Enter | Ctrl | Alt) from Ctrl+Enter, so the two never collide in the
+            // dispatcher. The default the epic commits to; a later host-reachability finding (#503/#511) or
+            // the D/#506 override layer can retune it without touching this slice's structure.
+            [(ScreenContext.MainList, KeyAction.OpenInSplitPane)] = "Ctrl+Alt+Enter",
             [(ScreenContext.MainList, KeyAction.QuickOpen)] = "Ctrl+O",
             [(ScreenContext.MainList, KeyAction.NewTask)] = "Ctrl+N",
             // Contextual chords H (#545): F2 renames the highlighted task's title in place — B (#539)
@@ -145,7 +157,20 @@ public static class Keybindings
             [(ScreenContext.Detail, KeyAction.DispatchToClaude)] = "Ctrl+A",
             [(ScreenContext.Detail, KeyAction.AddComment)] = "Ctrl+N",
             [(ScreenContext.Detail, KeyAction.ReplyToComment)] = "Ctrl+T",
+            // Contextual chords F, comment half (#594): Delete removes a comment on the Comments/Stream tabs,
+            // behind a confirmation, via the delete-picker overlay. Shares the "Delete" token with
+            // DeleteChecklistItem (below), disambiguated by sub-context exactly as AddComment/AddChecklistItem
+            // share "Ctrl+N" — no collision within a sub-context (Comments/Stream bind DeleteComment, the
+            // Checklists tab binds DeleteChecklistItem, and the two tabs never overlap).
+            [(ScreenContext.Detail, KeyAction.DeleteComment)] = "Delete",
             [(ScreenContext.Detail, KeyAction.EditDescription)] = "Ctrl+E",
+            // Contextual chords H (#545): F2 renames the highlighted node's task title on the Task Tree
+            // tab (contextual-chord-model.md §3, §5-H) — a plain title rename through the SetTaskNameAsync
+            // facade E (#542) landed, reusing the main-list rename overlay. It shares F2 with the checklist
+            // rename (slice D/#600 retargets F8 → F2 on the Checklists sub-context); the two never collide
+            // because the sub-context activation below makes only one live per tab (§2.2). RenameTask keeps
+            // one token (F2) across MainList and Detail, so AllBindingsOfAnAction_ShareOneKey holds.
+            [(ScreenContext.Detail, KeyAction.RenameTask)] = "F2",
             [(ScreenContext.Detail, KeyAction.ToggleChecklistItem)] = "Space",
             // Contextual chords C (#540): the "new" chord is now shared with AddComment (both "Ctrl+N")
             // and disambiguated by the front Task Detail tab (see DetailSubContext / ResolveDetail below).
@@ -263,8 +288,9 @@ public static class Keybindings
     //
     // The base Map above owns the *token for an action*; this layer owns *which action is live per Task
     // Detail tab*. It only needs to list the actions whose live-ness depends on the front tab — the ones
-    // that share a token with another action (today just Ctrl+N: AddComment vs AddChecklistItem) or are
-    // physically scoped to one tab (the checklist chords, already guarded to the Checklists ListView in
+    // that share a token with another action (Ctrl+N: AddComment vs AddChecklistItem; Delete: DeleteComment
+    // vs DeleteChecklistItem) or are physically scoped to one tab (the checklist chords, already guarded to
+    // the Checklists ListView in
     // TaskDetailScreen). Context-wide Detail actions (DispatchToClaude, ReplyToComment, EditDescription,
     // OpenInBrowser, QuickUpdate, Refresh, Help, Back) resolve unconditionally and are folded in by
     // DetailBindings rather than repeated per tab.
@@ -283,7 +309,10 @@ public static class Keybindings
     private static readonly IReadOnlyDictionary<DetailSubContext, IReadOnlyList<KeyAction>> DetailTabActions =
         new Dictionary<DetailSubContext, IReadOnlyList<KeyAction>>
         {
-            [DetailSubContext.Comments] = [KeyAction.AddComment],
+            // The two comment-bearing tabs bind the "new" chord to the composer and Delete to the
+            // comment-delete picker (#594). Kept identical so the chord means the same on both.
+            [DetailSubContext.Comments] = [KeyAction.AddComment, KeyAction.DeleteComment],
+            [DetailSubContext.Stream] = [KeyAction.AddComment, KeyAction.DeleteComment],
             [DetailSubContext.Checklists] =
             [
                 KeyAction.AddChecklistItem,
@@ -296,7 +325,12 @@ public static class Keybindings
                 KeyAction.IndentChecklistItem,
                 KeyAction.NewChecklist,
             ],
-            [DetailSubContext.TaskTree] = [KeyAction.AddComment],
+            // The Task Tree tab keeps Ctrl+N → comment (no per-tab override) and adds F2 → RenameTask (H,
+            // #545): F2 renames the highlighted node's task title, disambiguated from the checklist F2
+            // rename by this sub-context (§2.2). RenameTask is listed here, not context-wide, so F2 stays
+            // inert on every other Task Detail tab (where a rename has no highlighted node — that is the
+            // #542 alias question, deliberately not decided here).
+            [DetailSubContext.TaskTree] = [KeyAction.AddComment, KeyAction.RenameTask],
             [DetailSubContext.Default] = [KeyAction.AddComment],
         };
 

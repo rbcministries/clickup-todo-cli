@@ -40,6 +40,9 @@ public sealed class CacheResetTests : IDisposable
         Assert.Contains(StateKeys.Assignees, CacheReset.CacheKeys);
         // The warm closed-task set (#280) persists across restarts, so a logout must forget it too.
         Assert.Contains(StateKeys.Closed, CacheReset.CacheKeys);
+        // The Super Agent directory (#494) is workspace-scoped and persisted, so a logout into a
+        // different account/workspace must forget it too.
+        Assert.Contains(StateKeys.AgentDirectories, CacheReset.CacheKeys);
     }
 
     [Fact]

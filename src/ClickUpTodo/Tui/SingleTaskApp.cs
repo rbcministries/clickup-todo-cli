@@ -97,9 +97,10 @@ public sealed class SingleTaskApp
     // One-in-flight guard for the marker poll so two scans can't overlap (#377). UI-thread-only.
     private bool _pollingMarkers;
 
-    // The cross-platform "open this task in its own terminal tab" launcher (#435) — the single-task
-    // counterpart of the dashboard's Ctrl+Enter (#301/#384). `_launchingTab` is a one-in-flight guard so a
-    // rapid second Ctrl+Enter can't spawn duplicate tabs. UI-thread-only, mirroring TodoApp.
+    // The cross-platform "open this task in a new tab / split pane" launcher (#435/#507) — the single-task
+    // counterpart of the dashboard's Ctrl+Enter / Ctrl+Alt+Enter (#301/#384/#507). `_launchingTab` is a
+    // one-in-flight guard so a rapid second gesture can't spawn duplicate launches. UI-thread-only,
+    // mirroring TodoApp.
     private readonly ITerminalLauncher _tabLauncher = new TerminalLauncher();
     private bool _launchingTab;
 
@@ -277,6 +278,9 @@ public sealed class SingleTaskApp
             postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(id, text, ct),
             // Ctrl+T (#330) replies into a comment's thread — same injected-async seam, keyed to this tab's task.
             postReplyAsync: (commentId, text, ct) => _tasks.CreateThreadedCommentAsync(commentId, text, ct),
+            // Delete on the Comments/Stream tab (#594) removes a comment — same injected-async seam; the
+            // Comments/Stream tabs are present in single-task mode too, so wire the delete write here as well.
+            deleteCommentAsync: (commentId, ct) => _tasks.DeleteCommentAsync(commentId, ct),
             setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(id, text, ct),
             // The Task Tree tab (#374): identical wiring to the dashboard (#291/#415). The tree needs the
             // signed-in user's id for the trailing Assignees badge (#161), seeds its badge mode from the
@@ -367,6 +371,11 @@ public sealed class SingleTaskApp
         // F6 on the Task Tree tab (#415) cycles the tree's badge display; the host owns the flip/persist
         // and reflects it across the root and every stacked child so the visited-task chain stays in step.
         screen.CycleBadgeDisplayRequested += (_, _) => CycleTreeBadgeDisplay(tab.Screen);
+        // F2 on the Task Tree tab (H, #545) renames a node's task in the dashboard, but single-task mode
+        // defers task mutations for now (same as Quick Updates above) so it doesn't grow a lone task-write
+        // path here. Flash rather than silently no-op so the gap is legible; tracked as a follow-up.
+        screen.RenameTreeTaskRequested += (_, _) =>
+            Flash("Renaming from the Task Tree isn't available in single-task mode yet.");
         // Ctrl+Enter opens this tab's task in its own terminal tab (#435) — the single-task counterpart of
         // the dashboard's #384 gesture, reusing the exact launcher + copy-command fallback. Since #374 gave
         // single-task mode the Task Tree tab, the detail screen already raises this event and already
@@ -375,6 +384,12 @@ public sealed class SingleTaskApp
         // walking the tree launches its own task; tab.Task.Name is read live so a mid-view refresh that
         // renamed it is reflected (mirrors the dashboard reading screen.Task.Name).
         screen.OpenInNewTabRequested += (_, _) => LaunchAppTabForTask(tab.TaskId, tab.Task.Name);
+        // Ctrl+Alt+Enter opens this tab's task in a split pane beside the current one (#507) — the
+        // split-pane sibling of the new-tab gesture above. The detail screen already raises this event
+        // (gated on its tree loader, present in single-task mode since #374) and advertises "Ctrl+Alt+↩
+        // split pane" on its footer; subscribing here is what makes the advertised chord launch. Keyed to
+        // this tab; tab.Task.Name is read live so a mid-view rename is reflected (mirrors the new-tab sibling).
+        screen.OpenInSplitPaneRequested += (_, _) => LaunchAppForTask(tab.TaskId, tab.Task.Name, LaunchLocation.SplitPane);
 
         return tab;
     }
@@ -741,28 +756,46 @@ public sealed class SingleTaskApp
 
     /// <summary>
     /// Ctrl+Enter from a single-task tab: opens the front-most tab's task in its own terminal tab —
-    /// <c>clickup-todo --task &lt;id&gt;</c> (#301) — through the same cross-platform launcher and
-    /// copy-command fallback the dashboard uses (#384), sharing the option/message helper
-    /// (<see cref="AppHostLaunch"/>) so the two hosts can't drift. Re-entrancy-guarded so a rapid second
-    /// press can't spawn duplicate tabs; the launch runs off the UI thread and reports back via the shared
-    /// footer. Re-launching the <em>same</em> task is "a bit odd but harmless" (#384/#435) — the value is
-    /// footer parity and the copy-command fallback where a tab can't be targeted.
+    /// <c>clickup-todo --task &lt;id&gt;</c> (#301) — a thin new-tab pass-through to
+    /// <see cref="LaunchAppForTask"/>.
     /// </summary>
     private void LaunchAppTabForTask(string taskId, string name)
+        => LaunchAppForTask(taskId, name, LaunchLocation.NewTab);
+
+    /// <summary>
+    /// Opens the front-most tab's task at <paramref name="destination"/> — a new tab (Ctrl+Enter, #301) or
+    /// a split pane beside the current one (Ctrl+Alt+Enter, #507) — through the same cross-platform launcher
+    /// and copy-command fallback the dashboard uses (#384/#507), sharing the option/message helper
+    /// (<see cref="AppHostLaunch"/>) so the two hosts can't drift. Re-entrancy-guarded so a rapid second
+    /// press can't spawn duplicate launches; the launch runs off the UI thread and reports back via the
+    /// shared footer. Re-launching the <em>same</em> task is "a bit odd but harmless" (#384/#435) — the
+    /// value is footer parity and the copy-command fallback where an in-place surface can't be targeted.
+    /// </summary>
+    private void LaunchAppForTask(string taskId, string name, LaunchLocation destination)
     {
         if (_launchingTab)
         {
-            Flash("A task tab is already opening…");
+            Flash("A task launch is already in flight…");
             return;
         }
 
         // Resolve the command before arming the guard: ForTask is pure and could throw on a blank id, and
         // doing it first means such a throw can't leave _launchingTab stuck true (mirrors TodoApp).
         var command = AppLaunchCommand.ForTask(taskId);
-        var options = AppHostLaunch.Options(
-            LaunchLocation.NewTab, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
+        // Split-pane viability floor (#505/#515): degrade a SplitPane request to a tab before launch when
+        // the live terminal is too narrow to read a split, through the shared AppHostLaunch seam so this
+        // host and the dashboard can't drift (the planner has no notion of width — the caller decides,
+        // mirroring DispatchCoordinator). NewTab/NewWindow and the headless (null Cols) path pass through
+        // byte-identical; the decision's reason is appended to the success flash so the degrade reads as
+        // deliberate (#507).
+        var (options, degradeReason) = AppHostLaunch.ApplyViabilityFloor(
+            AppHostLaunch.Options(
+                destination, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand),
+            Application.Driver?.Cols);
+        var effective = options.LaunchLocation;
+
         _launchingTab = true;
-        Flash(AppHostLaunch.Opening(name, LaunchLocation.NewTab));
+        Flash(AppHostLaunch.Opening(name, effective));
         _ = Task.Run(async () =>
         {
             try
@@ -772,23 +805,27 @@ public sealed class SingleTaskApp
                 {
                     _launchingTab = false;
                     if (result.Success)
-                        Flash(AppHostLaunch.Opened(name, LaunchLocation.NewTab, result));
+                    {
+                        var opened = AppHostLaunch.Opened(name, effective, result);
+                        Flash(degradeReason is null ? opened : $"{opened} {degradeReason}");
+                    }
                     else
-                        FlashLaunchFallback(command);
+                        FlashLaunchFallback(command, effective);
                 });
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => { _launchingTab = false; FlashLaunchFallback(command, ErrorText.Short(ex)); });
+                Application.Invoke(() => { _launchingTab = false; FlashLaunchFallback(command, effective, ErrorText.Short(ex)); });
             }
         });
     }
 
     /// <summary>The no-terminal fallback (#301): flash the exact relaunch command and copy it to the
-    /// clipboard so the user can open the task tab themselves. <paramref name="reason"/> names the failure
-    /// when the launch threw (vs. simply finding no emulator to launch).</summary>
-    private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
-        => Flash(AppHostLaunch.Fallback(command, LaunchLocation.NewTab, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+    /// clipboard so the user can open the task at <paramref name="destination"/> themselves.
+    /// <paramref name="reason"/> names the failure when the launch threw (vs. simply finding no emulator to
+    /// launch).</summary>
+    private void FlashLaunchFallback(AppLaunchCommand command, LaunchLocation destination, string? reason = null)
+        => Flash(AppHostLaunch.Fallback(command, destination, TryCopyToClipboard(command.ToDisplayCommand()), reason));
 
     /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard yields false
     /// so the caller shows the run-it-yourself form instead (mirrors TodoApp).</summary>

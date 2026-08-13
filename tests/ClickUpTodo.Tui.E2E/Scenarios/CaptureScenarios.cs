@@ -75,3 +75,31 @@ internal sealed class ReplyLogScenario : IE2EScenario
         }, 1),
     ];
 }
+
+/// <summary>#594: when E2E_COMMENT_DELETE_LOG is set, record a deleted comment's id — one per line — so a
+/// comment-delete check can assert the DELETE reached the backend keyed to the picked comment, and return an
+/// empty <c>{}</c> body (the shape the facade expects). If E2E_COMMENT_DELETE_FORBID names a comment id, that
+/// id's DELETE answers 403 instead — the "only the author may delete" permission error — so the check can
+/// drive the optimistic-revert leg. Overrides <c>DELETE /comment/{id}</c>.</summary>
+internal sealed class CommentDeleteLogScenario : IE2EScenario
+{
+    public string Name => "comment-delete-log";
+    public bool IsActive => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("E2E_COMMENT_DELETE_LOG"));
+
+    public IEnumerable<Route<Handler>> Routes(FakeClickUp backend) =>
+    [
+        new(HttpMethod.Delete, "comment/{id}", (req, path, _, _) =>
+        {
+            _ = req;
+            var commentId = FakeClickUp.LastSegment(path);
+            if (Environment.GetEnvironmentVariable("E2E_COMMENT_DELETE_LOG") is { Length: > 0 } log)
+                try { File.AppendAllText(log, commentId + "\n"); }
+                catch { /* best-effort capture */ }
+            if (Environment.GetEnvironmentVariable("E2E_COMMENT_DELETE_FORBID") is { Length: > 0 } forbidden
+                && string.Equals(forbidden, commentId, StringComparison.Ordinal))
+                return Task.FromResult(FakeClickUp.Forbidden(
+                    """{"err":"You do not have permission to delete this comment","ECODE":"OAUTH_027"}"""));
+            return FakeClickUp.OkAsync("{}");
+        }, 1),
+    ];
+}

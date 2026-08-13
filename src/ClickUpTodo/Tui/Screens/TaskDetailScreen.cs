@@ -16,6 +16,12 @@ using Terminal.Gui.Views;
 
 namespace ClickUpTodo.Tui.Screens;
 
+/// <summary>The target of an F2 Task-Tree-tab rename (contextual chords H, #545): the highlighted node's
+/// task id and its current title (to pre-fill the rename overlay). Carried by
+/// <see cref="TaskDetailScreen.RenameTreeTaskRequested"/> so the host can open the overlay + write without
+/// re-reading the tree's selected row.</summary>
+public readonly record struct TreeTaskRenameRequest(string TaskId, string CurrentName);
+
 /// <summary>
 /// A full-window screen showing a task's detail (issue #17): a header (title, tags, assignees) above
 /// a tabbed, scrollable pane — Stream / Description / Comments / Other attributes. Built on the shared
@@ -170,6 +176,30 @@ public sealed class TaskDetailScreen : Screen
     // The picker's ideal height: a few target rows + the top/bottom frame border. Clamped on show.
     private const int ReplyPickerRows = 6;
     private const int ReplyPickerPreferredHeight = ReplyPickerRows + 2;
+
+    // Delete a comment (#594, the deferred comment half of contextual Delete #543): removes a comment over
+    // the #599 DeleteCommentAsync facade. Null disables delete (the Delete key is inert on the comment tabs),
+    // so a non-interactive host stays unaffected. The delete-target picker is a transient FrameView + ListView
+    // overlay, shown-then-dismissed like the reply picker, so the single-ListView model (#3) is untouched. The
+    // Comments/Stream text panes carry no row-selectable "highlighted comment" model, so the picker is how the
+    // user chooses which comment to delete (the same precedent the reply picker set, #330).
+    private readonly Func<string, CancellationToken, Task>? _deleteCommentAsync;
+    private readonly FrameView _commentDeletePickerBox;
+    private readonly ListView _commentDeletePicker;
+    private IReadOnlyList<CommentDeleteModel.DeleteTarget> _commentDeleteTargets = [];
+    // Armed after a comment is picked for deletion on the flag-off default path: the target awaiting an
+    // Enter/Esc confirm on the comment tab — the inline armed-key confirm the checklist delete uses, rather
+    // than a nested modal. Carries the author for the confirm flash.
+    private (string CommentId, string Author)? _commentDeletePending;
+    // Guards a second comment delete while one is in flight (the checklist-write discipline, scoped to the
+    // delete path so it never blocks a concurrent compose/reply post).
+    private bool _commentDeleteInFlight;
+    // While a delete is optimistically applied, this transform re-applies the removal onto any refresh landing
+    // mid-write (the _pendingChecklistEdit discipline, for comments) so a poll returning the pre-delete server
+    // state can't resurrect the just-deleted comment. Cleared when the write settles.
+    private Func<IReadOnlyList<CommentItem>, IReadOnlyList<CommentItem>>? _pendingCommentEdit;
+    private const int CommentDeletePickerRows = 6;
+    private const int CommentDeletePickerPreferredHeight = CommentDeletePickerRows + 2;
 
     // The description editor (#217): a bottom-anchored FrameView hosting a multi-line editor above a
     // Save/Cancel button row (with a hidden inline confirm row between them), hidden until Ctrl+E. Like
@@ -424,6 +454,17 @@ public sealed class TaskDetailScreen : Screen
     public event EventHandler? CycleBadgeDisplayRequested;
 
     /// <summary>
+    /// Raised when the user presses F2 on the Task Tree tab (contextual chords H, #545) to rename the
+    /// highlighted node's task title. Like <see cref="CycleBadgeDisplayRequested"/>, the screen only
+    /// <em>requests</em> the action: the host owns the rename overlay (<c>RenameTaskScreen</c>) and the
+    /// off-thread <see cref="ClickUpTodo.Services.TaskService.SetTaskNameAsync"/> write, then reflects the
+    /// result back through <see cref="ApplyTreeRename"/>. The argument carries the target node's id and its
+    /// current title (to pre-fill the overlay). Only raised when the tree tab exists (a loader was supplied)
+    /// and a real task row — not a placeholder/message row — is highlighted.
+    /// </summary>
+    public event EventHandler<TreeTaskRenameRequest>? RenameTreeTaskRequested;
+
+    /// <summary>
     /// Raised when the user presses Ctrl+B to open the task in the browser (#518). Like its sibling
     /// command events (<see cref="OpenInNewTabRequested"/>, <see cref="QuickUpdatesRequested"/>, …), the
     /// host owns the outcome: it launches the browser (flashing success/failure on this still-live view)
@@ -487,6 +528,17 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     public event EventHandler? OpenInNewTabRequested;
 
+    /// <summary>
+    /// Raised when the user asks to open the current task in a split pane beside the current one
+    /// (Ctrl+Alt+Enter, #507) — the split-pane sibling of <see cref="OpenInNewTabRequested"/> (epic #502).
+    /// The host owns the cross-platform launch (reusing B's split → tab → window ladder and C's viability
+    /// floor) and its copy-command fallback. Raised (and advertised on the <see cref="HelpItemSets.DetailWithTaskTree"/>
+    /// footer) wherever a tree loader was supplied — the dashboard-hosted detail and, since #374, single-task
+    /// launch mode — under the same <c>_treeList</c> guard in <see cref="OnKey"/> as the new-tab gesture, so
+    /// the footer hint and the key stay in lock-step.
+    /// </summary>
+    public event EventHandler? OpenInSplitPaneRequested;
+
     /// <param name="defaultSessionMode">
     /// Seeds the pane's one-off/interactive toggle (#94) from the persisted default (#101); the user
     /// can flip it per dispatch. Defaults to <see cref="AgentSessionMode.Interactive"/>.
@@ -521,6 +573,13 @@ public sealed class TaskDetailScreen : Screen
     /// host owns the off-thread ClickUp write via this callback. Null disables reply (<c>Ctrl+T</c> is
     /// inert), so non-interactive hosts stay unaffected.
     /// </param>
+    /// <param name="deleteCommentAsync">
+    /// Deletes a comment on this task (#594, over the #599 <c>DeleteCommentAsync</c> facade). Takes the
+    /// comment id; returns void (empty body). The screen owns the delete-target picker + confirmation +
+    /// optimistic removal/revert; the host owns the off-thread ClickUp write via this callback (the same
+    /// injected-async seam the checklist deletes use). Null disables delete (the <c>Delete</c> key is inert
+    /// on the comment tabs), so non-interactive hosts stay unaffected.
+    /// </param>
     /// <param name="setDescriptionAsync">
     /// Writes this task's plain-text description (#217, over the #211 facade) and returns the
     /// server-confirmed value. The screen owns the editor UI + the dirty-check + the in-place reflection;
@@ -542,6 +601,7 @@ public sealed class TaskDetailScreen : Screen
         Func<string>? workingDirectoryPreFill = null,
         Func<string, CancellationToken, Task<CommentItem>>? postCommentAsync = null,
         Func<string, string, CancellationToken, Task<CommentItem>>? postReplyAsync = null,
+        Func<string, CancellationToken, Task>? deleteCommentAsync = null,
         Func<string, CancellationToken, Task<string?>>? setDescriptionAsync = null,
         long? currentUserId = null,
         BadgeDisplay treeBadgeDisplay = BadgeDisplay.Text,
@@ -567,6 +627,7 @@ public sealed class TaskDetailScreen : Screen
         _workingDirectoryPreFill = workingDirectoryPreFill;
         _postCommentAsync = postCommentAsync;
         _postReplyAsync = postReplyAsync;
+        _deleteCommentAsync = deleteCommentAsync;
         _setDescriptionAsync = setDescriptionAsync;
         _currentUserId = currentUserId;
         _treeBadgeDisplay = treeBadgeDisplay;
@@ -589,7 +650,7 @@ public sealed class TaskDetailScreen : Screen
         _providers = providers ?? [];
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
-        Title = task.Name.Length > 60 ? task.Name[..59] + "…" : task.Name;
+        Title = FrameTitleFor(task.Name);
 
         // The title line carries trailing coloured Status/Priority badges (#162), which a plain Label
         // can't draw — render the header through the same per-run-coloured view the Other tab uses
@@ -906,6 +967,32 @@ public sealed class TaskDetailScreen : Screen
         };
         _replyPickerBox.Add(_replyPicker);
 
+        // The comment-delete picker (#594): a transient bottom-anchored list of the task's deletable comments
+        // (top-level + replies), hidden until Delete on the Comments/Stream tab. Modelled exactly on the reply
+        // picker above — a transient child view within the single already-open screen, so the single-ListView
+        // model (#3) is untouched. ↑/↓ move the highlight (native), Enter (or a row click) picks — arming the
+        // confirm for that comment — and Esc cancels. Sized on show (ShowCommentDeletePicker); its rows are set
+        // there from CommentDeleteModel.
+        _commentDeletePicker = new ListView
+        {
+            X = 0,
+            Y = 0,
+            Width = Dim.Fill(),
+            Height = Dim.Fill(),
+        };
+        _commentDeletePicker.KeyDown += OnCommentDeletePickerKey;
+        _commentDeletePicker.MouseEvent += OnCommentDeletePickerMouse;
+        _commentDeletePickerBox = new FrameView
+        {
+            Title = "Delete comment… — ↑/↓ choose · Enter delete · Esc cancel",
+            X = 0,
+            Y = Pos.AnchorEnd(CommentDeletePickerPreferredHeight),
+            Width = Dim.Fill(),
+            Height = CommentDeletePickerPreferredHeight,
+            Visible = false,
+        };
+        _commentDeletePickerBox.Add(_commentDeletePicker);
+
         // The description editor (#217): a bottom-anchored FrameView with a multi-line editor above a
         // Save/Cancel button row (and a hidden confirm row), shown on Ctrl+E. Modelled on the comment
         // composer — the editor keeps Enter for newlines (TabKeyAddsTab=false so Tab reaches the
@@ -980,7 +1067,7 @@ public sealed class TaskDetailScreen : Screen
             target.KeyDown += OnKey;
         KeyDown += OnKey;
 
-        Add([_headerView, _tabs, _promptBox, _commentBox, _replyPickerBox, _descriptionBox, _checklistItemBox]);
+        Add([_headerView, _tabs, _promptBox, _commentBox, _replyPickerBox, _commentDeletePickerBox, _descriptionBox, _checklistItemBox]);
     }
 
     // While the comment composer (Ctrl+N) or description editor (Ctrl+E) overlay is open, the footer
@@ -993,7 +1080,8 @@ public sealed class TaskDetailScreen : Screen
         HelpItemSets.DetailFooter(
             _commentBox.Visible, _descriptionBox.Visible, _replyPickerBox.Visible, _treeList is not null,
             CurrentDetailSubContext(),
-            _mentionBox?.Visible == true, _checklistItemBox.Visible);
+            _mentionBox?.Visible == true, _checklistItemBox.Visible,
+            _commentDeletePickerBox.Visible);
 
     public override void OnShown()
     {
@@ -1056,8 +1144,23 @@ public sealed class TaskDetailScreen : Screen
         if (_pendingChecklistAssignee is { } assigneeEdit)
             task = task with { Checklists = assigneeEdit(task.Checklists) };
 
+        // Likewise for an in-flight comment delete (#594): re-apply the optimistic removal onto the refresh so
+        // a poll landing mid-write can't resurrect the just-deleted comment. Overlaid before _comments is set
+        // and before the Stream/Comments panes re-render below, so every derived view sees the removal.
+        // Cleared when the delete settles, so the next refresh then carries the server truth.
+        if (_pendingCommentEdit is { } commentEdit)
+            comments = commentEdit(comments);
+
         _task = task;
         _comments = comments;
+
+        // Keep the frame-title border in step with the task name (H, #545): a rename applied through here
+        // (the F2 tree rename's current-task path, or a server refresh that renamed the task) must move the
+        // "╭┤{name}├╮" border too, not just the header line below. Gated on an actual change so a status /
+        // priority refresh — same name — doesn't reassign Title and trigger a needless relayout.
+        var frameTitle = FrameTitleFor(task.Name);
+        if (!string.Equals(Title, frameTitle, StringComparison.Ordinal))
+            Title = frameTitle;
 
         // Title header (#162): coloured attribute lines; re-render in place only when they moved.
         var titleHeaderLines = TaskDetailFormatter.HeaderLines(task);
@@ -1187,6 +1290,12 @@ public sealed class TaskDetailScreen : Screen
         }
     }
 
+    /// <summary>The frame-title border text for a task name (#162): the name, truncated with an ellipsis
+    /// past 60 chars so a long title can't overrun the border. Shared by the constructor and the
+    /// <see cref="UpdateData"/> rename sync (H, #545) so both derive the border the same way.</summary>
+    private static string FrameTitleFor(string name)
+        => name.Length > 60 ? name[..59] + "…" : name;
+
     /// <summary>A cheap content fingerprint of the Other tab (attribute lines + custom-fields body) so
     /// a refresh only rebuilds that tab when its rendered content moved. Line texts are newline-joined
     /// and separated from the body by a sentinel; a collision would only skip a cosmetic rebuild.</summary>
@@ -1204,6 +1313,7 @@ public sealed class TaskDetailScreen : Screen
         => ReferenceEquals(_tabs.Value, _checklistList) ? DetailSubContext.Checklists
             : _treeList is not null && ReferenceEquals(_tabs.Value, _treeList) ? DetailSubContext.TaskTree
             : ReferenceEquals(_tabs.Value, _commentsPane) ? DetailSubContext.Comments
+            : ReferenceEquals(_tabs.Value, _streamPane) ? DetailSubContext.Stream
             : DetailSubContext.Default;
 
     private void OnKey(object? sender, Key key)
@@ -1213,8 +1323,33 @@ public sealed class TaskDetailScreen : Screen
         // lets the rest fall through to the editor. Don't let the screen's chords (Ctrl+B close,
         // Ctrl+A/U/N/E openers, Ctrl+←/→ tab-cycle, F5 refresh) fire underneath and disrupt (or discard)
         // the draft.
-        if (_commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible || _checklistItemBox.Visible)
+        if (_commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible
+            || _commentDeletePickerBox.Visible || _checklistItemBox.Visible)
             return;
+
+        // Answer a pending comment delete confirm (#594), armed after a comment was picked in the delete picker
+        // on the flag-off default path: Enter deletes, Esc cancels. Guarded to a comment tab (Comments/Stream)
+        // being front-most, like the checklist confirm below is guarded to the Checklists ListView — a tab
+        // switch away leaves it armed but inert until the user returns (the delete targets the named comment by
+        // id regardless). Enter/Esc reach here because the read-only comment text panes ignore them.
+        if (_commentDeletePending is { } delComment
+            && Keybindings.ResolveDetail(CurrentDetailSubContext(), "Delete") == KeyAction.DeleteComment)
+        {
+            if (key.KeyCode == KeyCode.Enter)
+            {
+                key.Handled = true;
+                _commentDeletePending = null;
+                PerformCommentDelete(delComment.CommentId);
+                return;
+            }
+            if (key.KeyCode == KeyCode.Esc)
+            {
+                key.Handled = true;
+                _commentDeletePending = null;
+                RequestFlash("Delete cancelled.");
+                return;
+            }
+        }
 
         // Answer a pending checklist-item delete confirm (E, #458), armed by the Delete key on the Checklists tab (was F9 pre-#543):
         // Enter deletes, Esc cancels. (A letter like Y can't be used here — the focused Checklists ListView
@@ -1282,6 +1417,22 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
+        // F2 on the Task Tree tab (H, #545): rename the highlighted node's task title. Guarded on the tree
+        // being front-most (like Enter/F6 above) and routed through Keybindings.ResolveDetail so dispatch
+        // and the per-tab footer label stay in lock-step — only the Task Tree sub-context binds F2 →
+        // RenameTask, so this fires only here and F2 stays inert on the read-only text panes / Checklists
+        // tab (whose own F2/F8 rename is guarded to that tab). A placeholder/message row (null task, e.g.
+        // "(no task tree)" or a load error) is inert-but-flashed, not a silent no-op. The overlay + write
+        // are the host's (RenameTreeTaskRequested), reusing the main-list rename overlay + SetTaskNameAsync
+        // facade E (#542) landed; RequestTreeRename never renames on an unloaded/empty tree.
+        if (key.KeyCode == KeyCode.F2 && _treeList is not null && ReferenceEquals(_tabs.Value, _treeList)
+            && Keybindings.ResolveDetail(CurrentDetailSubContext(), "F2") == KeyAction.RenameTask)
+        {
+            key.Handled = true;
+            RequestTreeRename();
+            return;
+        }
+
         // Space on the Checklists tab (D, #457) toggles the selected item's resolved state, optimistically.
         // Guarded on the checklist ListView being front-most (claimed here, before the ListView's own
         // bindings, like the bare ↑/↓ block below), so Space on the read-only text panes (which ignore it)
@@ -1345,6 +1496,21 @@ public sealed class TaskDetailScreen : Screen
                 DeleteSelectedChecklistGroup();
             else
                 DeleteSelectedChecklistItem();
+            return;
+        }
+
+        // Contextual Delete, comment half (#594): Delete on the Comments/Stream tab opens the comment-delete
+        // picker (the panes have no row-selectable comment, so the transient picker is how the target is
+        // chosen), behind the same confirmation the checklist delete uses. Routed through the same
+        // Keybindings.ResolveDetail seam so dispatch and the footer label stay in lock-step, exactly as the
+        // checklist Delete above; ResolveDetail returns DeleteComment only on the comment tabs, so this stays
+        // inert on the Checklists/TaskTree/Description/Other tabs (the checklist Delete block above already
+        // claimed the Checklists tab).
+        if (key.KeyCode == KeyCode.Delete
+            && Keybindings.ResolveDetail(CurrentDetailSubContext(), "Delete") == KeyAction.DeleteComment)
+        {
+            key.Handled = true;
+            ShowCommentDeletePicker();
             return;
         }
 
@@ -1452,6 +1618,20 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             OpenBrowserRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        // Ctrl+Alt+Enter opens this task in a split pane beside the current one (#507, epic #502 E) — the
+        // split-pane sibling of the Ctrl+Enter new-tab gesture below, gated identically on _treeList so the
+        // footer hint and the key stay in lock-step. Ctrl+Alt+Enter carries KeyCode.Enter | Ctrl | Alt, so
+        // it is a distinct key from Ctrl+Enter and must be checked first: the Ctrl+Enter branch's
+        // `& ~CtrlMask == Enter` fails once Alt is set (it leaves Enter | Alt), so the two never cross, but
+        // checking the more-specific chord first keeps the intent obvious.
+        if (key.IsCtrl && key.IsAlt && (key.KeyCode & ~(KeyCode.CtrlMask | KeyCode.AltMask)) == KeyCode.Enter
+            && !_promptBox.Visible && _treeList is not null)
+        {
+            key.Handled = true;
+            OpenInSplitPaneRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 
@@ -2391,6 +2571,174 @@ public sealed class TaskDetailScreen : Screen
         e.Handled = true;
         _replyPicker.SelectedItem = row;
         PickReplyTarget();
+    }
+
+    // ── Comment delete (#594) ──────────────────────────────────────────────────
+
+    /// <summary>Delete on the Comments/Stream tab: opens the delete-target picker over the task's deletable
+    /// comments (top-level + replies, newest-first with each thread nested), or flashes when there are none.
+    /// Inert when the host wired no delete callback, or while a delete is already in flight.</summary>
+    private void ShowCommentDeletePicker()
+    {
+        if (_commentDeletePickerBox.Visible || _deleteCommentAsync is null)
+            return;
+        if (_commentDeleteInFlight)
+        {
+            RequestFlash("Still deleting…");
+            return;
+        }
+        _commentDeleteTargets = CommentDeleteModel.Targets(_comments);
+        if (_commentDeleteTargets.Count == 0)
+        {
+            RequestFlash("No comments to delete.");
+            return;
+        }
+        _commentDeletePicker.SetSource(new ObservableCollection<string>(_commentDeleteTargets.Select(t => t.Label)));
+        _commentDeletePicker.SelectedItem = 0;
+        var height = DispatchPaneModel.ClampHeight(CommentDeletePickerPreferredHeight, Viewport.Height, minTabRows: 3);
+        _commentDeletePickerBox.Height = height;
+        _commentDeletePickerBox.Y = Pos.AnchorEnd(height);
+        _commentDeletePickerBox.Visible = true;
+        RequestHoverHint(null);   // drop any stale hover hint the overlay now covers (#408)
+        _commentDeletePicker.SetFocus();
+    }
+
+    /// <summary>Closes the delete picker and returns focus to the front-most tab (mirrors HideReplyPicker).</summary>
+    private void HideCommentDeletePicker()
+    {
+        if (!_commentDeletePickerBox.Visible)
+            return;
+        _commentDeletePickerBox.Visible = false;
+        _commentDeleteTargets = []; // drop the snapshot's references; ShowCommentDeletePicker rebuilds it
+        FocusCurrentPane();
+    }
+
+    /// <summary>Picks the highlighted comment for deletion: closes the picker, then confirms — the native
+    /// <see cref="ConfirmDialog"/> when the flag is on, else the inline Enter/Esc armed confirm (answered at
+    /// the top of <see cref="OnKey"/>). Deleting is never one-touch: the API delete is not undoable (#594), so
+    /// a confirmation always stands between the pick and the write.</summary>
+    private void PickCommentToDelete()
+    {
+        if (!_commentDeletePickerBox.Visible)
+            return;
+        var index = _commentDeletePicker.SelectedItem ?? -1;
+        if (index < 0 || index >= _commentDeleteTargets.Count)
+            return;
+        var target = _commentDeleteTargets[index];
+        HideCommentDeletePicker();
+
+        if (ConfirmDialog.Enabled)
+        {
+            ConfirmCommentDeleteNatively(
+                title: "Delete comment",
+                message: $"Delete this comment by {target.Author}?\nThis can't be undone.",
+                onConfirm: () => PerformCommentDelete(target.CommentId));
+            return;
+        }
+        _commentDeletePending = (target.CommentId, target.Author);
+        RequestFlash($"Delete this comment by {target.Author}? (Enter = delete · Esc = cancel)");
+    }
+
+    /// <summary>Delete-picker keys: Enter picks the highlighted comment, Esc cancels; ↑/↓ are the list's own.</summary>
+    private void OnCommentDeletePickerKey(object? sender, Key key)
+    {
+        switch (key.KeyCode)
+        {
+            case KeyCode.Enter:
+                key.Handled = true;
+                PickCommentToDelete();
+                break;
+            case KeyCode.Esc:
+                key.Handled = true;
+                HideCommentDeletePicker();
+                break;
+        }
+    }
+
+    /// <summary>A left-click on a delete-picker row selects and picks it (the mouse path, mirroring the reply
+    /// picker's row hit-test, offset by the list's scroll).</summary>
+    private void OnCommentDeletePickerMouse(object? sender, Mouse e)
+    {
+        if (!e.Flags.HasFlag(MouseFlags.LeftButtonClicked) || e.Position is not { Y: >= 0 } pos)
+            return;
+        var row = _commentDeletePicker.Viewport.Y + pos.Y;
+        if (row < 0 || row >= _commentDeleteTargets.Count)
+            return;
+        e.Handled = true;
+        _commentDeletePicker.SelectedItem = row;
+        PickCommentToDelete();
+    }
+
+    /// <summary>Opens the reusable native <see cref="ConfirmDialog"/> for a comment delete, deferred out of the
+    /// keypress via <see cref="Application.Invoke(Action)"/> like the checklist confirm so the nested run-loop
+    /// isn't entered re-entrantly from a picker key. On confirm it runs the optimistic delete; on cancel it
+    /// flashes. Only reached when <see cref="ConfirmDialog.Enabled"/> — the flag-off default arms the inline
+    /// confirm instead.</summary>
+    private void ConfirmCommentDeleteNatively(string title, string message, Action onConfirm)
+    {
+        if (!ConfirmDialog.TryBeginOpen())
+            return;
+        Application.Invoke(() => ConfirmDialog.Run(title, message, "Delete", confirmed =>
+        {
+            if (_disposed)
+                return;
+            if (confirmed)
+                onConfirm();
+            else
+                RequestFlash("Delete cancelled.");
+        }));
+    }
+
+    /// <summary>Performs the confirmed comment delete: optimistic removal (a top-level comment and its thread,
+    /// or a nested reply) → re-render → off-thread <see cref="_deleteCommentAsync"/> → revert-to-snapshot +
+    /// flash on failure, mirroring the checklist delete's discipline. The <see cref="_pendingCommentEdit"/>
+    /// overlay keeps the removal authoritative against a refresh landing mid-write. Only the author's own
+    /// comments are deletable; a non-author permission error surfaces here on revert (<see cref="CommentItem"/>
+    /// carries no author id to pre-filter, per #594).</summary>
+    private void PerformCommentDelete(string commentId)
+    {
+        if (_deleteCommentAsync is null || _commentDeleteInFlight)
+            return;
+        if (!CommentDeleteModel.Targets(_comments).Any(t => string.Equals(t.CommentId, commentId, StringComparison.Ordinal)))
+        {
+            RequestFlash("That comment is no longer here.");
+            return;
+        }
+
+        var snapshot = _comments;
+
+        _commentDeleteInFlight = true;
+        _pendingCommentEdit = c => CommentDeleteModel.Remove(c, commentId);
+        UpdateData(_task, CommentDeleteModel.Remove(_comments, commentId));
+        // Feedback on the optimistic removal (mirrors the checklist "Deleting item…"); the comment is gone from
+        // the panes now, the request confirms it in the background.
+        RequestFlash("Deleting comment…");
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await _deleteCommentAsync(commentId, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _commentDeleteInFlight = false;
+                    _pendingCommentEdit = null;
+                    // The optimistic removal already matches the confirmed delete; the next refresh reconciles.
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _commentDeleteInFlight = false;
+                    _pendingCommentEdit = null; // cleared first so the overlay doesn't re-remove on revert.
+                    if (_disposed)
+                        return;
+                    UpdateData(_task, snapshot); // the comment reappears
+                    RequestFlash($"Could not delete comment: {ShortError(ex)}");
+                });
+            }
+        });
     }
 
     /// <summary>A one-line, length-capped rendering of an exception for the status flash.</summary>
@@ -3767,6 +4115,64 @@ public sealed class TaskDetailScreen : Screen
         NavigateToTreeTask(_treeRows[i]);
     }
 
+    /// <summary>The task on the highlighted Task Tree row, or null when the highlighted row is a
+    /// placeholder/message row ("(no task tree)", "Loading…", a load error) — the same null-task rows
+    /// <see cref="NavigateTreeSelection"/> and <see cref="OnTreeMouse"/> treat as inert.</summary>
+    private TaskItem? SelectedTreeTask()
+        => _treeList?.SelectedItem is int i && i >= 0 && i < _treeRows.Count ? _treeRows[i] : null;
+
+    /// <summary>F2 on the Task Tree tab (H, #545): request the host rename the highlighted node's task.
+    /// A placeholder/message row (no task) is inert-but-flashed rather than a silent no-op — mirroring the
+    /// main list's "Select a task to rename." guard.</summary>
+    private void RequestTreeRename()
+    {
+        if (SelectedTreeTask() is not { } task)
+        {
+            RequestFlash("Select a task to rename.");
+            return;
+        }
+        RenameTreeTaskRequested?.Invoke(this, new TreeTaskRenameRequest(task.Id, task.Name));
+    }
+
+    /// <summary>
+    /// Optimistically reflects an F2 rename made from the Task Tree tab (H, #545), called by the host on the
+    /// confirmed submit (and again with the server-confirmed name, or the previous name on a failed write —
+    /// revert). Re-renders the matching tree row in place with <paramref name="newName"/>, cursor preserved
+    /// (mirroring <see cref="SetTreeBadgeDisplay"/>); and when the renamed node is the task this screen shows
+    /// (the tree's default-highlighted current row), re-renders the header too via <see cref="UpdateData"/>
+    /// so the title stays consistent. A no-op when the tree hasn't loaded or doesn't contain the id (e.g. a
+    /// mid-write refresh dropped the node) — the host's write still reconciles the authoritative value.
+    /// </summary>
+    public void ApplyTreeRename(string taskId, string newName)
+    {
+        // The header follows the current task (the highlighted node is most often the current row).
+        if (string.Equals(taskId, _task.Id, StringComparison.Ordinal))
+            UpdateData(_task with { Name = newName }, _comments);
+
+        if (_treeList is null || _loadedTreeRows.Count == 0)
+            return;
+        var index = -1;
+        for (var i = 0; i < _loadedTreeRows.Count; i++)
+            if (string.Equals(_loadedTreeRows[i].Task.Id, taskId, StringComparison.Ordinal))
+            {
+                index = i;
+                break;
+            }
+        if (index < 0)
+            return;
+
+        var rows = _loadedTreeRows.ToArray();
+        rows[index] = rows[index] with { Task = rows[index].Task with { Name = newName } };
+        _loadedTreeRows = rows;
+
+        // Assigning .Source (inside RenderTreeRows) resets the selection, so capture and restore it around
+        // the rebuild — exactly as SetTreeBadgeDisplay does for the F6 re-render.
+        var previous = _treeList.SelectedItem;
+        RenderTreeRows(_loadedTreeRows);
+        if (previous >= 0 && previous < _treeRows.Count)
+            _treeList.SelectedItem = previous;
+    }
+
     /// <summary>Double-click a tree row → navigate to its task (the mouse equivalent of Enter), resolved
     /// via the shared <see cref="RowHitTester"/> (A, #286). A message/placeholder row (null task) or a
     /// click in the empty space beneath the rows no-ops. Single-click keeps native selection.</summary>
@@ -3793,7 +4199,8 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     private void OnPaneLinkActivation(object? sender, LinkActivationRequest request)
     {
-        if (_promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible)
+        if (_promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible
+            || _commentDeletePickerBox.Visible)
             return;
         LinkActivationRequested?.Invoke(this, request);
     }
@@ -3806,7 +4213,8 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     private void OnPaneHover(object? sender, string? target)
     {
-        var suppressed = _promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible;
+        var suppressed = _promptBox.Visible || _commentBox.Visible || _descriptionBox.Visible
+            || _replyPickerBox.Visible || _commentDeletePickerBox.Visible;
         RequestHoverHint(target is null || suppressed ? null : $"Link: {target}");
     }
 

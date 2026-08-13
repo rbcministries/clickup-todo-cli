@@ -114,24 +114,44 @@ public sealed class KeybindingsTests
         }
     }
 
-    // #539 (contextual chords B) moved Settings F2 → F10 to free F2 for the rename slices; H (#545) claims
-    // F2 for the main-list task rename and D (#541) claims it for the Checklists-tab item/group rename
-    // (contextual-chord-model.md §5-D/§5-H). Pinned so Settings stays on F10 and F2 is used *only* for a
-    // Rename action (the #290 convention) — a future slice can't quietly repurpose it for anything else.
+    // #539 (contextual chords B) moved Settings F2 → F10 to free F2 for the rename slices; F2 is now a
+    // Rename/Edit key across the app (the #290 convention): H (#545) claims it for RenameTask on the main
+    // list and — tree half — on the Task Tree tab in Detail, while D (#541) claims it for EditChecklistItem
+    // on the Checklists tab in Detail (labelled Edit since #572 put the assignee in that modal — #601). The
+    // two Detail F2 bindings coexist because ResolveDetail disambiguates by sub-context (§2.2). Pinned so
+    // Settings stays on F10 and F2 is used *only* for a Rename/Edit action — nothing else may repurpose it.
     [Fact]
     public void Settings_IsF10_OnMainList_AndF2_IsRenameOnly()
     {
         Assert.Equal("F10", Keybindings.Token(ScreenContext.MainList, KeyAction.Settings));
         Assert.Equal("F2", Keybindings.Token(ScreenContext.MainList, KeyAction.RenameTask));
+        // Task Detail binds F2 to TWO contextual actions after D (#541) + H (#545), disambiguated by
+        // sub-context: EditChecklistItem (Checklists tab; Edit since the surface edits name + assignee,
+        // #572/#601) and RenameTask (Task Tree tab).
         Assert.Equal("F2", Keybindings.Token(ScreenContext.Detail, KeyAction.EditChecklistItem));
+        Assert.Equal("F2", Keybindings.Token(ScreenContext.Detail, KeyAction.RenameTask));
 
-        // Every F2 binding is a Rename/Edit-the-contextual-thing action — RenameTask on the main list (H,
-        // #545, title only), EditChecklistItem in Task Detail (D, #541; labelled Edit since the surface edits
-        // name + assignee, #572/#601). F2 = Rename/Edit is the convention (#290); nothing else may claim the key.
+        // Every F2 binding is a Rename/Edit-the-contextual-thing action — RenameTask (main list H #545,
+        // title only, and the Task Tree tab in Detail) and EditChecklistItem (Detail Checklists tab, D #541).
+        // F2 = Rename/Edit is the convention (#290); nothing else may claim the key.
         KeyAction[] renameActions = [KeyAction.RenameTask, KeyAction.EditChecklistItem];
         Assert.All(
             Keybindings.All.Where(e => e.Value == "F2"),
             e => Assert.Contains(e.Key.Action, renameActions));
+    }
+
+    // Split-pane epic E (#507): OpenInSplitPane is a sibling launch mode of OpenInNewTab, not a mode of
+    // it — a distinct action on a distinct chord. Pinned so the two never get merged or their chords
+    // swapped: new tab stays Ctrl+Enter, split pane is Ctrl+Alt+Enter, and they parse to different keys.
+    [Fact]
+    public void OpenInSplitPane_IsCtrlAltEnter_DistinctFromNewTabsCtrlEnter()
+    {
+        Assert.Equal("Ctrl+Enter", Keybindings.Token(ScreenContext.MainList, KeyAction.OpenInNewTab));
+        Assert.Equal("Ctrl+Alt+Enter", Keybindings.Token(ScreenContext.MainList, KeyAction.OpenInSplitPane));
+
+        Assert.True(Key.TryParse("Ctrl+Enter", out var newTab));
+        Assert.True(Key.TryParse("Ctrl+Alt+Enter", out var splitPane));
+        Assert.NotEqual(newTab.KeyCode, splitPane.KeyCode);
     }
 
     // The Help screen is the help; it must not bind a Help action (it would advertise F1 → itself).
@@ -169,20 +189,24 @@ public sealed class KeybindingsTests
     {
         Assert.Equal(KeyAction.AddChecklistItem, Keybindings.ResolveDetail(DetailSubContext.Checklists, "Ctrl+N"));
         Assert.Equal(KeyAction.AddComment, Keybindings.ResolveDetail(DetailSubContext.Comments, "Ctrl+N"));
+        Assert.Equal(KeyAction.AddComment, Keybindings.ResolveDetail(DetailSubContext.Stream, "Ctrl+N"));
         Assert.Equal(KeyAction.AddComment, Keybindings.ResolveDetail(DetailSubContext.TaskTree, "Ctrl+N"));
         Assert.Equal(KeyAction.AddComment, Keybindings.ResolveDetail(DetailSubContext.Default, "Ctrl+N"));
     }
 
-    // Contextual chords D (#541): F2 edits on the Checklists tab (item or group, row-kind decided in the
-    // handler) and is inert on every other tab — the Detail dispatch routes F2 through this seam exactly as
-    // it does Ctrl+N, so the footer label and the fired action can't drift. RenameTask's own F2 lives in
-    // MainList, not Detail, so no Detail sub-context resolves F2 to it.
+    // Contextual chords D (#541) + H (#545, tree half): F2 is a per-tab Rename/Edit in Task Detail,
+    // disambiguated by sub-context — EditChecklistItem on the Checklists tab (item or group, row-kind decided
+    // in the handler; labelled Edit since #572 put the assignee in that modal — #601) and RenameTask on the
+    // Task Tree tab (the highlighted node's title) — and inert on every other tab, where it has no highlighted
+    // target (the #542 F2/Ctrl+E alias question, deliberately not decided here). Detail dispatch routes F2
+    // through this seam exactly as it does Ctrl+N, so the footer label and the fired action can't drift, and
+    // the two F2 actions never collide because only one is live per tab.
     [Fact]
-    public void ResolveDetail_F2_IsEditChecklistItem_OnChecklistsTab_AndInertElsewhere()
+    public void ResolveDetail_F2_IsEditChecklistItem_OnChecklists_RenameTask_OnTaskTree_InertElsewhere()
     {
         Assert.Equal(KeyAction.EditChecklistItem, Keybindings.ResolveDetail(DetailSubContext.Checklists, "F2"));
+        Assert.Equal(KeyAction.RenameTask, Keybindings.ResolveDetail(DetailSubContext.TaskTree, "F2"));
         Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Comments, "F2"));
-        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.TaskTree, "F2"));
         Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Default, "F2"));
     }
 
@@ -203,6 +227,26 @@ public sealed class KeybindingsTests
     {
         Assert.Equal("Delete", Keybindings.Token(ScreenContext.Detail, KeyAction.DeleteChecklistItem));
         Assert.DoesNotContain(Keybindings.All, e => e.Value == "F9");
+    }
+
+    // #594 (contextual chords F, comment half): Delete resolves to DeleteComment on the comment-bearing tabs
+    // (Comments/Stream) and to DeleteChecklistItem on the Checklists tab — the same "Delete" token,
+    // disambiguated by sub-context exactly as Ctrl+N's AddComment/AddChecklistItem are. It stays inert (null)
+    // on Description/Other (Default) and the Task Tree tab, which show no comments. This is the delete-side
+    // analogue of ResolveDetail_CtrlN_IsAddChecklistItem_OnChecklistsTab_AndAddComment_Elsewhere.
+    [Fact]
+    public void ResolveDetail_Delete_IsDeleteComment_OnCommentTabs_ChecklistItem_OnChecklists_InertElsewhere()
+    {
+        Assert.Equal(KeyAction.DeleteComment, Keybindings.ResolveDetail(DetailSubContext.Comments, "Delete"));
+        Assert.Equal(KeyAction.DeleteComment, Keybindings.ResolveDetail(DetailSubContext.Stream, "Delete"));
+        Assert.Equal(KeyAction.DeleteChecklistItem, Keybindings.ResolveDetail(DetailSubContext.Checklists, "Delete"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Default, "Delete"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.TaskTree, "Delete"));
+
+        // DeleteComment carries the same token as the checklist delete — the collision-free sharing the
+        // sub-context model rests on (DetailBindings_HaveNoTokenCollision_WithinASubContext proves no tab
+        // sees both live).
+        Assert.Equal("Delete", Keybindings.Token(ScreenContext.Detail, KeyAction.DeleteComment));
     }
 
     // #541 (contextual chords D) retargets the last #458 stopgap: rename moves F8 → the conventional F2

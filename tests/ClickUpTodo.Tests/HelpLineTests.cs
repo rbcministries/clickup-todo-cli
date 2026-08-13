@@ -29,7 +29,7 @@ public sealed class HelpLineTests
     public void Format_MainList_RendersTheFullFooter()
     {
         const string expected =
-            "↑/↓ move · →| next section · Ctrl+U quick update · ↩ detail · Ctrl+O 🗁 by ID · Ctrl+↩ new tab · Ctrl+N ➕ · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E 🔔 · "
+            "↑/↓ move · →| next section · Ctrl+U quick update · ↩ detail · Ctrl+O 🗁 by ID · Ctrl+↩ new tab · Ctrl+Alt+↩ split pane · Ctrl+N ➕ · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E 🔔 · "
             + "F1 ℹ · F10 ⚙ · F2 ✏ rename · F3 ⧩ ▼▲ ⛚ · F4 subtasks · F5 ↻ · F6 badges · F12 👁✅ · "
             + "→/← expand/collapse · Ctrl+→/← all · Ctrl+Q quit · type to search";
 
@@ -119,6 +119,36 @@ public sealed class HelpLineTests
     public void Detail_SingleTaskMode_DoesNotCarryNewTab()
         => Assert.DoesNotContain(HelpItemSets.Detail, i => i.Label == "new tab");
 
+    // Split-pane epic E (#507): the main list's Ctrl+Alt+Enter opens the selected task in a split pane
+    // beside the current one — the sibling of the #301 new-tab gesture. The glyph key `Ctrl+Alt+↩`
+    // re-raises the parseable `Ctrl+Alt+Enter` chord on a footer click (#289).
+    [Fact]
+    public void MainList_CarriesCtrlAltEnterSplitPane_ReRaisingCtrlAltEnter()
+    {
+        var item = HelpItemSets.MainList.Single(i => i.Label == "split pane");
+        Assert.Equal("Ctrl+Alt+↩", item.Key);
+        Assert.Equal("Ctrl+Alt+Enter", item.ActionKey);
+        Assert.True(item.IsAction);
+    }
+
+    // #507 — the detail view's Ctrl+Alt+Enter split-pane sibling of the #384 new-tab gesture. Same glyph
+    // key + chord as the list's, so the shortcut doesn't drift across surfaces (mirrors the new-tab pin).
+    [Fact]
+    public void DetailWithTaskTree_CarriesCtrlAltEnterSplitPane_ReRaisingCtrlAltEnter()
+    {
+        var item = HelpItemSets.DetailWithTaskTree.Single(i => i.Label == "split pane");
+        Assert.Equal("Ctrl+Alt+↩", item.Key);
+        Assert.Equal("Ctrl+Alt+Enter", item.ActionKey);
+        Assert.True(item.IsAction);
+        Assert.Equal(HelpItemSets.MainList.Single(i => i.Label == "split pane").ActionKey, item.ActionKey);
+    }
+
+    // Like new-tab, the split-pane gesture is scoped to the tree-present detail set; the leaner Detail set
+    // (no tree loader) neither advertises nor fires it.
+    [Fact]
+    public void Detail_SingleTaskMode_DoesNotCarrySplitPane()
+        => Assert.DoesNotContain(HelpItemSets.Detail, i => i.Label == "split pane");
+
     // #290 — the "quick update" action must use one shortcut everywhere. It launches Quick Updates from
     // both the main list and Task Detail, so both help sets must advertise the same key (Ctrl+U).
     [Fact]
@@ -155,6 +185,21 @@ public sealed class HelpLineTests
         Assert.Equal("F6", listItem.Key);
         Assert.Equal(listItem.Key, treeItem.Key);
         Assert.DoesNotContain(HelpItemSets.Detail, i => i.Key == "F6");
+    }
+
+    // Contextual chords D (#541) + H (#545, tree half): after both slices F2 → edit is a SINGLE footer
+    // item on each Task Detail base set (not one per bound action) — it serves the checklist item/group edit
+    // on the Checklists tab and the Task Tree node rename on the Task Tree tab, resolved per front tab via
+    // Keybindings.ResolveDetail, since the footer isn't split per sub-context yet. "Edit" is the umbrella
+    // (rename is one facet of edit — contextual-chord-model §3; the checklist surface edits name + assignee,
+    // #572/#601). The `.Single` pins that uniqueness so the two F2 slices can't leave a duplicated hint;
+    // DetailSets_CarryF2Edit_NotF8 above pins its presence + the F8 retirement.
+    [Theory]
+    [MemberData(nameof(DetailSets))]
+    public void DetailSets_CarryExactlyOneF2Edit(IReadOnlyList<HelpItem> set)
+    {
+        var item = set.Single(i => i.IsAction && i.ActionKey == "F2");
+        Assert.Equal("✏ edit", item.Label);
     }
 
     // #436 — while an overlay editor (comment composer Ctrl+N / description editor Ctrl+E) is open the

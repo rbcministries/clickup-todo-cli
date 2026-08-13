@@ -190,6 +190,69 @@ public sealed class ClickUpClientCreateTaskTests
             "no custom fields must send no custom_fields key.");
     }
 
+    [Fact]
+    public async Task CreateTask_WithParentTaskId_SendsTopLevelParentString_AndMapsSubtask()
+    {
+        // Slice G's subtask (#544) child path: a ParentTaskId creates the task under a parent, sent as
+        // ClickUp's top-level `parent` string (not nested), and the mapped result reflects the parent.
+        var handler = new CapturingHandler(
+            """{ "id": "sub1", "name": "N", "parent": "parent42" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        var created = await client.CreateTaskAsync("list1", new NewTaskRequest
+        {
+            Name = "N",
+            ParentTaskId = "parent42",
+        });
+
+        var parent = handler.Body!.RootElement.GetProperty("parent");
+        Assert.Equal(JsonValueKind.String, parent.ValueKind);
+        Assert.Equal("parent42", parent.GetString());
+        // The parent rides alongside name at the top level, not inside another object.
+        Assert.Equal("N", handler.Body!.RootElement.GetProperty("name").GetString());
+        Assert.Equal("parent42", created.ParentId);
+    }
+
+    [Fact]
+    public async Task CreateTask_ParentAndCustomFields_CoexistWithoutInterference()
+    {
+        // parent and custom_fields both ride on the request's additional-data bag; a task can be both a
+        // subtask and carry field values at create time, and neither key must clobber the other.
+        var handler = new CapturingHandler("""{ "id": "sub1", "name": "N", "parent": "p1" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await client.CreateTaskAsync("list1", new NewTaskRequest
+        {
+            Name = "N",
+            ParentTaskId = "p1",
+            CustomFields = [new CustomFieldValue("cf_text", JsonSerializer.SerializeToElement("hello"))],
+        });
+
+        var body = handler.Body!.RootElement;
+        Assert.Equal("p1", body.GetProperty("parent").GetString());
+        var custom = body.GetProperty("custom_fields");
+        Assert.Equal(1, custom.GetArrayLength());
+        Assert.Equal("cf_text", custom[0].GetProperty("id").GetString());
+        Assert.Equal("hello", custom[0].GetProperty("value").GetString());
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public async Task CreateTask_BlankParentTaskId_SendsNoParentKey(string? parentId)
+    {
+        // An unset/blank parent must leave today's top-level create body untouched (no `parent` key),
+        // mirroring the empty-custom_fields and unset-optional-field guards above.
+        var handler = new CapturingHandler("""{ "id": "t1", "name": "N" }""");
+        using var client = new ClickUpClient("pk_x", new HttpClient(handler));
+
+        await client.CreateTaskAsync("list1", new NewTaskRequest { Name = "N", ParentTaskId = parentId });
+
+        Assert.False(handler.Body!.RootElement.TryGetProperty("parent", out _),
+            "a blank/unset ParentTaskId must send no parent key.");
+    }
+
     /// <summary>Records the outgoing request (method, URI, parsed JSON body) and returns a canned body.</summary>
     private sealed class CapturingHandler(string responseBody) : HttpMessageHandler
     {
