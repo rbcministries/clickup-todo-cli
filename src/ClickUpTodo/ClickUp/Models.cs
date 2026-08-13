@@ -145,6 +145,13 @@ public sealed record NewTaskRequest
     /// <c>custom_fields</c> array. Empty (the default) sends no key, leaving today's create behaviour
     /// unchanged. Populated by the New Task screen from the pure <c>CustomFieldValueSerializer</c>.</summary>
     public IReadOnlyList<CustomFieldValue> CustomFields { get; init; } = [];
+
+    /// <summary>When set, the task is created as a <b>subtask</b> of this parent task — sent as
+    /// ClickUp's top-level <c>parent</c> field (#544, slice G's <c>Ctrl+N</c> sub-add child path).
+    /// Null/blank (the default) creates a top-level task, leaving today's create body unchanged. Like
+    /// <see cref="CustomFields"/>, this rides on the create request's additional-data bag rather than a
+    /// generated typed property, so it needs no spec change / Kiota regen.</summary>
+    public string? ParentTaskId { get; init; }
 }
 
 /// <summary>A unified task as shown in the to-do list, merged from either source endpoint.</summary>
