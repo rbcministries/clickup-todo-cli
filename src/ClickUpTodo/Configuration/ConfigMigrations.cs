@@ -26,6 +26,11 @@ public static class ConfigMigrations
         // call sites, so coalesce it back to an empty map.
         config.TaskWorkingDirectories ??= [];
 
+        // Same guard for the Super Agents seed (#494): a hand-edited "superAgents": null would defeat the
+        // `= new()` default, so the registry's seed read would NRE. Coalesce it back to defaults. No
+        // version bump — there is no legacy data to fold, only a null to normalize (like the two above).
+        config.SuperAgents ??= new SuperAgentSettings();
+
         // Widening the persisted LaunchLocation enum to three values (#508, split pane): an out-of-range
         // value — a future ordinal, or a hand-edited "launchLocation": 99 — deserializes through
         // JsonStringEnumConverter to an undefined (LaunchLocation)N without throwing, so clamp it back to

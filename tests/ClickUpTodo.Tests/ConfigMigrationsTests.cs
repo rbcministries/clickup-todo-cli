@@ -88,6 +88,21 @@ public sealed class ConfigMigrationsTests : IDisposable
     }
 
     [Fact]
+    public void Apply_NullSuperAgents_CoalescedToDefaults()
+    {
+        // A hand-edited config.json with "superAgents": null deserializes to null (the property's `= new()`
+        // default only fills a missing key). The agent registry's seed read would NRE, so Apply must
+        // normalize it back to defaults.
+        var config = new AppConfig { SuperAgents = null! };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.NotNull(config.SuperAgents);
+        Assert.True(config.SuperAgents.IsDefault);
+        Assert.Empty(config.SuperAgents.Agents);
+    }
+
+    [Fact]
     public void Apply_AbsentLegacyField_SeedsDefaultExclusions()
     {
         // A config that never carried excludedStatuses (null) is treated as a fresh install: seed the
