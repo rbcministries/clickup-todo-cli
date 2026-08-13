@@ -1334,10 +1334,15 @@ public sealed class TodoApp
         // Deferred out of the keypress via Application.Invoke so the nested run-loop isn't entered
         // re-entrantly from the dispatcher, mirroring the native confirm/help modals. After the dialog
         // tears down, OpenNewTask mounts over the (now clear) screen stack.
+        // Button labels have distinct first letters (Task/Subtask/Cancel → T/S/C) so each gets its own
+        // auto-derived hotkey — Terminal.Gui derives a button's accelerator from its first letter, so
+        // "Add task"/"Add subtask" would both claim 'A' (the repo's other choice dialogs, e.g.
+        // ConfirmDialog's Delete/Cancel, follow the same distinct-first-letter convention). The framing
+        // message carries the "add" verb, so the terse noun labels read clearly.
         Application.Invoke(() => ChoiceDialog.Run(
             "New task",
             $"Add a task, or a subtask of “{parentName}”?",
-            ["Add task", "Add subtask"],
+            ["Task", "Subtask"],
             index =>
             {
                 switch (index)

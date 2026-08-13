@@ -105,10 +105,13 @@ def leg_native(capture_path):
         v = app.send(CTRL_N, 2.0)
         assert NATIVE_CHOICE_MARKER in v, \
             f"native leg: Ctrl+N did not open the native choice dialog ({NATIVE_CHOICE_MARKER!r} missing):\n{v}"
-        assert "Add task" in v and "Add subtask" in v, \
-            f"native leg: the Add task / Add subtask choices are missing:\n{v}"
+        # The buttons are "Task" / "Subtask" (distinct first letters → distinct T/S hotkeys); the
+        # capitalised "Subtask" is the button (the message uses lower-case "subtask of"), and Cancel
+        # proves the multi-choice row rendered.
+        assert "Subtask" in v and "Cancel" in v, \
+            f"native leg: the Subtask / Cancel choices are missing:\n{v}"
         assert "subtask of" in v, f"native leg: the dialog message did not name the sub-add parent:\n{v}"
-        print("CHOICE ok — Ctrl+N opened the native [native choice] dialog with Add task / Add subtask")
+        print("CHOICE ok — Ctrl+N opened the native [native choice] dialog with Task / Subtask")
 
         # Move focus to the second button (Add subtask) and activate it.
         app.send(TAB, 0.5)
