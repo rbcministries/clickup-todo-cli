@@ -152,4 +152,51 @@ public sealed class QuickOpenParserTests
     [Fact]
     public void FindInCache_InvalidRef_ReturnsNull()
         => Assert.Null(QuickOpenParser.FindInCache([Task("aaa")], QuickOpenRef.Invalid));
+
+    // ── ResolveLaunch (launch modes B, #615) ──────────────────────────────
+    // The new-tab / split-pane resolution: a cache hit supplies the real id + name, a miss hands the raw
+    // trimmed token to the child (both id and display name), and an unparseable token yields null.
+
+    [Fact]
+    public void ResolveLaunch_CacheHitById_UsesRealIdAndName()
+    {
+        var universe = new[] { Task("aaa"), Task("bbb", "ABC-1") };
+        var launch = QuickOpenParser.ResolveLaunch(universe, "bbb");
+        Assert.Equal(new QuickOpenLaunch("bbb", "task bbb"), launch);
+    }
+
+    [Fact]
+    public void ResolveLaunch_CacheHitByCustomId_UsesRealIdAndName()
+    {
+        // A hyphenated bare token parses as a custom id and still resolves off the cache by CustomId.
+        var universe = new[] { Task("aaa"), Task("bbb", "ABC-1") };
+        var launch = QuickOpenParser.ResolveLaunch(universe, "abc-1");
+        Assert.Equal(new QuickOpenLaunch("bbb", "task bbb"), launch);
+    }
+
+    [Fact]
+    public void ResolveLaunch_CacheMiss_HandsRawTrimmedTokenToChild()
+    {
+        // An uncached but parseable token: the raw trimmed token is both the --task ref and the display
+        // name — the child's --task resolves every Ctrl+O form (#464), so no parent-side round-trip.
+        var launch = QuickOpenParser.ResolveLaunch([Task("aaa")], "  86zzz999  ");
+        Assert.Equal(new QuickOpenLaunch("86zzz999", "86zzz999"), launch);
+    }
+
+    [Fact]
+    public void ResolveLaunch_CacheMiss_Url_HandsRawUrlToChild()
+    {
+        // A task URL is parseable (so not rejected) but uncached — the whole URL goes to the child, whose
+        // --task classifies it through this same parser.
+        const string url = "https://app.clickup.com/t/86abc123";
+        var launch = QuickOpenParser.ResolveLaunch([Task("aaa")], url);
+        Assert.Equal(new QuickOpenLaunch(url, url), launch);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("https://notclickup.com/t/86abc123")] // a foreign URL is unparseable
+    public void ResolveLaunch_Unparseable_ReturnsNull(string input)
+        => Assert.Null(QuickOpenParser.ResolveLaunch([Task("aaa")], input));
 }

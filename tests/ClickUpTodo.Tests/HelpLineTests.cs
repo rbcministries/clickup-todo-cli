@@ -41,9 +41,11 @@ public sealed class HelpLineTests
         => Assert.Contains(new HelpItem("Ctrl+O", "🗁 by ID"), HelpItemSets.MainList);
 
     [Fact]
-    public void Format_QuickOpen_RendersOpenHelpCancel()
+    public void Format_QuickOpen_RendersOpenLaunchModesHelpCancel()
         => Assert.Equal(
-            "Enter/Open open · F1 ℹ · Esc cancel",
+            // Launch modes B (#615): the two chord items sit between Open and F1, matching the
+            // main-list / DetailWithTaskTree glyph style.
+            "Enter/Open open · Ctrl+↩ new tab · Ctrl+Alt+↩ split pane · F1 ℹ · Esc cancel",
             HelpLine.Format(HelpItemSets.QuickOpen));
 
     // The New Task action is on Ctrl+N; its label tightened to the ➕ glyph in #343 (key hint kept).

@@ -1503,14 +1503,49 @@ public sealed class TodoApp
             // first: doing it inline in the close handler fires it while the modal is still mounted, so
             // OpenTaskDetail captures the modal as its "requester" and then skips the mount once the modal
             // closes (observed under the tui-validate harness — "Loading details…" stuck, detail never
-            // shown). AddTimeout guarantees the later iteration.
-            if (screen.Result is { } text)
+            // shown). AddTimeout guarantees the later iteration. The deferral covers all three intents
+            // (#615): the OpenHere detail-open needs it, and keeping one path is simpler than branching —
+            // the NewTab/SplitPane launch flash simply lands on whatever the surface was covering, exactly
+            // as the detail-hosted Ctrl+U launch already does.
+            if (screen.Result is { } request)
                 Application.AddTimeout(TimeSpan.FromMilliseconds(1), () =>
                 {
-                    ResolveAndOpen(text);
+                    switch (request.Intent)
+                    {
+                        case QuickOpenIntent.NewTab:
+                            ResolveAndLaunch(request.Text, LaunchLocation.NewTab);
+                            break;
+                        case QuickOpenIntent.SplitPane:
+                            ResolveAndLaunch(request.Text, LaunchLocation.SplitPane);
+                            break;
+                        default:
+                            ResolveAndOpen(request.Text);
+                            break;
+                    }
                     return false;
                 });
         });
+    }
+
+    /// <summary>
+    /// Resolves a quick-open input and opens the target in a new terminal tab or a split pane (launch
+    /// modes B, #615) rather than in place. Parses locally with <see cref="QuickOpenParser.ResolveLaunch"/>
+    /// (pure, no I/O): an unparseable token flashes the same error <see cref="ResolveAndOpen"/> uses and
+    /// launches nothing — the error belongs where the typing happened, not in a child process that opens
+    /// and dies. A cache hit supplies the real id + name for the status flash; otherwise the raw token is
+    /// handed to the child, whose <c>--task</c> resolves every form Ctrl+O does (#464). The launch itself
+    /// is the shared <see cref="LaunchAppForTask"/>, which brings the in-flight guard, the #505/#515
+    /// split-viability floor, the split→tab→window ladder and the clipboard fallback.
+    /// </summary>
+    private void ResolveAndLaunch(string text, LaunchLocation destination)
+    {
+        if (QuickOpenParser.ResolveLaunch(CandidateUniverse(), text) is not { } launch)
+        {
+            Flash($"Couldn’t open “{Ellipsize(text)}” — enter a task id, custom id, or ClickUp task URL.");
+            return;
+        }
+
+        LaunchAppForTask(launch.TaskId, launch.Name, destination);
     }
 
     /// <summary>

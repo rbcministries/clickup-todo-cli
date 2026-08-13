@@ -218,6 +218,14 @@ public static class Keybindings
 
             // ── Quick Open ────────────────────────────────────────────────────────────────────
             [(ScreenContext.QuickOpen, KeyAction.Open)] = "Enter",
+            // Quick-open launch modes B (#615, epic #613): the resolved task can open in a new terminal
+            // tab (Ctrl+Enter, #301/#384) or a split pane beside the current one (Ctrl+Alt+Enter, #507) —
+            // the same two gestures the main list offers, reusing the app-wide OpenInNewTab/OpenInSplitPane
+            // actions so the gestures keep one meaning app-wide (#290), AllBindingsOfAnAction_ShareOneKey
+            // stays green, and #506's override layer picks these up with no per-screen change. Exact-KeyCode
+            // dispatch means Enter / Ctrl+Enter / Ctrl+Alt+Enter never collide.
+            [(ScreenContext.QuickOpen, KeyAction.OpenInNewTab)] = "Ctrl+Enter",
+            [(ScreenContext.QuickOpen, KeyAction.OpenInSplitPane)] = "Ctrl+Alt+Enter",
             [(ScreenContext.QuickOpen, KeyAction.Help)] = "F1",
             [(ScreenContext.QuickOpen, KeyAction.Back)] = "Esc",
 
