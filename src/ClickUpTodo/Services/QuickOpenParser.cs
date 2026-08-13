@@ -33,6 +33,11 @@ public readonly record struct QuickOpenRef(QuickOpenKind Kind, string Value, str
     public static QuickOpenRef Custom(string id, string? teamId = null) => new(QuickOpenKind.CustomId, id, teamId);
 }
 
+/// <summary>The <c>(taskId, name)</c> a new-tab / split-pane quick-open gesture (#615) hands the
+/// cross-platform launcher: the resolved id and display name on a cache hit, else the raw typed token as
+/// both (the child's <c>--task</c> resolves it, #464). See <see cref="QuickOpenParser.ResolveLaunch"/>.</summary>
+public readonly record struct QuickOpenLaunch(string TaskId, string Name);
+
 /// <summary>
 /// Pure parsing + cache-resolution for the Ctrl+O quick-open feature (#303): turn a pasted/typed
 /// task <b>id</b>, <b>custom id</b>, or <b>task URL</b> into a <see cref="QuickOpenRef"/>, and match a
@@ -104,6 +109,35 @@ public static class QuickOpenParser
                 return t;
 
         return null;
+    }
+
+    /// <summary>
+    /// Resolves a quick-open input to the <c>(taskId, name)</c> the cross-platform launcher should open
+    /// for a <b>new-tab / split-pane</b> gesture (launch modes B, #615): a cache hit supplies the real id
+    /// and name (for the status flash); a miss hands the <b>raw trimmed token</b> to the child as both id
+    /// and display name — the child's <c>--task</c> resolves every form Ctrl+O does (a plain id, custom id,
+    /// or task URL, #464), so there is no parent-side round-trip. Returns <c>null</c> when the input can't
+    /// be parsed as a task reference (the caller flashes and launches nothing — the error belongs where the
+    /// typing happened, not in a child process that opens and dies). Pure (mirrors <see cref="Parse"/> /
+    /// <see cref="FindInCache"/>) so the cache-hit-vs-raw-token decision is unit-tested off the host glue.
+    /// </summary>
+    public static QuickOpenLaunch? ResolveLaunch(IReadOnlyList<TaskItem> universe, string? input)
+    {
+        var r = Parse(input);
+        if (r.Kind == QuickOpenKind.Invalid)
+            return null;
+
+        if (FindInCache(universe, r) is { } cached)
+            return new QuickOpenLaunch(cached.Id, cached.Name);
+
+        // A miss: hand the *raw* trimmed token to the child as the id — a /t/{team}/{custom} URL must keep
+        // its team segment so the child resolves the custom id against the URL's own workspace, not the
+        // child's configured one (the parser can't fold the team id into a bare value). The display name,
+        // though, uses the parsed reference value (the id / custom id) so the status flash reads
+        // "Opening 86abc123…" rather than echoing the whole pasted URL. input is non-blank here: an
+        // all-whitespace input parses Invalid and returned above.
+        var token = input!.Trim();
+        return new QuickOpenLaunch(token, r.Value);
     }
 
     private static bool IsClickUpHost(string host)

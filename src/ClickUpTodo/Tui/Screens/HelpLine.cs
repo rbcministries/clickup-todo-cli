@@ -420,10 +420,15 @@ public static class HelpItemSets
     ];
 
     /// <summary>The quick-open entry surface (Ctrl+O, #303): a single field for a task id, custom id, or
-    /// URL; Enter (or the default Open button) resolves and opens, Esc cancels, F1 help.</summary>
+    /// URL; Enter (or the default Open button) resolves and opens in place, Ctrl+↩ opens a new terminal
+    /// tab and Ctrl+Alt+↩ a split pane (launch modes B, #615 — matching the main-list gesture glyphs), Esc
+    /// cancels, F1 help. The two chord items are clickable, so a mouse user reaches the gesture even on a
+    /// driver that eats the chord.</summary>
     public static readonly IReadOnlyList<HelpItem> QuickOpen =
     [
         new("Enter/Open", "open", Chord: "Enter"),
+        new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
+        new("Ctrl+Alt+↩", "split pane", Chord: "Ctrl+Alt+Enter"),
         new("F1", "ℹ"),
         new("Esc", "cancel"),
     ];

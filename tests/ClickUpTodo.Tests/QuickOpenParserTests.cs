@@ -152,4 +152,61 @@ public sealed class QuickOpenParserTests
     [Fact]
     public void FindInCache_InvalidRef_ReturnsNull()
         => Assert.Null(QuickOpenParser.FindInCache([Task("aaa")], QuickOpenRef.Invalid));
+
+    // ── ResolveLaunch (launch modes B, #615) ──────────────────────────────
+    // The new-tab / split-pane resolution: a cache hit supplies the real id + name, a miss hands the raw
+    // trimmed token to the child (both id and display name), and an unparseable token yields null.
+
+    [Fact]
+    public void ResolveLaunch_CacheHitById_UsesRealIdAndName()
+    {
+        var universe = new[] { Task("aaa"), Task("bbb", "ABC-1") };
+        var launch = QuickOpenParser.ResolveLaunch(universe, "bbb");
+        Assert.Equal(new QuickOpenLaunch("bbb", "task bbb"), launch);
+    }
+
+    [Fact]
+    public void ResolveLaunch_CacheHitByCustomId_UsesRealIdAndName()
+    {
+        // A hyphenated bare token parses as a custom id and still resolves off the cache by CustomId.
+        var universe = new[] { Task("aaa"), Task("bbb", "ABC-1") };
+        var launch = QuickOpenParser.ResolveLaunch(universe, "abc-1");
+        Assert.Equal(new QuickOpenLaunch("bbb", "task bbb"), launch);
+    }
+
+    [Fact]
+    public void ResolveLaunch_CacheMiss_HandsRawTrimmedTokenToChild()
+    {
+        // An uncached but parseable bare token: the raw trimmed token is the --task ref, and it is also the
+        // parsed value, so it doubles as the display name — the child's --task resolves it (#464).
+        var launch = QuickOpenParser.ResolveLaunch([Task("aaa")], "  86zzz999  ");
+        Assert.Equal(new QuickOpenLaunch("86zzz999", "86zzz999"), launch);
+    }
+
+    [Fact]
+    public void ResolveLaunch_CacheMiss_Url_HandsRawUrlToChild_ButNamesTheParsedId()
+    {
+        // A task URL is parseable (so not rejected) but uncached — the whole URL goes to the child as the
+        // --task ref (keeping any team segment), while the display name is the parsed id, not the raw URL.
+        const string url = "https://app.clickup.com/t/86abc123";
+        var launch = QuickOpenParser.ResolveLaunch([Task("aaa")], url);
+        Assert.Equal(new QuickOpenLaunch(url, "86abc123"), launch);
+    }
+
+    [Fact]
+    public void ResolveLaunch_CacheMiss_CustomIdUrl_KeepsRawUrlRef_NamesTheCustomId()
+    {
+        // A /t/{team}/{custom} URL must keep its team segment in the ref (so the child resolves against the
+        // URL's workspace), but the display name is just the custom id.
+        const string url = "https://app.clickup.com/t/9014107164/ABC-123";
+        var launch = QuickOpenParser.ResolveLaunch([Task("aaa")], url);
+        Assert.Equal(new QuickOpenLaunch(url, "ABC-123"), launch);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("https://notclickup.com/t/86abc123")] // a foreign URL is unparseable
+    public void ResolveLaunch_Unparseable_ReturnsNull(string input)
+        => Assert.Null(QuickOpenParser.ResolveLaunch([Task("aaa")], input));
 }
