@@ -278,6 +278,9 @@ public sealed class SingleTaskApp
             postCommentAsync: (text, ct) => _tasks.CreateTaskCommentAsync(id, text, ct),
             // Ctrl+T (#330) replies into a comment's thread — same injected-async seam, keyed to this tab's task.
             postReplyAsync: (commentId, text, ct) => _tasks.CreateThreadedCommentAsync(commentId, text, ct),
+            // Delete on the Comments/Stream tab (#594) removes a comment — same injected-async seam; the
+            // Comments/Stream tabs are present in single-task mode too, so wire the delete write here as well.
+            deleteCommentAsync: (commentId, ct) => _tasks.DeleteCommentAsync(commentId, ct),
             setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(id, text, ct),
             // The Task Tree tab (#374): identical wiring to the dashboard (#291/#415). The tree needs the
             // signed-in user's id for the trailing Assignees badge (#161), seeds its badge mode from the

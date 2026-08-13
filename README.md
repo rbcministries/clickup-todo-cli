@@ -156,6 +156,7 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `Ctrl+PgUp` / `Ctrl+PgDn` | ▼▲ | Order the comments & activity feed                    |
 | `Ctrl+A`              | ✨   | Dispatch a Claude session for this task                |
 | `Ctrl+N`              | ➕   | Add a comment                                          |
+| `Del`                 | 🗑   | Delete a comment on the Comments / Stream tab — pick one, then confirm |
 | `Ctrl+E`              | ✏    | Edit the description                                   |
 | `Ctrl+B`              | 🌐   | Open the task in your browser (keeps the view open — see below) |
 | `Tab` / `Shift+Tab`   |      | Move the focus highlight to the next / previous link in the pane |

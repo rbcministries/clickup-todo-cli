@@ -2163,6 +2163,9 @@ public sealed class TodoApp
                         // Ctrl+T (#330) replies into a comment's thread; the screen owns the target picker
                         // + reply-mode composer + optimistic nested append/revert, the host owns the write.
                         postReplyAsync: (commentId, text, ct) => _tasks.CreateThreadedCommentAsync(commentId, text, ct),
+                        // Delete on the Comments/Stream tab (#594) removes a comment; the screen owns the
+                        // target picker + confirmation + optimistic removal/revert, the host owns the write.
+                        deleteCommentAsync: (commentId, ct) => _tasks.DeleteCommentAsync(commentId, ct),
                         // Ctrl+E (#217) edits the plain-text description; the screen owns the editor +
                         // dirty-check + in-place reflection, the host owns the off-thread ClickUp write.
                         setDescriptionAsync: (text, ct) => _tasks.SetTaskDescriptionAsync(resolvedId, text, ct),
