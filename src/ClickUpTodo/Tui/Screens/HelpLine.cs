@@ -206,11 +206,13 @@ public static class HelpItemSets
         new("Ctrl+O", "🗁 by ID"),
         new("␣", "☑ toggle", Chord: "Space"),
         new("Ctrl+G", "➕ list"),
-        // F2 ✏ rename now serves BOTH F2-bound renames, disambiguated by the front tab via
-        // Keybindings.ResolveDetail: the checklist item/group rename on the Checklists tab (D, #541) and
-        // the highlighted node's task-title rename on the Task Tree tab (H, #545). One hint, since the
-        // footer isn't split per sub-context yet. F8 (the #458 stopgap) is retired.
-        new("F2", "✏ rename"),
+        // F2 ✏ edit serves BOTH F2-bound gestures, disambiguated by the front tab via
+        // Keybindings.ResolveDetail: the checklist item/group edit on the Checklists tab (D, #541; labelled
+        // Edit since #572 put the assignee control in that modal, so the surface edits name + assignee — #601)
+        // and the highlighted node's task-title rename on the Task Tree tab (H, #545). "Edit" is the umbrella
+        // (rename is one facet of edit — contextual-chord-model §3); one hint, since the footer isn't split
+        // per sub-context yet. F8 (the #458 stopgap) is retired.
+        new("F2", "✏ edit"),
         new("Del", "🗑 delete", Chord: "Delete"),
         new("Shift+↑", "move", Chord: "Shift+CursorUp"),
         new("Shift+↓", "move", Chord: "Shift+CursorDown"),
@@ -244,9 +246,10 @@ public static class HelpItemSets
         new("Ctrl+Alt+↩", "split pane", Chord: "Ctrl+Alt+Enter"),
         new("␣", "☑ toggle", Chord: "Space"),
         new("Ctrl+G", "➕ list"),
-        // F2 ✏ rename serves both F2 renames (checklist item, D #541; Task Tree node, H #545), resolved
-        // per front tab by Keybindings.ResolveDetail — see the Detail set above. F8 is retired.
-        new("F2", "✏ rename"),
+        // F2 ✏ edit serves both F2 gestures (checklist item/group edit, D #541/#601; Task Tree node rename,
+        // H #545), resolved per front tab by Keybindings.ResolveDetail — see the Detail set above. "Edit" is
+        // the umbrella (rename is a facet of edit — §3). F8 is retired.
+        new("F2", "✏ edit"),
         new("Del", "🗑 delete", Chord: "Delete"),
         new("Shift+↑", "move", Chord: "Shift+CursorUp"),
         new("Shift+↓", "move", Chord: "Shift+CursorDown"),

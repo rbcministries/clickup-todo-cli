@@ -68,13 +68,15 @@ public sealed class HelpLineTests
     public void Format_RenameTask_RendersSaveHelpCancel()
         => Assert.Equal("↩ save · F1 ℹ · Esc cancel", HelpLine.Format(HelpItemSets.RenameTask));
 
-    // Contextual chords D (#541): the Task Detail checklist rename hint moved off the #458 stopgap F8 to
-    // the conventional F2 (= Rename, #290) in both Detail footer variants; F8 no longer appears anywhere.
+    // Contextual chords D (#541): the Task Detail checklist edit hint moved off the #458 stopgap F8 to
+    // the conventional F2 (= Rename/Edit, #290) in both Detail footer variants; F8 no longer appears anywhere.
+    // The label reads "edit" (not "rename") because the F2 surface edits the item's name + assignee (#572) —
+    // contextual-chord-model §2/§3, executed in #601.
     [Theory]
     [MemberData(nameof(DetailSets))]
-    public void DetailSets_CarryF2Rename_NotF8(IReadOnlyList<HelpItem> set)
+    public void DetailSets_CarryF2Edit_NotF8(IReadOnlyList<HelpItem> set)
     {
-        Assert.Contains(new HelpItem("F2", "✏ rename"), set);
+        Assert.Contains(new HelpItem("F2", "✏ edit"), set);
         Assert.DoesNotContain(set, i => i.Key == "F8" || i.ActionKey == "F8");
     }
 
@@ -185,18 +187,19 @@ public sealed class HelpLineTests
         Assert.DoesNotContain(HelpItemSets.Detail, i => i.Key == "F6");
     }
 
-    // Contextual chords D (#541) + H (#545, tree half): after both slices F2 → rename is a SINGLE footer
-    // item on each Task Detail base set (not one per bound action) — it serves the checklist rename on the
-    // Checklists tab and the Task Tree node rename on the Task Tree tab, resolved per front tab via
-    // Keybindings.ResolveDetail, since the footer isn't split per sub-context yet. The `.Single` pins that
-    // uniqueness so the two F2 slices can't leave a duplicated hint; DetailSets_CarryF2Rename_NotF8 above
-    // pins its presence + the F8 retirement.
+    // Contextual chords D (#541) + H (#545, tree half): after both slices F2 → edit is a SINGLE footer
+    // item on each Task Detail base set (not one per bound action) — it serves the checklist item/group edit
+    // on the Checklists tab and the Task Tree node rename on the Task Tree tab, resolved per front tab via
+    // Keybindings.ResolveDetail, since the footer isn't split per sub-context yet. "Edit" is the umbrella
+    // (rename is one facet of edit — contextual-chord-model §3; the checklist surface edits name + assignee,
+    // #572/#601). The `.Single` pins that uniqueness so the two F2 slices can't leave a duplicated hint;
+    // DetailSets_CarryF2Edit_NotF8 above pins its presence + the F8 retirement.
     [Theory]
     [MemberData(nameof(DetailSets))]
-    public void DetailSets_CarryExactlyOneF2Rename(IReadOnlyList<HelpItem> set)
+    public void DetailSets_CarryExactlyOneF2Edit(IReadOnlyList<HelpItem> set)
     {
         var item = set.Single(i => i.IsAction && i.ActionKey == "F2");
-        Assert.Equal("✏ rename", item.Label);
+        Assert.Equal("✏ edit", item.Label);
     }
 
     // #436 — while an overlay editor (comment composer Ctrl+N / description editor Ctrl+E) is open the

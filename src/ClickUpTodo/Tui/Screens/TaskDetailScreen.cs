@@ -1467,17 +1467,17 @@ public sealed class TaskDetailScreen : Screen
         // Add is the contextual Ctrl+N above; delete is the contextual Delete below; group create is Ctrl+G.
         // Contextual chords D (#541): rename moved off the #458 stopgap F8 to the conventional F2 (= Rename,
         // #290); F8 is now unbound. Routing through Keybindings.ResolveDetail (only the Checklists tab binds
-        // F2 → RenameChecklistItem) keeps dispatch and the per-tab footer label in lock-step, exactly as the
+        // F2 → EditChecklistItem) keeps dispatch and the per-tab footer label in lock-step, exactly as the
         // contextual Ctrl+N / Delete blocks do. With F7 → Ctrl+N (#540) and F9 → Delete (#543) already landed,
         // this retires the last of the #458 F7/F8/F9 stopgaps.
         if (key.KeyCode == KeyCode.F2 && ReferenceEquals(_tabs.Value, _checklistList)
-            && Keybindings.ResolveDetail(CurrentDetailSubContext(), "F2") == KeyAction.RenameChecklistItem)
+            && Keybindings.ResolveDetail(CurrentDetailSubContext(), "F2") == KeyAction.EditChecklistItem)
         {
             key.Handled = true;
             if (SelectedChecklistRow() is { IsHeader: true })
-                RenameSelectedChecklistGroup();
+                EditSelectedChecklistGroup();
             else
-                RenameSelectedChecklistItem();
+                EditSelectedChecklistItem();
             return;
         }
 
@@ -3064,7 +3064,7 @@ public sealed class TaskDetailScreen : Screen
     /// transform + reconcile/revert. #572 adds the assignee control to this modal (a shared
     /// <c>AssigneeSelectorView</c> specialisation over the frequency-ranked member pool) and threads the write
     /// delegate + pool from the hosts.</para></summary>
-    private void RenameSelectedChecklistItem()
+    private void EditSelectedChecklistItem()
     {
         if (_renameChecklistItemAsync is null)
             return;
@@ -3079,7 +3079,7 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
         ShowChecklistItemEditor(ChecklistItemEditKind.Rename, row.ChecklistId, itemId, initialText: row.Text,
-            title: "Rename item — Enter save · Esc cancel");
+            title: "Edit item — Enter save · Esc cancel");
     }
 
     /// <summary>Delete (F, #543; was #458's F9) — delete the selected item behind a confirmation, since the
@@ -3212,7 +3212,7 @@ public sealed class TaskDetailScreen : Screen
 
     /// <summary>F2 on a checklist-header row — rename the selected group. Opens the name overlay pre-filled
     /// with the group's name; the rename fires on submit.</summary>
-    private void RenameSelectedChecklistGroup()
+    private void EditSelectedChecklistGroup()
     {
         if (_renameChecklistAsync is null)
             return;
@@ -3227,7 +3227,7 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
         ShowChecklistItemEditor(ChecklistItemEditKind.RenameGroup, row.ChecklistId, itemId: null, initialText: row.Text,
-            title: "Rename checklist — Enter save · Esc cancel");
+            title: "Edit checklist — Enter save · Esc cancel");
     }
 
     /// <summary>Delete on a checklist-header row (F, #543; was #459's F9) — delete the selected group behind
@@ -3374,8 +3374,8 @@ public sealed class TaskDetailScreen : Screen
     }
 
     /// <summary>Optimistic group rename: set the name locally → off-thread PUT → reconcile with the server
-    /// checklist, or revert to the prior name + flash on failure. Mirrors <see cref="RenameChecklistItem"/>.</summary>
-    private void RenameChecklistGroup(string checklistId, string name)
+    /// checklist, or revert to the prior name + flash on failure. Mirrors <see cref="EditChecklistItem"/>.</summary>
+    private void EditChecklistGroup(string checklistId, string name)
     {
         if (_renameChecklistAsync is null || _checklistWriteInFlight)
             return;
@@ -3555,7 +3555,7 @@ public sealed class TaskDetailScreen : Screen
                     return;
                 }
                 HideChecklistItemEditor();
-                RenameChecklistItem(checklistId, itemId, name);
+                EditChecklistItem(checklistId, itemId, name);
                 break;
             case ChecklistItemEditKind.RenameGroup:
                 if (string.Equals(name, _checklistItemOriginalName, StringComparison.Ordinal))
@@ -3564,7 +3564,7 @@ public sealed class TaskDetailScreen : Screen
                     return;
                 }
                 HideChecklistItemEditor();
-                RenameChecklistGroup(checklistId, name);
+                EditChecklistGroup(checklistId, name);
                 break;
             case ChecklistItemEditKind.NewGroup:
                 HideChecklistItemEditor();
@@ -3710,7 +3710,7 @@ public sealed class TaskDetailScreen : Screen
 
     /// <summary>Optimistic rename: set the name locally → off-thread PUT → reconcile with the server
     /// checklist, or revert to the prior name + flash on failure.</summary>
-    private void RenameChecklistItem(string checklistId, string itemId, string name)
+    private void EditChecklistItem(string checklistId, string itemId, string name)
     {
         if (_renameChecklistItemAsync is null || _checklistWriteInFlight)
             return;
