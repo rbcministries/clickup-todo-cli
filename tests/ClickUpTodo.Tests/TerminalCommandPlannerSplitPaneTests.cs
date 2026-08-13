@@ -113,6 +113,57 @@ public sealed class TerminalCommandPlannerSplitPaneTests
     }
 
     [Fact]
+    public void Windows_Split_ComposesProfileWithGeometryAndStayPutFocus()
+    {
+        // #516: the matched #462 profile must compose with the #505 geometry (`-V`/`-s`) and stay-put focus
+        // (`; mf previous`) in one split spec — the profile threads in *after* the `-w 0 sp` geometry prefix
+        // and *before* the trailing command, and the focus subcommand is appended after everything. WT's `sp`
+        // takes its options before the commandline and `mf previous` as a chained subcommand, so this exact
+        // order is the valid one; nothing else pins `-p` and the geometry/focus tokens together.
+        var opts = SplitWith(SplitDirection.Beside, 30, SplitFocus.StayPut) with { WindowsTerminalProfile = "Ubuntu" };
+        var spec = SplitSpec(Plan(OSPlatformKind.Windows, Present("wt", "pwsh"), opts, Env(("WT_SESSION", "1"))));
+
+        Assert.Equal(["-w", "0", "sp", "-V", "-s", "0.3", "-p", "Ubuntu", "pwsh", "-NoExit", "-Command"], spec.Arguments.Take(11));
+        Assert.Equal([";", "mf", "previous"], spec.Arguments.TakeLast(3));
+    }
+
+    [Fact]
+    public void Windows_Split_ComposesProfileWithDirectionOnly()
+    {
+        // Direction axis in isolation: `-H` divider + a matched profile, no size, focus follows.
+        var opts = SplitWith(SplitDirection.Below) with { WindowsTerminalProfile = "Ubuntu" };
+        var spec = SplitSpec(Plan(OSPlatformKind.Windows, Present("wt", "pwsh"), opts, Env(("WT_SESSION", "1"))));
+
+        Assert.Equal(["-w", "0", "sp", "-H", "-p", "Ubuntu", "pwsh", "-NoExit", "-Command"], spec.Arguments.Take(9));
+    }
+
+    [Fact]
+    public void Windows_Split_ComposesProfileWithSizeOnly()
+    {
+        // Size axis in isolation: auto direction (no `-V`/`-H`) + `-s` + a matched profile.
+        var opts = SplitWith(sizePercent: 40) with { WindowsTerminalProfile = "Ubuntu" };
+        var spec = SplitSpec(Plan(OSPlatformKind.Windows, Present("wt", "pwsh"), opts, Env(("WT_SESSION", "1"))));
+
+        Assert.Equal(["-w", "0", "sp", "-s", "0.4", "-p", "Ubuntu", "pwsh", "-NoExit", "-Command"], spec.Arguments.Take(10));
+    }
+
+    [Fact]
+    public void Windows_Split_WithGeometry_BlankProfile_IsByteIdenticalToNoProfileField()
+    {
+        // The `-p` insertion is the *only* difference a matched profile makes: a split carrying geometry but a
+        // blank/unset profile must be argv-identical to the same geometry with no profile field at all, so a
+        // no-match never perturbs the composed geometry spec.
+        var geometry = SplitWith(SplitDirection.Beside, 30, SplitFocus.StayPut);
+        var blank = geometry with { WindowsTerminalProfile = "  " };
+
+        var baseline = SplitSpec(Plan(OSPlatformKind.Windows, Present("wt", "pwsh"), geometry, Env(("WT_SESSION", "1"))));
+        var withBlank = SplitSpec(Plan(OSPlatformKind.Windows, Present("wt", "pwsh"), blank, Env(("WT_SESSION", "1"))));
+
+        Assert.Equal(baseline.Arguments, withBlank.Arguments);
+        Assert.DoesNotContain("-p", withBlank.Arguments);
+    }
+
+    [Fact]
     public void Windows_Split_EscapesTheWtDelimiter_InTheWorkingDirPrefix()
     {
         // The Set-Location prefix contains a `;`, which WT would treat as a subcommand delimiter — WtArgs
