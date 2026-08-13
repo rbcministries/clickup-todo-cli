@@ -130,9 +130,14 @@ public static class QuickOpenParser
         if (FindInCache(universe, r) is { } cached)
             return new QuickOpenLaunch(cached.Id, cached.Name);
 
-        // input is non-blank here: an all-whitespace input parses Invalid and returned above.
+        // A miss: hand the *raw* trimmed token to the child as the id — a /t/{team}/{custom} URL must keep
+        // its team segment so the child resolves the custom id against the URL's own workspace, not the
+        // child's configured one (the parser can't fold the team id into a bare value). The display name,
+        // though, uses the parsed reference value (the id / custom id) so the status flash reads
+        // "Opening 86abc123…" rather than echoing the whole pasted URL. input is non-blank here: an
+        // all-whitespace input parses Invalid and returned above.
         var token = input!.Trim();
-        return new QuickOpenLaunch(token, token);
+        return new QuickOpenLaunch(token, r.Value);
     }
 
     private static bool IsClickUpHost(string host)

@@ -1512,6 +1512,9 @@ public sealed class TodoApp
                 {
                     switch (request.Intent)
                     {
+                        case QuickOpenIntent.OpenHere:
+                            ResolveAndOpen(request.Text);
+                            break;
                         case QuickOpenIntent.NewTab:
                             ResolveAndLaunch(request.Text, LaunchLocation.NewTab);
                             break;
@@ -1519,8 +1522,7 @@ public sealed class TodoApp
                             ResolveAndLaunch(request.Text, LaunchLocation.SplitPane);
                             break;
                         default:
-                            ResolveAndOpen(request.Text);
-                            break;
+                            throw new InvalidOperationException($"Unhandled quick-open intent {request.Intent}.");
                     }
                     return false;
                 });

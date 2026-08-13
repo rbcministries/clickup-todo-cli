@@ -177,20 +177,30 @@ public sealed class QuickOpenParserTests
     [Fact]
     public void ResolveLaunch_CacheMiss_HandsRawTrimmedTokenToChild()
     {
-        // An uncached but parseable token: the raw trimmed token is both the --task ref and the display
-        // name — the child's --task resolves every Ctrl+O form (#464), so no parent-side round-trip.
+        // An uncached but parseable bare token: the raw trimmed token is the --task ref, and it is also the
+        // parsed value, so it doubles as the display name — the child's --task resolves it (#464).
         var launch = QuickOpenParser.ResolveLaunch([Task("aaa")], "  86zzz999  ");
         Assert.Equal(new QuickOpenLaunch("86zzz999", "86zzz999"), launch);
     }
 
     [Fact]
-    public void ResolveLaunch_CacheMiss_Url_HandsRawUrlToChild()
+    public void ResolveLaunch_CacheMiss_Url_HandsRawUrlToChild_ButNamesTheParsedId()
     {
-        // A task URL is parseable (so not rejected) but uncached — the whole URL goes to the child, whose
-        // --task classifies it through this same parser.
+        // A task URL is parseable (so not rejected) but uncached — the whole URL goes to the child as the
+        // --task ref (keeping any team segment), while the display name is the parsed id, not the raw URL.
         const string url = "https://app.clickup.com/t/86abc123";
         var launch = QuickOpenParser.ResolveLaunch([Task("aaa")], url);
-        Assert.Equal(new QuickOpenLaunch(url, url), launch);
+        Assert.Equal(new QuickOpenLaunch(url, "86abc123"), launch);
+    }
+
+    [Fact]
+    public void ResolveLaunch_CacheMiss_CustomIdUrl_KeepsRawUrlRef_NamesTheCustomId()
+    {
+        // A /t/{team}/{custom} URL must keep its team segment in the ref (so the child resolves against the
+        // URL's workspace), but the display name is just the custom id.
+        const string url = "https://app.clickup.com/t/9014107164/ABC-123";
+        var launch = QuickOpenParser.ResolveLaunch([Task("aaa")], url);
+        Assert.Equal(new QuickOpenLaunch(url, "ABC-123"), launch);
     }
 
     [Theory]
