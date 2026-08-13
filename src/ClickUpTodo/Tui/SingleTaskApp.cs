@@ -392,6 +392,14 @@ public sealed class SingleTaskApp
         // split pane" on its footer; subscribing here is what makes the advertised chord launch. Keyed to
         // this tab; tab.Task.Name is read live so a mid-view rename is reflected (mirrors the new-tab sibling).
         screen.OpenInSplitPaneRequested += (_, _) => LaunchAppForTask(tab.TaskId, tab.Task.Name, LaunchLocation.SplitPane);
+        // Ctrl+O quick-opens another task from within the detail (C, #616, epic #613) — the single-task
+        // counterpart of the dashboard's detail Ctrl+O (#353). The detail screen already raises this event
+        // from any host and its footer already advertises "🗁 by ID"; subscribing here is what makes that
+        // advertised key live in single-task mode instead of a silent no-op. OpenHere navigates the detail
+        // to the resolved task, stacked over this one so a single Esc walks back (the recorded decision,
+        // uniform with the tree/link detail→detail navigation, #374/#318); Ctrl+Enter / Ctrl+Alt+Enter open
+        // it in a new tab / split pane through the same LaunchAppForTask the new-tab/split gestures above use.
+        screen.QuickOpenRequested += (_, _) => OpenQuickOpen();
 
         return tab;
     }
@@ -939,6 +947,111 @@ public sealed class SingleTaskApp
         {
             return false;
         }
+    }
+
+    // ── Quick-open (Ctrl+O, C #616 — epic #613) ───────────────────────────────
+
+    /// <summary>
+    /// Ctrl+O from a single-task detail (#616): opens the quick-open entry surface stacked over the
+    /// front-most detail, then resolves the submitted target once the surface has closed. The resolve is
+    /// deferred one main-loop iteration (<see cref="Application.AddTimeout"/>) so the surface is fully torn
+    /// down first — resolving inline in the close handler captures the still-mounted surface as the open's
+    /// "requester" (<see cref="OpenTaskDetail"/> guards on <see cref="ActiveScreen"/>) and then drops the
+    /// open once the surface closes, exactly the bug the dashboard's <c>ShowQuickOpenSurface</c> defers the
+    /// same way. The deferral covers all three launch-mode intents (B, #615) — keeping one path is simpler
+    /// than branching, and a NewTab/SplitPane launch flash simply lands on whatever the surface was covering.
+    /// </summary>
+    private void OpenQuickOpen()
+    {
+        var screen = new QuickOpenScreen();
+        ShowScreen(screen, () =>
+        {
+            if (screen.Result is not { } request)
+                return;
+            Application.AddTimeout(TimeSpan.FromMilliseconds(1), () =>
+            {
+                switch (request.Intent)
+                {
+                    case QuickOpenIntent.OpenHere:
+                        ResolveAndOpen(request.Text);
+                        break;
+                    case QuickOpenIntent.NewTab:
+                        ResolveAndLaunch(request.Text, LaunchLocation.NewTab);
+                        break;
+                    case QuickOpenIntent.SplitPane:
+                        ResolveAndLaunch(request.Text, LaunchLocation.SplitPane);
+                        break;
+                    default:
+                        throw new InvalidOperationException($"Unhandled quick-open intent {request.Intent}.");
+                }
+                return false;
+            });
+        });
+    }
+
+    /// <summary>
+    /// Resolves a quick-open input and opens the target's detail <em>in place</em> — stacked over the
+    /// current detail so a single Esc walks back to the task we came from (the recorded #616 decision:
+    /// single-task mode's realisation of the #402 Back contract). Reuses the host's existing detail→detail
+    /// terminus, exactly as <see cref="ActivateLink"/> resolves a clicked task link (#353): a plain id (or a
+    /// bare hyphenless custom id) loads straight through <see cref="OpenTaskDetail"/> with the workspace team
+    /// id as a custom-id fallback; a bare custom id or a <c>/t/{team}/{custom}</c> URL resolves first via
+    /// <see cref="ResolveCustomIdAndOpen"/>; a custom id with no configured workspace, and an unparseable
+    /// token, each flash the same message the dashboard uses and leave the view unchanged. Single-task mode
+    /// holds no working set, so there is no cache-first step — the load's own "Loading details…" covers the
+    /// fetch.
+    /// </summary>
+    private void ResolveAndOpen(string text)
+    {
+        var reference = QuickOpenParser.Parse(text);
+        // A custom-id URL carries its own team id (#353); prefer it over the configured workspace so a
+        // target pasted from a different workspace resolves against that workspace, not this one.
+        var teamId = string.IsNullOrWhiteSpace(reference.TeamId) ? _config.WorkspaceId : reference.TeamId;
+        switch (reference.Kind)
+        {
+            case QuickOpenKind.TaskId:
+                OpenTaskDetail(reference.Value, customIdFallbackTeamId: teamId);
+                break;
+            case QuickOpenKind.CustomId when !string.IsNullOrWhiteSpace(teamId):
+                ResolveCustomIdAndOpen(reference.Value, teamId);
+                break;
+            case QuickOpenKind.CustomId:
+                Flash($"Can’t resolve custom id “{Ellipsize(reference.Value)}” — no workspace is configured.");
+                break;
+            default:
+                Flash($"Couldn’t open “{Ellipsize(text)}” — enter a task id, custom id, or ClickUp task URL.");
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Resolves a quick-open input and opens the target in a new terminal tab or a split pane (launch modes
+    /// B, #615) rather than in place — the single-task counterpart of <see cref="TodoApp"/>'s
+    /// <c>ResolveAndLaunch</c>. Single-task mode holds no working set, so
+    /// <see cref="QuickOpenParser.ResolveLaunch"/> is called with an empty universe and always takes its
+    /// miss-branch: the raw trimmed token is handed to the child, whose <c>--task</c> resolves every Ctrl+O
+    /// reference form (#464), so there is no parent-side round-trip. An unparseable token flashes and
+    /// launches nothing (the error belongs where the typing happened, not in a child process that opens and
+    /// dies). The launch is the shared <see cref="LaunchAppForTask"/> — the in-flight guard, the #505/#515
+    /// split-viability floor, the split→tab→window ladder and the clipboard fallback come with it.
+    /// </summary>
+    private void ResolveAndLaunch(string text, LaunchLocation destination)
+    {
+        if (QuickOpenParser.ResolveLaunch([], text) is not { } launch)
+        {
+            Flash($"Couldn’t open “{Ellipsize(text)}” — enter a task id, custom id, or ClickUp task URL.");
+            return;
+        }
+
+        LaunchAppForTask(launch.TaskId, launch.Name, destination);
+    }
+
+    /// <summary>Clips an echoed user input to a short, single-line snippet for a flash message (mirrors
+    /// <see cref="TodoApp"/>'s <c>Ellipsize</c>).</summary>
+    private static string Ellipsize(string s)
+    {
+        s = s.ReplaceLineEndings(" ").Trim();
+        return s.Length <= 40 ? s : s[..39] + "…";
     }
 
     // ── Footer / status ──────────────────────────────────────────────────────
