@@ -371,11 +371,13 @@ public sealed class SingleTaskApp
         // F6 on the Task Tree tab (#415) cycles the tree's badge display; the host owns the flip/persist
         // and reflects it across the root and every stacked child so the visited-task chain stays in step.
         screen.CycleBadgeDisplayRequested += (_, _) => CycleTreeBadgeDisplay(tab.Screen);
-        // F2 on the Task Tree tab (H, #545) renames a node's task in the dashboard, but single-task mode
-        // defers task mutations for now (same as Quick Updates above) so it doesn't grow a lone task-write
-        // path here. Flash rather than silently no-op so the gap is legible; tracked as a follow-up.
-        screen.RenameTreeTaskRequested += (_, _) =>
-            Flash("Renaming from the Task Tree isn't available in single-task mode yet.");
+        // F2 on the Task Tree tab (H, #545) renames the highlighted node's task — the single-task
+        // counterpart of the dashboard's ShowTreeRename/ApplyTreeRename (#605), now wired in single-task
+        // mode too (#604). Unlike Quick Updates (still deferred above), rename is a snapshot-free write
+        // straight through the SetTaskNameAsync facade (slice E, #592) — it doesn't depend on #297's
+        // working-set decoupling — so it's admitted as the low-risk exception #604 decided on. Keyed to
+        // this tab so a task opened by walking the tree (#374) renames its own node.
+        screen.RenameTreeTaskRequested += (_, req) => ShowTreeRename(tab, req);
         // Ctrl+Enter opens this tab's task in its own terminal tab (#435) — the single-task counterpart of
         // the dashboard's #384 gesture, reusing the exact launcher + copy-command fallback. Since #374 gave
         // single-task mode the Task Tree tab, the detail screen already raises this event and already
@@ -649,6 +651,104 @@ public sealed class SingleTaskApp
             if (stacked is TaskDetailScreen detail)
                 detail.SetTreeBadgeDisplay(mode);
         Flash(mode.Describe());
+    }
+
+    // ── Task Tree tab rename (F2, #604 / contextual chords H #545) ─────────────
+
+    // Per-task commit-generation guard, mirroring TodoApp: a write continuation only applies when its
+    // token is still current, so a superseding rename of the same task wins and a stacked rename of one
+    // task doesn't cancel another task's continuation. UI-thread-only.
+    private readonly Dictionary<string, int> _nameCommitGen = [];
+
+    private int NextNameCommitGen(string taskId)
+        => _nameCommitGen[taskId] = _nameCommitGen.GetValueOrDefault(taskId) + 1;
+
+    private bool IsCurrentNameCommit(string taskId, int gen)
+        => _nameCommitGen.GetValueOrDefault(taskId) == gen;
+
+    /// <summary>
+    /// F2 on the Task Tree tab (#604): rename the highlighted node's task in single-task mode — the
+    /// counterpart of the dashboard's <see cref="TodoApp"/>.<c>ShowTreeRename</c> (#605). Opens the same
+    /// single-line <see cref="RenameTaskScreen"/> the main list / dashboard tree use, stacked over the
+    /// detail via this host's <see cref="ShowScreen"/> and pre-filled with the node's current title; on a
+    /// confirmed submit applies the rename through <see cref="ApplyTreeRename"/>. The overlay only collects
+    /// the edit (its <see cref="RenameTaskModel"/> already rejects a blank title and drops an unchanged one).
+    /// </summary>
+    private void ShowTreeRename(DetailTab origin, TreeTaskRenameRequest req)
+    {
+        var screen = new RenameTaskScreen(req.CurrentName);
+        ShowScreen(screen, () =>
+        {
+            if (screen.Result is { } newName)
+                ApplyTreeRename(origin, req.TaskId, req.CurrentName, newName);
+        });
+    }
+
+    /// <summary>
+    /// Applies a Task-Tree-tab rename commit for <paramref name="taskId"/> in single-task mode (#604):
+    /// optimistically reflects the new title (tree row + header, and — for the launch task — the tab's
+    /// cached detail and the terminal window title), then an off-thread
+    /// <see cref="TaskService.SetTaskNameAsync"/> write, confirming with the server's returned title or
+    /// reverting on failure. Shares the per-task <see cref="_nameCommitGen"/> supersede guard. Mirrors
+    /// <see cref="TodoApp"/>.<c>ApplyTreeRename</c>, minus the main-list snapshot single-task mode has none
+    /// of — the simplification the issue notes.
+    /// </summary>
+    private void ApplyTreeRename(DetailTab origin, string taskId, string previousName, string newName)
+    {
+        var gen = NextNameCommitGen(taskId);
+
+        ReflectTreeRename(origin, taskId, newName);
+        Flash($"Renaming to '{newName}'…");
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var confirmed = await _tasks.SetTaskNameAsync(taskId, newName);
+                Application.Invoke(() =>
+                {
+                    if (!IsCurrentNameCommit(taskId, gen))
+                        return; // a newer rename superseded this one
+                    var final = confirmed ?? newName;
+                    ReflectTreeRename(origin, taskId, final);
+                    Flash($"Renamed to '{final}'.");
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    if (!IsCurrentNameCommit(taskId, gen))
+                        return;
+                    ReflectTreeRename(origin, taskId, previousName); // revert
+                    Flash($"Could not rename: {ErrorText.Short(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>Reflects a tree-rename of <paramref name="taskId"/> to <paramref name="name"/> across the
+    /// live surfaces: the origin screen's tree row (and its header when the node is that screen's current
+    /// task — the screen owns that) while it is still mounted, plus — when the renamed node is this tab's
+    /// own task — the tab's cached <see cref="TaskDetail"/> (so a later dispatch / new-tab launch / refresh
+    /// baseline reads the fresh title) and, for the launch (root) task, the terminal window title (#418/#425,
+    /// optimistic ahead of the next refresh). The mounted-screen guard avoids poking a stacked child the user
+    /// Esc'd away from mid-write; a non-current child node's rename touches only its row.</summary>
+    private void ReflectTreeRename(DetailTab origin, string taskId, string name)
+    {
+        if (ReferenceEquals(origin.Screen, _root.Screen) || _stack.Contains(origin.Screen))
+            origin.Screen.ApplyTreeRename(taskId, name);
+
+        if (!string.Equals(taskId, origin.TaskId, StringComparison.Ordinal))
+            return;
+
+        origin.Task = origin.Task with { Name = name };
+        if (ReferenceEquals(origin, _root)
+            && TerminalTitle.Retitle(_window.Title, origin.Task.Id, origin.Task.CustomId, origin.Task.Name)
+                is { } title)
+        {
+            _window.Title = title;
+        }
     }
 
     // ── Help overlay (F1) ────────────────────────────────────────────────────

@@ -269,6 +269,25 @@ deterministically before Enter drives the real keyboard activation path. (Bare �
 now exercisable under the PTY once #452 landed — `detail_arrow_check.py` asserts it directly — but this check keeps the
 click-select so its Enter leg stays pinned to one specific row regardless of where selection starts.)
 
+**`single_task_tree_rename_check.py`** — Task Tree tab F2 rename in single-task launch mode (#604): the
+single-task counterpart of `tree_rename_check.py`. Boots `SingleTaskApp` straight into `t0`
+(`E2E_SINGLE_TASK=t0` + `E2E_TREE=1`, i.e. `clickup-todo --task t0`, no dashboard list), cycles to the
+Task Tree tab, and asserts the rename wiring single-task mode gained (it previously only *flashed a
+deferral*): Leg A — `F2` on the default-highlighted launch node (ROOT) renames it and **both** the tree
+row and the detail header reflect the new title; Leg B — renaming a non-current child (CHILDTWO) updates
+its row only, header unchanged; Leg C — `Esc` cancels and nothing is written. Three legs, each its own
+boot (the fake's task Name is mutable via the default `PUT /task/{id}` applier, same as
+`tree_rename_check.py`):
+
+```bash
+timeout 180 python3 -u tests/ClickUpTodo.Tui.E2E/single_task_tree_rename_check.py $DLL
+```
+
+Self-contained (sets its own env). Expected: three `ok —` lines then `SINGLE-TASK TREE RENAME E2E: PASS`.
+The dashboard half is `tree_rename_check.py`; `RenameTaskModel` / `SetTaskNameAsync` /
+`TaskDetailScreen.ApplyTreeRename` are pinned by unit tests in CI, and this is the rendered end-to-end
+proof the single-task host wires them.
+
 **`detail_arrow_check.py`** — bare ↑/↓ scroll / row-move in Task Detail (#452): bare arrows used to be inert on every Task
 Detail tab: the read-only text panes moved an invisible caret instead of scrolling, and the Task Tree
 `ListView`'s `Command.Down` bubbled up to `NavSafeTabs`' inert crash-guard, cancelling its own
