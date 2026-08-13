@@ -42,8 +42,7 @@ SPACE = b" "
 CTRL_R = b"\x12"          # refresh (alias of F5) — re-fetches detail from the fake backend
 CTRL_G = b"\x07"          # new checklist group (F, #459)
 CTRL_N = b"\x0e"           # add checklist item on the Checklists tab (C, #540; ASCII 14, retired F7)
-F8 = b"\x1b[19~"          # rename the selected item / group (row-kind-scoped, F, #459)
-F9 = b"\x1b[20~"          # delete the selected item / group (row-kind-scoped, F, #459)
+F2 = b"\x1bOQ"            # rename the selected item / group (row-kind-scoped; D, #541 — retired F8)
 BACKSPACE = b"\x7f"
 DELETE = b"\x1b[3~"       # forward-delete (paired with BACKSPACE to clear a field caret-agnostically)
 TAB = b"\x09"            # cycle overlay focus (name field → assignee picker → Save → Cancel), #572
@@ -251,7 +250,7 @@ def type_text(s, text):
 
 
 def run_crud():
-    """E (#458): Ctrl+N add → F8 rename → F9 delete, an item CRUD round-trip that returns the checklist to
+    """E (#458): Ctrl+N add → F2 rename → Delete delete, an item CRUD round-trip that returns the checklist to
     its starting counts, driven against the mutable fake backend (which persists each write).
 
     Starting layout / aggregate (E2E_CHECKLISTS=1): Release steps (1/3), QA signoff (1/2) → (2/5).
@@ -283,10 +282,10 @@ def run_crud():
         assert "Checklists (2/6)" in v, "aggregate did not grow to (2/6) after add:\n" + v
         assert "Release steps  (1/4)" in v, "'Release steps' progress did not grow to (1/4) after add:\n" + v
 
-        # ── Rename (F8): the new item landed selected; clear the prefilled name and type a new one ─────
-        s.send(F8)
+        # ── Rename (F2): the new item landed selected; clear the prefilled name and type a new one ─────
+        s.send(F2)
         s.pump(0.8)
-        assert "Rename item" in s.visible(), "F8 did not open the rename overlay:\n" + s.visible()
+        assert "Rename item" in s.visible(), "F2 did not open the rename overlay:\n" + s.visible()
         for _ in range(24):        # clear the prefilled "Ship the release" regardless of caret position
             s.send(BACKSPACE)
             s.send(DELETE)
@@ -320,7 +319,7 @@ def run_crud():
         assert "Checklists (2/5)" in v and "Publish v2" not in v, \
             "a refresh resurrected the deleted item or wrong counts:\n" + v
 
-        print("ok — CRUD: Ctrl+N adds an item (2/6), F8 renames it, Delete+Enter deletes it back to (2/5); persists over refresh")
+        print("ok — CRUD: Ctrl+N adds an item (2/6), F2 renames it, Delete+Enter deletes it back to (2/5); persists over refresh")
     finally:
         s.kill()
 
@@ -447,7 +446,7 @@ def run_group_crud():
 
 
 def run_group_rename():
-    """F (#459): F8 on a checklist header renames the GROUP (not an item), optimistic + persisted."""
+    """F (#459): F2 on a checklist header renames the GROUP (not an item), optimistic + persisted."""
     s = Session({"E2E_CHECKLISTS": "1"})
     try:
         s.pump(8.0)
@@ -460,9 +459,9 @@ def run_group_rename():
         s.pump(0.3)
         assert "Release steps" in s.visible(), "precondition: 'Release steps' header present:\n" + s.visible()
 
-        s.send(F8)               # F8 on a header opens the rename-checklist overlay
+        s.send(F2)               # F2 on a header opens the rename-checklist overlay
         s.pump(0.8)
-        assert "Rename checklist" in s.visible(), "F8 on a header did not open the rename-group overlay:\n" + s.visible()
+        assert "Rename checklist" in s.visible(), "F2 on a header did not open the rename-group overlay:\n" + s.visible()
         for _ in range(24):      # clear the prefilled "Release steps"
             s.send(BACKSPACE)
             s.send(DELETE)
@@ -481,7 +480,7 @@ def run_group_rename():
         v = s.visible()
         assert "Release plan" in v and "Release steps" not in v, \
             "a refresh resurrected the pre-rename checklist name:\n" + v
-        print("ok — group rename: F8 on a header renames the checklist (persists over refresh) without "
+        print("ok — group rename: F2 on a header renames the checklist (persists over refresh) without "
               "disturbing its items")
     finally:
         s.kill()
@@ -512,11 +511,11 @@ def run_assignee():
         s.pump(0.3)
         assert "[x] Cut the tag" in s.visible(), "precondition: 'Cut the tag' selected:\n" + s.visible()
 
-        # ── Set: F8 opens the rename overlay, now carrying the assignee picker ─────────────────────────
-        s.send(F8)
+        # ── Set: F2 opens the rename overlay, now carrying the assignee picker ─────────────────────────
+        s.send(F2)
         s.pump(0.9)
         v = s.visible()
-        assert "Rename item" in v, "F8 did not open the rename overlay:\n" + v
+        assert "Rename item" in v, "F2 did not open the rename overlay:\n" + v
         assert "Assignee:" in v, "the rename overlay did not show the assignee picker (#572):\n" + v
 
         s.send(TAB)               # name field → the assignee picker's search box
@@ -544,7 +543,7 @@ def run_assignee():
 
         # ── Clear: reopen on the same item (still selected); the picker seeds with Grace as a ✓ row.
         #    Into the list (Down), Enter on the current ✓ row removes it → clear (writes null). ──────────
-        s.send(F8)
+        s.send(F2)
         s.pump(0.9)
         assert "Assignee:" in s.visible(), "reopening the rename overlay did not show the picker:\n" + s.visible()
         s.send(TAB)               # into the picker's search box

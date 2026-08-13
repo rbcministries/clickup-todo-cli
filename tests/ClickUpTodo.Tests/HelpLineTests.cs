@@ -52,7 +52,8 @@ public sealed class HelpLineTests
         => Assert.Contains(new HelpItem("Ctrl+N", "➕"), HelpItemSets.MainList);
 
     // Contextual chords H (#545): F2 renames the highlighted task; the ✏ glyph matches Task Detail's
-    // F8 rename hint, and the item is a clickable action so a footer click re-raises F2.
+    // F2 rename hint (the Checklists-tab item/group rename, D/#541), and the item is a clickable action so
+    // a footer click re-raises F2.
     [Fact]
     public void MainList_CarriesF2Rename_AsAClickableAction()
     {
@@ -66,6 +67,22 @@ public sealed class HelpLineTests
     [Fact]
     public void Format_RenameTask_RendersSaveHelpCancel()
         => Assert.Equal("↩ save · F1 ℹ · Esc cancel", HelpLine.Format(HelpItemSets.RenameTask));
+
+    // Contextual chords D (#541): the Task Detail checklist rename hint moved off the #458 stopgap F8 to
+    // the conventional F2 (= Rename, #290) in both Detail footer variants; F8 no longer appears anywhere.
+    [Theory]
+    [MemberData(nameof(DetailSets))]
+    public void DetailSets_CarryF2Rename_NotF8(IReadOnlyList<HelpItem> set)
+    {
+        Assert.Contains(new HelpItem("F2", "✏ rename"), set);
+        Assert.DoesNotContain(set, i => i.Key == "F8" || i.ActionKey == "F8");
+    }
+
+    public static readonly TheoryData<IReadOnlyList<HelpItem>> DetailSets = new()
+    {
+        HelpItemSets.Detail,
+        HelpItemSets.DetailWithTaskTree,
+    };
 
     [Fact]
     public void MainList_CarriesCtrlEnterNewTab_ReRaisingCtrlEnter()
