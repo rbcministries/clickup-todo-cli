@@ -58,7 +58,7 @@ the list. Both were kept deliberately — see "The feed", below.
 
 | Screen | Trigger | Category | `Esc` behavior | Back location? |
 |---|---|---|---|---|
-| `TaskDetailScreen` | Enter on list; detail→detail (`OpenTaskRequested`); Ctrl+O resolve; feed row | **Destination** (in-stack) | Back — pop to the layer beneath (previous detail, or the host root) | **Yes** — the one recorded in-stack destination |
+| `TaskDetailScreen` | Enter on list; detail→detail (`OpenTaskRequested`); Ctrl+O resolve; feed row | **Destination** (in-stack) | Back — pop to the layer beneath (a previous detail, a transient modal beneath it such as the `Ctrl+E` feed overlay, or the host root) | **Yes** — the one recorded in-stack destination |
 | `HelpScreen` (F1) | over any screen | Modal | Dismiss to layer beneath | No |
 | `SettingsScreen` (F10) | list | Modal | Cancel (discard edit) | No |
 | `FilterSortGroupScreen` (F3) | list | Modal | Cancel (`Result` null) | No |
@@ -93,8 +93,11 @@ One chokepoint per host, evaluated top-down:
 1. **A transient modal is on top of the view-stack** → `Esc` closes that modal (`Screen.Close()`),
    restoring the layer beneath. The back-stack is untouched. (Covers overlays over a detail — Ctrl+U,
    F1, the Ctrl+O surface — which must not disturb the task back-path.)
-2. **A destination (detail) is on top** → `Esc` pops it and shows the layer beneath: the previous detail,
-   or the host root. If the detail *is* the root (`SingleTaskApp`), `Esc` hands off to `RequestExit()`.
+2. **A destination (detail) is on top** → `Esc` pops it and shows the layer beneath — whatever it is: a
+   previous detail, a transient modal beneath it (the `Ctrl+E` feed overlay, when the detail was opened
+   from the feed — see "The feed"), or the host root. If the detail *is* the root (`SingleTaskApp`),
+   `Esc` hands off to `RequestExit()`. (`CloseScreen` restores `_screens[^1]` unconditionally, so the
+   "layer beneath" is literal — the model does not special-case what that layer is.)
 3. **At the host root with nothing stacked** → `Esc`/quit → `RequestExit()`. Roots: `TodoApp` = list;
    `SingleTaskApp` = launch task; `FeedApp` = feed. **As of #299 this plug point is filled:**
    `RequestExit()` mounts the `ExitConfirmScreen` modal (`Y`/`Enter` exits, `N`/`Esc` dismisses back to
@@ -120,7 +123,7 @@ explicit "keep `Ctrl+E` unchanged, add `--feed` as an additional path" decision 
 
 - **As the `--feed` host (`FeedApp`):** the feed is the root. `Esc` (and the inherited `Ctrl+E`) route to
   `RequestExit()` → exit-confirmation, since there is no list beneath. Opening a task from an entry
-  **launches `--task` in a new terminal tab** (via `AppLaunchCommand.ForTask` / `AppTabLaunch`), not an
+  **launches `--task` in a new terminal tab** (via `AppLaunchCommand.ForTask` / `AppHostLaunch`), not an
   in-app stacked detail — the destination-host analogue of stacking.
 - **As the in-dashboard `Ctrl+E` overlay:** the feed is a transient modal over the hidden list. `Esc`
   returns to the list. A task opened *from* the feed stacks over it (`[list, feed, detail]`), so `Esc`
