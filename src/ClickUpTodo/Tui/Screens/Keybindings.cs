@@ -292,6 +292,56 @@ public static class Keybindings
     public static IEnumerable<KeyAction> ActionsFor(ScreenContext context)
         => Map.Keys.Where(k => k.Context == context).Select(k => k.Action);
 
+    // ── Configurable launch chords (#506, split-pane epic #502 slice D) ──────────────────────────────
+    //
+    // A user-config override layer sits *over* the default Map above for the two app-wide launch gestures
+    // (OpenInNewTab = Ctrl+Enter, OpenInSplitPane = Ctrl+Alt+Enter). The Map/All stay pure defaults — the
+    // #355 cross-check keeps proving the hand-written footer matches the *default* table — while the two
+    // consumers that must agree (the dispatcher, via the Token overload below; the footer, via
+    // HelpItemSets.WithConfiguredLaunchChords) resolve through the same LaunchChordOverrides value, so a
+    // rebound gesture can't drift between what fires and what the footer advertises. Only these two actions
+    // are overridable; a general keybinding editor is a separate decision (#506 non-goal).
+
+    /// <summary>The two app-wide launch gestures the config override layer (#506) makes rebindable.</summary>
+    public static readonly IReadOnlyList<KeyAction> LaunchActions =
+        [KeyAction.OpenInNewTab, KeyAction.OpenInSplitPane];
+
+    /// <summary>The key token bound to <paramref name="action"/> in <paramref name="context"/> with the
+    /// launch-chord <paramref name="overrides"/> applied ahead of the static default (#506): for the two
+    /// overridable launch actions the configured token wins when set, otherwise the default table token.
+    /// Throws <see cref="KeyNotFoundException"/> if the context doesn't bind the action, exactly as the
+    /// parameterless <see cref="Token(ScreenContext, KeyAction)"/> does.</summary>
+    public static string Token(ScreenContext context, KeyAction action, LaunchChordOverrides overrides)
+    {
+        var token = Token(context, action);
+        return overrides.For(action) ?? token;
+    }
+
+    /// <summary>The override-aware counterpart of <see cref="TryToken(ScreenContext, KeyAction, out string)"/>
+    /// (#506): the configured launch-chord token when one is set, otherwise the default, or <c>false</c> when
+    /// the context doesn't bind the action.</summary>
+    public static bool TryToken(ScreenContext context, KeyAction action, LaunchChordOverrides overrides, out string token)
+    {
+        if (!TryToken(context, action, out token))
+            return false;
+        token = overrides.For(action) ?? token;
+        return true;
+    }
+
+    /// <summary>The distinct contexts whose default table binds <paramref name="action"/> (#506 collision
+    /// scope): a launch action is pinned to one token app-wide, so an override to it must not collide with
+    /// any other binding in <em>any</em> of these contexts.</summary>
+    public static IEnumerable<ScreenContext> ContextsBinding(KeyAction action)
+        => Map.Keys.Where(k => k.Action == action).Select(k => k.Context).Distinct();
+
+    /// <summary>Every <c>(action, token)</c> the default table binds in <paramref name="context"/>, with the
+    /// launch-chord <paramref name="overrides"/> applied (#506) — the effective bindings a save-time
+    /// collision check compares a proposed chord against.</summary>
+    public static IEnumerable<(KeyAction Action, string Token)> EffectiveBindingsFor(
+        ScreenContext context, LaunchChordOverrides overrides)
+        => Map.Where(e => e.Key.Context == context)
+            .Select(e => (e.Key.Action, overrides.For(e.Key.Action) ?? e.Value));
+
     // ── Task Detail sub-context activation (contextual chords C, #540) ──────────────────────────────
     //
     // The base Map above owns the *token for an action*; this layer owns *which action is live per Task

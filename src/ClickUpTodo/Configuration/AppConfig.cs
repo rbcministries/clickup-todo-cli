@@ -154,6 +154,17 @@ public sealed class AppConfig
     public SuperAgentSettings SuperAgents { get; set; } = new();
 
     /// <summary>
+    /// User overrides for the two app-wide launch gestures (#506, split-pane epic #502) — the
+    /// <c>Ctrl+Enter</c> new-tab and <c>Ctrl+Alt+Enter</c> split-pane chords. All optional; an absent
+    /// <c>launchChords</c> key (or either field null/blank) loads the shipped defaults, so the feature is
+    /// zero-config and no migration is needed. A hand-edited <c>"launchChords": null</c> is coalesced back
+    /// to defaults by <see cref="ConfigMigrations"/> (the <see cref="SuperAgents"/> precedent). The tokens
+    /// are read into the pure <see cref="Tui.Screens.LaunchChordOverrides"/> that the dispatcher and footer
+    /// resolve through, and validated at save time by <see cref="Tui.Screens.SettingsForm.ValidateLaunchChord"/>.
+    /// </summary>
+    public LaunchChordSettings LaunchChords { get; set; } = new();
+
+    /// <summary>
     /// The base working directory (#92) — the local root where most of the user's ClickUp-tracked
     /// work lives. It's the root the Dispatch file-tree browser (#95) hangs off and the parent a
     /// task-derived launch (#98) starts in. Blank/absent is the sentinel for the default

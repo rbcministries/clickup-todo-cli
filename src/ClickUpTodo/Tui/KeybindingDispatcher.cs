@@ -17,12 +17,17 @@ namespace ClickUpTodo.Tui;
 /// keypress all converge here.
 /// </para>
 /// </summary>
-public sealed class KeybindingDispatcher(ScreenContext context)
+public sealed class KeybindingDispatcher(ScreenContext context, LaunchChordOverrides? overrides = null)
 {
     private readonly Dictionary<KeyCode, Action> _handlers = [];
 
     /// <summary>The context whose <see cref="Keybindings"/> entries this dispatcher resolves against.</summary>
     public ScreenContext Context { get; } = context;
+
+    /// <summary>The user's launch-chord overrides (#506) this dispatcher resolves the two launch gestures
+    /// through, ahead of the table defaults. Defaults to <see cref="LaunchChordOverrides.None"/> so existing
+    /// zero-arg construction keeps the shipped chords.</summary>
+    private readonly LaunchChordOverrides _overrides = overrides ?? LaunchChordOverrides.None;
 
     /// <summary>
     /// Bind <paramref name="handler"/> to the key the table maps <paramref name="action"/> to in this
@@ -32,7 +37,7 @@ public sealed class KeybindingDispatcher(ScreenContext context)
     /// </summary>
     public KeybindingDispatcher On(KeyAction action, Action handler)
     {
-        var token = Keybindings.Token(Context, action);
+        var token = Keybindings.Token(Context, action, _overrides);
         if (!Key.TryParse(token, out var key))
             throw new InvalidOperationException(
                 $"Keybinding '{token}' for {Context}/{action} is not a parseable key.");

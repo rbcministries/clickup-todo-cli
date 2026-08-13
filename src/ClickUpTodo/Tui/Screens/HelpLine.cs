@@ -388,6 +388,36 @@ public static class HelpItemSets
             ? set
             : [.. set.Select(i => i is { IsAction: true, Key: "Ctrl+N" } ? i with { Label = "➕ item" } : i)];
 
+    /// <summary>
+    /// Relabels the two launch-gesture footer items to the user's configured chords (#506), so the footer
+    /// advertises what the rebound gesture actually is — the render-side counterpart of the dispatcher's
+    /// <see cref="Keybindings.Token(ScreenContext, KeyAction, LaunchChordOverrides)"/> resolution, funnelling
+    /// through the same <see cref="LaunchChordOverrides"/> value so the label and the fired key can't drift.
+    /// Matches each item by its default <see cref="HelpItem.ActionKey"/> (the app-wide <c>Ctrl+Enter</c> /
+    /// <c>Ctrl+Alt+Enter</c> tokens, pinned by <c>AllBindingsOfAnAction_ShareOneKey</c>) and rewrites both the
+    /// displayed key and the re-raised <see cref="HelpItem.Chord"/> to the override token. Applied to the
+    /// table-driven footers (<see cref="MainList"/>, <see cref="QuickOpen"/>); returns the set unchanged when
+    /// nothing is overridden, so the common case allocates nothing new.
+    /// </summary>
+    public static IReadOnlyList<HelpItem> WithConfiguredLaunchChords(
+        IReadOnlyList<HelpItem> set, LaunchChordOverrides overrides)
+    {
+        if (!overrides.HasAny)
+            return set;
+
+        var defaultNewTab = Keybindings.Token(ScreenContext.MainList, KeyAction.OpenInNewTab);
+        var defaultSplitPane = Keybindings.Token(ScreenContext.MainList, KeyAction.OpenInSplitPane);
+        var newTab = overrides.For(KeyAction.OpenInNewTab);
+        var splitPane = overrides.For(KeyAction.OpenInSplitPane);
+
+        return [.. set.Select(i =>
+            i is { IsAction: true } && newTab is not null && i.ActionKey == defaultNewTab
+                ? i with { Key = newTab, Chord = newTab }
+                : i is { IsAction: true } && splitPane is not null && i.ActionKey == defaultSplitPane
+                    ? i with { Key = splitPane, Chord = splitPane }
+                    : i)];
+    }
+
     /// <summary>The settings screen (F2).</summary>
     public static readonly IReadOnlyList<HelpItem> Settings =
     [

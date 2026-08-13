@@ -1,7 +1,21 @@
 using System.Globalization;
 using ClickUpTodo.Configuration;
+using Terminal.Gui.Input;
 
 namespace ClickUpTodo.Tui.Screens;
+
+/// <summary>The outcome of validating a proposed launch-chord override (#506): either
+/// <see cref="Ok"/>, or invalid with a user-facing <see cref="Error"/> naming the problem (an
+/// unparseable token, or the binding it would collide with).</summary>
+public readonly record struct LaunchChordValidation(bool IsValid, string? Error)
+{
+    /// <summary>The accepted result — a parseable, collision-free chord (or a blank field, which clears the
+    /// override back to the default).</summary>
+    public static readonly LaunchChordValidation Ok = new(true, null);
+
+    /// <summary>An <paramref name="error"/> the settings dialog surfaces inline while keeping the default.</summary>
+    public static LaunchChordValidation Invalid(string error) => new(false, error);
+}
 
 /// <summary>
 /// Pure input-handling logic for the settings screen, factored out of the Terminal.Gui glue so it
@@ -70,6 +84,65 @@ public static class SettingsForm
             ? $"1 provider · {def.Name}"
             : $"{providers.Count} providers · default {def.Name}";
     }
+
+    // ── configurable launch chords (#506) ───────────────────────────────────────
+
+    /// <summary>
+    /// Validates a proposed launch-chord override (#506) at save time: a blank field is <b>Ok</b> (it clears
+    /// the override, reverting the gesture to its shipped default); a non-blank token must be parseable by
+    /// <see cref="Key.TryParse"/> and must not <b>collide</b> — its parsed <c>KeyCode</c> may not equal any
+    /// <em>other</em> live binding's in any context that binds <paramref name="action"/> (a launch action is
+    /// pinned to one key app-wide, so it is checked across every such context). The sibling launch gesture is
+    /// compared at its <em>effective</em> token via <paramref name="current"/>, so rebinding one launch chord
+    /// onto the other's configured chord is caught. On collision the message names the conflicting action and
+    /// context; the caller keeps the default. Pure so it is unit-tested (mirrors the other <see cref="SettingsForm"/>
+    /// parsers); the F10 dialog calls it before persisting.
+    /// </summary>
+    public static LaunchChordValidation ValidateLaunchChord(
+        KeyAction action, string? proposedToken, LaunchChordOverrides current)
+    {
+        var token = proposedToken?.Trim() ?? "";
+        if (token.Length == 0)
+            return LaunchChordValidation.Ok;
+
+        if (!Key.TryParse(token, out var proposed))
+            return LaunchChordValidation.Invalid($"'{token}' isn't a recognised key combination.");
+
+        foreach (var context in Keybindings.ContextsBinding(action))
+            foreach (var (otherAction, otherToken) in Keybindings.EffectiveBindingsFor(context, current))
+            {
+                if (otherAction == action)
+                    continue;
+                if (Key.TryParse(otherToken, out var other) && other.KeyCode == proposed.KeyCode)
+                    return LaunchChordValidation.Invalid(
+                        $"{token} is already bound to {DescribeAction(otherAction)} on the {DescribeContext(context)}.");
+            }
+
+        return LaunchChordValidation.Ok;
+    }
+
+    /// <summary>A short human label for a <see cref="KeyAction"/> in a launch-chord collision message.</summary>
+    private static string DescribeAction(KeyAction action) => action switch
+    {
+        KeyAction.OpenInNewTab => "open in new tab",
+        KeyAction.OpenInSplitPane => "open in split pane",
+        KeyAction.Open => "open",
+        KeyAction.QuickOpen => "quick-open",
+        KeyAction.QuickUpdate => "quick update",
+        KeyAction.NewTask => "new task",
+        KeyAction.RenameTask => "rename",
+        KeyAction.Help => "help",
+        KeyAction.Back => "back",
+        _ => action.ToString(),
+    };
+
+    /// <summary>A short human label for a <see cref="ScreenContext"/> in a launch-chord collision message.</summary>
+    private static string DescribeContext(ScreenContext context) => context switch
+    {
+        ScreenContext.MainList => "task list",
+        ScreenContext.QuickOpen => "quick-open surface",
+        _ => context.ToString(),
+    };
 
     // ── base working directory (#92) ────────────────────────────────────────────
 
