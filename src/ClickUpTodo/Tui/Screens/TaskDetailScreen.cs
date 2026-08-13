@@ -706,9 +706,12 @@ public sealed class TaskDetailScreen : Screen
         // word-wrapped "Custom fields:" body). DetailOtherTabView owns that split and adapts it so both
         // the header attributes and the custom-fields section stay reachable on a very short window (#81).
         var headerLines = TaskDetailFormatter.HeaderAttributeLines(task);
+        // The signature still fingerprints the rendered custom-fields body (a cheap capture of both the
+        // header attributes and every field's display value), so an unchanged poll skips the rebuild; the
+        // navigable row model itself (#587 §2) is projected from task.CustomFields inside the view.
         var customFieldsBody = TaskDetailFormatter.CustomFieldsBody(task);
         _otherSignature = OtherTabSignature(headerLines, customFieldsBody);
-        _otherTab = new DetailOtherTabView(headerLines, customFieldsBody);
+        _otherTab = new DetailOtherTabView(headerLines, task.CustomFields);
 
         // The Task Tree tab (#291): a focusable ListView showing the task's ancestry + itself + its
         // descendants, indented and badged like the main list (via the shared TaskRowRenderer). Appended
@@ -1205,7 +1208,7 @@ public sealed class TaskDetailScreen : Screen
         if (!string.Equals(_otherSignature, otherSignature, StringComparison.Ordinal))
         {
             _otherSignature = otherSignature;
-            _otherTab.Update(headerLines, customFieldsBody);
+            _otherTab.Update(headerLines, task.CustomFields);
         }
 
         // Checklists tab (C, #456): rebuild only when the projected content moved, so an unchanged poll
