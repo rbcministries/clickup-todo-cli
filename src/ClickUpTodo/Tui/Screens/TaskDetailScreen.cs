@@ -351,7 +351,7 @@ public sealed class TaskDetailScreen : Screen
     private long _assigneeWriteGeneration;
 
     // The item add/rename input overlay: a bottom-anchored single-line name field + Save/Cancel (with a
-    // hidden discard-confirm row for an edited rename), hidden until Ctrl+N/F8. A transient child view within
+    // hidden discard-confirm row for an edited rename), hidden until Ctrl+N/F2. A transient child view within
     // the one open screen (like the comment composer / description editor), so the single-ListView model
     // (#3) is untouched.
     private readonly FrameView _checklistItemBox;
@@ -946,7 +946,7 @@ public sealed class TaskDetailScreen : Screen
 
         // The checklist-item add/rename overlay (E, #458): a bottom-anchored FrameView with a single-line
         // name field above a Save/Cancel button row (and a hidden discard-confirm row for an edited rename),
-        // shown on Ctrl+N (add) / F8 (rename). Modelled on the description editor — Save is the default (Enter
+        // shown on Ctrl+N (add) / F2 (rename). Modelled on the description editor — Save is the default (Enter
         // submits) and Esc cancels (arming the discard confirm when a rename has unsaved edits). A single
         // line, so unlike the multi-line editors the field takes Enter as submit, not a newline. Sized on
         // show (ShowChecklistItemEditor).
@@ -1311,13 +1311,16 @@ public sealed class TaskDetailScreen : Screen
         }
 
         // Checklist rename (E, #458 items; F, #459 groups), guarded to the Checklists tab being front-most
-        // (like Space above), so the chord on the other tabs / text panes stays inert. F8 is row-kind-scoped
+        // (like Space above), so the chord on the other tabs / text panes stays inert. F2 is row-kind-scoped
         // — on a checklist-header row it renames the whole group (F), on an item row it renames the item (E).
-        // The chord is shown in the Checklists footer but acts only here — the same shape D used for the
-        // toggle. Add is the contextual Ctrl+N above; delete is the contextual Delete below; group create is
-        // Ctrl+G. (F7/F8/F9 move to Ctrl+N / F2 / Delete across #540/#541/#543; F7 → Ctrl+N and F9 → Delete
-        // have landed, F8 → F2 is slice D.)
-        if (ReferenceEquals(_tabs.Value, _checklistList) && key.KeyCode == KeyCode.F8)
+        // Add is the contextual Ctrl+N above; delete is the contextual Delete below; group create is Ctrl+G.
+        // Contextual chords D (#541): rename moved off the #458 stopgap F8 to the conventional F2 (= Rename,
+        // #290); F8 is now unbound. Routing through Keybindings.ResolveDetail (only the Checklists tab binds
+        // F2 → RenameChecklistItem) keeps dispatch and the per-tab footer label in lock-step, exactly as the
+        // contextual Ctrl+N / Delete blocks do. With F7 → Ctrl+N (#540) and F9 → Delete (#543) already landed,
+        // this retires the last of the #458 F7/F8/F9 stopgaps.
+        if (key.KeyCode == KeyCode.F2 && ReferenceEquals(_tabs.Value, _checklistList)
+            && Keybindings.ResolveDetail(CurrentDetailSubContext(), "F2") == KeyAction.RenameChecklistItem)
         {
             key.Handled = true;
             if (SelectedChecklistRow() is { IsHeader: true })
@@ -1346,7 +1349,7 @@ public sealed class TaskDetailScreen : Screen
         }
 
         // Shift+↑/↓/←/→ on the Checklists tab (G, #569): reorder (↑/↓) or reparent (←outdent / →indent) the
-        // highlighted item. Guarded on the checklist ListView being front-most (like Space / Ctrl+N / F8 / F9 above), so
+        // highlighted item. Guarded on the checklist ListView being front-most (like Space / Ctrl+N / F2 / Delete above), so
         // the chords stay inert on the other tabs and text panes. Shift-modified (not Alt: Windows Terminal
         // claims Alt+arrows for pane focus and Alt+Shift+arrows for pane resize) so they don't collide with
         // Ctrl+←/→ tab cycling or the bare ↑/↓ pane-scroll block below (which excludes IsShift); consumed here
@@ -2703,7 +2706,7 @@ public sealed class TaskDetailScreen : Screen
             title: "New item — Enter save · Esc cancel");
     }
 
-    /// <summary>F8 — rename the selected item. Opens the name overlay pre-filled; the rename fires on
+    /// <summary>F2 — rename the selected item. Opens the name overlay pre-filled; the rename fires on
     /// submit. A header/empty-state row is inert-but-flashed.
     /// <para><b>Assignee hook (G, #460 → #572):</b> per the #538 decision, the per-item <em>assignee</em>
     /// belongs in this same rename surface (which migrates to the <c>F2</c>/<c>Ctrl+E</c> rename modal under
@@ -2859,7 +2862,7 @@ public sealed class TaskDetailScreen : Screen
             title: "New checklist — Enter save · Esc cancel");
     }
 
-    /// <summary>F8 on a checklist-header row — rename the selected group. Opens the name overlay pre-filled
+    /// <summary>F2 on a checklist-header row — rename the selected group. Opens the name overlay pre-filled
     /// with the group's name; the rename fires on submit.</summary>
     private void RenameSelectedChecklistGroup()
     {
