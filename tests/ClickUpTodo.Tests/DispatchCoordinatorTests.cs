@@ -356,7 +356,12 @@ public sealed class DispatchCoordinatorTests
 
         Assert.Equal(LaunchLocation.NewTab, plan.LaunchLocation);
         Assert.NotNull(plan.SplitDegradedReason);
-        Assert.Contains("tab", plan.SplitDegradedReason, StringComparison.OrdinalIgnoreCase);
+        // The LaunchLocation degrades to NewTab, but the human reason must NOT promise a literal "tab":
+        // #589/#590 made SplitViability's message host-agnostic ("… opening elsewhere instead") because the
+        // NewTab surface can resolve to a Zellij pane or a window fallback (the sibling over-promise #591
+        // fixes in AppHostLaunch). Assert the stable explanatory text instead of the retired "tab" wording.
+        Assert.Contains("too narrow to split", plan.SplitDegradedReason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("tab", plan.SplitDegradedReason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
