@@ -65,6 +65,7 @@ public enum KeyAction
     // Main list commands.
     OpenDetail,
     OpenInNewTab,
+    OpenInSplitPane,
     NewTask,
     RenameTask,
     QuickOpen,
@@ -122,6 +123,12 @@ public static class Keybindings
             [(ScreenContext.MainList, KeyAction.QuickUpdate)] = "Ctrl+U",
             [(ScreenContext.MainList, KeyAction.OpenDetail)] = "Enter",
             [(ScreenContext.MainList, KeyAction.OpenInNewTab)] = "Ctrl+Enter",
+            // Split-pane epic E (#507): open the selected task in a split pane beside the current one — a
+            // sibling launch mode of OpenInNewTab, not a mode of it (#502). Ctrl+Alt+Enter parses to a
+            // distinct KeyCode (Enter | Ctrl | Alt) from Ctrl+Enter, so the two never collide in the
+            // dispatcher. The default the epic commits to; a later host-reachability finding (#503/#511) or
+            // the D/#506 override layer can retune it without touching this slice's structure.
+            [(ScreenContext.MainList, KeyAction.OpenInSplitPane)] = "Ctrl+Alt+Enter",
             [(ScreenContext.MainList, KeyAction.QuickOpen)] = "Ctrl+O",
             [(ScreenContext.MainList, KeyAction.NewTask)] = "Ctrl+N",
             // Contextual chords H (#545): F2 renames the highlighted task's title in place — B (#539)
