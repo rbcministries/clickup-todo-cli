@@ -838,6 +838,18 @@ public sealed class TaskService(
     public Task<string?> SetTaskNameAsync(string taskId, string name, CancellationToken ct = default)
         => client.SetTaskNameAsync(taskId, name, ct);
 
+    /// <summary>Sets a Custom Field's value on an existing task (#587, over the facade write). The value is
+    /// a neutral <see cref="System.Text.Json.JsonElement"/> (as produced by <c>CustomFieldValueSerializer</c>);
+    /// its JSON kind is preserved. A blank field id is rejected by the facade. Thin passthrough, mirroring
+    /// <see cref="SetTaskNameAsync"/>.</summary>
+    public Task SetTaskCustomFieldAsync(string taskId, string fieldId, System.Text.Json.JsonElement value, CancellationToken ct = default)
+        => client.SetTaskCustomFieldAsync(taskId, fieldId, value, ct);
+
+    /// <summary>Clears a Custom Field's value on an existing task (#587, over the facade write) — the clear
+    /// counterpart to <see cref="SetTaskCustomFieldAsync"/>. Thin passthrough.</summary>
+    public Task ClearTaskCustomFieldAsync(string taskId, string fieldId, CancellationToken ct = default)
+        => client.ClearTaskCustomFieldAsync(taskId, fieldId, ct);
+
     /// <summary>Toggles (or sets) a checklist item's <c>resolved</c> state (D, #457, over the facade write)
     /// and returns the server-confirmed parent <see cref="TaskChecklist"/> so the detail view can reconcile
     /// it. <paramref name="taskId"/> is the owning task, threaded through so the facade can record a

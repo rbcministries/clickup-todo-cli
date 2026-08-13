@@ -3,6 +3,7 @@
 using ClickUpTodo.ClickUp.Generated.Models;
 using ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Checklist;
 using ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment;
+using ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Field;
 using Microsoft.Kiota.Abstractions.Extensions;
 using Microsoft.Kiota.Abstractions.Serialization;
 using Microsoft.Kiota.Abstractions;
@@ -28,6 +29,11 @@ namespace ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item
         public global::ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment.CommentRequestBuilder Comment
         {
             get => new global::ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Comment.CommentRequestBuilder(PathParameters, RequestAdapter);
+        }
+        /// <summary>The field property</summary>
+        public global::ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Field.FieldRequestBuilder Field
+        {
+            get => new global::ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.Field.FieldRequestBuilder(PathParameters, RequestAdapter);
         }
         /// <summary>
         /// Instantiates a new <see cref="global::ClickUpTodo.ClickUp.Generated.V2.TaskNamespace.Item.WithTask_ItemRequestBuilder"/> and sets the default values.
