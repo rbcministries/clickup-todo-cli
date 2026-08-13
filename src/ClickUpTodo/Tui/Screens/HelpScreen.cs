@@ -62,6 +62,7 @@ public sealed class HelpScreen : Screen
                 + "                    Mentions need a per-Space automation — see docs/mention-assignee-automation.md\n"
                 + "  F1            ℹ   This help / shortcuts\n"
                 + "  F10           ⚙   Settings (refresh rate, excluded statuses)\n"
+                + "  F2            ✏   Rename the focused task's title\n"
                 + "  F3            ⧩ ▼▲ ⛚  Filter / sort / group the list\n"
                 + "  F4                Cycle subtasks: mine + unassigned → all → hidden (nested under parent)\n"
                 + "  F5            ↻   Refresh now (also Ctrl+R; the detail & feed views also auto-refresh)\n"

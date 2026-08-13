@@ -537,6 +537,7 @@ public sealed class TodoApp
             .On(KeyAction.QuickOpen, OpenQuickOpen)         // #303
             .On(KeyAction.OpenInNewTab, () => LaunchTaskInNewTab(CurrentTask()))   // #301
             .On(KeyAction.NewTask, OpenNewTask)             // #213
+            .On(KeyAction.RenameTask, RenameCurrentTask)    // #545 (contextual chords H)
             .On(KeyAction.OpenInBrowser, OpenInBrowser)
             .On(KeyAction.TogglePin, TogglePin)
             .On(KeyAction.Feed, OpenNotificationsFeed)      // List ↔ Feed
@@ -1937,6 +1938,45 @@ public sealed class TodoApp
         });
     }
 
+    /// <summary>
+    /// F2 (contextual chords H, #545): rename the highlighted task's title. Opens the single-line
+    /// <see cref="RenameTaskScreen"/> pre-filled with the current title and, on a confirmed submit,
+    /// hands the new title to <see cref="ApplyRename"/>. The read-only rows are inert-but-flashed: a
+    /// header/spacer (no <see cref="CurrentTask"/>), a foreign subtask (#70) and a context-parent row
+    /// (#46) aren't the user's task to rename here — mirroring <see cref="TogglePin"/>'s guards.
+    /// </summary>
+    private void RenameCurrentTask()
+    {
+        if (ActiveScreen is not null)
+            return;
+
+        var task = CurrentTask();
+        if (task is null)
+        {
+            Flash("Select a task to rename.");
+            return;
+        }
+        if (_foreignSubtasks.ContainsKey(task.Id))
+        {
+            Flash(SubtaskVisibility.IsUnassigned(task)
+                ? "This subtask isn't assigned to anyone — nothing to rename."
+                : "This subtask isn't assigned to you — nothing to rename.");
+            return;
+        }
+        if (_contextParents.ContainsKey(task.Id))
+        {
+            Flash("This parent isn't in your list — nothing to rename here.");
+            return;
+        }
+
+        var screen = new RenameTaskScreen(task.Name);
+        ShowScreen(screen, () =>
+        {
+            if (screen.Result is { } newName)
+                ApplyRename(task.Id, newName);
+        });
+    }
+
     private void OpenInBrowser()
     {
         var task = CurrentTask();
@@ -2831,6 +2871,10 @@ public sealed class TodoApp
     // latest commit regardless of the order the responses arrive in.
     private int _statusCommitGen;
     private int _priorityCommitGen;
+    // The same monotonic-generation guard for F2 renames (#545): the overlay is one-shot, but a
+    // background refresh can still land between a rename's optimistic apply and its confirm, so a
+    // superseded continuation is dropped exactly as the status/priority commits do.
+    private int _nameCommitGen;
 
     /// <summary>
     /// Applies a Quick Updates status commit for <paramref name="taskId"/>: move the ✓ optimistically,
@@ -2945,6 +2989,60 @@ public sealed class TodoApp
                     ReconcileScreenPriority(screen, previousLevel);
                     ReflectDetailPriority(detailOrigin, previousLevel);
                     Flash($"Could not set priority: {ErrorText.Short(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>
+    /// Applies an F2 rename commit for <paramref name="taskId"/> (contextual chords H, #545): optimistic
+    /// row update with the new title, then an off-thread <see cref="TaskService.SetTaskNameAsync"/> write,
+    /// confirming with the server's returned title on success and reverting the one row on failure. The
+    /// task is looked up fresh from the snapshot; a superseded (out-of-order) continuation is dropped via
+    /// <see cref="_nameCommitGen"/>. The update is <c>wholesale</c> because
+    /// <see cref="TaskService.ApplyFieldChanges"/> folds status/priority/assignees but not the name, so a
+    /// per-field fold would leave the snapshot's title stale and flicker it back on the next re-render.
+    /// The overlay already rejected a blank title and dropped an unchanged one, so this only runs for a
+    /// genuine, non-blank edit.
+    /// </summary>
+    private void ApplyRename(string taskId, string newName)
+    {
+        var task = QuickUpdatesTaskById(taskId);
+        if (task is null)
+        {
+            Flash("This task is no longer in the list — not renamed.");
+            return;
+        }
+        var gen = ++_nameCommitGen;
+        var previousName = task.Name;
+
+        UpdateTaskRow(task with { Name = newName }, sending: true, wholesale: true);
+        Flash($"Renaming to '{newName}'…");
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var confirmed = await _tasks.SetTaskNameAsync(taskId, newName);
+                Application.Invoke(() =>
+                {
+                    if (gen != _nameCommitGen)
+                        return; // a newer rename superseded this one
+                    var final = confirmed ?? newName;
+                    if (QuickUpdatesTaskById(taskId) is { } t)
+                        UpdateTaskRow(t with { Name = final }, sending: false, wholesale: true);
+                    Flash($"Renamed to '{final}'.");
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    if (gen != _nameCommitGen)
+                        return;
+                    if (QuickUpdatesTaskById(taskId) is { } t)
+                        UpdateTaskRow(t with { Name = previousName }, sending: false, wholesale: true); // revert
+                    Flash($"Could not rename: {ErrorText.Short(ex)}");
                 });
             }
         });

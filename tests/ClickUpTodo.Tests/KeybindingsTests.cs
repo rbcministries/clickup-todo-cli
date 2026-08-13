@@ -20,6 +20,7 @@ public sealed class KeybindingsTests
         ScreenContext.FilterSortGroup => HelpItemSets.FilterSortGroup,
         ScreenContext.QuickUpdates => HelpItemSets.QuickUpdates,
         ScreenContext.QuickOpen => HelpItemSets.QuickOpen,
+        ScreenContext.RenameTask => HelpItemSets.RenameTask,
         ScreenContext.NewTask => HelpItemSets.NewTask,
         ScreenContext.PromptTemplateEditor => HelpItemSets.PromptTemplateEditor,
         ScreenContext.DispatchProviders => HelpItemSets.DispatchProviders,
@@ -113,14 +114,19 @@ public sealed class KeybindingsTests
         }
     }
 
-    // #539 (contextual chords B): Settings moved F2 → F10 to free F2 for the later rename slices
-    // (D #541 / E #542 / H #545). Pinned so a future run can't re-introduce an F2 binding without
-    // deciding the #538 rename model first — F2 must stay bound to nothing in every context.
+    // #539 (contextual chords B) moved Settings F2 → F10 to free F2 for the rename slices; H (#545) now
+    // claims F2 for the main-list task rename (contextual-chord-model.md §5-H). Pinned so Settings stays
+    // on F10 and F2 is used *only* by RenameTask — a future slice can't quietly repurpose it.
     [Fact]
-    public void Settings_IsF10_OnMainList_AndNoBindingUsesF2()
+    public void Settings_IsF10_OnMainList_AndF2_IsRenameTaskOnly()
     {
         Assert.Equal("F10", Keybindings.Token(ScreenContext.MainList, KeyAction.Settings));
-        Assert.DoesNotContain(Keybindings.All, e => e.Value == "F2");
+        Assert.Equal("F2", Keybindings.Token(ScreenContext.MainList, KeyAction.RenameTask));
+
+        // Every F2 binding is the RenameTask action (today only on the main list).
+        Assert.All(
+            Keybindings.All.Where(e => e.Value == "F2"),
+            e => Assert.Equal(KeyAction.RenameTask, e.Key.Action));
     }
 
     // The Help screen is the help; it must not bind a Help action (it would advertise F1 → itself).

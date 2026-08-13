@@ -178,6 +178,7 @@ public static class HelpItemSets
         new("Ctrl+E", "🔔"),
         new("F1", "ℹ"),
         new("F10", "⚙"),
+        new("F2", "✏ rename"),
         new("F3", "⧩ ▼▲ ⛚"),
         new("F4", "subtasks"),
         new("F5", "↻"),
@@ -308,6 +309,16 @@ public static class HelpItemSets
     /// Mirrors <see cref="DetailCommentComposer"/> so the footer advertises only what the overlay does —
     /// otherwise a click on an inert command hint would re-raise its chord into the field (#436).</summary>
     public static readonly IReadOnlyList<HelpItem> DetailChecklistItemEditor =
+    [
+        new("↩", "save", Chord: "Enter"),
+        new("F1", "ℹ"),
+        new("Esc", "cancel"),
+    ];
+
+    /// <summary>The main-list task-rename overlay (H, #545): a single-line title field launched by F2,
+    /// whose own keys are Enter to save and Esc to cancel; F1 opens Help. Mirrors
+    /// <see cref="DetailChecklistItemEditor"/> so the footer advertises only what the overlay does.</summary>
+    public static readonly IReadOnlyList<HelpItem> RenameTask =
     [
         new("↩", "save", Chord: "Enter"),
         new("F1", "ℹ"),

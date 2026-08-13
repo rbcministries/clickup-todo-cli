@@ -30,7 +30,7 @@ public sealed class HelpLineTests
     {
         const string expected =
             "↑/↓ move · →| next section · Ctrl+U quick update · ↩ detail · Ctrl+O 🗁 by ID · Ctrl+↩ new tab · Ctrl+N ➕ · Ctrl+B 🌐 · Ctrl+P 📌 · Ctrl+E 🔔 · "
-            + "F1 ℹ · F10 ⚙ · F3 ⧩ ▼▲ ⛚ · F4 subtasks · F5 ↻ · F6 badges · F12 👁✅ · "
+            + "F1 ℹ · F10 ⚙ · F2 ✏ rename · F3 ⧩ ▼▲ ⛚ · F4 subtasks · F5 ↻ · F6 badges · F12 👁✅ · "
             + "→/← expand/collapse · Ctrl+→/← all · Ctrl+Q quit · type to search";
 
         Assert.Equal(expected, HelpLine.Format(HelpItemSets.MainList));
@@ -50,6 +50,22 @@ public sealed class HelpLineTests
     [Fact]
     public void MainList_CarriesCtrlNNewTask()
         => Assert.Contains(new HelpItem("Ctrl+N", "➕"), HelpItemSets.MainList);
+
+    // Contextual chords H (#545): F2 renames the highlighted task; the ✏ glyph matches Task Detail's
+    // F8 rename hint, and the item is a clickable action so a footer click re-raises F2.
+    [Fact]
+    public void MainList_CarriesF2Rename_AsAClickableAction()
+    {
+        var item = HelpItemSets.MainList.Single(i => i.Key == "F2");
+        Assert.Equal("✏ rename", item.Label);
+        Assert.True(item.IsAction);
+        Assert.Equal("F2", item.ActionKey);
+    }
+
+    // The rename overlay footer advertises only what it does (save/help/cancel), like the other editors.
+    [Fact]
+    public void Format_RenameTask_RendersSaveHelpCancel()
+        => Assert.Equal("↩ save · F1 ℹ · Esc cancel", HelpLine.Format(HelpItemSets.RenameTask));
 
     [Fact]
     public void MainList_CarriesCtrlEnterNewTab_ReRaisingCtrlEnter()
@@ -506,7 +522,7 @@ public sealed class HelpLineTests
             HelpItemSets.MainList, HelpItemSets.Detail, HelpItemSets.DetailWithTaskTree,
             HelpItemSets.DetailDescriptionEditor, HelpItemSets.DetailCommentComposer,
             HelpItemSets.DetailMentionPicker, HelpItemSets.DetailReplyPicker,
-            HelpItemSets.DetailChecklistItemEditor,
+            HelpItemSets.DetailChecklistItemEditor, HelpItemSets.RenameTask,
             HelpItemSets.Settings, HelpItemSets.FilterSortGroup, HelpItemSets.QuickUpdates,
             HelpItemSets.QuickOpen, HelpItemSets.NewTask, HelpItemSets.PromptTemplateEditor,
             HelpItemSets.DispatchProviders,
