@@ -205,11 +205,10 @@ public static class HelpItemSets
         new("Ctrl+O", "🗁 by ID"),
         new("␣", "☑ toggle", Chord: "Space"),
         new("Ctrl+G", "➕ list"),
-        new("F8", "✏ rename"),
-        // F2 renames the highlighted Task Tree node's task title (H, #545), the same ✏ glyph the main
-        // list's F2 rename uses. Like the checklist chords above, it is carried on the base set and acts
-        // only on its own tab (the Task Tree tab, resolved via Keybindings.ResolveDetail) — the footer is
-        // not yet split per sub-context (future work with slice D/#600).
+        // F2 ✏ rename now serves BOTH F2-bound renames, disambiguated by the front tab via
+        // Keybindings.ResolveDetail: the checklist item/group rename on the Checklists tab (D, #541) and
+        // the highlighted node's task-title rename on the Task Tree tab (H, #545). One hint, since the
+        // footer isn't split per sub-context yet. F8 (the #458 stopgap) is retired.
         new("F2", "✏ rename"),
         new("Del", "🗑 delete", Chord: "Delete"),
         new("Shift+↑", "move", Chord: "Shift+CursorUp"),
@@ -242,8 +241,8 @@ public static class HelpItemSets
         new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
         new("␣", "☑ toggle", Chord: "Space"),
         new("Ctrl+G", "➕ list"),
-        new("F8", "✏ rename"),
-        // F2 renames the highlighted Task Tree node's task title (H, #545) — see the Detail set above.
+        // F2 ✏ rename serves both F2 renames (checklist item, D #541; Task Tree node, H #545), resolved
+        // per front tab by Keybindings.ResolveDetail — see the Detail set above. F8 is retired.
         new("F2", "✏ rename"),
         new("Del", "🗑 delete", Chord: "Delete"),
         new("Shift+↑", "move", Chord: "Shift+CursorUp"),

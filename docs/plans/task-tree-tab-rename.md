@@ -51,9 +51,10 @@ per-sub-context `DetailFooter_PerSubContext_ShowsEveryLiveBinding` (which iterat
 tree-present/absent variants). `WithContextualNewLabel` still only reallocates for the Checklists tab, so
 the `Assert.Same` footer-identity tests are unaffected.
 
-> Cosmetic note (out of scope, inherent to the not-yet-per-tab footer): on the tree-present footer the
-> checklist `F8 ✏ rename` hint and the new `F2 ✏ rename` hint both show even though each is live on only
-> its own tab. Fully splitting the footer per sub-context is future work (composes with slice D/#600).
+> Note: after merging slice D/#600 (which retargets the checklist rename `F8 → F2` and retires `F8`), the
+> two F2 renames — checklist item (Checklists tab) and task node (Task Tree tab) — share a **single**
+> `F2 ✏ rename` footer hint, resolved per front tab by `ResolveDetail`. So there is no duplicate hint; a
+> full per-sub-context footer split (dropping a chord that's inert on the current tab) remains future work.
 
 ### 3. Detail screen (`TaskDetailScreen.cs`)
 

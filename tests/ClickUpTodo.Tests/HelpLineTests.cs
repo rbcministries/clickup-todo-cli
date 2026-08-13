@@ -52,7 +52,8 @@ public sealed class HelpLineTests
         => Assert.Contains(new HelpItem("Ctrl+N", "➕"), HelpItemSets.MainList);
 
     // Contextual chords H (#545): F2 renames the highlighted task; the ✏ glyph matches Task Detail's
-    // F8 rename hint, and the item is a clickable action so a footer click re-raises F2.
+    // F2 rename hint (the Checklists-tab item/group rename, D/#541), and the item is a clickable action so
+    // a footer click re-raises F2.
     [Fact]
     public void MainList_CarriesF2Rename_AsAClickableAction()
     {
@@ -66,6 +67,22 @@ public sealed class HelpLineTests
     [Fact]
     public void Format_RenameTask_RendersSaveHelpCancel()
         => Assert.Equal("↩ save · F1 ℹ · Esc cancel", HelpLine.Format(HelpItemSets.RenameTask));
+
+    // Contextual chords D (#541): the Task Detail checklist rename hint moved off the #458 stopgap F8 to
+    // the conventional F2 (= Rename, #290) in both Detail footer variants; F8 no longer appears anywhere.
+    [Theory]
+    [MemberData(nameof(DetailSets))]
+    public void DetailSets_CarryF2Rename_NotF8(IReadOnlyList<HelpItem> set)
+    {
+        Assert.Contains(new HelpItem("F2", "✏ rename"), set);
+        Assert.DoesNotContain(set, i => i.Key == "F8" || i.ActionKey == "F8");
+    }
+
+    public static readonly TheoryData<IReadOnlyList<HelpItem>> DetailSets = new()
+    {
+        HelpItemSets.Detail,
+        HelpItemSets.DetailWithTaskTree,
+    };
 
     [Fact]
     public void MainList_CarriesCtrlEnterNewTab_ReRaisingCtrlEnter()
@@ -138,21 +155,19 @@ public sealed class HelpLineTests
         Assert.DoesNotContain(HelpItemSets.Detail, i => i.Key == "F6");
     }
 
-    // Contextual chords H (#545), tree half: both Task Detail base footer sets advertise F2 → rename (the
-    // Task Tree tab's node rename, resolved via Keybindings.ResolveDetail), a clickable action re-raising
-    // F2 under the same ✏ glyph the main list's F2 rename uses. Carried on both base sets like the other
-    // per-tab chords (the footer isn't split per sub-context yet), so the #355 cross-checks
-    // (Footer_ShowsTheTableKey_ForEveryBinding + DetailFooter_PerSubContext_ShowsEveryLiveBinding) hold.
+    // Contextual chords D (#541) + H (#545, tree half): after both slices F2 → rename is a SINGLE footer
+    // item on each Task Detail base set (not one per bound action) — it serves the checklist rename on the
+    // Checklists tab and the Task Tree node rename on the Task Tree tab, resolved per front tab via
+    // Keybindings.ResolveDetail, since the footer isn't split per sub-context yet. The `.Single` pins that
+    // uniqueness so the two F2 slices can't leave a duplicated hint; DetailSets_CarryF2Rename_NotF8 above
+    // pins its presence + the F8 retirement.
     [Theory]
-    [MemberData(nameof(DetailBaseSets))]
-    public void DetailSets_CarryF2Rename(IReadOnlyList<HelpItem> set)
+    [MemberData(nameof(DetailSets))]
+    public void DetailSets_CarryExactlyOneF2Rename(IReadOnlyList<HelpItem> set)
     {
         var item = set.Single(i => i.IsAction && i.ActionKey == "F2");
         Assert.Equal("✏ rename", item.Label);
     }
-
-    public static readonly TheoryData<IReadOnlyList<HelpItem>> DetailBaseSets =
-        [HelpItemSets.Detail, HelpItemSets.DetailWithTaskTree];
 
     // #436 — while an overlay editor (comment composer Ctrl+N / description editor Ctrl+E) is open the
     // footer must show only that overlay's keys. Otherwise the full command footer stays up and, since
