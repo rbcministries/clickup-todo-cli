@@ -278,24 +278,41 @@ public static class TaskDetailFormatter
         static string? ValueColor(string value, string? color) => value == EmDash ? null : color;
     }
 
+    /// <summary>The "Custom fields:" section heading and the empty-state marker shown when a task has
+    /// no custom fields — shared by the plain <see cref="CustomFieldsBody"/> string and the Other tab's
+    /// row model (<c>CustomFieldOtherTabArranger</c>, #587 §2) so the two can't drift.</summary>
+    public const string CustomFieldsHeading = "Custom fields:";
+
+    /// <summary>The empty-state line under <see cref="CustomFieldsHeading"/> (indented like a field row).</summary>
+    public const string CustomFieldsEmptyLine = "  (none)";
+
+    /// <summary>One custom field rendered as its Other-tab line — <c>  • {Name}  ({Type}): {value}</c>,
+    /// omitting the type/value segments when absent. The single source of truth for both the plain
+    /// <see cref="CustomFieldsBody"/> string and the Other tab's row projection (#587 §2), so a field's
+    /// rendering can't diverge between the read blob and the navigable row model. Pure.</summary>
+    public static string CustomFieldLine(CustomFieldItem field)
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        var sb = new StringBuilder();
+        sb.Append("  • ").Append(field.Name);
+        if (!string.IsNullOrWhiteSpace(field.Type))
+            sb.Append("  (").Append(field.Type).Append(')');
+        var value = CustomFieldValue(field);
+        if (!string.IsNullOrWhiteSpace(value))
+            sb.Append(": ").Append(value);
+        return sb.ToString();
+    }
+
     /// <summary>The Other tab's "Custom fields:" section (below the header attributes).</summary>
     public static string CustomFieldsBody(TaskDetail task)
     {
         var sb = new StringBuilder();
-        sb.Append("Custom fields:").Append('\n');
+        sb.Append(CustomFieldsHeading).Append('\n');
         if (task.CustomFields.Count == 0)
-            sb.Append("  (none)");
+            sb.Append(CustomFieldsEmptyLine);
         else
             foreach (var f in task.CustomFields)
-            {
-                sb.Append("  • ").Append(f.Name);
-                if (!string.IsNullOrWhiteSpace(f.Type))
-                    sb.Append("  (").Append(f.Type).Append(')');
-                var value = CustomFieldValue(f);
-                if (!string.IsNullOrWhiteSpace(value))
-                    sb.Append(": ").Append(value);
-                sb.Append('\n');
-            }
+                sb.Append(CustomFieldLine(f)).Append('\n');
         return sb.ToString().TrimEnd('\n');
     }
 
