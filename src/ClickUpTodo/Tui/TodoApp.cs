@@ -538,7 +538,7 @@ public sealed class TodoApp
             .On(KeyAction.QuickOpen, OpenQuickOpen)         // #303
             .On(KeyAction.OpenInNewTab, () => LaunchTaskInNewTab(CurrentTask()))   // #301
             .On(KeyAction.OpenInSplitPane, () => LaunchTaskInSplitPane(CurrentTask()))   // #507 (epic #502 E)
-            .On(KeyAction.NewTask, OpenNewTask)             // #213
+            .On(KeyAction.NewTask, BeginNewTask)            // #213; sibling-vs-subtask choice #544
             .On(KeyAction.RenameTask, RenameCurrentTask)    // #545 (contextual chords H)
             .On(KeyAction.OpenInBrowser, OpenInBrowser)
             .On(KeyAction.TogglePin, TogglePin)
@@ -1297,6 +1297,76 @@ public sealed class TodoApp
     }
 
     /// <summary>
+    /// Ctrl+N (contextual chords G, #544): classify the cursor into an <b>Add (sibling) vs Sub-add
+    /// (child)</b> choice via the pure <see cref="TaskAddChoiceModel"/>, then open the compose screen.
+    /// A header/empty row or a cursor that isn't the user's own fileable work (#46 context parent,
+    /// #70/#179 foreign subtask) has no valid parent, so it opens New Task directly with no prompt —
+    /// today's behaviour. Otherwise, when the native-modal flag is on, a <see cref="ChoiceDialog"/> asks
+    /// "Add task" vs "Add subtask": the latter opens the screen seeded to create a subtask of the
+    /// highlighted task (<see cref="OpenNewTask"/>'s <c>parentTaskId</c>). With the flag off the choice
+    /// modal is unavailable, so it falls back to a plain New Task (the flag-off default is byte-identical
+    /// to pre-#544), consistent with the other native-modal slices (F/#543).
+    /// </summary>
+    private void BeginNewTask()
+    {
+        if (ActiveScreen is not null)
+            return;
+
+        var task = CurrentTask();
+        var choice = TaskAddChoiceModel.ForCursor(
+            task?.Id,
+            task?.Name,
+            isContextParent: task is not null && _contextParents.ContainsKey(task.Id),
+            isForeignSubtask: task is not null && _foreignSubtasks.ContainsKey(task.Id));
+
+        // No parent to sub-add under, or the native choice modal is off: today's plain New Task.
+        if (!choice.Prompt || !ChoiceDialog.Enabled)
+        {
+            OpenNewTask();
+            return;
+        }
+
+        if (!ChoiceDialog.TryBeginOpen())
+            return;
+
+        var parentId = choice.ParentTaskId;
+        var parentName = TruncateForPrompt(choice.ParentTaskName);
+        // Deferred out of the keypress via Application.Invoke so the nested run-loop isn't entered
+        // re-entrantly from the dispatcher, mirroring the native confirm/help modals. After the dialog
+        // tears down, OpenNewTask mounts over the (now clear) screen stack.
+        Application.Invoke(() => ChoiceDialog.Run(
+            "New task",
+            $"Add a task, or a subtask of “{parentName}”?",
+            ["Add task", "Add subtask"],
+            index =>
+            {
+                switch (index)
+                {
+                    case 0:
+                        OpenNewTask();
+                        break;
+                    case 1:
+                        OpenNewTask(parentId);
+                        break;
+                    default:
+                        break; // Cancelled (Esc / Cancel) — no-op, no flash.
+                }
+            }));
+    }
+
+    /// <summary>The parent-task name shown in the sub-add prompt, single-lined and length-capped so a long
+    /// title keeps the dialog message to one readable row (the dialog also word-wraps as a backstop).</summary>
+    private static string TruncateForPrompt(string? name)
+    {
+        var oneLine = string.Join(" ", (name ?? string.Empty)
+            .Split('\n', '\r')
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0));
+        const int max = 48;
+        return oneLine.Length <= max ? oneLine : string.Concat(oneLine.AsSpan(0, max - 1).TrimEnd(), "…");
+    }
+
+    /// <summary>
     /// Ctrl+N — opens the New Task compose screen (#213/#240) over the list. Guarded on
     /// <see cref="ActiveScreen"/> like the other list-initiated opens (only Help stacks). Requires a
     /// configured Personal Tasks list (the fallback seed / create target when the cursor can't supply one);
@@ -1306,10 +1376,17 @@ public sealed class TodoApp
     /// (personal-list fallback — see <see cref="NewTaskForm.ResolveListSeed"/>). On success the list
     /// refreshes and the cursor lands on the new task.
     /// </summary>
-    private void OpenNewTask()
+    private void OpenNewTask(string? parentTaskId = null)
     {
         if (ActiveScreen is not null)
             return;
+
+        // Contextual chords G (#544): a non-blank parentTaskId opens the same New Task screen as a
+        // *subtask* create — the host rewrites the built request with the merged #603 facade's
+        // NewTaskRequest.ParentTaskId (ClickUp's top-level `parent`) below, so NewTaskScreen itself is
+        // untouched. The List selector already seeds from the cursor, which *is* the parent for a
+        // sub-add, so the subtask is POSTed to the parent's list by default.
+        var isSubtask = !string.IsNullOrWhiteSpace(parentTaskId);
 
         var listId = _config.PersonalTasksListId;
         if (string.IsNullOrWhiteSpace(listId))
@@ -1342,9 +1419,14 @@ public sealed class TodoApp
             listMatch: (query, exclude) => _lists.Match(query, exclude),
             listTopFrequent: (n, exclude) => _lists.TopMostFrequent(n, exclude),
             primaryList: primaryList,
-            createAsync: (targetListId, request, ct) => _tasks.CreateTaskAsync(targetListId, request, ct),
+            createAsync: (targetListId, request, ct) => _tasks.CreateTaskAsync(
+                targetListId,
+                isSubtask ? request with { ParentTaskId = parentTaskId } : request,
+                ct),
             addToListAsync: (taskId, targetListId, ct) => _tasks.AddTaskToListAsync(taskId, targetListId, ct),
             fetchListFieldsAsync: (targetListId, ct) => _tasks.GetListCustomFieldsAsync(targetListId, ct));
+        if (isSubtask)
+            screen.Title = "New subtask";
         screen.Created += (_, result) =>
         {
             // Land the next refresh on the new task, then kick that refresh directly (RequestRefresh's
@@ -1354,9 +1436,10 @@ public sealed class TodoApp
             // AllListsSucceeded and the happy-path flash still cover the common single-list case.)
             var created = result.Created;
             _pendingSelectId = created.Id;
+            var noun = isSubtask ? "subtask" : "task";
             Flash(result.AllListsSucceeded
-                ? $"Created “{created.Name}” · refreshing…"
-                : $"Created “{created.Name}”, but couldn't add to {DescribeLists(result.FailedAdditionalLists)} · refreshing…");
+                ? $"Created {noun} “{created.Name}” · refreshing…"
+                : $"Created {noun} “{created.Name}”, but couldn't add to {DescribeLists(result.FailedAdditionalLists)} · refreshing…");
             _refresh.RequestRefresh();
         };
         ShowScreen(screen, static () => { });
