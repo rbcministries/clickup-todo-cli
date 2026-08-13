@@ -606,7 +606,7 @@ public sealed class TaskDetailScreen : Screen
         _providers = providers ?? [];
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
-        Title = task.Name.Length > 60 ? task.Name[..59] + "…" : task.Name;
+        Title = FrameTitleFor(task.Name);
 
         // The title line carries trailing coloured Status/Priority badges (#162), which a plain Label
         // can't draw — render the header through the same per-run-coloured view the Other tab uses
@@ -1076,6 +1076,14 @@ public sealed class TaskDetailScreen : Screen
         _task = task;
         _comments = comments;
 
+        // Keep the frame-title border in step with the task name (H, #545): a rename applied through here
+        // (the F2 tree rename's current-task path, or a server refresh that renamed the task) must move the
+        // "╭┤{name}├╮" border too, not just the header line below. Gated on an actual change so a status /
+        // priority refresh — same name — doesn't reassign Title and trigger a needless relayout.
+        var frameTitle = FrameTitleFor(task.Name);
+        if (!string.Equals(Title, frameTitle, StringComparison.Ordinal))
+            Title = frameTitle;
+
         // Title header (#162): coloured attribute lines; re-render in place only when they moved.
         var titleHeaderLines = TaskDetailFormatter.HeaderLines(task);
         var headerSignature = OtherTabSignature(titleHeaderLines, "");
@@ -1203,6 +1211,12 @@ public sealed class TaskDetailScreen : Screen
             pane.Viewport = new Rectangle(vp.X, restored, vp.Width, vp.Height);
         }
     }
+
+    /// <summary>The frame-title border text for a task name (#162): the name, truncated with an ellipsis
+    /// past 60 chars so a long title can't overrun the border. Shared by the constructor and the
+    /// <see cref="UpdateData"/> rename sync (H, #545) so both derive the border the same way.</summary>
+    private static string FrameTitleFor(string name)
+        => name.Length > 60 ? name[..59] + "…" : name;
 
     /// <summary>A cheap content fingerprint of the Other tab (attribute lines + custom-fields body) so
     /// a refresh only rebuilds that tab when its rendered content moved. Line texts are newline-joined
