@@ -114,19 +114,24 @@ public sealed class KeybindingsTests
         }
     }
 
-    // #539 (contextual chords B) moved Settings F2 → F10 to free F2 for the rename slices; H (#545) claims
-    // F2 for the main-list task rename and D (#541) claims it for the Checklists-tab item/group rename
-    // (contextual-chord-model.md §5-D/§5-H). Pinned so Settings stays on F10 and F2 is used *only* for a
-    // Rename action (the #290 convention) — a future slice can't quietly repurpose it for anything else.
+    // #539 (contextual chords B) moved Settings F2 → F10 to free F2 for the rename slices; F2 is now a
+    // Rename key across the app (the #290 convention): H (#545) claims it for RenameTask on the main list
+    // and — tree half — on the Task Tree tab in Detail, while D (#541) claims it for RenameChecklistItem on
+    // the Checklists tab in Detail. The two Detail F2 bindings coexist because ResolveDetail disambiguates
+    // by sub-context (§2.2). Pinned so Settings stays on F10 and F2 is used *only* for a Rename action —
+    // nothing else may quietly repurpose it.
     [Fact]
     public void Settings_IsF10_OnMainList_AndF2_IsRenameOnly()
     {
         Assert.Equal("F10", Keybindings.Token(ScreenContext.MainList, KeyAction.Settings));
         Assert.Equal("F2", Keybindings.Token(ScreenContext.MainList, KeyAction.RenameTask));
+        // Task Detail binds F2 to TWO rename actions after D (#541) + H (#545), disambiguated by
+        // sub-context: RenameChecklistItem (Checklists tab) and RenameTask (Task Tree tab).
         Assert.Equal("F2", Keybindings.Token(ScreenContext.Detail, KeyAction.RenameChecklistItem));
+        Assert.Equal("F2", Keybindings.Token(ScreenContext.Detail, KeyAction.RenameTask));
 
-        // Every F2 binding is a Rename action — RenameTask on the main list (H, #545), RenameChecklistItem
-        // in Task Detail (D, #541). F2 = Rename is the convention (#290); nothing else may claim the key.
+        // Every F2 binding is a Rename action — RenameTask (main list H #545 + Task Tree tab) and
+        // RenameChecklistItem (Detail, D #541). F2 = Rename is the convention (#290); nothing else may claim it.
         KeyAction[] renameActions = [KeyAction.RenameTask, KeyAction.RenameChecklistItem];
         Assert.All(
             Keybindings.All.Where(e => e.Value == "F2"),
@@ -172,16 +177,19 @@ public sealed class KeybindingsTests
         Assert.Equal(KeyAction.AddComment, Keybindings.ResolveDetail(DetailSubContext.Default, "Ctrl+N"));
     }
 
-    // Contextual chords D (#541): F2 renames on the Checklists tab (item or group, row-kind decided in the
-    // handler) and is inert on every other tab — the Detail dispatch routes F2 through this seam exactly as
-    // it does Ctrl+N, so the footer label and the fired action can't drift. RenameTask's own F2 lives in
-    // MainList, not Detail, so no Detail sub-context resolves F2 to it.
+    // Contextual chords D (#541) + H (#545, tree half): F2 is a per-tab Rename in Task Detail, disambiguated
+    // by sub-context — RenameChecklistItem on the Checklists tab (item or group, row-kind decided in the
+    // handler) and RenameTask on the Task Tree tab (the highlighted node's title) — and inert on every other
+    // tab, where a rename has no highlighted target (that is the #542 F2/Ctrl+E alias question, deliberately
+    // not decided here). Detail dispatch routes F2 through this seam exactly as it does Ctrl+N, so the footer
+    // label and the fired action can't drift, and the two F2 actions never collide because only one is live
+    // per tab.
     [Fact]
-    public void ResolveDetail_F2_IsRenameChecklistItem_OnChecklistsTab_AndInertElsewhere()
+    public void ResolveDetail_F2_IsRenameChecklistItem_OnChecklists_RenameTask_OnTaskTree_InertElsewhere()
     {
         Assert.Equal(KeyAction.RenameChecklistItem, Keybindings.ResolveDetail(DetailSubContext.Checklists, "F2"));
+        Assert.Equal(KeyAction.RenameTask, Keybindings.ResolveDetail(DetailSubContext.TaskTree, "F2"));
         Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Comments, "F2"));
-        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.TaskTree, "F2"));
         Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Default, "F2"));
     }
 

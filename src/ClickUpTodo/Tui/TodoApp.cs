@@ -2201,6 +2201,9 @@ public sealed class TodoApp
                     // F6 on the Task Tree tab (#415) cycles the tree's badge display just like the main
                     // list; the host owns the flip/persist so both surfaces share one BadgeDisplay.
                     screen.CycleBadgeDisplayRequested += (_, _) => CycleTreeBadgeDisplay(screen);
+                    // F2 on the Task Tree tab (H, #545) renames the highlighted node's task title, reusing
+                    // the same RenameTaskScreen overlay + SetTaskNameAsync write as the main-list F2 rename.
+                    screen.RenameTreeTaskRequested += (_, req) => ShowTreeRename(screen, req);
                     // Ctrl+O quick-opens another task from within the detail (#353), stacked over it; the
                     // resolved Task Detail opens over this one, so Esc walks back through them.
                     screen.QuickOpenRequested += (_, _) => OpenQuickOpenFromScreen();
@@ -2871,10 +2874,25 @@ public sealed class TodoApp
     // latest commit regardless of the order the responses arrive in.
     private int _statusCommitGen;
     private int _priorityCommitGen;
-    // The same monotonic-generation guard for F2 renames (#545): the overlay is one-shot, but a
-    // background refresh can still land between a rename's optimistic apply and its confirm, so a
-    // superseded continuation is dropped exactly as the status/priority commits do.
-    private int _nameCommitGen;
+    // The same monotonic-generation guard for F2 renames (#545), but keyed PER TASK ID: the overlay is
+    // one-shot, yet a background refresh can land between a rename's optimistic apply and its confirm, and
+    // — since the main-list rename and the Task Tree rename (which can target a different task, from a
+    // stacked detail) are both fire-and-forget after the modal closes — two renames of DIFFERENT tasks can
+    // be in flight at once. A single global counter would let the later one's generation cancel the
+    // earlier task's revert/confirm, stranding its row on an un-persisted optimistic name. Keying by task
+    // id keeps a same-task re-rename superseding correctly while leaving a different task's write alone.
+    private readonly Dictionary<string, int> _nameCommitGen = [];
+
+    /// <summary>Bumps and returns the rename generation for <paramref name="taskId"/> (see
+    /// <see cref="_nameCommitGen"/>): the token a write continuation checks with
+    /// <see cref="IsCurrentNameCommit"/> to drop itself when a newer rename of the same task superseded it.</summary>
+    private int NextNameCommitGen(string taskId)
+        => _nameCommitGen[taskId] = _nameCommitGen.GetValueOrDefault(taskId) + 1;
+
+    /// <summary>Whether <paramref name="gen"/> is still the current rename generation for
+    /// <paramref name="taskId"/> — false once a newer rename of that same task superseded it.</summary>
+    private bool IsCurrentNameCommit(string taskId, int gen)
+        => _nameCommitGen.GetValueOrDefault(taskId) == gen;
 
     /// <summary>
     /// Applies a Quick Updates status commit for <paramref name="taskId"/>: move the ✓ optimistically,
@@ -3013,7 +3031,7 @@ public sealed class TodoApp
             Flash("This task is no longer in the list — not renamed.");
             return;
         }
-        var gen = ++_nameCommitGen;
+        var gen = NextNameCommitGen(taskId);
         var previousName = task.Name;
 
         UpdateTaskRow(task with { Name = newName }, sending: true, wholesale: true);
@@ -3026,7 +3044,7 @@ public sealed class TodoApp
                 var confirmed = await _tasks.SetTaskNameAsync(taskId, newName);
                 Application.Invoke(() =>
                 {
-                    if (gen != _nameCommitGen)
+                    if (!IsCurrentNameCommit(taskId, gen))
                         return; // a newer rename superseded this one
                     var final = confirmed ?? newName;
                     if (QuickUpdatesTaskById(taskId) is { } t)
@@ -3038,10 +3056,82 @@ public sealed class TodoApp
             {
                 Application.Invoke(() =>
                 {
-                    if (gen != _nameCommitGen)
+                    if (!IsCurrentNameCommit(taskId, gen))
                         return;
                     if (QuickUpdatesTaskById(taskId) is { } t)
                         UpdateTaskRow(t with { Name = previousName }, sending: false, wholesale: true); // revert
+                    Flash($"Could not rename: {ErrorText.Short(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>
+    /// F2 on the Task Tree tab (contextual chords H, #545): rename the highlighted node's task. Opens the
+    /// same single-line <see cref="RenameTaskScreen"/> the main list uses, stacked over the detail screen
+    /// (like Quick-Updates-from-detail), pre-filled with the node's current title; on a confirmed submit
+    /// applies the rename through <see cref="ApplyTreeRename(TaskDetailScreen, string, string, string)"/>.
+    /// The overlay itself only collects the edit (its <see cref="RenameTaskModel"/> already rejected a
+    /// blank title and dropped an unchanged one), mirroring <see cref="RenameCurrentTask"/>.
+    /// </summary>
+    private void ShowTreeRename(TaskDetailScreen origin, TreeTaskRenameRequest req)
+    {
+        var screen = new RenameTaskScreen(req.CurrentName);
+        ShowScreen(screen, () =>
+        {
+            if (screen.Result is { } newName)
+                ApplyTreeRename(origin, req.TaskId, req.CurrentName, newName);
+        });
+    }
+
+    /// <summary>
+    /// Applies a Task-Tree-tab rename commit for <paramref name="taskId"/> (contextual chords H, #545):
+    /// optimistically reflects the new title on the detail screen's tree row (and its header when the node
+    /// is the current task) and — when the task is also in the main-list snapshot — on the list row behind
+    /// it, then an off-thread <see cref="TaskService.SetTaskNameAsync"/> write, confirming with the server's
+    /// returned title or reverting on failure. A subtree node can be outside the main-list snapshot, so the
+    /// list update is best-effort (<see cref="QuickUpdatesTaskById"/> null ⇒ tree-only). Shares the
+    /// per-task <see cref="_nameCommitGen"/> supersede guard with <see cref="ApplyRename"/>, so a stacked
+    /// tree rename of one task and a main-list rename of another don't cancel each other's continuation.
+    /// Mirrors <see cref="ApplyRename"/>.
+    /// </summary>
+    private void ApplyTreeRename(TaskDetailScreen origin, string taskId, string previousName, string newName)
+    {
+        var gen = NextNameCommitGen(taskId);
+
+        if (_screens.Contains(origin))
+            origin.ApplyTreeRename(taskId, newName);
+        if (QuickUpdatesTaskById(taskId) is { } listTask)
+            UpdateTaskRow(listTask with { Name = newName }, sending: true, wholesale: true);
+        Flash($"Renaming to '{newName}'…");
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var confirmed = await _tasks.SetTaskNameAsync(taskId, newName);
+                Application.Invoke(() =>
+                {
+                    if (!IsCurrentNameCommit(taskId, gen))
+                        return; // a newer rename superseded this one
+                    var final = confirmed ?? newName;
+                    if (_screens.Contains(origin))
+                        origin.ApplyTreeRename(taskId, final);
+                    if (QuickUpdatesTaskById(taskId) is { } t)
+                        UpdateTaskRow(t with { Name = final }, sending: false, wholesale: true);
+                    Flash($"Renamed to '{final}'.");
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    if (!IsCurrentNameCommit(taskId, gen))
+                        return;
+                    if (_screens.Contains(origin))
+                        origin.ApplyTreeRename(taskId, previousName); // revert
+                    if (QuickUpdatesTaskById(taskId) is { } t)
+                        UpdateTaskRow(t with { Name = previousName }, sending: false, wholesale: true);
                     Flash($"Could not rename: {ErrorText.Short(ex)}");
                 });
             }

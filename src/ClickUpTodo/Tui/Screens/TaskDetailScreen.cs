@@ -16,6 +16,12 @@ using Terminal.Gui.Views;
 
 namespace ClickUpTodo.Tui.Screens;
 
+/// <summary>The target of an F2 Task-Tree-tab rename (contextual chords H, #545): the highlighted node's
+/// task id and its current title (to pre-fill the rename overlay). Carried by
+/// <see cref="TaskDetailScreen.RenameTreeTaskRequested"/> so the host can open the overlay + write without
+/// re-reading the tree's selected row.</summary>
+public readonly record struct TreeTaskRenameRequest(string TaskId, string CurrentName);
+
 /// <summary>
 /// A full-window screen showing a task's detail (issue #17): a header (title, tags, assignees) above
 /// a tabbed, scrollable pane — Stream / Description / Comments / Other attributes. Built on the shared
@@ -424,6 +430,17 @@ public sealed class TaskDetailScreen : Screen
     public event EventHandler? CycleBadgeDisplayRequested;
 
     /// <summary>
+    /// Raised when the user presses F2 on the Task Tree tab (contextual chords H, #545) to rename the
+    /// highlighted node's task title. Like <see cref="CycleBadgeDisplayRequested"/>, the screen only
+    /// <em>requests</em> the action: the host owns the rename overlay (<c>RenameTaskScreen</c>) and the
+    /// off-thread <see cref="ClickUpTodo.Services.TaskService.SetTaskNameAsync"/> write, then reflects the
+    /// result back through <see cref="ApplyTreeRename"/>. The argument carries the target node's id and its
+    /// current title (to pre-fill the overlay). Only raised when the tree tab exists (a loader was supplied)
+    /// and a real task row — not a placeholder/message row — is highlighted.
+    /// </summary>
+    public event EventHandler<TreeTaskRenameRequest>? RenameTreeTaskRequested;
+
+    /// <summary>
     /// Raised when the user presses Ctrl+B to open the task in the browser (#518). Like its sibling
     /// command events (<see cref="OpenInNewTabRequested"/>, <see cref="QuickUpdatesRequested"/>, …), the
     /// host owns the outcome: it launches the browser (flashing success/failure on this still-live view)
@@ -589,7 +606,7 @@ public sealed class TaskDetailScreen : Screen
         _providers = providers ?? [];
         _streamSort = prefs.StreamSort;
         _streamAutoScroll = prefs.AutoScroll;
-        Title = task.Name.Length > 60 ? task.Name[..59] + "…" : task.Name;
+        Title = FrameTitleFor(task.Name);
 
         // The title line carries trailing coloured Status/Priority badges (#162), which a plain Label
         // can't draw — render the header through the same per-run-coloured view the Other tab uses
@@ -1059,6 +1076,14 @@ public sealed class TaskDetailScreen : Screen
         _task = task;
         _comments = comments;
 
+        // Keep the frame-title border in step with the task name (H, #545): a rename applied through here
+        // (the F2 tree rename's current-task path, or a server refresh that renamed the task) must move the
+        // "╭┤{name}├╮" border too, not just the header line below. Gated on an actual change so a status /
+        // priority refresh — same name — doesn't reassign Title and trigger a needless relayout.
+        var frameTitle = FrameTitleFor(task.Name);
+        if (!string.Equals(Title, frameTitle, StringComparison.Ordinal))
+            Title = frameTitle;
+
         // Title header (#162): coloured attribute lines; re-render in place only when they moved.
         var titleHeaderLines = TaskDetailFormatter.HeaderLines(task);
         var headerSignature = OtherTabSignature(titleHeaderLines, "");
@@ -1187,6 +1212,12 @@ public sealed class TaskDetailScreen : Screen
         }
     }
 
+    /// <summary>The frame-title border text for a task name (#162): the name, truncated with an ellipsis
+    /// past 60 chars so a long title can't overrun the border. Shared by the constructor and the
+    /// <see cref="UpdateData"/> rename sync (H, #545) so both derive the border the same way.</summary>
+    private static string FrameTitleFor(string name)
+        => name.Length > 60 ? name[..59] + "…" : name;
+
     /// <summary>A cheap content fingerprint of the Other tab (attribute lines + custom-fields body) so
     /// a refresh only rebuilds that tab when its rendered content moved. Line texts are newline-joined
     /// and separated from the body by a sentinel; a collision would only skip a cosmetic rebuild.</summary>
@@ -1279,6 +1310,22 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             CycleBadgeDisplayRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        // F2 on the Task Tree tab (H, #545): rename the highlighted node's task title. Guarded on the tree
+        // being front-most (like Enter/F6 above) and routed through Keybindings.ResolveDetail so dispatch
+        // and the per-tab footer label stay in lock-step — only the Task Tree sub-context binds F2 →
+        // RenameTask, so this fires only here and F2 stays inert on the read-only text panes / Checklists
+        // tab (whose own F2/F8 rename is guarded to that tab). A placeholder/message row (null task, e.g.
+        // "(no task tree)" or a load error) is inert-but-flashed, not a silent no-op. The overlay + write
+        // are the host's (RenameTreeTaskRequested), reusing the main-list rename overlay + SetTaskNameAsync
+        // facade E (#542) landed; RequestTreeRename never renames on an unloaded/empty tree.
+        if (key.KeyCode == KeyCode.F2 && _treeList is not null && ReferenceEquals(_tabs.Value, _treeList)
+            && Keybindings.ResolveDetail(CurrentDetailSubContext(), "F2") == KeyAction.RenameTask)
+        {
+            key.Handled = true;
+            RequestTreeRename();
             return;
         }
 
@@ -3765,6 +3812,64 @@ public sealed class TaskDetailScreen : Screen
         if (_treeList?.SelectedItem is not int i || i < 0 || i >= _treeRows.Count)
             return;
         NavigateToTreeTask(_treeRows[i]);
+    }
+
+    /// <summary>The task on the highlighted Task Tree row, or null when the highlighted row is a
+    /// placeholder/message row ("(no task tree)", "Loading…", a load error) — the same null-task rows
+    /// <see cref="NavigateTreeSelection"/> and <see cref="OnTreeMouse"/> treat as inert.</summary>
+    private TaskItem? SelectedTreeTask()
+        => _treeList?.SelectedItem is int i && i >= 0 && i < _treeRows.Count ? _treeRows[i] : null;
+
+    /// <summary>F2 on the Task Tree tab (H, #545): request the host rename the highlighted node's task.
+    /// A placeholder/message row (no task) is inert-but-flashed rather than a silent no-op — mirroring the
+    /// main list's "Select a task to rename." guard.</summary>
+    private void RequestTreeRename()
+    {
+        if (SelectedTreeTask() is not { } task)
+        {
+            RequestFlash("Select a task to rename.");
+            return;
+        }
+        RenameTreeTaskRequested?.Invoke(this, new TreeTaskRenameRequest(task.Id, task.Name));
+    }
+
+    /// <summary>
+    /// Optimistically reflects an F2 rename made from the Task Tree tab (H, #545), called by the host on the
+    /// confirmed submit (and again with the server-confirmed name, or the previous name on a failed write —
+    /// revert). Re-renders the matching tree row in place with <paramref name="newName"/>, cursor preserved
+    /// (mirroring <see cref="SetTreeBadgeDisplay"/>); and when the renamed node is the task this screen shows
+    /// (the tree's default-highlighted current row), re-renders the header too via <see cref="UpdateData"/>
+    /// so the title stays consistent. A no-op when the tree hasn't loaded or doesn't contain the id (e.g. a
+    /// mid-write refresh dropped the node) — the host's write still reconciles the authoritative value.
+    /// </summary>
+    public void ApplyTreeRename(string taskId, string newName)
+    {
+        // The header follows the current task (the highlighted node is most often the current row).
+        if (string.Equals(taskId, _task.Id, StringComparison.Ordinal))
+            UpdateData(_task with { Name = newName }, _comments);
+
+        if (_treeList is null || _loadedTreeRows.Count == 0)
+            return;
+        var index = -1;
+        for (var i = 0; i < _loadedTreeRows.Count; i++)
+            if (string.Equals(_loadedTreeRows[i].Task.Id, taskId, StringComparison.Ordinal))
+            {
+                index = i;
+                break;
+            }
+        if (index < 0)
+            return;
+
+        var rows = _loadedTreeRows.ToArray();
+        rows[index] = rows[index] with { Task = rows[index].Task with { Name = newName } };
+        _loadedTreeRows = rows;
+
+        // Assigning .Source (inside RenderTreeRows) resets the selection, so capture and restore it around
+        // the rebuild — exactly as SetTreeBadgeDisplay does for the F6 re-render.
+        var previous = _treeList.SelectedItem;
+        RenderTreeRows(_loadedTreeRows);
+        if (previous >= 0 && previous < _treeRows.Count)
+            _treeList.SelectedItem = previous;
     }
 
     /// <summary>Double-click a tree row → navigate to its task (the mouse equivalent of Enter), resolved

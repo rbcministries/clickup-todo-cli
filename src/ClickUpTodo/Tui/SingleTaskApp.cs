@@ -367,6 +367,11 @@ public sealed class SingleTaskApp
         // F6 on the Task Tree tab (#415) cycles the tree's badge display; the host owns the flip/persist
         // and reflects it across the root and every stacked child so the visited-task chain stays in step.
         screen.CycleBadgeDisplayRequested += (_, _) => CycleTreeBadgeDisplay(tab.Screen);
+        // F2 on the Task Tree tab (H, #545) renames a node's task in the dashboard, but single-task mode
+        // defers task mutations for now (same as Quick Updates above) so it doesn't grow a lone task-write
+        // path here. Flash rather than silently no-op so the gap is legible; tracked as a follow-up.
+        screen.RenameTreeTaskRequested += (_, _) =>
+            Flash("Renaming from the Task Tree isn't available in single-task mode yet.");
         // Ctrl+Enter opens this tab's task in its own terminal tab (#435) — the single-task counterpart of
         // the dashboard's #384 gesture, reusing the exact launcher + copy-command fallback. Since #374 gave
         // single-task mode the Task Tree tab, the detail screen already raises this event and already

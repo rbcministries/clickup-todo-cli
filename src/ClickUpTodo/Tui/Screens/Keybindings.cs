@@ -146,6 +146,13 @@ public static class Keybindings
             [(ScreenContext.Detail, KeyAction.AddComment)] = "Ctrl+N",
             [(ScreenContext.Detail, KeyAction.ReplyToComment)] = "Ctrl+T",
             [(ScreenContext.Detail, KeyAction.EditDescription)] = "Ctrl+E",
+            // Contextual chords H (#545): F2 renames the highlighted node's task title on the Task Tree
+            // tab (contextual-chord-model.md §3, §5-H) — a plain title rename through the SetTaskNameAsync
+            // facade E (#542) landed, reusing the main-list rename overlay. It shares F2 with the checklist
+            // rename (slice D/#600 retargets F8 → F2 on the Checklists sub-context); the two never collide
+            // because the sub-context activation below makes only one live per tab (§2.2). RenameTask keeps
+            // one token (F2) across MainList and Detail, so AllBindingsOfAnAction_ShareOneKey holds.
+            [(ScreenContext.Detail, KeyAction.RenameTask)] = "F2",
             [(ScreenContext.Detail, KeyAction.ToggleChecklistItem)] = "Space",
             // Contextual chords C (#540): the "new" chord is now shared with AddComment (both "Ctrl+N")
             // and disambiguated by the front Task Detail tab (see DetailSubContext / ResolveDetail below).
@@ -294,7 +301,12 @@ public static class Keybindings
                 KeyAction.IndentChecklistItem,
                 KeyAction.NewChecklist,
             ],
-            [DetailSubContext.TaskTree] = [KeyAction.AddComment],
+            // The Task Tree tab keeps Ctrl+N → comment (no per-tab override) and adds F2 → RenameTask (H,
+            // #545): F2 renames the highlighted node's task title, disambiguated from the checklist F2
+            // rename by this sub-context (§2.2). RenameTask is listed here, not context-wide, so F2 stays
+            // inert on every other Task Detail tab (where a rename has no highlighted node — that is the
+            // #542 alias question, deliberately not decided here).
+            [DetailSubContext.TaskTree] = [KeyAction.AddComment, KeyAction.RenameTask],
             [DetailSubContext.Default] = [KeyAction.AddComment],
         };
 

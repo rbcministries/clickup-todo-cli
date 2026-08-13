@@ -155,6 +155,20 @@ public sealed class HelpLineTests
         Assert.DoesNotContain(HelpItemSets.Detail, i => i.Key == "F6");
     }
 
+    // Contextual chords D (#541) + H (#545, tree half): after both slices F2 → rename is a SINGLE footer
+    // item on each Task Detail base set (not one per bound action) — it serves the checklist rename on the
+    // Checklists tab and the Task Tree node rename on the Task Tree tab, resolved per front tab via
+    // Keybindings.ResolveDetail, since the footer isn't split per sub-context yet. The `.Single` pins that
+    // uniqueness so the two F2 slices can't leave a duplicated hint; DetailSets_CarryF2Rename_NotF8 above
+    // pins its presence + the F8 retirement.
+    [Theory]
+    [MemberData(nameof(DetailSets))]
+    public void DetailSets_CarryExactlyOneF2Rename(IReadOnlyList<HelpItem> set)
+    {
+        var item = set.Single(i => i.IsAction && i.ActionKey == "F2");
+        Assert.Equal("✏ rename", item.Label);
+    }
+
     // #436 — while an overlay editor (comment composer Ctrl+N / description editor Ctrl+E) is open the
     // footer must show only that overlay's keys. Otherwise the full command footer stays up and, since
     // footer hints are clickable, a click re-raises an inert chord into the composer (e.g. Ctrl+Enter →
