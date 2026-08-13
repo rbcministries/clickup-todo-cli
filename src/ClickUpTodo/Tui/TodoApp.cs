@@ -2342,7 +2342,15 @@ public sealed class TodoApp
                         assigneeMatch: (query, exclude) => _assignees.Match(query, exclude),
                         assigneeTopFrequent: (n, exclude) => _assignees.TopMostFrequent(n, exclude),
                         setChecklistItemAssigneeAsync: (checklistId, itemId, assigneeId, ct) =>
-                            _tasks.SetChecklistItemAssigneeAsync(resolvedId, checklistId, itemId, assigneeId, ct));
+                            _tasks.SetChecklistItemAssigneeAsync(resolvedId, checklistId, itemId, assigneeId, ct),
+                        // Other-tab custom-field editing (#587 §3): Space toggles a checkbox field / Enter
+                        // edits a text-like value. Both close over the resolved task id (the writes are
+                        // POST/DELETE /task/{id}/field/{fieldId}), like the checklist writes above; the facade
+                        // records the confirmed-write change-marker nudge (#294) that drives the reconcile.
+                        setTaskCustomFieldAsync: (fieldId, value, ct) =>
+                            _tasks.SetTaskCustomFieldAsync(resolvedId, fieldId, value, ct),
+                        clearTaskCustomFieldAsync: (fieldId, ct) =>
+                            _tasks.ClearTaskCustomFieldAsync(resolvedId, fieldId, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the
