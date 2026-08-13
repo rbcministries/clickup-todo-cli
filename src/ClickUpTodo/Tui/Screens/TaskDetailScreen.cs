@@ -1310,32 +1310,38 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
-        // Checklist rename / delete (E, #458 items; F, #459 groups), guarded to the Checklists tab being
-        // front-most (like Space above), so the chords on the other tabs / text panes stay inert. F8/F9 are
-        // row-kind-scoped — on a checklist-header row they rename / delete the whole group (F), on an item
-        // row they rename / delete the item (E). The chords are shown in the Checklists footer, but act only
-        // here — the same shape D used for the toggle. Add is the contextual Ctrl+N above; group create is
-        // Ctrl+G below. (F7/F8/F9 move to Ctrl+N / F2 / Delete across #540/#541/#543; only F7 has moved so far.)
-        if (ReferenceEquals(_tabs.Value, _checklistList)
-            && key.KeyCode is KeyCode.F8 or KeyCode.F9)
+        // Checklist rename (E, #458 items; F, #459 groups), guarded to the Checklists tab being front-most
+        // (like Space above), so the chord on the other tabs / text panes stays inert. F8 is row-kind-scoped
+        // — on a checklist-header row it renames the whole group (F), on an item row it renames the item (E).
+        // The chord is shown in the Checklists footer but acts only here — the same shape D used for the
+        // toggle. Add is the contextual Ctrl+N above; delete is the contextual Delete below; group create is
+        // Ctrl+G. (F7/F8/F9 move to Ctrl+N / F2 / Delete across #540/#541/#543; F7 → Ctrl+N and F9 → Delete
+        // have landed, F8 → F2 is slice D.)
+        if (ReferenceEquals(_tabs.Value, _checklistList) && key.KeyCode == KeyCode.F8)
         {
             key.Handled = true;
-            var onHeader = SelectedChecklistRow() is { IsHeader: true };
-            switch (key.KeyCode)
-            {
-                case KeyCode.F8:
-                    if (onHeader)
-                        RenameSelectedChecklistGroup();
-                    else
-                        RenameSelectedChecklistItem();
-                    break;
-                case KeyCode.F9:
-                    if (onHeader)
-                        DeleteSelectedChecklistGroup();
-                    else
-                        DeleteSelectedChecklistItem();
-                    break;
-            }
+            if (SelectedChecklistRow() is { IsHeader: true })
+                RenameSelectedChecklistGroup();
+            else
+                RenameSelectedChecklistItem();
+            return;
+        }
+
+        // Contextual Delete (F, #543): Delete removes the highlighted checklist thing — the whole group on a
+        // header row, the item otherwise — behind a confirmation. Retargeted from #458's F9. Routing the
+        // decision through Keybindings.ResolveDetail (only the Checklists tab binds Delete →
+        // DeleteChecklistItem) keeps dispatch and the per-tab footer label in lock-step, exactly as the
+        // contextual Ctrl+N block above does. The confirmation surface is chosen inside the Delete* handlers
+        // (the native ConfirmDialog when the flag is on, else the #458 inline armed confirm answered at the
+        // top of OnKey).
+        if (key.KeyCode == KeyCode.Delete && ReferenceEquals(_tabs.Value, _checklistList)
+            && Keybindings.ResolveDetail(CurrentDetailSubContext(), "Delete") == KeyAction.DeleteChecklistItem)
+        {
+            key.Handled = true;
+            if (SelectedChecklistRow() is { IsHeader: true })
+                DeleteSelectedChecklistGroup();
+            else
+                DeleteSelectedChecklistItem();
             return;
         }
 
@@ -2725,9 +2731,10 @@ public sealed class TaskDetailScreen : Screen
             title: "Rename item — Enter save · Esc cancel");
     }
 
-    /// <summary>F9 — delete the selected item. Arms an inline Y/N confirm on the tab (answered in OnKey)
-    /// rather than deleting on a single keypress, since the API delete is not undoable. A header/empty-state
-    /// row is inert-but-flashed.</summary>
+    /// <summary>Delete (F, #543; was #458's F9) — delete the selected item behind a confirmation, since the
+    /// API delete is not undoable. With the native-modal flag on, opens the reusable <see cref="ConfirmDialog"/>;
+    /// otherwise arms the inline <c>Enter</c>/<c>Esc</c> confirm on the tab (answered in OnKey). A
+    /// header/empty-state row is inert-but-flashed.</summary>
     private void DeleteSelectedChecklistItem()
     {
         if (_deleteChecklistItemAsync is null)
@@ -2742,8 +2749,39 @@ public sealed class TaskDetailScreen : Screen
             RequestFlash("Select a checklist item to delete — headers can't be deleted.");
             return;
         }
-        _checklistDeletePending = (row.ChecklistId, itemId, row.Text);
-        RequestFlash($"Delete \"{row.Text}\"? (Enter = delete · Esc = cancel)");
+        var checklistId = row.ChecklistId;
+        var text = row.Text;
+        if (ConfirmDialog.Enabled)
+        {
+            ConfirmChecklistDeleteNatively(
+                title: "Delete item",
+                message: $"Delete \"{text}\"?\nThis can't be undone.",
+                onConfirm: () => PerformChecklistItemDelete(checklistId, itemId));
+            return;
+        }
+        _checklistDeletePending = (checklistId, itemId, text);
+        RequestFlash($"Delete \"{text}\"? (Enter = delete · Esc = cancel)");
+    }
+
+    /// <summary>Contextual chords F (#543): open the reusable native <see cref="ConfirmDialog"/> for a
+    /// destructive checklist delete, deferred out of the keypress via <see cref="Application.Invoke(Action)"/>
+    /// like the native-modal spike so the nested run-loop isn't entered re-entrantly from <c>OnKey</c>. On
+    /// confirm it runs <paramref name="onConfirm"/> (the optimistic Perform*Delete) on the UI thread; on
+    /// cancel it flashes. A busy slot (a confirm already open) is a no-op. Only reached when
+    /// <see cref="ConfirmDialog.Enabled"/> — the flag-off default keeps the #458 inline armed confirm.</summary>
+    private void ConfirmChecklistDeleteNatively(string title, string message, Action onConfirm)
+    {
+        if (!ConfirmDialog.TryBeginOpen())
+            return;
+        Application.Invoke(() => ConfirmDialog.Run(title, message, "Delete", confirmed =>
+        {
+            if (_disposed)
+                return;
+            if (confirmed)
+                onConfirm();
+            else
+                RequestFlash("Delete cancelled.");
+        }));
     }
 
     /// <summary>
@@ -2841,9 +2879,11 @@ public sealed class TaskDetailScreen : Screen
             title: "Rename checklist — Enter save · Esc cancel");
     }
 
-    /// <summary>F9 on a checklist-header row — delete the selected group. Arms an inline Enter/Esc confirm
-    /// (answered in OnKey) that names the group and its item count, since the group delete (which also
-    /// destroys every item) is not undoable via the API.</summary>
+    /// <summary>Delete on a checklist-header row (F, #543; was #459's F9) — delete the selected group behind
+    /// a confirmation that names the group and its item count, since the group delete (which also destroys
+    /// every item) is not undoable via the API. With the native-modal flag on, opens the reusable
+    /// <see cref="ConfirmDialog"/>; otherwise arms the inline <c>Enter</c>/<c>Esc</c> confirm (answered in
+    /// OnKey).</summary>
     private void DeleteSelectedChecklistGroup()
     {
         if (_deleteChecklistAsync is null)
@@ -2859,6 +2899,15 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
         _checklistDeletePending = null; // a group-delete supersedes any armed item-delete
+        var checklistId = row.ChecklistId;
+        if (ConfirmDialog.Enabled)
+        {
+            ConfirmChecklistDeleteNatively(
+                title: "Delete checklist",
+                message: ChecklistTabModel.DeleteGroupMessage(row.Text, row.TotalCount),
+                onConfirm: () => PerformChecklistGroupDelete(checklistId));
+            return;
+        }
         _checklistGroupDeletePending = (row.ChecklistId, row.Text, row.TotalCount);
         RequestFlash(ChecklistTabModel.DeleteGroupPrompt(row.Text, row.TotalCount));
     }
