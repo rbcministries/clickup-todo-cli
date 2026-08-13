@@ -229,11 +229,7 @@ public static class DispatchCoordinator
     /// passes <see cref="AgentDispatchResult.LaunchedWith"/>.
     /// </summary>
     public static string? WindowsTerminalProfileNote(ResolvedDispatch plan, string? launchedWith)
-        => plan.WindowsTerminalProfile is { } profile
-            && launchedWith is { } host
-            && host.StartsWith("Windows Terminal", StringComparison.Ordinal)
-            ? $" (Windows Terminal profile '{profile}'.)"
-            : null;
+        => DispatchStatusLine.WindowsTerminalProfileNote(plan.WindowsTerminalProfile, launchedWith);
 
     /// <summary>The real-filesystem default for <see cref="Plan"/>'s #462 WT-profile match: reads the
     /// first existing Windows Terminal <c>settings.json</c>, or <c>null</c> (no file, off Windows, or an
@@ -305,14 +301,15 @@ public static class DispatchCoordinator
                     plan.OneOff, plan.PostToComments, launchLocation: plan.LaunchLocation,
                     windowsTerminalProfile: plan.WindowsTerminalProfile,
                     providerExecutable: plan.ProviderExecutable, providerExtraArgs: plan.ProviderExtraArgs);
-                // Tell the user when a #462 WT profile match launched the session under a non-default
-                // profile — otherwise a launch that looked different than expected is unexplained. The
-                // #461 Repository match no longer needs a note: the directory it chose is now visible in
-                // the pre-filled working-dir field, which explains itself (#533 decision 5).
-                // When the split-pane viability floor (#505/#515) downgraded the request to a tab, lead
-                // with its reason so the tab reads as a deliberate degradation, not a dropped choice.
-                var degraded = plan.SplitDegradedReason is { } reason ? reason + " " : "";
-                var status = degraded + result.StatusMessage + (WindowsTerminalProfileNote(plan, result.LaunchedWith) ?? "");
+                // Compose the one coherent dispatch status line (#517, slice L): the #505/#515 split→tab
+                // degradation reason leads (highest-value — "you asked for a pane and got a tab"), the
+                // launcher's core message follows (carrying its own fall-back Note), and the #462 WT
+                // profile note trails when a Windows Terminal host actually launched. A failed launch is
+                // just the failure message. The #461 Repository match needs no clause: the directory it
+                // chose is visible in the pre-filled working-dir field, which explains itself (#533).
+                var status = DispatchStatusLine.Compose(
+                    result.StatusMessage, result.Success, result.LaunchedWith,
+                    plan.SplitDegradedReason, plan.WindowsTerminalProfile);
                 Application.Invoke(() => report(status));
             }
             catch (Exception ex)
