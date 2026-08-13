@@ -155,6 +155,38 @@ public sealed class AgentDirectoryCacheTests : IDisposable
     }
 
     [Fact]
+    public async Task Refresh_EmptyResult_DoesNotReArmNeedsRefreshUntilTtl()
+    {
+        var clock = NewClock();
+        var cache = new AgentDirectoryCache(discovery: Source(), timeProvider: clock, ttl: TimeSpan.FromHours(12));
+        Assert.True(cache.NeedsRefresh); // never fetched
+
+        await cache.RefreshAsync(); // a legitimate agent-less workspace: fetched, nothing there
+
+        Assert.Empty(cache.Entries);
+        Assert.False(cache.NeedsRefresh); // "fetched, empty" is not "never fetched" — don't refetch every tick
+
+        clock.Advance(TimeSpan.FromHours(13)); // past the TTL
+        Assert.True(cache.NeedsRefresh);      // now a periodic refresh is due
+    }
+
+    [Fact]
+    public async Task Refresh_ReplacesDiscoveredLayer_VanishedAgentDropped()
+    {
+        // Second discovery drops -4; "only a successful discovery replaces it" means -4 disappears.
+        var source = new FuncSource(n => n == 1
+            ? [Discovered(-3, "Charlie"), Discovered(-4, "Delta")]
+            : [Discovered(-3, "Charlie")]);
+        var cache = new AgentDirectoryCache(discovery: source, timeProvider: NewClock());
+
+        await cache.RefreshAsync();
+        Assert.Equal(new[] { -4L, -3L }.OrderBy(x => x), cache.Entries.Select(e => e.Id).OrderBy(x => x));
+
+        await cache.RefreshAsync();
+        Assert.Equal([-3], cache.Entries.Select(e => e.Id)); // -4 replaced away, not merged
+    }
+
+    [Fact]
     public async Task Refresh_SourceThrows_LeavesExistingLayerIntact()
     {
         var source = new FuncSource(n => n == 1
@@ -248,6 +280,21 @@ public sealed class AgentDirectoryCacheTests : IDisposable
         Assert.Equal("Charlie", entry.Name);
         Assert.Equal("recaps", entry.Purpose);
         Assert.Equal(AgentEntrySource.Discovered, entry.Source);
+        Assert.False(second.NeedsRefresh); // warmed a fresh layer ⇒ not due for a refresh yet
+    }
+
+    [Fact]
+    public void Persistence_OutOfRangeTimestamp_EntryDropped_NoThrow()
+    {
+        var store = new JsonFileStateStore(_dir);
+        // A structurally-valid document with a hand-tampered, out-of-range FetchedAtMs: FromUnixTimeMilliseconds
+        // would throw — construction must swallow it and drop that entry rather than brick launch.
+        store.Save(StateKeys.AgentDirectories, new AgentDirectoryDocument(
+            AgentDirectoryCache.CurrentSchemaVersion, "ws1",
+            [new AgentDirectoryEntryDto(-3, "Charlie", null, long.MaxValue)]));
+
+        var cache = new AgentDirectoryCache(timeProvider: NewClock(), store: store, workspaceId: "ws1");
+        Assert.Empty(cache.Entries);
     }
 
     [Fact]

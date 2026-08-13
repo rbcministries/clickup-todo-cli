@@ -56,6 +56,12 @@ public sealed class AgentDirectoryCache
     private readonly Lock _gate = new();
     private readonly Lock _persistGate = new();
 
+    // When the discovered layer was last populated — by a refresh, or by warming from the persisted
+    // snapshot (the newest loaded capture time). Drives NeedsRefresh so a successful-but-empty discovery
+    // still counts as "fetched" (it doesn't re-arm on every tick), separate from whether any entry
+    // survived. Guarded by _gate.
+    private DateTimeOffset? _lastPopulatedAt;
+
     private readonly record struct DiscoveredEntry(AgentDirectoryEntry Entry, DateTimeOffset FetchedAt);
 
     /// <param name="seed">The user's hand-pinned agents (<see cref="SuperAgentSettings.Agents"/>). Invalid
@@ -97,8 +103,11 @@ public sealed class AgentDirectoryCache
         }
     }
 
-    /// <summary>Whether a refresh would help: a discovery source is present and no fresh discovered entry
-    /// is currently held. Seed-only registries never need a refresh.</summary>
+    /// <summary>Whether a refresh would help: a discovery source is present and the discovered layer was
+    /// either never populated or was populated longer than the TTL ago. Deliberately keyed on <em>when</em>
+    /// the layer was last populated, not on whether it currently holds an entry — so a workspace that
+    /// legitimately has no agents (a successful, empty discovery) reports <c>false</c> until the TTL
+    /// elapses, rather than re-arming a refresh on every tick. Seed-only registries never need a refresh.</summary>
     public bool NeedsRefresh
     {
         get
@@ -106,7 +115,7 @@ public sealed class AgentDirectoryCache
             if (_discovery is null)
                 return false;
             lock (_gate)
-                return FreshDiscoveredLocked().Count == 0;
+                return _lastPopulatedAt is not { } last || _clock.GetUtcNow() - last >= _ttl;
         }
     }
 
@@ -160,10 +169,15 @@ public sealed class AgentDirectoryCache
             {
                 if (entry is null || !AgentDirectory.IsValid(entry.Id, entry.Name))
                     continue;
+                // Last-wins within one discovery batch on a duplicate id — a source shouldn't emit dups,
+                // and cross-layer precedence (seed over discovered) is decided later in Merge regardless.
                 _discovered[entry.Id] = new DiscoveredEntry(
                     new AgentDirectoryEntry(entry.Id, entry.Name.Trim(), Normalize(entry.Purpose), AgentEntrySource.Discovered),
                     now);
             }
+            // Stamp the populate time even when the batch was empty, so NeedsRefresh treats a legitimately
+            // agent-less workspace as "fetched" until the TTL elapses.
+            _lastPopulatedAt = now;
         }
         Persist();
     }
@@ -239,6 +253,7 @@ public sealed class AgentDirectoryCache
             return;
 
         var now = _clock.GetUtcNow();
+        DateTimeOffset? newestLoaded = null;
         foreach (var entry in doc.Entries)
         {
             if (entry is null || !AgentDirectory.IsValid(entry.Id, entry.Name))
@@ -254,7 +269,14 @@ public sealed class AgentDirectoryCache
             _discovered[entry.Id] = new DiscoveredEntry(
                 new AgentDirectoryEntry(entry.Id, entry.Name.Trim(), Normalize(entry.Purpose), AgentEntrySource.Discovered),
                 fetchedAt);
+            if (newestLoaded is null || fetchedAt > newestLoaded)
+                newestLoaded = fetchedAt;
         }
+        // Warming a fresh persisted layer counts as a populate, so NeedsRefresh stays false until the TTL
+        // elapses (the persisted entries all share the last refresh's capture time). If everything was
+        // stale/invalid, nothing loaded and _lastPopulatedAt stays null ⇒ NeedsRefresh re-arms.
+        if (newestLoaded is { } loaded)
+            _lastPopulatedAt = loaded;
     }
 
     // Rewrites the whole discovered snapshot (the set is tiny). The disk write runs under a dedicated
