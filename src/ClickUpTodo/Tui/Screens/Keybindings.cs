@@ -82,7 +82,7 @@ public enum KeyAction
     EditDescription,
     ToggleChecklistItem,
     AddChecklistItem,
-    RenameChecklistItem,
+    EditChecklistItem,
     DeleteChecklistItem,
     MoveChecklistItemUp,
     MoveChecklistItemDown,
@@ -154,9 +154,11 @@ public static class Keybindings
             // Contextual chords D (#541): rename moves off the #458 stopgap F8 to the conventional F2
             // (= Rename, #290). F8 is now unbound; the checklist item / group rename is F2 on the
             // Checklists tab (see DetailSubContext / ResolveDetail below). No collision — F2 is otherwise
-            // RenameTask in MainList only (slice H, #545), a different ScreenContext, and RenameChecklistItem
+            // RenameTask in MainList only (slice H, #545), a different ScreenContext, and EditChecklistItem
             // is the sole F2-bound action in any Detail sub-context. After C/D/F no F7/F8/F9 binding remains.
-            [(ScreenContext.Detail, KeyAction.RenameChecklistItem)] = "F2",
+            // The action reads Edit (not Rename) because the F2 surface edits the item's name + assignee
+            // (#572) — contextual-chord-model §3/§5-D; the token (F2) and sub-context slot are unchanged (#601).
+            [(ScreenContext.Detail, KeyAction.EditChecklistItem)] = "F2",
             // Contextual chords F (#543): delete moves off the #458 stopgap F9 to the conventional
             // Delete key, behind a confirmation. F9 is now unbound; the checklist item / group delete
             // is Delete on the Checklists tab (see DetailSubContext / ResolveDetail below).
@@ -285,7 +287,7 @@ public static class Keybindings
             [DetailSubContext.Checklists] =
             [
                 KeyAction.AddChecklistItem,
-                KeyAction.RenameChecklistItem,
+                KeyAction.EditChecklistItem,
                 KeyAction.DeleteChecklistItem,
                 KeyAction.ToggleChecklistItem,
                 KeyAction.MoveChecklistItemUp,

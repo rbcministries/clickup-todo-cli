@@ -285,7 +285,7 @@ def run_crud():
         # ── Rename (F2): the new item landed selected; clear the prefilled name and type a new one ─────
         s.send(F2)
         s.pump(0.8)
-        assert "Rename item" in s.visible(), "F2 did not open the rename overlay:\n" + s.visible()
+        assert "Edit item" in s.visible(), "F2 did not open the edit overlay:\n" + s.visible()
         for _ in range(24):        # clear the prefilled "Ship the release" regardless of caret position
             s.send(BACKSPACE)
             s.send(DELETE)
@@ -461,7 +461,7 @@ def run_group_rename():
 
         s.send(F2)               # F2 on a header opens the rename-checklist overlay
         s.pump(0.8)
-        assert "Rename checklist" in s.visible(), "F2 on a header did not open the rename-group overlay:\n" + s.visible()
+        assert "Edit checklist" in s.visible(), "F2 on a header did not open the edit-group overlay:\n" + s.visible()
         for _ in range(24):      # clear the prefilled "Release steps"
             s.send(BACKSPACE)
             s.send(DELETE)
@@ -515,7 +515,7 @@ def run_assignee():
         s.send(F2)
         s.pump(0.9)
         v = s.visible()
-        assert "Rename item" in v, "F2 did not open the rename overlay:\n" + v
+        assert "Edit item" in v, "F2 did not open the edit overlay:\n" + v
         assert "Assignee:" in v, "the rename overlay did not show the assignee picker (#572):\n" + v
 
         s.send(TAB)               # name field → the assignee picker's search box

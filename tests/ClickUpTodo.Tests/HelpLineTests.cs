@@ -68,13 +68,15 @@ public sealed class HelpLineTests
     public void Format_RenameTask_RendersSaveHelpCancel()
         => Assert.Equal("↩ save · F1 ℹ · Esc cancel", HelpLine.Format(HelpItemSets.RenameTask));
 
-    // Contextual chords D (#541): the Task Detail checklist rename hint moved off the #458 stopgap F8 to
-    // the conventional F2 (= Rename, #290) in both Detail footer variants; F8 no longer appears anywhere.
+    // Contextual chords D (#541): the Task Detail checklist edit hint moved off the #458 stopgap F8 to
+    // the conventional F2 (= Rename/Edit, #290) in both Detail footer variants; F8 no longer appears anywhere.
+    // The label reads "edit" (not "rename") because the F2 surface edits the item's name + assignee (#572) —
+    // contextual-chord-model §2/§3, executed in #601.
     [Theory]
     [MemberData(nameof(DetailSets))]
-    public void DetailSets_CarryF2Rename_NotF8(IReadOnlyList<HelpItem> set)
+    public void DetailSets_CarryF2Edit_NotF8(IReadOnlyList<HelpItem> set)
     {
-        Assert.Contains(new HelpItem("F2", "✏ rename"), set);
+        Assert.Contains(new HelpItem("F2", "✏ edit"), set);
         Assert.DoesNotContain(set, i => i.Key == "F8" || i.ActionKey == "F8");
     }
 
