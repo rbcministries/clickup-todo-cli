@@ -83,8 +83,9 @@ public sealed class TodoApp
     // Interactive-only, so a plain field (not rebuilt on F2 like _agent); the tab launch reads the
     // preferred-terminal setting at call time.
     private readonly ITerminalLauncher _tabLauncher;
-    // True while a new-tab launch is in flight, so a rapid second Ctrl+Enter can't spawn duplicate tabs.
-    // UI-thread-only (set in LaunchTaskInNewTab, cleared via Application.Invoke), like _dispatching.
+    // True while an app-host launch (new tab #301 or split pane #507) is in flight, so a rapid second
+    // Ctrl+Enter / Ctrl+Alt+Enter can't spawn duplicate launches. UI-thread-only (set in LaunchAppForTask,
+    // cleared via Application.Invoke), like _dispatching.
     private bool _launchingTab;
     // True while a feed / detail auto- or manual refresh fetch is outstanding, so ticks coalesce
     // instead of piling up when a fan-out outlasts the cadence. UI-thread-only (like _dispatching).
@@ -536,6 +537,7 @@ public sealed class TodoApp
             .On(KeyAction.OpenDetail, OpenDetail)
             .On(KeyAction.QuickOpen, OpenQuickOpen)         // #303
             .On(KeyAction.OpenInNewTab, () => LaunchTaskInNewTab(CurrentTask()))   // #301
+            .On(KeyAction.OpenInSplitPane, () => LaunchTaskInSplitPane(CurrentTask()))   // #507 (epic #502 E)
             .On(KeyAction.NewTask, OpenNewTask)             // #213
             .On(KeyAction.RenameTask, RenameCurrentTask)    // #545 (contextual chords H)
             .On(KeyAction.OpenInBrowser, OpenInBrowser)
@@ -698,48 +700,73 @@ public sealed class TodoApp
     /// <summary>
     /// The main list's Ctrl+Enter / Ctrl+Left-Click — open <paramref name="task"/> in its own terminal
     /// tab (#301). A null task (header/spacer row) no-ops, and it only fires from the list itself (no
-    /// screen stacked over it); the actual launch is <see cref="LaunchAppTabForTask"/>, shared with Task
+    /// screen stacked over it); the actual launch is <see cref="LaunchAppForTask"/>, shared with Task
     /// Detail's Ctrl+Enter (#384).
     /// </summary>
     private void LaunchTaskInNewTab(TaskItem? task)
     {
         if (task is null || ActiveScreen is not null)
             return;
-        LaunchAppTabForTask(task.Id, task.Name);
+        LaunchAppForTask(task.Id, task.Name, LaunchLocation.NewTab);
     }
 
     /// <summary>
-    /// The core new-terminal-tab launch shared by the main list's Ctrl+Enter / Ctrl+Left-Click gesture
-    /// (#301, via <see cref="LaunchTaskInNewTab"/>) and Task Detail's Ctrl+Enter (#384): resolves how to
-    /// relaunch this app (<see cref="AppLaunchCommand.ForTask(string)"/>) and hands it to the shared
-    /// cross-platform launcher off the UI thread, preferring a new tab of the current terminal (falling
-    /// back to a new window per emulator support). On success the status line names the terminal; when no
-    /// emulator can be launched it flashes the exact command and copies it to the clipboard so the user
-    /// can run it themselves (the documented fallback). Re-entrancy-guarded so a rapid second gesture
-    /// can't spawn duplicate tabs. Unlike the list wrapper it does <b>not</b> guard on
-    /// <see cref="ActiveScreen"/>: the detail path launches while the detail screen is front-most, exactly
-    /// as Quick Updates (Ctrl+U) stacks over the detail.
+    /// The main list's Ctrl+Alt+Enter — open <paramref name="task"/> in a split pane beside the current
+    /// one (#507, epic #502 E), the split-pane sibling of <see cref="LaunchTaskInNewTab"/>. Same
+    /// null-task / no-stacked-screen guard; the launch is the shared <see cref="LaunchAppForTask"/> with
+    /// <see cref="LaunchLocation.SplitPane"/> (which degrades to a tab where the host can't split or the
+    /// pane would be too narrow — see the viability floor there).
     /// </summary>
-    private void LaunchAppTabForTask(string taskId, string name)
+    private void LaunchTaskInSplitPane(TaskItem? task)
+    {
+        if (task is null || ActiveScreen is not null)
+            return;
+        LaunchAppForTask(task.Id, task.Name, LaunchLocation.SplitPane);
+    }
+
+    /// <summary>
+    /// The core app-host relaunch shared by the main list's Ctrl+Enter / Ctrl+Alt+Enter (#301/#507, via
+    /// <see cref="LaunchTaskInNewTab"/> / <see cref="LaunchTaskInSplitPane"/>) and Task Detail's gestures
+    /// (#384/#507): resolves how to relaunch this app (<see cref="AppLaunchCommand.ForTask(string)"/>) and
+    /// hands it to the shared cross-platform launcher off the UI thread, opening at
+    /// <paramref name="destination"/> (a new tab, or a split pane beside the current one) where the host
+    /// supports it, falling back down the split → tab → window ladder otherwise. On success the status line
+    /// names the terminal and the surface it actually used; when no emulator can be launched it flashes the
+    /// exact command and copies it to the clipboard so the user can run it themselves (the documented
+    /// fallback). Re-entrancy-guarded so a rapid second gesture can't spawn duplicate launches. Unlike the
+    /// list wrapper it does <b>not</b> guard on <see cref="ActiveScreen"/>: the detail path launches while
+    /// the detail screen is front-most, exactly as Quick Updates (Ctrl+U) stacks over the detail.
+    /// </summary>
+    private void LaunchAppForTask(string taskId, string name, LaunchLocation destination)
     {
         if (_launchingTab)
         {
-            Flash("A task tab is already opening…");
+            Flash("A task launch is already in flight…");
             return;
         }
 
         // Resolve the command before arming the re-entrancy guard: ForTask is pure and could in principle
         // throw (a blank id), and doing it first means such a throw can't leave _launchingTab stuck true.
         var command = AppLaunchCommand.ForTask(taskId);
-        // A new tab of the current terminal where the host supports it (#255's LaunchLocation), honouring
-        // the user's preferred-terminal setting on Windows. The options + status strings are shared with
-        // single-task mode's Ctrl+Enter (#435) via AppHostLaunch so the two hosts can't drift; the helper
-        // deliberately doesn't use AgentDispatch.ToLauncherOptions (ClaudeExecutable/ExtraArgs are a
-        // dispatch concern that doesn't apply to relaunching this app).
-        var options = AppHostLaunch.Options(
-            LaunchLocation.NewTab, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
+        // The destination (a new tab / split pane) of the current terminal where the host supports it
+        // (#255/#502 LaunchLocation), honouring the user's preferred-terminal setting on Windows. The
+        // options + status strings are shared with single-task mode (#435/#507) via AppHostLaunch so the
+        // two hosts can't drift; the helper deliberately doesn't use AgentDispatch.ToLauncherOptions
+        // (ClaudeExecutable/ExtraArgs are a dispatch concern that doesn't apply to relaunching this app).
+        // Split-pane viability floor (#505/#515, slice C): a split into an unreadably narrow pane is worse
+        // than a tab, so a SplitPane request degrades to a tab before launch when the live terminal
+        // (Application.Driver?.Cols — null off a live driver) is too narrow — the planner has no notion of
+        // width, so the shared AppHostLaunch seam decides (mirroring DispatchCoordinator, and keeping the
+        // two hosts from drifting). NewTab/NewWindow and the headless path pass through byte-identical; the
+        // decision's reason is appended to the success flash so the degrade reads as deliberate (#507).
+        var (options, degradeReason) = AppHostLaunch.ApplyViabilityFloor(
+            AppHostLaunch.Options(
+                destination, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand),
+            Application.Driver?.Cols);
+        var effective = options.LaunchLocation;
+
         _launchingTab = true;
-        Flash(AppHostLaunch.Opening(name, LaunchLocation.NewTab));
+        Flash(AppHostLaunch.Opening(name, effective));
         _ = Task.Run(async () =>
         {
             try
@@ -750,24 +777,31 @@ public sealed class TodoApp
                     _launchingTab = false;
                     if (!result.Success)
                     {
-                        FlashLaunchFallback(command);
+                        FlashLaunchFallback(command, effective);
                         return;
                     }
-                    Flash(AppHostLaunch.Opened(name, LaunchLocation.NewTab, result));
+                    var opened = AppHostLaunch.Opened(name, effective, result);
+                    Flash(degradeReason is null ? opened : $"{opened} {degradeReason}");
                 });
             }
             catch (Exception ex)
             {
-                Application.Invoke(() => { _launchingTab = false; FlashLaunchFallback(command, ErrorText.Short(ex)); });
+                Application.Invoke(() => { _launchingTab = false; FlashLaunchFallback(command, effective, ErrorText.Short(ex)); });
             }
         });
     }
 
+    /// <summary>Compatibility shim for the callers that always open a new tab (Ctrl+O by-id open, the
+    /// detail new-tab subscriber): a thin pass-through to <see cref="LaunchAppForTask"/> with
+    /// <see cref="LaunchLocation.NewTab"/>.</summary>
+    private void LaunchAppTabForTask(string taskId, string name)
+        => LaunchAppForTask(taskId, name, LaunchLocation.NewTab);
+
     /// <summary>The no-terminal fallback (#301): flash the exact command and copy it to the clipboard so
-    /// the user can open the task tab themselves. <paramref name="reason"/> names the failure when the
-    /// launch threw (vs. simply finding no emulator).</summary>
-    private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
-        => Flash(AppHostLaunch.Fallback(command, LaunchLocation.NewTab, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+    /// the user can open the task at <paramref name="destination"/> themselves. <paramref name="reason"/>
+    /// names the failure when the launch threw (vs. simply finding no emulator).</summary>
+    private void FlashLaunchFallback(AppLaunchCommand command, LaunchLocation destination, string? reason = null)
+        => Flash(AppHostLaunch.Fallback(command, destination, TryCopyToClipboard(command.ToDisplayCommand()), reason));
 
     /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard just yields
     /// false so the caller shows the run-it-yourself form instead.</summary>
@@ -2213,6 +2247,11 @@ public sealed class TodoApp
                     // label, read live so a mid-view refresh that renamed the task is reflected (mirrors
                     // OpenQuickUpdatesForDetail reading the screen's current task).
                     screen.OpenInNewTabRequested += (_, _) => LaunchAppTabForTask(resolvedId, screen.Task.Name);
+                    // Ctrl+Alt+Enter opens this task in a split pane beside the current one (#507) — the
+                    // split-pane sibling of the new-tab gesture above, reusing the exact launcher (with B's
+                    // degradation ladder + C's viability floor) and the copy-command fallback. Same live
+                    // screen.Task.Name status label, so a mid-view rename is reflected.
+                    screen.OpenInSplitPaneRequested += (_, _) => LaunchAppForTask(resolvedId, screen.Task.Name, LaunchLocation.SplitPane);
                     // Clicking a link in a text pane (#318): a task link opens in-app, anything else (and
                     // any Ctrl+click) in the browser.
                     screen.LinkActivationRequested += (_, request) => ActivateLink(request);

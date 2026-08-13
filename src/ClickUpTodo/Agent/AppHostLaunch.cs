@@ -31,6 +31,35 @@ public static class AppHostLaunch
             CustomTerminalCommand = TerminalCommandParser.Parse(customTerminalCommand),
         };
 
+    /// <summary>
+    /// Applies the split-pane viability floor (#505/#515, slice C) to an app-host launch: a
+    /// <see cref="LaunchLocation.SplitPane"/> request degrades to a <see cref="LaunchLocation.NewTab"/>
+    /// <b>before</b> planning when the live terminal is too narrow to read a split, because the planner
+    /// (<see cref="TerminalCommandPlanner"/>) has no notion of terminal width — the caller decides, exactly
+    /// as <c>DispatchCoordinator</c> does for a dispatch. Shared by the dashboard and single-task hosts so
+    /// the two can't drift (the same reason <see cref="Options"/> / <see cref="Opened"/> live here).
+    /// <para>
+    /// Returns the (possibly re-targeted) <paramref name="options"/> and a ready-to-flash degrade reason —
+    /// non-null <b>only</b> when it degraded, so a caller can append it to the success status. Only an
+    /// explicit <see cref="LaunchLocation.SplitPane"/> request with a live width
+    /// (<paramref name="terminalColumns"/> non-null) is evaluated; a new tab / window request, or a headless
+    /// caller with no driver width, returns <paramref name="options"/> unchanged and a null reason — so
+    /// those launches stay byte-identical. The split geometry judged is read from <paramref name="options"/>
+    /// (the shape the planner will draw), matching <c>DispatchCoordinator</c>.
+    /// </para>
+    /// </summary>
+    public static (TerminalLauncherOptions Options, string? DegradeReason) ApplyViabilityFloor(
+        TerminalLauncherOptions options, int? terminalColumns)
+    {
+        if (options.LaunchLocation != LaunchLocation.SplitPane || terminalColumns is not { } cols)
+            return (options, null);
+
+        var decision = SplitViability.Evaluate(cols, options.SplitDirection, options.SplitSizePercent);
+        return decision.Degraded
+            ? (options with { LaunchLocation = decision.Location }, decision.Reason)
+            : (options, null);
+    }
+
     /// <summary>The status flashed while the host is opening, worded for the destination.</summary>
     public static string Opening(string name, LaunchLocation destination)
         => $"Opening '{name}' in {OpeningPhrase(destination)}…";

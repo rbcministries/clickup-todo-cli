@@ -172,6 +172,7 @@ public static class HelpItemSets
         new("↩", "detail", Chord: "Enter"),
         new("Ctrl+O", "🗁 by ID"),
         new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
+        new("Ctrl+Alt+↩", "split pane", Chord: "Ctrl+Alt+Enter"),
         new("Ctrl+N", "➕"),
         new("Ctrl+B", "🌐"),
         new("Ctrl+P", "📌"),
@@ -221,11 +222,12 @@ public static class HelpItemSets
     ];
 
     /// <summary>The task detail view when the Task Tree tab is present (#291): <see cref="Detail"/> plus
-    /// the tab's F6 badge-display cycle (#415, mirroring the main list's F6) and the Ctrl+Enter "open this
-    /// task in a new terminal tab" gesture (#384/#435, the detail counterpart of the list's #301 gesture).
-    /// Both hosts carry it: the dashboard-hosted detail, and — since #374 gave single-task launch mode the
-    /// Task Tree tab too — single-task mode. The leaner <see cref="Detail"/> set (neither F6 nor Ctrl+Enter)
-    /// is only used when no tree loader was supplied.</summary>
+    /// the tab's F6 badge-display cycle (#415, mirroring the main list's F6), the Ctrl+Enter "open this
+    /// task in a new terminal tab" gesture (#384/#435, the detail counterpart of the list's #301 gesture)
+    /// and its Ctrl+Alt+Enter split-pane sibling (#507, epic #502 E — open the task in a pane beside this
+    /// one). Both hosts carry it: the dashboard-hosted detail, and — since #374 gave single-task launch mode
+    /// the Task Tree tab too — single-task mode. The leaner <see cref="Detail"/> set (neither F6 nor the
+    /// launch gestures) is only used when no tree loader was supplied.</summary>
     public static readonly IReadOnlyList<HelpItem> DetailWithTaskTree =
     [
         new("Ctrl+←/→", "switch tab", IsAction: false),
@@ -239,6 +241,7 @@ public static class HelpItemSets
         new("Ctrl+U", "quick update"),
         new("Ctrl+O", "🗁 by ID"),
         new("Ctrl+↩", "new tab", Chord: "Ctrl+Enter"),
+        new("Ctrl+Alt+↩", "split pane", Chord: "Ctrl+Alt+Enter"),
         new("␣", "☑ toggle", Chord: "Space"),
         new("Ctrl+G", "➕ list"),
         // F2 ✏ rename serves both F2 renames (checklist item, D #541; Task Tree node, H #545), resolved

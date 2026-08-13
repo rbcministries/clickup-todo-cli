@@ -138,6 +138,20 @@ public sealed class KeybindingsTests
             e => Assert.Contains(e.Key.Action, renameActions));
     }
 
+    // Split-pane epic E (#507): OpenInSplitPane is a sibling launch mode of OpenInNewTab, not a mode of
+    // it — a distinct action on a distinct chord. Pinned so the two never get merged or their chords
+    // swapped: new tab stays Ctrl+Enter, split pane is Ctrl+Alt+Enter, and they parse to different keys.
+    [Fact]
+    public void OpenInSplitPane_IsCtrlAltEnter_DistinctFromNewTabsCtrlEnter()
+    {
+        Assert.Equal("Ctrl+Enter", Keybindings.Token(ScreenContext.MainList, KeyAction.OpenInNewTab));
+        Assert.Equal("Ctrl+Alt+Enter", Keybindings.Token(ScreenContext.MainList, KeyAction.OpenInSplitPane));
+
+        Assert.True(Key.TryParse("Ctrl+Enter", out var newTab));
+        Assert.True(Key.TryParse("Ctrl+Alt+Enter", out var splitPane));
+        Assert.NotEqual(newTab.KeyCode, splitPane.KeyCode);
+    }
+
     // The Help screen is the help; it must not bind a Help action (it would advertise F1 → itself).
     [Fact]
     public void HelpContext_DoesNotBindHelp()

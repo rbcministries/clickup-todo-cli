@@ -504,6 +504,17 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     public event EventHandler? OpenInNewTabRequested;
 
+    /// <summary>
+    /// Raised when the user asks to open the current task in a split pane beside the current one
+    /// (Ctrl+Alt+Enter, #507) — the split-pane sibling of <see cref="OpenInNewTabRequested"/> (epic #502).
+    /// The host owns the cross-platform launch (reusing B's split → tab → window ladder and C's viability
+    /// floor) and its copy-command fallback. Raised (and advertised on the <see cref="HelpItemSets.DetailWithTaskTree"/>
+    /// footer) wherever a tree loader was supplied — the dashboard-hosted detail and, since #374, single-task
+    /// launch mode — under the same <c>_treeList</c> guard in <see cref="OnKey"/> as the new-tab gesture, so
+    /// the footer hint and the key stay in lock-step.
+    /// </summary>
+    public event EventHandler? OpenInSplitPaneRequested;
+
     /// <param name="defaultSessionMode">
     /// Seeds the pane's one-off/interactive toggle (#94) from the persisted default (#101); the user
     /// can flip it per dispatch. Defaults to <see cref="AgentSessionMode.Interactive"/>.
@@ -1499,6 +1510,20 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             OpenBrowserRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        // Ctrl+Alt+Enter opens this task in a split pane beside the current one (#507, epic #502 E) — the
+        // split-pane sibling of the Ctrl+Enter new-tab gesture below, gated identically on _treeList so the
+        // footer hint and the key stay in lock-step. Ctrl+Alt+Enter carries KeyCode.Enter | Ctrl | Alt, so
+        // it is a distinct key from Ctrl+Enter and must be checked first: the Ctrl+Enter branch's
+        // `& ~CtrlMask == Enter` fails once Alt is set (it leaves Enter | Alt), so the two never cross, but
+        // checking the more-specific chord first keeps the intent obvious.
+        if (key.IsCtrl && key.IsAlt && (key.KeyCode & ~(KeyCode.CtrlMask | KeyCode.AltMask)) == KeyCode.Enter
+            && !_promptBox.Visible && _treeList is not null)
+        {
+            key.Handled = true;
+            OpenInSplitPaneRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 
