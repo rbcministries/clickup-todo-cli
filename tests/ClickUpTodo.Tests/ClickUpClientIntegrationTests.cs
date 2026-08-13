@@ -163,6 +163,41 @@ public sealed class ClickUpClientIntegrationTests
     }
 
     [SkippableFact]
+    public async Task CreateTask_WithParentTaskId_CreatesSubtaskUnderParent()
+    {
+        // Slice G (#544): a NewTaskRequest.ParentTaskId round-trips to a real subtask whose ParentId
+        // is the parent we created. Create parent → create subtask under it → assert → delete both
+        // (subtask first, parent last) in a finally so the run leaves no residue.
+        Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(ListId),
+            "Set CLICKUP_TOKEN and CLICKUP_LIST_ID to run this test.");
+        using var client = new ClickUpClient(Token!);
+
+        var parent = await client.CreateTaskAsync(ListId!, new NewTaskRequest
+        {
+            Name = "[clickup-todo-cli test] subtask parent — safe to delete",
+        });
+        TaskItem? child = null;
+        try
+        {
+            child = await client.CreateTaskAsync(ListId!, new NewTaskRequest
+            {
+                Name = "[clickup-todo-cli test] subtask child — safe to delete",
+                ParentTaskId = parent.Id,
+            });
+
+            Assert.False(string.IsNullOrWhiteSpace(child.Id));
+            Assert.Equal(parent.Id, child.ParentId);
+        }
+        finally
+        {
+            if (child is not null && !string.IsNullOrWhiteSpace(child.Id))
+                await client.DeleteTaskAsync(child.Id);
+            if (!string.IsNullOrWhiteSpace(parent.Id))
+                await client.DeleteTaskAsync(parent.Id);
+        }
+    }
+
+    [SkippableFact]
     public async Task DeleteComment_RemovesTheCommentFromTheTask()
     {
         Skip.If(string.IsNullOrWhiteSpace(Token) || string.IsNullOrWhiteSpace(ListId),
