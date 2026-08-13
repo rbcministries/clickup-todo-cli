@@ -152,7 +152,10 @@ public static class Keybindings
             // Retargeted from the #458 stopgap F7, which is now unbound.
             [(ScreenContext.Detail, KeyAction.AddChecklistItem)] = "Ctrl+N",
             [(ScreenContext.Detail, KeyAction.RenameChecklistItem)] = "F8",
-            [(ScreenContext.Detail, KeyAction.DeleteChecklistItem)] = "F9",
+            // Contextual chords F (#543): delete moves off the #458 stopgap F9 to the conventional
+            // Delete key, behind a confirmation. F9 is now unbound; the checklist item / group delete
+            // is Delete on the Checklists tab (see DetailSubContext / ResolveDetail below).
+            [(ScreenContext.Detail, KeyAction.DeleteChecklistItem)] = "Delete",
             [(ScreenContext.Detail, KeyAction.MoveChecklistItemUp)] = "Shift+CursorUp",
             [(ScreenContext.Detail, KeyAction.MoveChecklistItemDown)] = "Shift+CursorDown",
             [(ScreenContext.Detail, KeyAction.OutdentChecklistItem)] = "Shift+CursorLeft",

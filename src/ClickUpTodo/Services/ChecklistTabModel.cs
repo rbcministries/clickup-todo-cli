@@ -220,6 +220,17 @@ public static class ChecklistTabModel
                 ? $"Delete checklist '{name}' and its 1 item? (Enter / Esc)"
                 : $"Delete checklist '{name}' and its {itemCount} items? (Enter / Esc)";
 
+    /// <summary>The same destructive delete-group confirmation as <see cref="DeleteGroupPrompt"/>, worded
+    /// for a surface that carries its own buttons (contextual chords F, #543's native <c>ConfirmDialog</c>):
+    /// the item-count wording without the inline <c>(Enter / Esc)</c> key hints, plus a not-undoable warning
+    /// on a second line. Pure and unit-tested.</summary>
+    public static string DeleteGroupMessage(string name, int itemCount)
+        => itemCount <= 0
+            ? $"Delete checklist '{name}'?\nThis can't be undone."
+            : itemCount == 1
+                ? $"Delete checklist '{name}' and its 1 item?\nThis can't be undone."
+                : $"Delete checklist '{name}' and its {itemCount} items?\nThis can't be undone.";
+
     /// <summary>The index of the first row in <paramref name="rows"/> with the same identity as
     /// <paramref name="anchor"/> (<see cref="SameRow"/>), or -1.</summary>
     private static int IndexOfRow(IReadOnlyList<ChecklistRow> rows, ChecklistRow anchor)

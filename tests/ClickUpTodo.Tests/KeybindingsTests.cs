@@ -177,6 +177,17 @@ public sealed class KeybindingsTests
         Assert.DoesNotContain(Keybindings.All, e => e.Value == "F7");
     }
 
+    // #543 (contextual chords F) retargets the last #458 stopgap: delete moves F9 → the conventional
+    // Delete key, and F9 is bound to nothing anywhere. Pinned so a later slice can't resurrect F9 (the
+    // sibling of AddChecklistItem_IsCtrlN_AndNoBindingUsesF7 for F7). With #540's F7 and this, none of
+    // the #458 F7/F8/F9 stopgaps survive except F8 (rename), which slice D moves to F2.
+    [Fact]
+    public void DeleteChecklistItem_IsDelete_AndNoBindingUsesF9()
+    {
+        Assert.Equal("Delete", Keybindings.Token(ScreenContext.Detail, KeyAction.DeleteChecklistItem));
+        Assert.DoesNotContain(Keybindings.All, e => e.Value == "F9");
+    }
+
     // The anti-collision invariant the whole sub-context model rests on (contextual-chord-model.md §2.2):
     // within one sub-context no token resolves to two live actions — otherwise ResolveDetail would be
     // ambiguous and the footer could advertise one meaning while dispatch fired another.

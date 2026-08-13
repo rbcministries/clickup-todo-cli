@@ -281,4 +281,27 @@ public class ChecklistTabModelTests
     public void DeleteGroupPrompt_Empty_OmitsTheItemClause()
         => Assert.Equal("Delete checklist 'Docs'? (Enter / Esc)",
             ChecklistTabModel.DeleteGroupPrompt("Docs", 0));
+
+    // ── DeleteGroupMessage (F, #543 — the native ConfirmDialog wording) ────────
+
+    [Fact]
+    public void DeleteGroupMessage_Plural_NamesTheGroupAndCount_WithNoKeyHints()
+        => Assert.Equal("Delete checklist 'Release steps' and its 3 items?\nThis can't be undone.",
+            ChecklistTabModel.DeleteGroupMessage("Release steps", 3));
+
+    [Fact]
+    public void DeleteGroupMessage_Singular_UsesItem()
+        => Assert.Equal("Delete checklist 'QA' and its 1 item?\nThis can't be undone.",
+            ChecklistTabModel.DeleteGroupMessage("QA", 1));
+
+    [Fact]
+    public void DeleteGroupMessage_Empty_OmitsTheItemClause()
+        => Assert.Equal("Delete checklist 'Docs'?\nThis can't be undone.",
+            ChecklistTabModel.DeleteGroupMessage("Docs", 0));
+
+    // The native ConfirmDialog carries its own buttons, so unlike DeleteGroupPrompt the message must not
+    // append the inline "(Enter / Esc)" answer hint (which would read as a second, contradictory affordance).
+    [Fact]
+    public void DeleteGroupMessage_HasNoInlineKeyHints()
+        => Assert.DoesNotContain("Enter / Esc", ChecklistTabModel.DeleteGroupMessage("Release steps", 3));
 }
