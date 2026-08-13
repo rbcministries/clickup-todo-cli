@@ -304,6 +304,17 @@ public static class HelpItemSets
         new("Esc", "cancel"),
     ];
 
+    /// <summary>The Task Detail comment-delete picker overlay (Delete on the Comments/Stream tab, #594): a list
+    /// of the task's deletable comments whose own keys are ↑/↓ to choose, Enter to arm the delete confirm and
+    /// Esc to cancel. Mirrors <see cref="DetailReplyPicker"/> so the footer advertises only what the picker
+    /// does — otherwise a click on an inert command hint re-raises its chord (#436).</summary>
+    public static readonly IReadOnlyList<HelpItem> DetailDeletePicker =
+    [
+        new("↑/↓", "choose", IsAction: false),
+        new("Enter", "delete"),
+        new("Esc", "cancel"),
+    ];
+
     /// <summary>The Checklists-tab item add/rename input overlay (E, #458): a single-line name field whose
     /// own keys are Enter to submit and Esc to cancel (arming a discard confirm on an edited rename).
     /// Mirrors <see cref="DetailCommentComposer"/> so the footer advertises only what the overlay does —
@@ -330,7 +341,7 @@ public static class HelpItemSets
     /// it lives on a Terminal.Gui view and can't run in CI. The mention picker (#325), comment composer,
     /// reply-target picker (#330) and description editor overlays are checked in a fixed order: the mention
     /// picker sits over the composer so it wins when both are up, then the composer, then the description
-    /// editor, then the reply picker. When no overlay is open the set depends on whether the Task Tree tab
+    /// editor, then the reply picker, then the comment-delete picker (#594). When no overlay is open the set depends on whether the Task Tree tab
     /// is present (its F6 badge cycle #415, and the Ctrl+Enter new-tab gesture #384/#435): present →
     /// <see cref="DetailWithTaskTree"/>, absent → <see cref="Detail"/>. Both the dashboard and single-task
     /// launch mode (since #374) supply a tree loader, so both get <see cref="DetailWithTaskTree"/>;
@@ -346,11 +357,13 @@ public static class HelpItemSets
     public static IReadOnlyList<HelpItem> DetailFooter(
         bool commentComposerVisible, bool descriptionEditorVisible, bool replyPickerVisible, bool hasTaskTree,
         DetailSubContext sub = DetailSubContext.Default,
-        bool mentionPickerVisible = false, bool checklistItemEditorVisible = false) =>
+        bool mentionPickerVisible = false, bool checklistItemEditorVisible = false,
+        bool deletePickerVisible = false) =>
         mentionPickerVisible ? DetailMentionPicker
         : commentComposerVisible ? DetailCommentComposer
         : descriptionEditorVisible ? DetailDescriptionEditor
         : replyPickerVisible ? DetailReplyPicker
+        : deletePickerVisible ? DetailDeletePicker
         : checklistItemEditorVisible ? DetailChecklistItemEditor
         : WithContextualNewLabel(hasTaskTree ? DetailWithTaskTree : Detail, sub);
 

@@ -120,6 +120,15 @@ internal sealed class FakeClickUp : HttpMessageHandler
 
     internal static Task<HttpResponseMessage> OkAsync(string body) => Task.FromResult(Ok(body));
 
+    /// <summary>A 403 forbidden shape (#594): the app surfaces a non-2xx delete as a throwing
+    /// <c>ClickUpApiException</c>, so a comment-delete check can drive the permission-revert leg (only the
+    /// comment's author may delete it) with this.</summary>
+    internal static HttpResponseMessage Forbidden(string body) =>
+        new(HttpStatusCode.Forbidden)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+
     /// <summary>ClickUp's task-not-found shape (#303/#353): a 404 with the ITEM_100 error body.</summary>
     internal static HttpResponseMessage TaskNotFound() =>
         new(HttpStatusCode.NotFound)
