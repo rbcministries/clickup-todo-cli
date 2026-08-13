@@ -372,11 +372,11 @@ public sealed class TaskDetailScreen : Screen
     private string _checklistItemOriginalName = ""; // for the rename dirty-check
     // True between an Esc-on-dirty (rename) and the Y/N answer; the next key confirms discard or dismisses.
     private bool _checklistItemPendingDiscard;
-    // Armed by F9 (delete): the target item awaiting a Y/N confirm on the Checklists tab. The next key
+    // Armed by the Delete key (was F9 pre-#543): the target item awaiting a Y/N confirm on the Checklists tab. The next key
     // there answers it (Y deletes; anything else cancels) — the inline armed-key confirm the description
     // editor / exit prompt use, rather than a nested modal (#404/#402 seam untouched).
     private (string ChecklistId, string ItemId, string Name)? _checklistDeletePending;
-    // Armed by F9 on a checklist-header row (F, #459): the target group awaiting a Y/N confirm on the tab,
+    // Armed by the Delete key on a checklist-header row (F, #459; was F9 pre-#543): the target group awaiting a Y/N confirm on the tab,
     // carrying its item count so the confirm prompt can name what goes with it. Answered in OnKey alongside
     // the item-delete confirm; the two are mutually exclusive (a header selection arms this, an item the other).
     private (string ChecklistId, string Name, int ItemCount)? _checklistGroupDeletePending;
@@ -1216,7 +1216,7 @@ public sealed class TaskDetailScreen : Screen
         if (_commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible || _checklistItemBox.Visible)
             return;
 
-        // Answer a pending checklist-item delete confirm (E, #458), armed by F9 on the Checklists tab:
+        // Answer a pending checklist-item delete confirm (E, #458), armed by the Delete key on the Checklists tab (was F9 pre-#543):
         // Enter deletes, Esc cancels. (A letter like Y can't be used here — the focused Checklists ListView
         // consumes letters for its type-ahead before this screen-level handler sees them, unlike the
         // overlay-hosted description/exit confirms; Enter/Esc do reach here, as the tree tab's Enter does.)
@@ -1240,7 +1240,7 @@ public sealed class TaskDetailScreen : Screen
             }
         }
 
-        // Answer a pending checklist-group delete confirm (F, #459), armed by F9 on a checklist-header row:
+        // Answer a pending checklist-group delete confirm (F, #459), armed by the Delete key on a checklist-header row (was F9 pre-#543):
         // Enter deletes the whole group (and its items), Esc cancels. Same Enter/Esc-only shape as the item
         // confirm above (a bare Y is eaten by the ListView type-ahead); any other key leaves it armed so
         // navigation is undisturbed, and the delete targets the named group by id wherever the cursor sits.
