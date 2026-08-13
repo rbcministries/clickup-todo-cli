@@ -825,6 +825,13 @@ public sealed class TaskService(
     public Task<CommentItem> CreateThreadedCommentAsync(string commentId, string text, CancellationToken ct = default)
         => client.CreateThreadedCommentAsync(commentId, text, ct);
 
+    /// <summary>Deletes a comment or reply (#594, over the #543-style delete facade). ClickUp returns an
+    /// empty body, so the caller keeps its optimistic removal and reverts on failure. Only the comment's
+    /// author may delete it — a non-author delete surfaces as a <see cref="ClickUpApiException"/>. A thin
+    /// passthrough, mirroring <see cref="DeleteChecklistItemAsync"/>.</summary>
+    public Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
+        => client.DeleteCommentAsync(commentId, ct);
+
     /// <summary>Writes a task's plain-text description (#217, over the #211 facade) and returns the
     /// server-confirmed value so the detail view can reflect it without a manual refresh. Pass <c>""</c>
     /// to clear the description.</summary>

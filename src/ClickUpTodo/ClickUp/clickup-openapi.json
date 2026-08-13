@@ -305,6 +305,18 @@
         }
       }
     },
+    "/v2/comment/{comment_id}": {
+      "delete": {
+        "operationId": "DeleteComment",
+        "summary": "Delete a comment or reply (#594, deferred half of the contextual-Delete slice #543). ClickUp returns an empty object, so there is no response schema — the caller keeps its optimistic local removal (revert-on-failure), exactly as DELETE /checklist/{checklist_id} does. Only the comment's author can delete it; a non-author delete returns a permission error the facade surfaces as a caught ClickUpApiException so the caller can revert + flash.",
+        "parameters": [
+          { "name": "comment_id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "The comment was deleted (ClickUp returns an empty object)." }
+        }
+      }
+    },
     "/v2/comment/{comment_id}/reply": {
       "get": {
         "operationId": "GetThreadedComments",

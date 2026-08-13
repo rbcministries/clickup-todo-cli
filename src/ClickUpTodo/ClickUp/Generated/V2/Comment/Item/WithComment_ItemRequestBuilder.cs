@@ -2,10 +2,12 @@
 #pragma warning disable CS0618
 using ClickUpTodo.ClickUp.Generated.V2.Comment.Item.Reply;
 using Microsoft.Kiota.Abstractions.Extensions;
+using Microsoft.Kiota.Abstractions.Serialization;
 using Microsoft.Kiota.Abstractions;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
+using System.Threading;
 using System;
 namespace ClickUpTodo.ClickUp.Generated.V2.Comment.Item
 {
@@ -35,6 +37,51 @@ namespace ClickUpTodo.ClickUp.Generated.V2.Comment.Item
         /// <param name="requestAdapter">The request adapter to use to execute the requests.</param>
         public WithComment_ItemRequestBuilder(string rawUrl, IRequestAdapter requestAdapter) : base(requestAdapter, "{+baseurl}/v2/comment/{comment_id}", rawUrl)
         {
+        }
+        /// <summary>
+        /// Delete a comment or reply (#594, deferred half of the contextual-Delete slice #543). ClickUp returns an empty object, so there is no response schema — the caller keeps its optimistic local removal (revert-on-failure), exactly as DELETE /checklist/{checklist_id} does. Only the comment&apos;s author can delete it; a non-author delete returns a permission error the facade surfaces as a caught ClickUpApiException so the caller can revert + flash.
+        /// </summary>
+        /// <returns>A <see cref="Stream"/></returns>
+        /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
+        /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public async Task<Stream?> DeleteAsync(Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
+        {
+#nullable restore
+#else
+        public async Task<Stream> DeleteAsync(Action<RequestConfiguration<DefaultQueryParameters>> requestConfiguration = default, CancellationToken cancellationToken = default)
+        {
+#endif
+            var requestInfo = ToDeleteRequestInformation(requestConfiguration);
+            return await RequestAdapter.SendPrimitiveAsync<Stream>(requestInfo, default, cancellationToken).ConfigureAwait(false);
+        }
+        /// <summary>
+        /// Delete a comment or reply (#594, deferred half of the contextual-Delete slice #543). ClickUp returns an empty object, so there is no response schema — the caller keeps its optimistic local removal (revert-on-failure), exactly as DELETE /checklist/{checklist_id} does. Only the comment&apos;s author can delete it; a non-author delete returns a permission error the facade surfaces as a caught ClickUpApiException so the caller can revert + flash.
+        /// </summary>
+        /// <returns>A <see cref="RequestInformation"/></returns>
+        /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public RequestInformation ToDeleteRequestInformation(Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default)
+        {
+#nullable restore
+#else
+        public RequestInformation ToDeleteRequestInformation(Action<RequestConfiguration<DefaultQueryParameters>> requestConfiguration = default)
+        {
+#endif
+            var requestInfo = new RequestInformation(Method.DELETE, UrlTemplate, PathParameters);
+            requestInfo.Configure(requestConfiguration);
+            return requestInfo;
+        }
+        /// <summary>
+        /// Returns a request builder with the provided arbitrary URL. Using this method means any other path or query parameters are ignored.
+        /// </summary>
+        /// <returns>A <see cref="global::ClickUpTodo.ClickUp.Generated.V2.Comment.Item.WithComment_ItemRequestBuilder"/></returns>
+        /// <param name="rawUrl">The raw URL to use for the request builder.</param>
+        public global::ClickUpTodo.ClickUp.Generated.V2.Comment.Item.WithComment_ItemRequestBuilder WithUrl(string rawUrl)
+        {
+            return new global::ClickUpTodo.ClickUp.Generated.V2.Comment.Item.WithComment_ItemRequestBuilder(rawUrl, RequestAdapter);
         }
     }
 }

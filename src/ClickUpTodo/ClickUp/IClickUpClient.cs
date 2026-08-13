@@ -194,4 +194,10 @@ public interface IClickUpClient
     /// <see cref="ClickUpClient.CreateThreadedCommentAsync"/> for the minimal-response mapping contract.</summary>
     Task<CommentItem> CreateThreadedCommentAsync(string commentId, string text, CancellationToken ct = default)
         => throw new NotSupportedException($"{GetType().Name} does not implement threaded-comment writes.");
+
+    /// <summary>Delete a comment or reply (#594). Default throwing implementation so existing fakes need
+    /// not implement it; <see cref="ClickUpClient"/> overrides it. See
+    /// <see cref="ClickUpClient.DeleteCommentAsync"/>.</summary>
+    Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
+        => throw new NotSupportedException($"{GetType().Name} does not implement comment deletes.");
 }
