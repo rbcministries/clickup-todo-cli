@@ -226,3 +226,14 @@ flag until the `windows`/`dotnet` drivers are confirmed, then flip the default.
 
 The `FilterSortGroupFormBuilder` extraction (host-agnostic form) is the shape a real migration would
 reuse: keep the form pure, and let the host be either `_screens` or native `Dialog`.
+
+## Migration policy (where this GO is acted on)
+
+This spike's GO is now bound to a written migration policy in the accepted navigation ADR,
+[`docs/navigation-model.md`](../../navigation-model.md) ("Transient-modal migration to native
+Terminal.Gui modals", recorded by #614) — so the GO and the policy sit one hop apart. The ADR names
+the **pilot** (Quick Open, `Ctrl+O` — the smallest form of the category, slice **E** / #618), the
+**order** (pilot → the #554-validated form modals → the simple non-form modals), and the
+**default-flip condition** (keep every native variant behind `CLICKUP_TODO_NATIVE_MODAL`, off by
+default, until the `windows` and `dotnet` drivers are confirmed — the ANSI-only-harness gap this spike
+flagged as the largest remaining unknown — which is slice **D** / #617).
