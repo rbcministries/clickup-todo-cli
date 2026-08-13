@@ -774,24 +774,16 @@ public sealed class SingleTaskApp
         // Resolve the command before arming the guard: ForTask is pure and could throw on a blank id, and
         // doing it first means such a throw can't leave _launchingTab stuck true (mirrors TodoApp).
         var command = AppLaunchCommand.ForTask(taskId);
-        var options = AppHostLaunch.Options(
-            destination, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
-
         // Split-pane viability floor (#505/#515): degrade a SplitPane request to a tab before launch when
-        // the live terminal is too narrow to read a split (the planner has no notion of width, so the caller
-        // decides — mirrors DispatchCoordinator and the dashboard host). NewTab/NewWindow and the headless
-        // (null Cols) path pass through untouched. The decision's Reason is appended to the success flash so
-        // the degrade reads as deliberate (#507).
-        string? degradeReason = null;
-        if (destination == LaunchLocation.SplitPane && Application.Driver?.Cols is { } cols)
-        {
-            var decision = SplitViability.Evaluate(cols, options.SplitDirection, options.SplitSizePercent);
-            if (decision.Degraded)
-            {
-                options = options with { LaunchLocation = decision.Location };
-                degradeReason = decision.Reason;
-            }
-        }
+        // the live terminal is too narrow to read a split, through the shared AppHostLaunch seam so this
+        // host and the dashboard can't drift (the planner has no notion of width — the caller decides,
+        // mirroring DispatchCoordinator). NewTab/NewWindow and the headless (null Cols) path pass through
+        // byte-identical; the decision's reason is appended to the success flash so the degrade reads as
+        // deliberate (#507).
+        var (options, degradeReason) = AppHostLaunch.ApplyViabilityFloor(
+            AppHostLaunch.Options(
+                destination, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand),
+            Application.Driver?.Cols);
         var effective = options.LaunchLocation;
 
         _launchingTab = true;

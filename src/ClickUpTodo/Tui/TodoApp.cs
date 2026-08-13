@@ -753,27 +753,16 @@ public sealed class TodoApp
         // options + status strings are shared with single-task mode (#435/#507) via AppHostLaunch so the
         // two hosts can't drift; the helper deliberately doesn't use AgentDispatch.ToLauncherOptions
         // (ClaudeExecutable/ExtraArgs are a dispatch concern that doesn't apply to relaunching this app).
-        var options = AppHostLaunch.Options(
-            destination, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand);
-
         // Split-pane viability floor (#505/#515, slice C): a split into an unreadably narrow pane is worse
-        // than a tab, so a SplitPane request degrades to a tab before launch when the live terminal is too
-        // narrow — the planner has no notion of terminal width, so the caller decides (mirrors
-        // DispatchCoordinator, #515). The geometry read from `options` is the Auto/even split AppHostLaunch
-        // implies, so the floor judges the shape the planner will draw. Only an explicit SplitPane request
-        // with a live driver width is evaluated; NewTab/NewWindow and the headless (null Cols) path pass
-        // through untouched, keeping those launches byte-identical. The decision's Reason is appended to the
-        // success flash so the degrade reads as deliberate rather than a silently-failed split (#507).
-        string? degradeReason = null;
-        if (destination == LaunchLocation.SplitPane && Application.Driver?.Cols is { } cols)
-        {
-            var decision = SplitViability.Evaluate(cols, options.SplitDirection, options.SplitSizePercent);
-            if (decision.Degraded)
-            {
-                options = options with { LaunchLocation = decision.Location };
-                degradeReason = decision.Reason;
-            }
-        }
+        // than a tab, so a SplitPane request degrades to a tab before launch when the live terminal
+        // (Application.Driver?.Cols — null off a live driver) is too narrow — the planner has no notion of
+        // width, so the shared AppHostLaunch seam decides (mirroring DispatchCoordinator, and keeping the
+        // two hosts from drifting). NewTab/NewWindow and the headless path pass through byte-identical; the
+        // decision's reason is appended to the success flash so the degrade reads as deliberate (#507).
+        var (options, degradeReason) = AppHostLaunch.ApplyViabilityFloor(
+            AppHostLaunch.Options(
+                destination, _config.AgentDispatch.PreferredTerminal, _config.AgentDispatch.CustomTerminalCommand),
+            Application.Driver?.Cols);
         var effective = options.LaunchLocation;
 
         _launchingTab = true;
