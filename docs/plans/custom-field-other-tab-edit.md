@@ -5,6 +5,10 @@ Custom Field write path — `SetTaskCustomFieldAsync` / `ClearTaskCustomFieldAsy
 over `POST`/`DELETE /task/{id}/field/{fid}`) already shipped and merged in #596;
 this is the Terminal.Gui half that drives it.
 
+**Progress:** Phase 1 (the pure `CustomFieldOtherTabArranger` projection) merged in
+#602. Phase 2 (the navigable Other-tab `ListView` row model) is up in PR #620.
+**Phase 3 (per-type activation) is the remaining slice**, tracked on #587.
+
 ## Problem
 
 On an existing task the Task Detail **Other** tab renders custom fields strictly
