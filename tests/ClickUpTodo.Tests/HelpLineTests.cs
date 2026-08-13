@@ -138,6 +138,22 @@ public sealed class HelpLineTests
         Assert.DoesNotContain(HelpItemSets.Detail, i => i.Key == "F6");
     }
 
+    // Contextual chords H (#545), tree half: both Task Detail base footer sets advertise F2 → rename (the
+    // Task Tree tab's node rename, resolved via Keybindings.ResolveDetail), a clickable action re-raising
+    // F2 under the same ✏ glyph the main list's F2 rename uses. Carried on both base sets like the other
+    // per-tab chords (the footer isn't split per sub-context yet), so the #355 cross-checks
+    // (Footer_ShowsTheTableKey_ForEveryBinding + DetailFooter_PerSubContext_ShowsEveryLiveBinding) hold.
+    [Theory]
+    [MemberData(nameof(DetailBaseSets))]
+    public void DetailSets_CarryF2Rename(IReadOnlyList<HelpItem> set)
+    {
+        var item = set.Single(i => i.IsAction && i.ActionKey == "F2");
+        Assert.Equal("✏ rename", item.Label);
+    }
+
+    public static readonly TheoryData<IReadOnlyList<HelpItem>> DetailBaseSets =
+        [HelpItemSets.Detail, HelpItemSets.DetailWithTaskTree];
+
     // #436 — while an overlay editor (comment composer Ctrl+N / description editor Ctrl+E) is open the
     // footer must show only that overlay's keys. Otherwise the full command footer stays up and, since
     // footer hints are clickable, a click re-raises an inert chord into the composer (e.g. Ctrl+Enter →

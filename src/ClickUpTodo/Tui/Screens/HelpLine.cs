@@ -206,6 +206,11 @@ public static class HelpItemSets
         new("␣", "☑ toggle", Chord: "Space"),
         new("Ctrl+G", "➕ list"),
         new("F8", "✏ rename"),
+        // F2 renames the highlighted Task Tree node's task title (H, #545), the same ✏ glyph the main
+        // list's F2 rename uses. Like the checklist chords above, it is carried on the base set and acts
+        // only on its own tab (the Task Tree tab, resolved via Keybindings.ResolveDetail) — the footer is
+        // not yet split per sub-context (future work with slice D/#600).
+        new("F2", "✏ rename"),
         new("Del", "🗑 delete", Chord: "Delete"),
         new("Shift+↑", "move", Chord: "Shift+CursorUp"),
         new("Shift+↓", "move", Chord: "Shift+CursorDown"),
@@ -238,6 +243,8 @@ public static class HelpItemSets
         new("␣", "☑ toggle", Chord: "Space"),
         new("Ctrl+G", "➕ list"),
         new("F8", "✏ rename"),
+        // F2 renames the highlighted Task Tree node's task title (H, #545) — see the Detail set above.
+        new("F2", "✏ rename"),
         new("Del", "🗑 delete", Chord: "Delete"),
         new("Shift+↑", "move", Chord: "Shift+CursorUp"),
         new("Shift+↓", "move", Chord: "Shift+CursorDown"),

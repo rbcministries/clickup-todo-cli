@@ -115,15 +115,20 @@ public sealed class KeybindingsTests
     }
 
     // #539 (contextual chords B) moved Settings F2 → F10 to free F2 for the rename slices; H (#545) now
-    // claims F2 for the main-list task rename (contextual-chord-model.md §5-H). Pinned so Settings stays
-    // on F10 and F2 is used *only* by RenameTask — a future slice can't quietly repurpose it.
+    // claims F2 for RenameTask — on the main list and, tree half, in Task Detail (the Task Tree tab),
+    // contextual-chord-model.md §5-H. Pinned so Settings stays on F10 and F2 is used *only* by RenameTask —
+    // a future slice can't quietly repurpose it. (Slice D/#600 adds a *second* F2 binding for
+    // RenameChecklistItem; when it lands it stays a rename action, not an unrelated one — the invariant this
+    // guards is "F2 is a rename key," which the per-sub-context ResolveDetail then disambiguates.)
     [Fact]
     public void Settings_IsF10_OnMainList_AndF2_IsRenameTaskOnly()
     {
         Assert.Equal("F10", Keybindings.Token(ScreenContext.MainList, KeyAction.Settings));
         Assert.Equal("F2", Keybindings.Token(ScreenContext.MainList, KeyAction.RenameTask));
+        // H's tree half binds F2 → RenameTask in Task Detail too; RenameTask keeps one token everywhere.
+        Assert.Equal("F2", Keybindings.Token(ScreenContext.Detail, KeyAction.RenameTask));
 
-        // Every F2 binding is the RenameTask action (today only on the main list).
+        // Every F2 binding is the RenameTask action (main list + Task Detail today).
         Assert.All(
             Keybindings.All.Where(e => e.Value == "F2"),
             e => Assert.Equal(KeyAction.RenameTask, e.Key.Action));
@@ -166,6 +171,21 @@ public sealed class KeybindingsTests
         Assert.Equal(KeyAction.AddComment, Keybindings.ResolveDetail(DetailSubContext.Comments, "Ctrl+N"));
         Assert.Equal(KeyAction.AddComment, Keybindings.ResolveDetail(DetailSubContext.TaskTree, "Ctrl+N"));
         Assert.Equal(KeyAction.AddComment, Keybindings.ResolveDetail(DetailSubContext.Default, "Ctrl+N"));
+    }
+
+    // Contextual chords H (#545), tree half: F2 renames the highlighted node's task title on the Task Tree
+    // tab and is inert on every other Task Detail sub-context — where a rename has no highlighted node (the
+    // #542 F2/Ctrl+E alias question, deliberately not decided here). RenameTask shares F2 with the checklist
+    // rename (slice D/#600, on the Checklists sub-context); the sub-context is what makes only one live.
+    [Fact]
+    public void ResolveDetail_F2_IsRenameTask_OnTaskTreeTab_AndInertElsewhere()
+    {
+        Assert.Equal(KeyAction.RenameTask, Keybindings.ResolveDetail(DetailSubContext.TaskTree, "F2"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Comments, "F2"));
+        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Default, "F2"));
+        // The Checklists tab does not bind F2 today (its rename is still F8 until slice D/#600); when D lands
+        // it binds F2 → RenameChecklistItem on this same sub-context, still never RenameTask.
+        Assert.NotEqual(KeyAction.RenameTask, Keybindings.ResolveDetail(DetailSubContext.Checklists, "F2"));
     }
 
     // #540 retargets the #458 stopgap: the add-item chord is now Ctrl+N (shared with AddComment), and F7
