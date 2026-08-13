@@ -104,7 +104,8 @@ class Session:
 def boot(s):
     # Poll until the launch task's detail renders rather than a fixed wait: three sequential app boots in
     # one check leave the last one racing under accumulated load. Single-task mode boots straight into the
-    # detail (Description tab, the launch task's name in the frame) — no list row to wait on.
+    # detail (the "Description" tab label is present on the tab strip whatever the front tab, and the launch
+    # task's name is in the frame) — no list row to wait on.
     end = time.monotonic() + 18.0
     while time.monotonic() < end:
         s.pump(1.0)
