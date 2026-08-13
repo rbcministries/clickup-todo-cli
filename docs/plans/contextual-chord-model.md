@@ -307,9 +307,13 @@ be **updated, not weakened**, to assert the stronger sub-context invariant:
 ## 7. Reconciliation & invariants
 
 - **#402 (navigation taxonomy).** F/G's confirm/choice dialogs are exactly #402's **transient-modal**
-  category. This note commits only the *new* F/G dialogs to native surfaces; it does **not** decide the
-  wholesale migration of the existing transient modals — that stays #402's open call. Consistent, not
-  pre-empting.
+  category. This note commits only the *new* F/G dialogs to native surfaces; the **wholesale migration**
+  of the existing transient modals is no longer "#402's open call" (that issue is closed) — it is now
+  decided and owned by the accepted navigation ADR, `docs/navigation-model.md` ("Transient-modal
+  migration to native Terminal.Gui modals", via #614): pilot Quick Open, flag-gated behind
+  `CLICKUP_TODO_NATIVE_MODAL` until the `windows`/`dotnet` drivers are confirmed. F/G stay consistent
+  with that policy — the `ConfirmDialog`/`ChoiceDialog` they promote are the reusable shape those
+  migrations reuse.
 - **#290 (shortcut standardization).** F2 = Rename, F10 = Settings, `Delete` = Delete, one `Ctrl+N`
   "new" chord — all move toward #290's conventions.
 - **#506 (config chord-override layer).** The sub-context activation layer is precisely where a future
