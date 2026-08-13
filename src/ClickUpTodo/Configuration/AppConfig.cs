@@ -146,6 +146,14 @@ public sealed class AppConfig
     public AgentDispatchSettings AgentDispatch { get; set; } = new();
 
     /// <summary>
+    /// Super Agents configuration (#490) — today just the hand-pinned agent <see cref="SuperAgentSettings.Agents">
+    /// seed</see> that populates <see cref="Services.AgentDirectoryCache"/> when live discovery is
+    /// unavailable. All optional; an absent <c>superAgents</c> key loads an empty seed, and a hand-edited
+    /// <c>"superAgents": null</c> is coalesced back to defaults by <see cref="ConfigMigrations"/>.
+    /// </summary>
+    public SuperAgentSettings SuperAgents { get; set; } = new();
+
+    /// <summary>
     /// The base working directory (#92) — the local root where most of the user's ClickUp-tracked
     /// work lives. It's the root the Dispatch file-tree browser (#95) hangs off and the parent a
     /// task-derived launch (#98) starts in. Blank/absent is the sentinel for the default
