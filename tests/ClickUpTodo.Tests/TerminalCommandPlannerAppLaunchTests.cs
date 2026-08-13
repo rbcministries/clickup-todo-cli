@@ -250,6 +250,9 @@ public sealed class TerminalCommandPlannerAppLaunchTests
         Assert.True(result.Success);
         Assert.Equal("konsole", result.LaunchedWith);
         Assert.Contains("was not found on PATH", result.Note);
+        // #591: the Note rides the same app-launch status line as the softened NewTab lead, so it must not
+        // hard-code "tab" either — the resolved surface can be a Zellij pane or a window fallback (#589).
+        Assert.DoesNotContain("tab", result.Note!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -7,8 +7,10 @@ namespace ClickUpTodo.Tests;
 /// options and status strings shared by the dashboard's Ctrl+Enter (#301/#384), single-task mode's
 /// Ctrl+Enter and the feed's Enter, so the hosts can't drift. Generalised from the tab-only
 /// <c>AppTabLaunch</c>: each helper takes a <see cref="LaunchLocation"/> destination and words its status
-/// accordingly (new tab / new window / split pane). The <c>NewTab</c> wording is pinned byte-identical to
-/// the retired helper's strings. Every branch runs without a terminal or a UI host.
+/// accordingly (new tab / new window / split pane). The <c>NewTab</c> wording was once pinned byte-identical
+/// to the retired helper's strings, but #591 softened it to a host-neutral "… where supported" so the status
+/// line never asserts a literal tab a host didn't open (a Zellij pane or a window fallback down the #589
+/// split → tab → window ladder). Every branch runs without a terminal or a UI host.
 /// </summary>
 public sealed class AppHostLaunchTests
 {
@@ -56,23 +58,24 @@ public sealed class AppHostLaunchTests
         Assert.Empty(options.ExtraArgs);
     }
 
-    // ── Opening / Opened — NewTab wording pinned to the retired AppTabLaunch strings ──
+    // ── Opening / Opened — NewTab wording softened to host-neutral "… where supported" (#591) ──
 
     [Fact]
     public void Opening_names_the_task_for_a_new_tab()
         => Assert.Equal(
-            "Opening 'My Task' in a new terminal tab…", AppHostLaunch.Opening("My Task", LaunchLocation.NewTab));
+            "Opening 'My Task' in a new terminal tab where supported…",
+            AppHostLaunch.Opening("My Task", LaunchLocation.NewTab));
 
     [Fact]
     public void Opened_names_the_task_and_the_terminal_for_a_new_tab()
         => Assert.Equal(
-            "Opened 'My Task' in a new tab (gnome-terminal).",
+            "Opened 'My Task' in a new tab where supported (gnome-terminal).",
             AppHostLaunch.Opened("My Task", LaunchLocation.NewTab, new LaunchResult(true, "gnome-terminal", Error: null)));
 
     [Fact]
     public void Opened_appends_a_non_fatal_note_when_present()
         => Assert.Equal(
-            "Opened 'My Task' in a new tab (xterm). Opened a new window (no tab support).",
+            "Opened 'My Task' in a new tab where supported (xterm). Opened a new window (no tab support).",
             AppHostLaunch.Opened("My Task", LaunchLocation.NewTab,
                 new LaunchResult(true, "xterm", Error: null, Note: "Opened a new window (no tab support).")));
 
@@ -82,20 +85,37 @@ public sealed class AppHostLaunchTests
     [InlineData("   ")]
     public void Opened_omits_a_blank_note(string? note)
         => Assert.Equal(
-            "Opened 'My Task' in a new tab (kitty).",
+            "Opened 'My Task' in a new tab where supported (kitty).",
             AppHostLaunch.Opened("My Task", LaunchLocation.NewTab, new LaunchResult(true, "kitty", Error: null, Note: note)));
+
+    // #591 regression: the NewTab lead must not contradict a non-tab surface the #589 ladder resolved to.
+    // Opened's parenthetical carries the true LaunchSpec.Description (e.g. a Zellij pane or a window
+    // fallback), so the softened "where supported" lead reads honestly alongside it.
+    [Theory]
+    [InlineData("Zellij (new pane)")]
+    [InlineData("WezTerm (new window)")]
+    public void Opened_for_a_new_tab_does_not_claim_a_literal_tab_for_a_non_tab_surface(string launchedWith)
+    {
+        var message = AppHostLaunch.Opened(
+            "My Task", LaunchLocation.NewTab, new LaunchResult(true, launchedWith, Error: null));
+
+        // The actual surface is named verbatim, and the lead hedges rather than asserting a bare "a new tab".
+        Assert.Equal($"Opened 'My Task' in a new tab where supported ({launchedWith}).", message);
+        Assert.Contains("where supported", message);
+        Assert.DoesNotContain("in a new tab (", message);
+    }
 
     // ── Destination-aware wording (#504) ──────────────────────────────────────
 
     [Theory]
-    [InlineData(LaunchLocation.NewTab, "Opening 'My Task' in a new terminal tab…")]
+    [InlineData(LaunchLocation.NewTab, "Opening 'My Task' in a new terminal tab where supported…")]
     [InlineData(LaunchLocation.NewWindow, "Opening 'My Task' in a new terminal window…")]
     [InlineData(LaunchLocation.SplitPane, "Opening 'My Task' in a split pane…")]
     public void Opening_words_the_destination(LaunchLocation destination, string expected)
         => Assert.Equal(expected, AppHostLaunch.Opening("My Task", destination));
 
     [Theory]
-    [InlineData(LaunchLocation.NewTab, "Opened 'My Task' in a new tab (wezterm).")]
+    [InlineData(LaunchLocation.NewTab, "Opened 'My Task' in a new tab where supported (wezterm).")]
     [InlineData(LaunchLocation.NewWindow, "Opened 'My Task' in a new window (wezterm).")]
     [InlineData(LaunchLocation.SplitPane, "Opened 'My Task' in a split pane (wezterm).")]
     public void Opened_words_the_destination(LaunchLocation destination, string expected)
@@ -103,7 +123,7 @@ public sealed class AppHostLaunchTests
             expected, AppHostLaunch.Opened("My Task", destination, new LaunchResult(true, "wezterm", Error: null)));
 
     [Theory]
-    [InlineData(LaunchLocation.NewTab, "Couldn't open a terminal tab.")]
+    [InlineData(LaunchLocation.NewTab, "Couldn't open a terminal tab where supported.")]
     [InlineData(LaunchLocation.NewWindow, "Couldn't open a terminal window.")]
     [InlineData(LaunchLocation.SplitPane, "Couldn't open a split pane.")]
     public void Fallback_words_the_destination(LaunchLocation destination, string lead)
@@ -111,24 +131,24 @@ public sealed class AppHostLaunchTests
             $"{lead} Command copied to clipboard: {SampleCommand.ToDisplayCommand()}",
             AppHostLaunch.Fallback(SampleCommand, destination, copied: true));
 
-    // ── Fallback — NewTab wording pinned to the retired AppTabLaunch strings ──
+    // ── Fallback — NewTab wording softened to host-neutral "… where supported" (#591) ──
 
     [Fact]
     public void Fallback_when_copied_points_at_the_clipboard()
         => Assert.Equal(
-            $"Couldn't open a terminal tab. Command copied to clipboard: {SampleCommand.ToDisplayCommand()}",
+            $"Couldn't open a terminal tab where supported. Command copied to clipboard: {SampleCommand.ToDisplayCommand()}",
             AppHostLaunch.Fallback(SampleCommand, LaunchLocation.NewTab, copied: true));
 
     [Fact]
     public void Fallback_when_not_copied_asks_the_user_to_run_it()
         => Assert.Equal(
-            $"Couldn't open a terminal tab. Run: {SampleCommand.ToDisplayCommand()}",
+            $"Couldn't open a terminal tab where supported. Run: {SampleCommand.ToDisplayCommand()}",
             AppHostLaunch.Fallback(SampleCommand, LaunchLocation.NewTab, copied: false));
 
     [Fact]
     public void Fallback_names_the_failure_reason_when_the_launch_threw()
         => Assert.Equal(
-            $"Couldn't open a terminal tab (spawn denied). Command copied to clipboard: {SampleCommand.ToDisplayCommand()}",
+            $"Couldn't open a terminal tab where supported (spawn denied). Command copied to clipboard: {SampleCommand.ToDisplayCommand()}",
             AppHostLaunch.Fallback(SampleCommand, LaunchLocation.NewTab, copied: true, reason: "spawn denied"));
 
     [Fact]

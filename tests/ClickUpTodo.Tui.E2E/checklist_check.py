@@ -299,10 +299,12 @@ def run_crud():
         assert "Ship the release" not in v, "the pre-rename name is still shown:\n" + v
         assert "Checklists (2/6)" in v, "rename wrongly changed the aggregate:\n" + v
 
-        # ── Delete (F9 → Y): confirm and remove; the checklist returns to its starting counts ──────────
-        s.send(F9)
+        # ── Delete (Delete → Enter): confirm and remove; the checklist returns to its starting counts ──
+        # Delete retargeted from #458's F9 (contextual chords F, #543); the default build arms the inline
+        # Enter/Esc confirm (the native ConfirmDialog is behind CLICKUP_TODO_NATIVE_MODAL, off here).
+        s.send(DELETE)
         s.pump(0.8)
-        assert "Delete" in s.visible(), "F9 did not arm the delete confirm:\n" + s.visible()
+        assert "Delete" in s.visible(), "Delete did not arm the delete confirm:\n" + s.visible()
         s.send(ENTER)             # Enter confirms the delete (a letter would be eaten by the ListView type-ahead)
         s.pump(1.5)
         v = s.visible()
@@ -318,7 +320,7 @@ def run_crud():
         assert "Checklists (2/5)" in v and "Publish v2" not in v, \
             "a refresh resurrected the deleted item or wrong counts:\n" + v
 
-        print("ok — CRUD: Ctrl+N adds an item (2/6), F8 renames it, F9+Y deletes it back to (2/5); persists over refresh")
+        print("ok — CRUD: Ctrl+N adds an item (2/6), F8 renames it, Delete+Enter deletes it back to (2/5); persists over refresh")
     finally:
         s.kill()
 
@@ -347,8 +349,9 @@ def run_add_cancel():
 
 
 def run_delete_confirm_cleared_by_overlay():
-    """E (#458) regression: arming the delete confirm (F9) then opening the add overlay (Ctrl+N) must cancel
-    the armed delete, so a later Enter can't silently delete the once-targeted item."""
+    """E (#458) regression: arming the delete confirm (Delete, retargeted from F9 in #543) then opening the
+    add overlay (Ctrl+N) must cancel the armed delete, so a later Enter can't silently delete the once-
+    targeted item. (Default build — the inline confirm; the native ConfirmDialog is behind the flag.)"""
     s = Session({"E2E_CHECKLISTS": "1"})
     try:
         s.pump(8.0)
@@ -361,9 +364,9 @@ def run_delete_confirm_cleared_by_overlay():
         s.send(DOWN)
         s.pump(0.3)
 
-        s.send(F9)                # arm the delete confirm for the selected item
+        s.send(DELETE)            # arm the delete confirm for the selected item (Delete, was F9)
         s.pump(0.6)
-        assert "Delete" in s.visible(), "F9 did not arm the delete confirm:\n" + s.visible()
+        assert "Delete" in s.visible(), "Delete did not arm the delete confirm:\n" + s.visible()
         s.send(CTRL_N)                # open the add overlay — this must cancel the armed delete
         s.pump(0.6)
         s.send(b"\x1b")           # Esc: cancel the add overlay (creates nothing)
@@ -373,15 +376,15 @@ def run_delete_confirm_cleared_by_overlay():
         v = s.visible()
         assert "[x] Cut the tag" in v, "opening the add overlay left a delete armed — Enter deleted an item:\n" + v
         assert "Checklists (2/5)" in v, "an item was unexpectedly deleted (aggregate changed):\n" + v
-        print("ok — delete-confirm cleared: F9 then Ctrl+N cancels the armed delete; a later Enter is inert")
+        print("ok — delete-confirm cleared: Delete then Ctrl+N cancels the armed delete; a later Enter is inert")
     finally:
         s.kill()
 
 
 def run_group_crud():
     """F (#459): checklist GROUP CRUD on a task that starts with no checklists (E2E_CHECKLISTS_EMPTY seeds
-    the mutable DOM empty). Ctrl+G create a group -> Ctrl+N add an item to it -> F9+Enter on its header delete
-    the group, returning to the empty state. Each write persists in the fake backend, so a refresh agrees."""
+    the mutable DOM empty). Ctrl+G create a group -> Ctrl+N add an item to it -> Delete+Enter on its header
+    delete the group, returning to the empty state. Each write persists in the fake backend, so a refresh agrees."""
     s = Session({"E2E_CHECKLISTS_EMPTY": "1"})
     try:
         s.pump(8.0)
@@ -415,13 +418,13 @@ def run_group_crud():
         assert "Release steps  (0/1)" in v, "the group progress did not grow to (0/1):\n" + v
         assert "Checklists (0/1)" in v, "the tab title aggregate did not update to (0/1):\n" + v
 
-        # ── Delete the group (F9 on its header -> Enter): the item added lands selected, so ↑ to the header
+        # ── Delete the group (Delete on its header -> Enter): the item added lands selected, so ↑ to the header
         s.send(UP)
         s.pump(0.3)
-        s.send(F9)
+        s.send(DELETE)
         s.pump(0.8)
         v = s.visible()
-        assert "Delete checklist 'Release steps'" in v, "F9 on the header did not arm the group-delete confirm:\n" + v
+        assert "Delete checklist 'Release steps'" in v, "Delete on the header did not arm the group-delete confirm:\n" + v
         assert "1 item" in v, "the group-delete confirm did not name the item count:\n" + v
         s.send(ENTER)            # Enter confirms (a bare letter would be eaten by the ListView type-ahead)
         s.pump(1.5)
@@ -437,7 +440,7 @@ def run_group_crud():
         assert "No checklists on this task." in v and "Release steps" not in v, \
             "a refresh resurrected the deleted group:\n" + v
 
-        print("ok — group CRUD: Ctrl+G creates a checklist, Ctrl+N adds an item (0/1), F9+Enter on the header "
+        print("ok — group CRUD: Ctrl+G creates a checklist, Ctrl+N adds an item (0/1), Delete+Enter on the header "
               "deletes the group back to the empty state; persists over refresh")
     finally:
         s.kill()

@@ -67,7 +67,7 @@ public sealed class TerminalLauncher : ITerminalLauncher
 
         var note = _exists(command.FileName)
             ? null
-            : $"'{command.FileName}' was not found on PATH — install the CLI so the new tab can run it.";
+            : $"'{command.FileName}' was not found on PATH — install the CLI so the new terminal can run it.";
         return Task.FromResult(LaunchResult.Ok(spec.DisplayName, note));
     }
 
