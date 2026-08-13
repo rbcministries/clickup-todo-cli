@@ -288,6 +288,26 @@ The dashboard half is `tree_rename_check.py`; `RenameTaskModel` / `SetTaskNameAs
 `TaskDetailScreen.ApplyTreeRename` are pinned by unit tests in CI, and this is the rendered end-to-end
 proof the single-task host wires them.
 
+**`other_tab_check.py`** — Task Detail **Other** tab custom-field row model (#587 §2): with
+`E2E_TASK_CUSTOM_FIELDS=1` (`DetailCustomFieldsScenario` splices a seeded `custom_fields` array — a
+checkbox / short_text / drop_down / formula — into the detail read), opens a task's detail, cycles to the
+Other tab (index 3), and asserts the §2 row model: the custom-fields body renders as per-field rows (the
+`Custom fields:` heading plus one row per seeded field), a bare `↓` moves the focus-highlighted row down
+one field and a bare `↑` moves it back (the navigable ListView, driven through `MoveActiveTab` like the
+Task Tree / Checklists tabs — inert on the old read-only `TextView` body), and the moves stay on the tab
+(NavSafe). The row projection/selectability is unit-covered in CI (`CustomFieldOtherTabArrangerTests`,
+#602); this is the rendered end-to-end proof the view drives it:
+
+```bash
+timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/other_tab_check.py $DLL
+```
+
+Self-contained (sets its own `E2E_TASK_CUSTOM_FIELDS=1`; the seed is env-gated, so every other check sees
+the default no-custom-fields detail and the `detail_check.py` A/B stays byte-identical). Expected: `ok —
+Other tab renders navigable custom-field rows …` then `OTHER TAB NAV E2E: PASS`. Fails on the pre-#587-§2
+read-only `TextView` body (the field names render as wrapped text, but no row is focus-highlighted and
+bare `↓`/`↑` don't move a selection). §3 per-type activation (Space toggle / Enter editor) is a follow-up.
+
 **`detail_arrow_check.py`** — bare ↑/↓ scroll / row-move in Task Detail (#452): bare arrows used to be inert on every Task
 Detail tab: the read-only text panes moved an invisible caret instead of scrolling, and the Task Tree
 `ListView`'s `Command.Down` bubbled up to `NavSafeTabs`' inert crash-guard, cancelling its own
