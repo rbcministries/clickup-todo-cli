@@ -110,6 +110,40 @@ public sealed class CustomFieldOtherTabArrangerTests
         Assert.True(Assert.Single(p.Rows, r => r.IsField).Selectable);
     }
 
+    [Fact]
+    public void FillableCoverage_MatchesTheFillableTaxonomy()
+    {
+        // Keeps EveryFillableType_IsSelectable honest: if a 12th fillable type is added, this fails until
+        // the theory's InlineData list is extended.
+        Assert.Equal(11, CustomFieldTypes.Fillable.Count);
+    }
+
+    [Theory]
+    [InlineData("TEXT")]
+    [InlineData(" text ")]
+    [InlineData("Number")]
+    public void FillableType_IsCaseInsensitiveAndTrimmed(string type)
+    {
+        var p = CustomFieldOtherTabArranger.Project(null, [Field("F", type)]);
+
+        Assert.True(Assert.Single(p.Rows, r => r.IsField).Selectable);
+    }
+
+    [Fact]
+    public void FillableField_WithNoId_RendersButIsNotSelectable()
+    {
+        // A fillable type with no addressable id can't be written back (#587 §3 POSTs to /field/{id}),
+        // so it must render but never present as an activation target.
+        var p = CustomFieldOtherTabArranger.Project(null, [Field("Orphan", "text", "\"v\"", id: null)]);
+
+        var row = Assert.Single(p.Rows, r => r.IsField);
+        Assert.True(row.Fillable);
+        Assert.False(row.Selectable);
+        Assert.Equal(1, p.FieldCount);
+        Assert.Equal(0, p.SelectableCount);
+        Assert.Equal(-1, p.FirstSelectableIndex());
+    }
+
     [Theory]
     [InlineData("formula")]
     [InlineData("rollup")]
@@ -183,6 +217,20 @@ public sealed class CustomFieldOtherTabArrangerTests
 
         var rebuilt = string.Join('\n', p.Rows
             .Where(r => r.Kind is CustomFieldOtherRowKind.SectionLabel or CustomFieldOtherRowKind.Field)
+            .Select(r => r.Text));
+        Assert.Equal(TaskDetailFormatter.CustomFieldsBody(task), rebuilt);
+    }
+
+    [Fact]
+    public void EmptyRows_ConcatenateToTheReadOnlyBody()
+    {
+        // The empty case is single-sourced through the same consts — pin it too.
+        var task = new TaskDetail { Id = "id", Name = "Title" };
+
+        var p = CustomFieldOtherTabArranger.Project(null, fields: null);
+
+        var rebuilt = string.Join('\n', p.Rows
+            .Where(r => r.Kind is CustomFieldOtherRowKind.SectionLabel or CustomFieldOtherRowKind.EmptyState)
             .Select(r => r.Text));
         Assert.Equal(TaskDetailFormatter.CustomFieldsBody(task), rebuilt);
     }

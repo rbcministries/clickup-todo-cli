@@ -293,11 +293,21 @@ public static class TaskDetailFormatter
     public static string CustomFieldLine(CustomFieldItem field)
     {
         ArgumentNullException.ThrowIfNull(field);
+        return CustomFieldLine(field, CustomFieldValue(field));
+    }
+
+    /// <summary>As <see cref="CustomFieldLine(CustomFieldItem)"/> but with the display
+    /// <paramref name="value"/> already computed (via <see cref="CustomFieldValue"/>) — lets the Other-tab
+    /// row projection render the line and carry the same value without parsing the field's JSON twice.
+    /// The <paramref name="value"/> is the display rendering (truncated at <see cref="MaxValueLength"/>),
+    /// not a round-trippable edit value.</summary>
+    public static string CustomFieldLine(CustomFieldItem field, string? value)
+    {
+        ArgumentNullException.ThrowIfNull(field);
         var sb = new StringBuilder();
         sb.Append("  • ").Append(field.Name);
         if (!string.IsNullOrWhiteSpace(field.Type))
             sb.Append("  (").Append(field.Type).Append(')');
-        var value = CustomFieldValue(field);
         if (!string.IsNullOrWhiteSpace(value))
             sb.Append(": ").Append(value);
         return sb.ToString();

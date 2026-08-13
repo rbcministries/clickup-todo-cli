@@ -56,9 +56,13 @@ deferred to a follow-up (clearly noted in the PR) and #587 stays open.
 
 ### Phase 1 — pure row projection (§2 core, CI-verifiable) — the guaranteed-green slice
 
-A new pure `Services/CustomFieldOtherTabArranger.cs` mirroring `ChecklistArranger`
-(no Terminal.Gui, no I/O), separately unit-tested so the #81 short-terminal
-guarantee can't regress:
+A new pure `CustomFieldOtherTabArranger` mirroring `ChecklistArranger` (no
+Terminal.Gui, no I/O), separately unit-tested so the #81 short-terminal
+guarantee can't regress. It lives in `Tui/` (namespace `ClickUpTodo.Tui`,
+colocated with `DetailOtherTabLayout`) rather than `Services/`, because it reuses
+`TaskDetailFormatter.CustomFieldLine`/`CustomFieldValue` (in `Tui/`) as the
+single source of a field's rendered line — putting it in `Services/` would invert
+that dependency:
 
 - **`CustomFieldOtherRowKind`** — `Spill` (a clipped coloured-header line pushed
   into the body by #81, non-selectable), `SectionLabel` (the `Custom fields:`

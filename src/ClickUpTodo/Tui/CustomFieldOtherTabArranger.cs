@@ -27,8 +27,8 @@ public enum CustomFieldOtherRowKind
 /// One projected row of the Other tab's navigable custom-fields body (#587 §2). Pure data: the arranger
 /// decides the ordering and per-row text; the Terminal.Gui glue renders it and moves the selection over
 /// the <see cref="Selectable"/> rows only. A <see cref="Field"/> row carries its <see cref="FieldId"/>,
-/// <see cref="FieldName"/>, <see cref="FieldType"/> and current <see cref="Value"/> text so the §3
-/// activation path never has to re-walk <see cref="TaskDetail.CustomFields"/> from a selected index.
+/// <see cref="FieldName"/> and <see cref="FieldType"/> so the §3 activation path never has to re-walk
+/// <see cref="TaskDetail.CustomFields"/> from a selected index.
 /// </summary>
 public readonly record struct CustomFieldOtherRow(
     CustomFieldOtherRowKind Kind,
@@ -42,9 +42,17 @@ public readonly record struct CustomFieldOtherRow(
     /// <summary><c>true</c> for a custom-field row (whether or not it is fillable).</summary>
     public bool IsField => Kind == CustomFieldOtherRowKind.Field;
 
-    /// <summary>Whether ↑/↓ may land on this row and §3 may activate it: a fillable custom field only.
-    /// Spill / heading / empty-state rows and computed or relationship field types are skipped and inert.</summary>
-    public bool Selectable => Kind == CustomFieldOtherRowKind.Field && Fillable;
+    /// <summary>Whether ↑/↓ may land on this row and §3 may activate it: a fillable custom field with an
+    /// addressable id only. Spill / heading / empty-state rows, computed or relationship field types, and
+    /// the (pathological) id-less field are skipped and inert — a §3 write has nowhere to POST without an
+    /// id, so such a row must never present as editable.</summary>
+    public bool Selectable => Kind == CustomFieldOtherRowKind.Field && Fillable && FieldId is not null;
+
+    /// <summary>The field's value rendered for <b>display</b> (via <c>TaskDetailFormatter.CustomFieldValue</c>,
+    /// truncated at <c>MaxValueLength</c>) — for the row text and read-back, <b>not</b> a round-trippable
+    /// edit value. The §3 editor must source the full value from the field's <c>JsonElement</c>, never
+    /// prefill from this (truncation would silently drop the tail on save). Null on non-field rows.</summary>
+    public string? Value { get; init; } = Value;
 }
 
 /// <summary>The result of <see cref="CustomFieldOtherTabArranger.Project"/>: the flat, display-ordered
@@ -117,16 +125,19 @@ public static class CustomFieldOtherTabArranger
             {
                 fieldCount++;
                 var fillable = CustomFieldTypes.IsFillable(f.Type);
-                if (fillable)
-                    selectableCount++;
-                rows.Add(new CustomFieldOtherRow(
+                // Parse the field's value once and reuse it for the row text and the carried display value.
+                var value = TaskDetailFormatter.CustomFieldValue(f);
+                var row = new CustomFieldOtherRow(
                     Kind: CustomFieldOtherRowKind.Field,
-                    Text: TaskDetailFormatter.CustomFieldLine(f),
+                    Text: TaskDetailFormatter.CustomFieldLine(f, value),
                     FieldId: f.Id,
                     FieldName: f.Name,
                     FieldType: f.Type,
                     Fillable: fillable,
-                    Value: TaskDetailFormatter.CustomFieldValue(f)));
+                    Value: value);
+                if (row.Selectable)
+                    selectableCount++;
+                rows.Add(row);
             }
         }
 
