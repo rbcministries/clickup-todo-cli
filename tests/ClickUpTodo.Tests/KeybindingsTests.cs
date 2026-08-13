@@ -116,10 +116,11 @@ public sealed class KeybindingsTests
 
     // #539 (contextual chords B) moved Settings F2 → F10 to free F2 for the rename slices; H (#545) now
     // claims F2 for RenameTask — on the main list and, tree half, in Task Detail (the Task Tree tab),
-    // contextual-chord-model.md §5-H. Pinned so Settings stays on F10 and F2 is used *only* by RenameTask —
-    // a future slice can't quietly repurpose it. (Slice D/#600 adds a *second* F2 binding for
-    // RenameChecklistItem; when it lands it stays a rename action, not an unrelated one — the invariant this
-    // guards is "F2 is a rename key," which the per-sub-context ResolveDetail then disambiguates.)
+    // contextual-chord-model.md §5-H. Pinned so Settings stays on F10 and, today, every F2 binding is
+    // RenameTask — no unrelated action can quietly repurpose it. (Slice D/#600 adds a *second* F2 binding,
+    // RenameChecklistItem on the Checklists sub-context; per the model note §6 it must *update, not weaken*,
+    // this assertion to the "every F2 is a rename action" form — the two coexist because ResolveDetail
+    // disambiguates by sub-context.)
     [Fact]
     public void Settings_IsF10_OnMainList_AndF2_IsRenameTaskOnly()
     {
