@@ -201,7 +201,35 @@ def leg_c():
         s.kill()
 
 
+def leg_d():
+    # Regression: a pending delete confirm must NOT survive a tab switch. On the Task Tree tab Enter also
+    # navigates (#291), so a lingering arm would be re-triggered by the very key used to move around — a
+    # silent destructive delete. Arm on the current ROOT row, switch away and back, then press Enter: nothing
+    # is deleted (the arm was cleared on the tab switch) and the view is intact.
+    log = tempfile.mktemp(prefix="task_delete_d_")
+    s = boot_to_tree({"E2E_TASK_DELETE_LOG": log})
+    try:
+        s.select_row("ROOT")
+        s.send(DELETE)
+        s.pump(0.8)
+        assert "Delete task" in s.visible(), "current-task delete confirm not shown:\n" + s.visible()
+        s.send(CTRL_RIGHT)   # switch to Stream (wraps), clearing the arm
+        s.pump(0.6)
+        s.send(b"\x1b[1;5D")  # Ctrl+Left back to the Task Tree tab
+        s.pump(1.2)
+        assert "ROOT" in s.visible(), "did not return to the Task Tree tab:\n" + s.visible()
+        s.send(ENTER)        # with the arm cleared, Enter navigates (current row = no-op), never deletes
+        s.pump(1.5)
+        assert s.proc.poll() is None, "a stale armed delete fired on Enter after a tab switch (tab quit)"
+        assert read_log(log) == [], "a stale armed delete wrote a DELETE after a tab switch: " + str(read_log(log))
+        assert "ROOT" in s.visible(), "the current task vanished — a stale delete fired:\n" + s.visible()
+        print("ok — leg D: a pending delete is cleared on a tab switch; a later Enter navigates, never deletes")
+    finally:
+        s.kill()
+
+
 leg_a()
 leg_b()
 leg_c()
+leg_d()
 print("TASK DELETE E2E: PASS")

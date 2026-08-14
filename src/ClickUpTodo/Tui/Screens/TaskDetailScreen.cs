@@ -795,9 +795,13 @@ public sealed class TaskDetailScreen : Screen
         _tabs.ValueChanged += (_, _) =>
         {
             // Leaving (or re-entering) a tab cancels a pending checklist-item (E, #458) or -group (F, #459)
-            // delete confirm so it can't linger, invisibly armed, and fire an unprompted delete on a later Enter.
+            // or task/subtask (F, #594) delete confirm so it can't linger, invisibly armed, and fire an
+            // unprompted delete on a later Enter. The task-delete arm especially must be cleared here: on the
+            // Task Tree tab Enter also *navigates* (#291), so a lingering arm would be re-triggered by the very
+            // key a user presses to move around the tree — a silent destructive delete.
             _checklistDeletePending = null;
             _checklistGroupDeletePending = null;
+            _taskDeletePending = null;
             FocusCurrentPane();
             EnsureTreeLoaded();
         };
