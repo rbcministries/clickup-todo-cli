@@ -111,11 +111,19 @@ default on error.
   gestures and **both** the dispatch and the footer follow, on the list and
   quick-open.
 
-### Phase 3 — F10 Settings fields
+### Phase 3 — F10 Settings fields *(deferred; tracked on #506)*
+
+Shipped Phases 1–2 make the feature fully usable via a hand-edited `config.json`
+(the config-first cadence this repo uses throughout), with the save-time
+`ValidateLaunchChord` seam already in place and unit-tested. The F10 surface is a
+discoverability enhancement, deferred as its own reviewed slice:
 
 - Two fields in `SettingsScreen` for the chords, seeded from config, validated on
-  save via `ValidateLaunchChord` (inline error, default retained on invalid),
-  persisted to `AppConfig.LaunchChords`.
+  save via the shipped `SettingsForm.ValidateLaunchChord` (inline error, default
+  retained on invalid — a new *blocking-save-on-invalid* interaction for that
+  always-closes-on-Save form), persisted to `AppConfig.LaunchChords`, then
+  `_launchChords` recomputed + the list dispatcher rebuilt + footer refreshed on
+  save (the `_agent` precedent).
 - `tui-validate` leg: the Settings surface shows/accepts a chord, an invalid entry
   is rejected inline, and a rebound chord dispatches (footer reflects it).
 
