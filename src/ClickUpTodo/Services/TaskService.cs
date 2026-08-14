@@ -832,6 +832,13 @@ public sealed class TaskService(
     public Task DeleteCommentAsync(string commentId, CancellationToken ct = default)
         => client.DeleteCommentAsync(commentId, ct);
 
+    /// <summary>Permanently deletes a task or subtask (#594, over the <see cref="ClickUpClient.DeleteTaskAsync"/>
+    /// facade). ClickUp returns an empty body, so the caller keeps its optimistic removal (or its close/navigate)
+    /// and reverts on failure. Consumed by the Task Tree tab's contextual <c>Delete</c>. A thin passthrough,
+    /// mirroring <see cref="DeleteCommentAsync"/>.</summary>
+    public Task DeleteTaskAsync(string taskId, CancellationToken ct = default)
+        => client.DeleteTaskAsync(taskId, ct);
+
     /// <summary>Writes a task's plain-text description (#217, over the #211 facade) and returns the
     /// server-confirmed value so the detail view can reflect it without a manual refresh. Pass <c>""</c>
     /// to clear the description.</summary>

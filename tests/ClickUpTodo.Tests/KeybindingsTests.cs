@@ -229,24 +229,25 @@ public sealed class KeybindingsTests
         Assert.DoesNotContain(Keybindings.All, e => e.Value == "F9");
     }
 
-    // #594 (contextual chords F, comment half): Delete resolves to DeleteComment on the comment-bearing tabs
-    // (Comments/Stream) and to DeleteChecklistItem on the Checklists tab — the same "Delete" token,
-    // disambiguated by sub-context exactly as Ctrl+N's AddComment/AddChecklistItem are. It stays inert (null)
-    // on Description/Other (Default) and the Task Tree tab, which show no comments. This is the delete-side
-    // analogue of ResolveDetail_CtrlN_IsAddChecklistItem_OnChecklistsTab_AndAddComment_Elsewhere.
+    // #594 (contextual chords F): Delete resolves per sub-context to whatever that tab deletes — DeleteComment
+    // on the comment-bearing tabs (Comments/Stream), DeleteChecklistItem on the Checklists tab, and DeleteTask
+    // on the Task Tree tab (the deferred task half, #594) — all off the same "Delete" token, disambiguated by
+    // sub-context exactly as Ctrl+N's AddComment/AddChecklistItem are. It stays inert (null) only on
+    // Description/Other (Default), which has no highlighted deletable thing. This is the delete-side analogue of
+    // ResolveDetail_CtrlN_IsAddChecklistItem_OnChecklistsTab_AndAddComment_Elsewhere.
     [Fact]
-    public void ResolveDetail_Delete_IsDeleteComment_OnCommentTabs_ChecklistItem_OnChecklists_InertElsewhere()
+    public void ResolveDetail_Delete_IsPerTabDelete_DeleteComment_ChecklistItem_Task_InertOnDefault()
     {
         Assert.Equal(KeyAction.DeleteComment, Keybindings.ResolveDetail(DetailSubContext.Comments, "Delete"));
         Assert.Equal(KeyAction.DeleteComment, Keybindings.ResolveDetail(DetailSubContext.Stream, "Delete"));
         Assert.Equal(KeyAction.DeleteChecklistItem, Keybindings.ResolveDetail(DetailSubContext.Checklists, "Delete"));
+        Assert.Equal(KeyAction.DeleteTask, Keybindings.ResolveDetail(DetailSubContext.TaskTree, "Delete"));
         Assert.Null(Keybindings.ResolveDetail(DetailSubContext.Default, "Delete"));
-        Assert.Null(Keybindings.ResolveDetail(DetailSubContext.TaskTree, "Delete"));
 
-        // DeleteComment carries the same token as the checklist delete — the collision-free sharing the
-        // sub-context model rests on (DetailBindings_HaveNoTokenCollision_WithinASubContext proves no tab
-        // sees both live).
+        // The three deletes carry the same token — the collision-free sharing the sub-context model rests on
+        // (DetailBindings_HaveNoTokenCollision_WithinASubContext proves no single tab sees two live).
         Assert.Equal("Delete", Keybindings.Token(ScreenContext.Detail, KeyAction.DeleteComment));
+        Assert.Equal("Delete", Keybindings.Token(ScreenContext.Detail, KeyAction.DeleteTask));
     }
 
     // #541 (contextual chords D) retargets the last #458 stopgap: rename moves F8 → the conventional F2

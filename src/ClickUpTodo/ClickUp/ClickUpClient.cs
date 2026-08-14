@@ -315,8 +315,9 @@ public sealed class ClickUpClient : IClickUpClient, IDisposable
 
     /// <summary>
     /// Permanently delete a task (<c>DELETE /task/{task_id}</c>). ClickUp returns an empty body. Errors
-    /// surface as a caught <see cref="ClickUpApiException"/>. The app has no delete UI; this exists so the
-    /// create-task integration test can remove its throwaway task and stay idempotent.
+    /// surface as a caught <see cref="ClickUpApiException"/>. Consumed by the Task Tree tab's contextual
+    /// <c>Delete</c> (#594, via the <see cref="Services.TaskService.DeleteTaskAsync"/> passthrough), and by the
+    /// create-task integration test to remove its throwaway task and stay idempotent.
     /// </summary>
     public Task DeleteTaskAsync(string taskId, CancellationToken ct = default)
         => Guard("DeleteTask", async () =>
