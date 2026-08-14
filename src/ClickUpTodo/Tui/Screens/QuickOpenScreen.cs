@@ -58,20 +58,22 @@ public sealed class QuickOpenScreen : Screen
 {
     private readonly TextField _input;
     private readonly KeybindingDispatcher _keys;
+    private readonly LaunchChordOverrides _launchChords;
 
     /// <summary>The submitted (trimmed) text + chosen launch intent, or null when the screen was
     /// cancelled.</summary>
     public QuickOpenRequest? Result { get; private set; }
 
-    public QuickOpenScreen()
+    public QuickOpenScreen(LaunchChordOverrides? launchChords = null)
     {
+        _launchChords = launchChords ?? LaunchChordOverrides.None;
         Title = "Open a task";
 
         // #355/#398: dispatch the command shortcuts through the central table rather than a
         // hand-rolled key switch, so the keys and their footer labels (HelpItemSets.QuickOpen)
         // cannot drift. The three submit gestures pick the destination (launch modes B, #615);
         // Help/Back round out the ScreenContext.QuickOpen entries.
-        _keys = new KeybindingDispatcher(ScreenContext.QuickOpen)
+        _keys = new KeybindingDispatcher(ScreenContext.QuickOpen, _launchChords)
             .On(KeyAction.Open, () => Submit(QuickOpenIntent.OpenHere))
             .On(KeyAction.OpenInNewTab, () => Submit(QuickOpenIntent.NewTab))
             .On(KeyAction.OpenInSplitPane, () => Submit(QuickOpenIntent.SplitPane))
@@ -130,7 +132,8 @@ public sealed class QuickOpenScreen : Screen
         Add([prompt, _input, open, newTab, splitPane, cancel]);
     }
 
-    public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.QuickOpen;
+    public override IReadOnlyList<HelpItem> HelpItems =>
+        HelpItemSets.WithConfiguredLaunchChords(HelpItemSets.QuickOpen, _launchChords);
 
     public override void OnShown() => _input.SetFocus();
 

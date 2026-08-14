@@ -31,6 +31,12 @@ public static class ConfigMigrations
         // version bump — there is no legacy data to fold, only a null to normalize (like the two above).
         config.SuperAgents ??= new SuperAgentSettings();
 
+        // Same guard for the launch-chord overrides (#506): a hand-edited "launchChords": null would defeat
+        // the `= new()` default, so LaunchChordOverrides.FromConfig's read would NRE. Coalesce it back to
+        // defaults (both chords null ⇒ shipped Ctrl+Enter/Ctrl+Alt+Enter). No version bump — there is no
+        // legacy data to fold, only a null to normalize (like the guards above).
+        config.LaunchChords ??= new LaunchChordSettings();
+
         // Widening the persisted LaunchLocation enum to three values (#508, split pane): an out-of-range
         // value — a future ordinal, or a hand-edited "launchLocation": 99 — deserializes through
         // JsonStringEnumConverter to an undefined (LaunchLocation)N without throwing, so clamp it back to

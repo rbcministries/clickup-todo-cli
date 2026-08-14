@@ -394,6 +394,38 @@ public sealed class TaskDetailScreen : Screen
     // pick (mirrors SelectorView._applyGeneration). Bumped per write; only the latest clears/reverts the slot.
     private long _assigneeWriteGeneration;
 
+    // ── Custom-field value editing on the Other tab (#587 §3) ───────────────────────────────────
+    // The two writes, owned by the host (the screen never reaches for the client); null ⇒ editing is inert.
+    // Set posts a value (POST /task/{id}/field/{fid}); clear removes it (DELETE). Both return void — the
+    // confirmed-write change-marker nudge (#294) drives the follow-up refresh that reconciles the server value.
+    private readonly Func<string, System.Text.Json.JsonElement, CancellationToken, Task>? _setTaskCustomFieldAsync;
+    private readonly Func<string, CancellationToken, Task>? _clearTaskCustomFieldAsync;
+    // Guards against a second custom-field write while one is in flight (the checklist-toggle discipline), so
+    // a key-mash (a Space toggle or an editor Save) can't stack writes.
+    private bool _customFieldWriteInFlight;
+    // The in-flight optimistic custom-field transform, re-applied onto any refresh landing mid-write so a
+    // poll can neither resurrect the stale value nor double-apply the edit; cleared when the write settles
+    // (the _pendingChecklistEdit discipline, field-scoped to CustomFields).
+    private Func<IReadOnlyList<CustomFieldItem>, IReadOnlyList<CustomFieldItem>>? _pendingCustomFieldEdit;
+    // The value editor overlay: a bottom-anchored single-line value field + Save/Cancel (with a hidden
+    // discard-confirm row for an edited value), hidden until Enter on a text-like field. A transient child
+    // view within the one open screen (like the checklist overlay), so the single-ListView model (#3) holds.
+    private readonly FrameView _customFieldBox;
+    private readonly TextField _customFieldEditor;
+    private readonly Label _customFieldConfirm;
+    private readonly View[] _customFieldControls;
+    // The field the open editor targets (id / type / display name) and its original text, for the write and
+    // the rename-style dirty-check.
+    private string _customFieldTargetId = "";
+    private string? _customFieldTargetType;
+    private string _customFieldTargetName = "";
+    private string _customFieldOriginalText = "";
+    // True between an Esc-on-dirty and the Y/N answer; the next key confirms discard or dismisses.
+    private bool _customFieldPendingDiscard;
+    // The overlay's ideal height: the single-line field + the confirm row + the Save/Cancel row + the frame
+    // border. Clamped on show so it degrades gracefully on a short terminal.
+    private const int CustomFieldEditorPreferredHeight = 1 + 1 + 1 + 2;
+
     // The item add/rename input overlay: a bottom-anchored single-line name field + Save/Cancel (with a
     // hidden discard-confirm row for an edited rename), hidden until Ctrl+N/F2. A transient child view within
     // the one open screen (like the comment composer / description editor), so the single-ListView model
@@ -645,6 +677,8 @@ public sealed class TaskDetailScreen : Screen
         Func<string, ISet<long>, IReadOnlyList<TaskAssignee>>? assigneeMatch = null,
         Func<int, ISet<long>, IReadOnlyList<TaskAssignee>>? assigneeTopFrequent = null,
         Func<string, string, long?, CancellationToken, Task<TaskChecklist>>? setChecklistItemAssigneeAsync = null,
+        Func<string, System.Text.Json.JsonElement, CancellationToken, Task>? setTaskCustomFieldAsync = null,
+        Func<string, CancellationToken, Task>? clearTaskCustomFieldAsync = null,
         Func<string, CancellationToken, Task>? deleteTaskAsync = null)
     {
         var prefs = settings ?? new DetailViewSettings();
@@ -673,6 +707,8 @@ public sealed class TaskDetailScreen : Screen
         _assigneeMatch = assigneeMatch;
         _assigneeTopFrequent = assigneeTopFrequent;
         _setChecklistItemAssigneeAsync = setChecklistItemAssigneeAsync;
+        _setTaskCustomFieldAsync = setTaskCustomFieldAsync;
+        _clearTaskCustomFieldAsync = clearTaskCustomFieldAsync;
         _browser = new DirectoryBrowserModel(baseWorkingDirectory);
         _providers = providers ?? [];
         _streamSort = prefs.StreamSort;
@@ -1095,13 +1131,37 @@ public sealed class TaskDetailScreen : Screen
         foreach (var control in _checklistItemControls)
             control.KeyDown += OnChecklistItemKey;
 
+        // The Other-tab custom-field value editor (#587 §3): the same single-line FrameView overlay as the
+        // checklist item editor, shown on Enter over a text-like field. Save is the default (Enter submits)
+        // and Esc cancels (arming the discard confirm when the value has unsaved edits). Sized on show
+        // (ShowCustomFieldEditor).
+        _customFieldEditor = new TextField { X = 1, Y = 0, Width = Dim.Fill(1) };
+        _customFieldConfirm = new Label { X = 1, Y = Pos.AnchorEnd(2), Width = Dim.Fill(1), Text = "" };
+        var customFieldSaveButton = new Button { X = 1, Y = Pos.AnchorEnd(1), Text = "Save", IsDefault = true };
+        var customFieldCancelButton = new Button { X = Pos.Right(customFieldSaveButton) + 2, Y = Pos.AnchorEnd(1), Text = "Cancel" };
+        customFieldSaveButton.Accepting += (_, _) => SubmitCustomFieldEditor();
+        customFieldCancelButton.Accepting += (_, _) => CancelCustomFieldEditor();
+        _customFieldControls = [_customFieldEditor, customFieldSaveButton, customFieldCancelButton];
+        _customFieldBox = new FrameView
+        {
+            Title = "Edit value — Enter save · Esc cancel",
+            X = 0,
+            Y = Pos.AnchorEnd(CustomFieldEditorPreferredHeight),
+            Width = Dim.Fill(),
+            Height = CustomFieldEditorPreferredHeight,
+            Visible = false,
+        };
+        _customFieldBox.Add(_customFieldEditor, _customFieldConfirm, customFieldSaveButton, customFieldCancelButton);
+        foreach (var control in _customFieldControls)
+            control.KeyDown += OnCustomFieldKey;
+
         // Focus lives in whichever scroll target (TextView) is front-most, so the key handler is wired
         // to each to reliably intercept Tab/Esc/Ctrl+B/Ctrl+A/F1 before the read-only TextView sees them.
         foreach (var target in _scrollTargets)
             target.KeyDown += OnKey;
         KeyDown += OnKey;
 
-        Add([_headerView, _tabs, _promptBox, _commentBox, _replyPickerBox, _commentDeletePickerBox, _descriptionBox, _checklistItemBox]);
+        Add([_headerView, _tabs, _promptBox, _commentBox, _replyPickerBox, _commentDeletePickerBox, _descriptionBox, _checklistItemBox, _customFieldBox]);
     }
 
     // While the comment composer (Ctrl+N) or description editor (Ctrl+E) overlay is open, the footer
@@ -1115,7 +1175,7 @@ public sealed class TaskDetailScreen : Screen
             _commentBox.Visible, _descriptionBox.Visible, _replyPickerBox.Visible, _treeList is not null,
             CurrentDetailSubContext(),
             _mentionBox?.Visible == true, _checklistItemBox.Visible,
-            _commentDeletePickerBox.Visible);
+            _commentDeletePickerBox.Visible, _customFieldBox.Visible);
 
     public override void OnShown()
     {
@@ -1177,6 +1237,13 @@ public sealed class TaskDetailScreen : Screen
         // assignee write settles.
         if (_pendingChecklistAssignee is { } assigneeEdit)
             task = task with { Checklists = assigneeEdit(task.Checklists) };
+
+        // Likewise for an in-flight Other-tab custom-field write (#587 §3): re-apply the field-scoped
+        // optimistic transform onto the refresh so a poll landing mid-write can't revert the just-set value or
+        // resurrect a just-cleared one. Its own slot, so it composes with the checklist overlays above;
+        // cleared when the write settles, and the confirmed-write nudge then carries the server truth.
+        if (_pendingCustomFieldEdit is { } customFieldEdit)
+            task = task with { CustomFields = customFieldEdit(task.CustomFields) };
 
         // Likewise for an in-flight comment delete (#594): re-apply the optimistic removal onto the refresh so
         // a poll landing mid-write can't resurrect the just-deleted comment. Overlaid before _comments is set
@@ -1348,6 +1415,7 @@ public sealed class TaskDetailScreen : Screen
             : _treeList is not null && ReferenceEquals(_tabs.Value, _treeList) ? DetailSubContext.TaskTree
             : ReferenceEquals(_tabs.Value, _commentsPane) ? DetailSubContext.Comments
             : ReferenceEquals(_tabs.Value, _streamPane) ? DetailSubContext.Stream
+            : ReferenceEquals(_tabs.Value, _otherTab) ? DetailSubContext.Other
             : DetailSubContext.Default;
 
     private void OnKey(object? sender, Key key)
@@ -1358,7 +1426,7 @@ public sealed class TaskDetailScreen : Screen
         // Ctrl+A/U/N/E openers, Ctrl+←/→ tab-cycle, F5 refresh) fire underneath and disrupt (or discard)
         // the draft.
         if (_commentBox.Visible || _descriptionBox.Visible || _replyPickerBox.Visible
-            || _commentDeletePickerBox.Visible || _checklistItemBox.Visible)
+            || _commentDeletePickerBox.Visible || _checklistItemBox.Visible || _customFieldBox.Visible)
             return;
 
         // Answer a pending comment delete confirm (#594), armed after a comment was picked in the delete picker
@@ -1517,6 +1585,33 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             ToggleSelectedChecklistItem();
+            return;
+        }
+
+        // Space on the Other tab (#587 §3) toggles the highlighted checkbox custom field, optimistically.
+        // Guarded on the Other tab's body ListView being front-most (like the checklist Space above), so
+        // Space on every other tab / the read-only text panes is undisturbed. A non-checkbox / non-fillable
+        // row is inert-but-flashed inside ToggleSelectedCustomField, not a silent no-op. Space is the
+        // ToggleCustomField token only on the Other sub-context (Keybindings), so it never collides with the
+        // checklist toggle — the front-tab guard already disambiguates them physically.
+        if (key.KeyCode == KeyCode.Space && ReferenceEquals(_tabs.Value, _otherTab))
+        {
+            key.Handled = true;
+            ToggleSelectedCustomField();
+            return;
+        }
+
+        // Enter on the Other tab (#587 §3) opens the value editor for a text-like custom field. Guarded on
+        // the Other tab being front-most and routed through Keybindings.ResolveDetail (only the Other
+        // sub-context binds Enter → EditCustomField) so dispatch and the per-tab footer label stay in
+        // lock-step, exactly as the checklist F2 block does. Claimed before the link-focus block below —
+        // ActiveTextPane() is null for the Other tab, so Enter would otherwise fall through untouched. A
+        // checkbox row toggles (an Enter is the obvious activate), an option/computed row is inert-but-flashed.
+        if (key.KeyCode == KeyCode.Enter && ReferenceEquals(_tabs.Value, _otherTab)
+            && Keybindings.ResolveDetail(CurrentDetailSubContext(), "Enter") == KeyAction.EditCustomField)
+        {
+            key.Handled = true;
+            ActivateSelectedCustomField();
             return;
         }
 
@@ -3099,6 +3194,284 @@ public sealed class TaskDetailScreen : Screen
                 });
             }
         });
+    }
+
+    // ── Other-tab custom-field editing (#587 §3) ────────────────────────────────
+
+    /// <summary>The live <see cref="CustomFieldItem"/> under the Other-tab selection when it is an editable
+    /// (selectable) custom-field row, else null. Sourced from <c>_task.CustomFields</c> (the raw
+    /// <c>JsonElement?</c> value) rather than the projected row (whose <c>Value</c> is display-truncated),
+    /// keyed by the row's field id — the analogue of <see cref="SelectedChecklistRow"/>.</summary>
+    private CustomFieldItem? SelectedCustomField()
+    {
+        if (_otherTab.SelectedRow is not { Selectable: true, FieldId: { } id })
+            return null;
+        foreach (var field in _task.CustomFields)
+            if (string.Equals(field.Id, id, StringComparison.Ordinal))
+                return field;
+        return null;
+    }
+
+    private static string CustomFieldLabel(CustomFieldItem field)
+        => string.IsNullOrWhiteSpace(field.Name) ? "field" : field.Name;
+
+    /// <summary>Space on the Other tab (#587 §3): toggle the highlighted checkbox custom field in place. A
+    /// non-checkbox selectable field is flashed a hint (Enter edits it); a missing/inert selection is flashed.</summary>
+    private void ToggleSelectedCustomField()
+    {
+        if (_setTaskCustomFieldAsync is null)
+            return;
+        if (_customFieldWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (SelectedCustomField() is not { } field)
+        {
+            RequestFlash("Select a custom field to edit.");
+            return;
+        }
+        if (CustomFieldActivation.Classify(field.Type) != CustomFieldActivationKind.Checkbox)
+        {
+            RequestFlash("Space toggles a checkbox field — press Enter to edit this field.");
+            return;
+        }
+        var desired = CustomFieldActivation.NextCheckboxState(field.Value);
+        var value = System.Text.Json.JsonSerializer.SerializeToElement(desired);
+        ApplyCustomFieldWrite(field.Id!, value, $"{(desired ? "Checked" : "Unchecked")} {CustomFieldLabel(field)}");
+    }
+
+    /// <summary>Enter on the Other tab (#587 §3): a checkbox toggles (Enter is the obvious activate), a
+    /// text-like field opens the value editor, an option field / computed field is flashed as not-editable
+    /// here (its picker is a deferred follow-up). Mirrors the Checklists-tab F2 dispatch.</summary>
+    private void ActivateSelectedCustomField()
+    {
+        if (_setTaskCustomFieldAsync is null)
+            return;
+        // A write is in flight — don't open the editor or fire a second write over it; flash and leave the
+        // current state, mirroring ToggleSelectedChecklistItem's "Still updating…" guard.
+        if (_customFieldWriteInFlight)
+        {
+            RequestFlash("Still updating…");
+            return;
+        }
+        if (SelectedCustomField() is not { } field)
+        {
+            RequestFlash("Select a custom field to edit.");
+            return;
+        }
+        switch (CustomFieldActivation.Classify(field.Type))
+        {
+            case CustomFieldActivationKind.Checkbox:
+                var desired = CustomFieldActivation.NextCheckboxState(field.Value);
+                ApplyCustomFieldWrite(field.Id!, System.Text.Json.JsonSerializer.SerializeToElement(desired),
+                    $"{(desired ? "Checked" : "Unchecked")} {CustomFieldLabel(field)}");
+                break;
+            case CustomFieldActivationKind.TextEdit:
+                ShowCustomFieldEditor(field);
+                break;
+            case CustomFieldActivationKind.OptionsDeferred:
+                RequestFlash("Option fields can't be edited here yet — edit them in ClickUp.");
+                break;
+            default:
+                RequestFlash("This field can't be edited here.");
+                break;
+        }
+    }
+
+    /// <summary>The optimistic custom-field write (#587 §3), the analogue of
+    /// <see cref="ToggleSelectedChecklistItem"/>: set <paramref name="value"/> (or clear it when null) on the
+    /// working task and re-render now, then issue the host write off-thread and revert + flash on failure. A
+    /// second write while one is in flight is ignored; the pending overlay in <see cref="UpdateData"/> keeps
+    /// the optimistic value authoritative against a refresh landing mid-write.</summary>
+    private void ApplyCustomFieldWrite(string fieldId, System.Text.Json.JsonElement? value, string flashOnSuccess)
+    {
+        if (_setTaskCustomFieldAsync is null || _customFieldWriteInFlight)
+            return;
+        if (value is null && _clearTaskCustomFieldAsync is null)
+        {
+            RequestFlash("Clearing this field isn't available.");
+            return;
+        }
+
+        System.Text.Json.JsonElement? previous = null;
+        foreach (var field in _task.CustomFields)
+            if (string.Equals(field.Id, fieldId, StringComparison.Ordinal))
+            {
+                previous = field.Value;
+                break;
+            }
+
+        _customFieldWriteInFlight = true;
+        _pendingCustomFieldEdit = fields => CustomFieldValueEdit.SetValue(fields, fieldId, value);
+        UpdateData(
+            _task with { CustomFields = CustomFieldValueEdit.SetValue(_task.CustomFields, fieldId, value) },
+            _comments);
+
+        // Fully-qualified Task (this screen exposes a `Task` property that would otherwise shadow it), as in
+        // ToggleSelectedChecklistItem.
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                if (value is { } v)
+                    await _setTaskCustomFieldAsync(fieldId, v, CancellationToken.None).ConfigureAwait(false);
+                else
+                    await _clearTaskCustomFieldAsync!(fieldId, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _customFieldWriteInFlight = false;
+                    _pendingCustomFieldEdit = null;
+                    if (_disposed)
+                        return;
+                    // The optimistic state already matches the confirmed write; the confirmed-write nudge
+                    // (#294) drives the next refresh that reconciles the authoritative server value.
+                    RequestFlash(flashOnSuccess);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _customFieldWriteInFlight = false;
+                    _pendingCustomFieldEdit = null; // cleared first so the revert isn't re-applied
+                    if (_disposed)
+                        return;
+                    UpdateData(
+                        _task with { CustomFields = CustomFieldValueEdit.SetValue(_task.CustomFields, fieldId, previous) },
+                        _comments);
+                    RequestFlash($"Could not update field: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>Open the single-line value editor over a text-like custom field (#587 §3), seeded with the
+    /// field's round-trippable current value (never the display string) and sized on show. Mirrors
+    /// <see cref="ShowChecklistItemEditor"/>.</summary>
+    private void ShowCustomFieldEditor(CustomFieldItem field)
+    {
+        if (_customFieldBox.Visible)
+            return;
+        var seed = CustomFieldActivation.SeedText(field);
+        _customFieldTargetId = field.Id!;
+        _customFieldTargetType = field.Type;
+        _customFieldTargetName = CustomFieldLabel(field);
+        _customFieldOriginalText = seed;
+        _customFieldPendingDiscard = false;
+        _customFieldConfirm.Text = "";
+        _customFieldEditor.Text = seed;
+        _customFieldBox.Title = $"Edit {_customFieldTargetName} — Enter save · Esc cancel";
+
+        var height = DispatchPaneModel.ClampHeight(CustomFieldEditorPreferredHeight, Viewport.Height, minTabRows: 3);
+        _customFieldBox.Height = height;
+        _customFieldBox.Y = Pos.AnchorEnd(height);
+        _customFieldBox.Visible = true;
+        _customFieldEditor.SetFocus();
+    }
+
+    private void HideCustomFieldEditor()
+    {
+        if (!_customFieldBox.Visible)
+            return;
+        _customFieldBox.Visible = false;
+        _customFieldPendingDiscard = false;
+        _customFieldConfirm.Text = "";
+        FocusCurrentPane();
+    }
+
+    private void CancelCustomFieldEditor()
+    {
+        var current = _customFieldEditor.Text?.ToString() ?? "";
+        if (!string.Equals(current, _customFieldOriginalText, StringComparison.Ordinal))
+        {
+            _customFieldPendingDiscard = true;
+            _customFieldConfirm.Text = "Discard the changed value? (Y / N)";
+            return;
+        }
+        HideCustomFieldEditor();
+    }
+
+    /// <summary>Save the edited custom-field value (#587 §3): unchanged text is a no-op close; otherwise the
+    /// tested <see cref="CustomFieldValueSerializer"/> parses/validates it (its <c>Error</c> is flashed with
+    /// the overlay left open), a value is written via the set facade, and an empty submit clears via the
+    /// clear facade. The definition is synthesised from the field — <c>Build</c> reads only its id + type for
+    /// the text-like types, so no list-definition fetch is needed (options/required arrive with the deferred
+    /// option-picker slice; required-clear stays server-authoritative).</summary>
+    private void SubmitCustomFieldEditor()
+    {
+        var text = _customFieldEditor.Text?.ToString() ?? "";
+        var fieldId = _customFieldTargetId;
+        var label = _customFieldTargetName;
+        if (string.Equals(text, _customFieldOriginalText, StringComparison.Ordinal))
+        {
+            HideCustomFieldEditor(); // unchanged — no needless write
+            return;
+        }
+
+        var definition = new CustomFieldDefinition(fieldId, label, _customFieldTargetType, Required: false);
+        var result = CustomFieldValueSerializer.Build(definition, new CustomFieldEntry { Text = text });
+        switch (result.Outcome)
+        {
+            case CustomFieldWriteOutcome.Value when result.Value is { } written:
+                HideCustomFieldEditor();
+                ApplyCustomFieldWrite(fieldId, written.Value, $"Updated {label}");
+                break;
+            case CustomFieldWriteOutcome.Skip:
+                // An empty submit clears the field. Only the text-like types open this editor, so a Skip here
+                // means empty input (never a mis-serialised option/checkbox — those don't reach the editor).
+                HideCustomFieldEditor();
+                ApplyCustomFieldWrite(fieldId, value: null, $"Cleared {label}");
+                break;
+            default:
+                // Error (or any unexpected/incomplete outcome): keep the overlay open so the user can fix the
+                // value rather than silently clearing it (guards a null-message Error from falling to a clear).
+                RequestFlash(result.Error ?? "That value isn't valid.");
+                return;
+        }
+    }
+
+    private void OnCustomFieldKey(object? sender, Key key)
+    {
+        if (_customFieldPendingDiscard)
+        {
+            key.Handled = true;
+            _customFieldPendingDiscard = false;
+            _customFieldConfirm.Text = "";
+            if ((key.KeyCode & ~KeyCode.ShiftMask) == KeyCode.Y)
+                HideCustomFieldEditor();
+            return;
+        }
+        if (key.KeyCode == KeyCode.Tab)
+        {
+            key.Handled = true;
+            var ring = _customFieldControls;
+            var current = Array.FindIndex(ring, static c => c.HasFocus);
+            if (current < 0)
+                current = 0;
+            ring[DispatchPaneModel.NextFocus(current, ring.Length, forward: !key.IsShift)].SetFocus();
+            return;
+        }
+        if (key.KeyCode == KeyCode.F1)
+        {
+            key.Handled = true;
+            RequestHelp();
+            return;
+        }
+        if (key.KeyCode == KeyCode.Esc)
+        {
+            key.Handled = true;
+            CancelCustomFieldEditor();
+            return;
+        }
+        // Single-line field: bare Enter (with the field focused) submits, not a newline; Ctrl+Enter submits
+        // from anywhere in the overlay; a bare Enter on a focused button falls through to its own Accept.
+        if ((key.KeyCode == KeyCode.Enter && _customFieldEditor.HasFocus)
+            || (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.Enter))
+        {
+            key.Handled = true;
+            SubmitCustomFieldEditor();
+        }
     }
 
     // ── Checklist item CRUD (E, #458) ───────────────────────────────────────────

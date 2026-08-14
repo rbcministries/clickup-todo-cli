@@ -44,6 +44,12 @@ public enum DetailSubContext
     Stream,
     Checklists,
     TaskTree,
+
+    /// <summary>The Other tab (#587 §3): its own sub-context because <c>Space</c> toggles a checkbox
+    /// custom field and <c>Enter</c> opens the value editor there — chords inert on every other non-item
+    /// tab. Splitting it out of <see cref="Default"/> keeps those two chords live only where a custom field
+    /// can be edited.</summary>
+    Other,
 }
 
 /// <summary>
@@ -96,6 +102,12 @@ public enum KeyAction
     OutdentChecklistItem,
     IndentChecklistItem,
     NewChecklist,
+
+    // Task Detail — Other tab custom-field editing (#587 §3). Both share their token with another action,
+    // disambiguated by the Other sub-context: ToggleCustomField shares "Space" with ToggleChecklistItem,
+    // EditCustomField shares "Enter" with the list/quick-open Open actions in other contexts.
+    ToggleCustomField,
+    EditCustomField,
 
     // Quick Updates.
     Apply,
@@ -201,6 +213,14 @@ public static class Keybindings
             [(ScreenContext.Detail, KeyAction.OutdentChecklistItem)] = "Shift+CursorLeft",
             [(ScreenContext.Detail, KeyAction.IndentChecklistItem)] = "Shift+CursorRight",
             [(ScreenContext.Detail, KeyAction.NewChecklist)] = "Ctrl+G",
+            // Contextual chords, Other tab (#587 §3): Space toggles the highlighted checkbox custom field
+            // and Enter opens the value editor for a text-like field. Both are live only on the Other
+            // sub-context (see DetailTabActions below): Space is shared with ToggleChecklistItem (Checklists
+            // tab) and Enter is otherwise the list/quick-open Open key in different ScreenContexts, so
+            // AllBindingsOfAnAction_ShareOneKey holds (each action keeps one token) and no token resolves to
+            // two live actions within any one sub-context.
+            [(ScreenContext.Detail, KeyAction.ToggleCustomField)] = "Space",
+            [(ScreenContext.Detail, KeyAction.EditCustomField)] = "Enter",
             [(ScreenContext.Detail, KeyAction.OpenInBrowser)] = "Ctrl+B",
             [(ScreenContext.Detail, KeyAction.QuickUpdate)] = "Ctrl+U",
             [(ScreenContext.Detail, KeyAction.Refresh)] = "F5",
@@ -300,6 +320,56 @@ public static class Keybindings
     public static IEnumerable<KeyAction> ActionsFor(ScreenContext context)
         => Map.Keys.Where(k => k.Context == context).Select(k => k.Action);
 
+    // ── Configurable launch chords (#506, split-pane epic #502 slice D) ──────────────────────────────
+    //
+    // A user-config override layer sits *over* the default Map above for the two app-wide launch gestures
+    // (OpenInNewTab = Ctrl+Enter, OpenInSplitPane = Ctrl+Alt+Enter). The Map/All stay pure defaults — the
+    // #355 cross-check keeps proving the hand-written footer matches the *default* table — while the two
+    // consumers that must agree (the dispatcher, via the Token overload below; the footer, via
+    // HelpItemSets.WithConfiguredLaunchChords) resolve through the same LaunchChordOverrides value, so a
+    // rebound gesture can't drift between what fires and what the footer advertises. Only these two actions
+    // are overridable; a general keybinding editor is a separate decision (#506 non-goal).
+
+    /// <summary>The two app-wide launch gestures the config override layer (#506) makes rebindable.</summary>
+    public static readonly IReadOnlyList<KeyAction> LaunchActions =
+        [KeyAction.OpenInNewTab, KeyAction.OpenInSplitPane];
+
+    /// <summary>The key token bound to <paramref name="action"/> in <paramref name="context"/> with the
+    /// launch-chord <paramref name="overrides"/> applied ahead of the static default (#506): for the two
+    /// overridable launch actions the configured token wins when set, otherwise the default table token.
+    /// Throws <see cref="KeyNotFoundException"/> if the context doesn't bind the action, exactly as the
+    /// parameterless <see cref="Token(ScreenContext, KeyAction)"/> does.</summary>
+    public static string Token(ScreenContext context, KeyAction action, LaunchChordOverrides overrides)
+    {
+        var token = Token(context, action);
+        return overrides.For(action) ?? token;
+    }
+
+    /// <summary>The override-aware counterpart of <see cref="TryToken(ScreenContext, KeyAction, out string)"/>
+    /// (#506): the configured launch-chord token when one is set, otherwise the default, or <c>false</c> when
+    /// the context doesn't bind the action.</summary>
+    public static bool TryToken(ScreenContext context, KeyAction action, LaunchChordOverrides overrides, out string token)
+    {
+        if (!TryToken(context, action, out token))
+            return false;
+        token = overrides.For(action) ?? token;
+        return true;
+    }
+
+    /// <summary>The distinct contexts whose default table binds <paramref name="action"/> (#506 collision
+    /// scope): a launch action is pinned to one token app-wide, so an override to it must not collide with
+    /// any other binding in <em>any</em> of these contexts.</summary>
+    public static IEnumerable<ScreenContext> ContextsBinding(KeyAction action)
+        => Map.Keys.Where(k => k.Action == action).Select(k => k.Context).Distinct();
+
+    /// <summary>Every <c>(action, token)</c> the default table binds in <paramref name="context"/>, with the
+    /// launch-chord <paramref name="overrides"/> applied (#506) — the effective bindings a save-time
+    /// collision check compares a proposed chord against.</summary>
+    public static IEnumerable<(KeyAction Action, string Token)> EffectiveBindingsFor(
+        ScreenContext context, LaunchChordOverrides overrides)
+        => Map.Where(e => e.Key.Context == context)
+            .Select(e => (e.Key.Action, overrides.For(e.Key.Action) ?? e.Value));
+
     // ── Task Detail sub-context activation (contextual chords C, #540) ──────────────────────────────
     //
     // The base Map above owns the *token for an action*; this layer owns *which action is live per Task
@@ -347,6 +417,11 @@ public static class Keybindings
             // Both are listed here, not context-wide, so F2/Delete stay inert on every other Task Detail tab
             // (where they have no highlighted node — the #542 alias question, deliberately not decided here).
             [DetailSubContext.TaskTree] = [KeyAction.AddComment, KeyAction.RenameTask, KeyAction.DeleteTask],
+            // The Other tab keeps Ctrl+N → comment (like Default) and adds the two custom-field edit chords
+            // (#587 §3): Space toggles a checkbox field, Enter opens the value editor. Listed here, not
+            // context-wide, so Space/Enter stay inert on every other tab (where no custom-field row exists);
+            // Space still resolves to ToggleChecklistItem on the Checklists tab via that sub-context's set.
+            [DetailSubContext.Other] = [KeyAction.AddComment, KeyAction.ToggleCustomField, KeyAction.EditCustomField],
             [DetailSubContext.Default] = [KeyAction.AddComment],
         };
 

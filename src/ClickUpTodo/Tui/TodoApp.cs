@@ -127,6 +127,12 @@ public sealed class TodoApp
     // HelpItemSets). Movement/arrow/Tab keys and undisplayed aliases (Ctrl+R, Ctrl+C, Esc quit) stay in
     // OnListKey — they are intentionally not table-governed footer commands.
     private KeybindingDispatcher _listKeys = null!;
+    // The user's launch-chord overrides (#506), resolved from AppConfig.LaunchChords in the constructor.
+    // Threaded to the list dispatcher (so a rebound Ctrl+Enter/Ctrl+Alt+Enter fires) and the main-list footer
+    // (so it advertises the rebound chord) via the same value, so the two can't drift. Read once at startup:
+    // a config change takes effect on the next launch until the F10 Settings fields land (#506 Phase 3), at
+    // which point a save must recompute this AND rebuild _listKeys (the dispatcher captures the value).
+    private LaunchChordOverrides _launchChords = LaunchChordOverrides.None;
     private RefreshService _refresh = null!;
     // The stack of full-window screens swapped in over the list (Settings / status picker / detail /
     // Help). The top is visible + focused; any beneath it are mounted-but-hidden so we can return to
@@ -230,7 +236,14 @@ public sealed class TodoApp
         _changeMarkers = changeMarkers ?? NullChangeMarkerStore.Instance;
         _markerConsumer = new ChangeMarkerConsumer(_changeMarkers.InstanceId);
         _agent = BuildAgentDispatcher();
+        _launchChords = LaunchChordOverrides.FromConfig(_config.LaunchChords);
     }
+
+    /// <summary>The main-list footer with the user's configured launch chords applied (#506), so the footer
+    /// advertises the same rebound Ctrl+Enter/Ctrl+Alt+Enter the list dispatcher fires. Returns
+    /// <see cref="HelpItemSets.MainList"/> unchanged when nothing is overridden.</summary>
+    private IReadOnlyList<HelpItem> MainListFooter()
+        => HelpItemSets.WithConfiguredLaunchChords(HelpItemSets.MainList, _launchChords);
 
     // Builds the dispatcher from the current AgentDispatch settings (#91), so the preferred terminal,
     // custom claude executable, and extra args take effect. Zero-config settings project onto the
@@ -508,7 +521,7 @@ public sealed class TodoApp
         // The shared status + contextual help footer (#103/#346). The help line is seeded with the
         // list's shortcuts — byte-for-byte the pre-#103 text, so the default footer is unchanged;
         // UpdateHelpLine swaps in the active screen's shortcuts on show and back to the list's on close.
-        _footer = new ContextualFooter(_status, initialHelp: HelpLine.Format(HelpItemSets.MainList));
+        _footer = new ContextualFooter(_status, initialHelp: HelpLine.Format(MainListFooter()));
         // Clicking an action hint on the footer fires its shortcut (#289). The Label stays
         // CanFocus=false, so this adds a mouse affordance without a second focusable pane (#3/#38).
         _footer.HelpLabel.MouseEvent += OnHelpBarMouse;
@@ -532,7 +545,7 @@ public sealed class TodoApp
     /// (Ctrl+R, Ctrl+C, Esc quit) are not footer commands and stay literal in <see cref="OnListKey"/>.
     /// </summary>
     private KeybindingDispatcher BuildListKeyDispatcher()
-        => new KeybindingDispatcher(ScreenContext.MainList)
+        => new KeybindingDispatcher(ScreenContext.MainList, _launchChords)
             .On(KeyAction.QuickUpdate, OpenQuickUpdates)   // #159/#290, standardized to Ctrl+U
             .On(KeyAction.OpenDetail, OpenDetail)
             .On(KeyAction.QuickOpen, OpenQuickOpen)         // #303
@@ -1496,7 +1509,7 @@ public sealed class TodoApp
     /// the entry surface rather than stacking on top of the surface itself.</summary>
     private void ShowQuickOpenSurface()
     {
-        var screen = new QuickOpenScreen();
+        var screen = new QuickOpenScreen(_launchChords);
         ShowScreen(screen, () =>
         {
             // Run the resolve on a later main-loop iteration so this entry surface is fully torn down
@@ -1785,7 +1798,7 @@ public sealed class TodoApp
     private void UpdateHelpLine()
         // The footer fits the items to its current width and returns exactly what it rendered; cache that
         // so a footer click hit-tests against the on-screen items (#289).
-        => _helpFooter = _footer.RenderHelp(HelpLine.ForActiveScreen(ActiveScreen?.HelpItems, HelpItemSets.MainList));
+        => _helpFooter = _footer.RenderHelp(HelpLine.ForActiveScreen(ActiveScreen?.HelpItems, MainListFooter()));
 
     /// <summary>
     /// A left-click on the contextual footer (#289): resolves the clicked item via
@@ -2343,6 +2356,14 @@ public sealed class TodoApp
                         assigneeTopFrequent: (n, exclude) => _assignees.TopMostFrequent(n, exclude),
                         setChecklistItemAssigneeAsync: (checklistId, itemId, assigneeId, ct) =>
                             _tasks.SetChecklistItemAssigneeAsync(resolvedId, checklistId, itemId, assigneeId, ct),
+                        // Other-tab custom-field editing (#587 §3): Space toggles a checkbox field / Enter
+                        // edits a text-like value. Both close over the resolved task id (the writes are
+                        // POST/DELETE /task/{id}/field/{fieldId}), like the checklist writes above; the facade
+                        // records the confirmed-write change-marker nudge (#294) that drives the reconcile.
+                        setTaskCustomFieldAsync: (fieldId, value, ct) =>
+                            _tasks.SetTaskCustomFieldAsync(resolvedId, fieldId, value, ct),
+                        clearTaskCustomFieldAsync: (fieldId, ct) =>
+                            _tasks.ClearTaskCustomFieldAsync(resolvedId, fieldId, ct),
                         // Delete on the Task Tree tab (F, #594) deletes the highlighted node's task; the screen
                         // owns the confirmation + optimistic subtree removal/revert (for a subtask) or the
                         // navigate-away (for the current task), the host owns the off-thread ClickUp write.

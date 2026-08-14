@@ -82,6 +82,16 @@ public sealed class DetailOtherTabView : View
     /// exactly as it does for the Task&#160;Tree / Checklists tabs, so no per-key wiring changes.</summary>
     public ListView ScrollTarget => _body;
 
+    /// <summary>The projected row under the current body selection, or <c>null</c> when nothing is selected
+    /// (or the selection is out of range). §3 activation (<c>Space</c> toggle / <c>Enter</c> edit) reads this
+    /// to reach the highlighted field's id / type / value — the analogue of the Checklists tab's
+    /// <c>SelectedChecklistRow()</c>. The row carries the field's addressable id and type so the activation
+    /// path never re-walks the values from a raw index; the caller still gates on
+    /// <see cref="CustomFieldOtherRow.Selectable"/> and sources the full edit value from the live
+    /// <see cref="CustomFieldItem"/> (the row's <c>Value</c> is display-truncated).</summary>
+    public CustomFieldOtherRow? SelectedRow
+        => _body.SelectedItem is int i && i >= 0 && i < _rows.Count ? _rows[i] : null;
+
     /// <summary>Swaps in fresh header lines and custom-field values (a detail-view refresh, #114 follow-up)
     /// and forces the adaptive split to recompute so the body rows and header height are re-applied. Callers
     /// only invoke this when the content actually changed, so re-projecting (which the selection re-anchor

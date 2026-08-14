@@ -6,8 +6,43 @@ over `POST`/`DELETE /task/{id}/field/{fid}`) already shipped and merged in #596;
 this is the Terminal.Gui half that drives it.
 
 **Progress:** Phase 1 (the pure `CustomFieldOtherTabArranger` projection) merged in
-#602. Phase 2 (the navigable Other-tab `ListView` row model) is up in PR #620.
-**Phase 3 (per-type activation) is the remaining slice**, tracked on #587.
+#602. Phase 2 (the navigable Other-tab `ListView` row model) merged in #620.
+**Phase 3 (per-type activation) is the remaining slice**, tracked on #587 — this is
+the slice being implemented now (see *Phase 3 — this session* below).
+
+## Phase 3 — this session (scope + pinned decisions)
+
+Highest-value gestures first, per the phasing below: **`Space` toggles a `checkbox`
+field** and **`Enter` opens a single-line editor** for the text-like fillable types
+(`text` / `short_text` / `url` / `email` / `phone` / `number` / `currency` / `date`).
+Both go through the merged §1 write facade.
+
+Two decisions let this slice land without the lazy definition fetch the earlier note
+anticipated (that fetch arrives with the deferred option-picker slice that actually
+needs `Options`):
+
+- **The write synthesises a `CustomFieldDefinition` from the `CustomFieldItem`.**
+  `CustomFieldValueSerializer.Build` only reads `def.Id` + `def.Type` for the
+  text/number/date/checkbox types — both are already on the `CustomFieldItem` the row
+  carries — so the handler builds `new CustomFieldDefinition(item.Id, item.Name,
+  item.Type, Required: false)` and reuses the tested serializer for all per-type
+  parsing/validation. `Options` and `Required` are only needed by the deferred
+  `drop_down`/`labels` pickers, so no `GetListCustomFieldsAsync` host callback is wired
+  this session.
+- **Required-clear stays server-authoritative** (per the earlier note): an empty submit
+  clears via `ClearTaskCustomFieldAsync` and a 4xx on a required field is surfaced/flashed
+  rather than blocked client-side.
+
+**`drop_down` / `labels`** rows stay selectable but their `Enter` flashes a
+*"not editable here yet — edit in ClickUp"* notice (a text editor would mis-serialise an
+option name into a clear); **computed / non-fillable** rows are already non-selectable
+(§2) and stay inert. Both, plus mouse-click-activates, are the clearly-noted follow-up
+that keeps #587 open.
+
+New pure, unit-tested helpers (the analogues of `ChecklistToggle` / `ChecklistItemEdits`):
+`CustomFieldActivation` (classify a field type → Checkbox / TextEdit / OptionsDeferred /
+NotEditable; current-checkbox-state read; round-trippable editor seed text) and
+`CustomFieldValueEdit.SetValue` (the optimistic `CustomFields` mutation by field id).
 
 ## Problem
 
