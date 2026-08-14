@@ -29,6 +29,25 @@ internal sealed class LinkCtrlDestScenario : IE2EScenario
         => config.DetailView.TaskLinkCtrlClick = TaskLinkCtrlClickDestination.NewTerminalTab;
 }
 
+/// <summary>#506: seed launch-chord overrides (E2E_LAUNCH_NEWTAB / E2E_LAUNCH_SPLIT) so the configurable
+/// launch-chord check can boot with a rebound Ctrl+Enter/Ctrl+Alt+Enter and observe the main-list footer
+/// advertise it (and the list dispatcher fire it). Absent ⇒ both null ⇒ the shipped defaults, so every
+/// other check sees the stock chords and their footers byte-for-byte.</summary>
+internal sealed class LaunchChordScenario : IE2EScenario
+{
+    public string Name => "launch-chords";
+
+    public bool IsActive =>
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("E2E_LAUNCH_NEWTAB"))
+        || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("E2E_LAUNCH_SPLIT"));
+
+    public void Configure(AppConfig config)
+    {
+        config.LaunchChords.NewTab = Environment.GetEnvironmentVariable("E2E_LAUNCH_NEWTAB");
+        config.LaunchChords.SplitPane = Environment.GetEnvironmentVariable("E2E_LAUNCH_SPLIT");
+    }
+}
+
 /// <summary>#304: seed a workspace subdomain (E2E_SUBDOMAIN) so a Ctrl+B launch rewrites the fake backend's
 /// app.clickup.com task URLs onto {subdomain}.clickup.com. Absent ⇒ blank ⇒ no rewrite (the default).</summary>
 internal sealed class SubdomainScenario : IE2EScenario
