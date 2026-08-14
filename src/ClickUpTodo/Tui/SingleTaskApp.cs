@@ -344,7 +344,15 @@ public sealed class SingleTaskApp
             setChecklistItemAssigneeAsync: _assignees is null
                 ? null
                 : (checklistId, itemId, assigneeId, ct) =>
-                    _tasks.SetChecklistItemAssigneeAsync(id, checklistId, itemId, assigneeId, ct));
+                    _tasks.SetChecklistItemAssigneeAsync(id, checklistId, itemId, assigneeId, ct),
+            // Other-tab custom-field editing (#587 §3): the Other tab is present in single-task mode too, so
+            // wire the value writes here as well, keyed to this tab's task id (POST/DELETE
+            // /task/{id}/field/{fieldId}) — the facade's confirmed-write nudge (#294) surfaces the edit in the
+            // dashboard tab, like the checklist toggle.
+            setTaskCustomFieldAsync: (fieldId, value, ct) =>
+                _tasks.SetTaskCustomFieldAsync(id, fieldId, value, ct),
+            clearTaskCustomFieldAsync: (fieldId, ct) =>
+                _tasks.ClearTaskCustomFieldAsync(id, fieldId, ct));
 
         var tab = new DetailTab(screen, id, task, comments);
 
