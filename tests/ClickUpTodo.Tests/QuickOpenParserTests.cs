@@ -209,4 +209,33 @@ public sealed class QuickOpenParserTests
     [InlineData("https://notclickup.com/t/86abc123")] // a foreign URL is unparseable
     public void ResolveLaunch_Unparseable_ReturnsNull(string input)
         => Assert.Null(QuickOpenParser.ResolveLaunch([Task("aaa")], input));
+
+    // ── ResolveLaunch over an empty universe (single-task parity, C #616) ──────
+    // Single-task launch mode (--task) holds no working set, so it always calls ResolveLaunch with an EMPTY
+    // universe: every parseable reference then takes the miss-branch (the raw trimmed token to the child,
+    // whose --task resolves it, #464), and an unparseable token still yields null. This pins the one
+    // resolution contract slice C newly depends on.
+
+    [Theory]
+    [InlineData("86zzz999", "86zzz999", "86zzz999")]     // a plain id
+    [InlineData("  86zzz999  ", "86zzz999", "86zzz999")] // trimmed
+    [InlineData("ABC-123", "ABC-123", "ABC-123")]        // a bare (hyphenated) custom id
+    public void ResolveLaunch_EmptyUniverse_HandsRawTrimmedTokenToChild(string input, string id, string name)
+        => Assert.Equal(new QuickOpenLaunch(id, name), QuickOpenParser.ResolveLaunch([], input));
+
+    [Fact]
+    public void ResolveLaunch_EmptyUniverse_CustomIdUrl_KeepsRawUrlRef_NamesTheCustomId()
+    {
+        // The /t/{team}/{custom} URL must reach the child whole (team segment kept) even with no cache, so
+        // the child resolves the custom id against the URL's workspace; the display name is the custom id.
+        const string url = "https://app.clickup.com/t/9014107164/ABC-123";
+        Assert.Equal(new QuickOpenLaunch(url, "ABC-123"), QuickOpenParser.ResolveLaunch([], url));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("https://notclickup.com/t/86abc123")]
+    public void ResolveLaunch_EmptyUniverse_Unparseable_ReturnsNull(string input)
+        => Assert.Null(QuickOpenParser.ResolveLaunch([], input));
 }
