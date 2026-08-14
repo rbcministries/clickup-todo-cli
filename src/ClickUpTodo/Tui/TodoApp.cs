@@ -2363,7 +2363,11 @@ public sealed class TodoApp
                         setTaskCustomFieldAsync: (fieldId, value, ct) =>
                             _tasks.SetTaskCustomFieldAsync(resolvedId, fieldId, value, ct),
                         clearTaskCustomFieldAsync: (fieldId, ct) =>
-                            _tasks.ClearTaskCustomFieldAsync(resolvedId, fieldId, ct));
+                            _tasks.ClearTaskCustomFieldAsync(resolvedId, fieldId, ct),
+                        // Delete on the Task Tree tab (F, #594) deletes the highlighted node's task; the screen
+                        // owns the confirmation + optimistic subtree removal/revert (for a subtask) or the
+                        // navigate-away (for the current task), the host owns the off-thread ClickUp write.
+                        deleteTaskAsync: (taskId, ct) => _tasks.DeleteTaskAsync(taskId, ct));
                     // Ctrl+A (in the detail view) → compose + launch a claude session (#26/#93). The
                     // detail view stays open; dispatch runs off the UI thread so the TUI stays live. The
                     // prompt, the one-off/interactive mode (#94), the working dir (#95), the
@@ -2387,6 +2391,16 @@ public sealed class TodoApp
                     // F2 on the Task Tree tab (H, #545) renames the highlighted node's task title, reusing
                     // the same RenameTaskScreen overlay + SetTaskNameAsync write as the main-list F2 rename.
                     screen.RenameTreeTaskRequested += (_, req) => ShowTreeRename(screen, req);
+                    // Delete on the Task Tree tab (F, #594): deleting the *current* task closes this detail —
+                    // pop to the layer beneath (the list, or a parent detail opened from a tree row), the ADR's
+                    // "Esc = Back" post-delete navigation (docs/navigation-model.md). Then wake the poll so the
+                    // now-stale list drops the deleted task promptly rather than waiting for the interval tick.
+                    // (A subtask delete removes its row in place and raises nothing.)
+                    screen.CurrentTaskDeleted += (_, _) =>
+                    {
+                        CloseScreen(screen);
+                        _refresh.RequestRefresh();
+                    };
                     // Ctrl+O quick-opens another task from within the detail (#353), stacked over it; the
                     // resolved Task Detail opens over this one, so Esc walks back through them.
                     screen.QuickOpenRequested += (_, _) => OpenQuickOpenFromScreen();

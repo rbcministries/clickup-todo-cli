@@ -203,6 +203,12 @@ public sealed class SingleTaskApp
         // (#374) pop back on close rather than quit — wired in OpenTaskDetail.
         _root = BuildDetailTab(_seedTask, _seedComments);
         _root.Screen.Closed += (_, _) => RequestExit();
+        // Delete on the Task Tree tab (F, #594): deleting the launch-task root leaves the tab with no subject —
+        // and the user already confirmed the destructive delete — so quit the tab directly. Routing through the
+        // root's Closed → RequestExit would re-prompt the #299 exit confirmation on top of the delete confirm;
+        // a stacked child instead pops back to its parent (wired in OpenTaskDetail). (A subtask delete removes
+        // its row in place and raises nothing.)
+        _root.Screen.CurrentTaskDeleted += (_, _) => Application.RequestStop();
         // Ctrl+B (#518) opens the task in the browser. The root has no back to navigate to, so it never
         // closes on Ctrl+B — the invariant that Ctrl+B never exits. The root now stays live, so unlike the
         // old flag-and-close path there *is* a footer to report onto: LaunchBrowser flashes success/failure.
@@ -352,7 +358,12 @@ public sealed class SingleTaskApp
             setTaskCustomFieldAsync: (fieldId, value, ct) =>
                 _tasks.SetTaskCustomFieldAsync(id, fieldId, value, ct),
             clearTaskCustomFieldAsync: (fieldId, ct) =>
-                _tasks.ClearTaskCustomFieldAsync(id, fieldId, ct));
+                _tasks.ClearTaskCustomFieldAsync(id, fieldId, ct),
+            // Delete on the Task Tree tab (F, #594): the tree tab is present in single-task mode too (#374), so
+            // wire the delete write here as well, keyed to this tab's task. The CurrentTaskDeleted navigation
+            // differs for the root vs a stacked child, so it's wired at the call sites (ctor / OpenTaskDetail),
+            // like the root-only Closed/OpenBrowser wiring — not here in the shared builder.
+            deleteTaskAsync: (taskId, ct) => _tasks.DeleteTaskAsync(taskId, ct));
 
         var tab = new DetailTab(screen, id, task, comments);
 
@@ -499,6 +510,10 @@ public sealed class SingleTaskApp
                         if (OpenBrowserAction.ShouldCloseView(_config.DetailView.OpenBrowser, isRoot: false))
                             tab.Screen.RequestClose();
                     };
+                    // Delete on the Task Tree tab (F, #594): a stacked child (opened by walking the tree, #374)
+                    // is not the root, so deleting *its* current task pops back to its parent — the ADR's
+                    // "Esc = Back" post-delete navigation — via RequestClose → ShowScreen's Closed handler.
+                    tab.Screen.CurrentTaskDeleted += (_, _) => tab.Screen.RequestClose();
                     ShowScreen(tab.Screen);
                 });
             }

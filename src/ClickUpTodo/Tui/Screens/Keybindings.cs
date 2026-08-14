@@ -92,6 +92,7 @@ public enum KeyAction
     ReplyToComment,
     DeleteComment,
     EditDescription,
+    DeleteTask,
     ToggleChecklistItem,
     AddChecklistItem,
     EditChecklistItem,
@@ -183,6 +184,13 @@ public static class Keybindings
             // because the sub-context activation below makes only one live per tab (§2.2). RenameTask keeps
             // one token (F2) across MainList and Detail, so AllBindingsOfAnAction_ShareOneKey holds.
             [(ScreenContext.Detail, KeyAction.RenameTask)] = "F2",
+            // Contextual chords F, task half (#594): Delete removes the highlighted Task Tree node's task —
+            // the current task (the view then closes/navigates per docs/navigation-model.md) or a descendant
+            // subtask (removed in place). Shares the "Delete" token with DeleteComment (above) and
+            // DeleteChecklistItem (below), disambiguated by sub-context exactly as they are — Comments/Stream
+            // bind DeleteComment, the Checklists tab DeleteChecklistItem, and the Task Tree tab DeleteTask, and
+            // the three tabs never overlap, so no token maps to two live actions within a sub-context.
+            [(ScreenContext.Detail, KeyAction.DeleteTask)] = "Delete",
             [(ScreenContext.Detail, KeyAction.ToggleChecklistItem)] = "Space",
             // Contextual chords C (#540): the "new" chord is now shared with AddComment (both "Ctrl+N")
             // and disambiguated by the front Task Detail tab (see DetailSubContext / ResolveDetail below).
@@ -404,11 +412,11 @@ public static class Keybindings
                 KeyAction.NewChecklist,
             ],
             // The Task Tree tab keeps Ctrl+N → comment (no per-tab override) and adds F2 → RenameTask (H,
-            // #545): F2 renames the highlighted node's task title, disambiguated from the checklist F2
-            // rename by this sub-context (§2.2). RenameTask is listed here, not context-wide, so F2 stays
-            // inert on every other Task Detail tab (where a rename has no highlighted node — that is the
-            // #542 alias question, deliberately not decided here).
-            [DetailSubContext.TaskTree] = [KeyAction.AddComment, KeyAction.RenameTask],
+            // #545) and Delete → DeleteTask (F, #594): F2 renames the highlighted node's task title and
+            // Delete deletes it, each disambiguated from the checklist F2/Delete by this sub-context (§2.2).
+            // Both are listed here, not context-wide, so F2/Delete stay inert on every other Task Detail tab
+            // (where they have no highlighted node — the #542 alias question, deliberately not decided here).
+            [DetailSubContext.TaskTree] = [KeyAction.AddComment, KeyAction.RenameTask, KeyAction.DeleteTask],
             // The Other tab keeps Ctrl+N → comment (like Default) and adds the two custom-field edit chords
             // (#587 §3): Space toggles a checkbox field, Enter opens the value editor. Listed here, not
             // context-wide, so Space/Enter stay inert on every other tab (where no custom-field row exists);
