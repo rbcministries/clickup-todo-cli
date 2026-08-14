@@ -288,6 +288,28 @@ The dashboard half is `tree_rename_check.py`; `RenameTaskModel` / `SetTaskNameAs
 `TaskDetailScreen.ApplyTreeRename` are pinned by unit tests in CI, and this is the rendered end-to-end
 proof the single-task host wires them.
 
+**`single_task_quick_open_check.py`** — Ctrl+O quick-open parity in single-task launch mode (C, #616):
+boots `SingleTaskApp` straight into `t0` (`E2E_SINGLE_TASK=t0` + `E2E_TREE=1`, i.e. `clickup-todo --task t0`)
+and asserts the wiring #616 adds (the dashboard `TodoApp` already had it): `Ctrl+O` now opens the
+quick-open entry surface (it was a silent no-op before the subscription) and B's `New tab` / `Split pane`
+buttons (#615) render in this host; `Esc` cancels with no navigation and without quitting the tab;
+**OpenHere** — typing another task's id (`t0c2`) + `Enter` navigates the detail to it **stacked** over the
+launch task, so a single `Esc` walks back to the launch task (the recorded #616 decision, uniform with the
+tree/link detail→detail navigation #374/#318); and **NewTab** — the driver-robust `New tab` button reaches
+`LaunchAppForTask` (a `tab where supported` launch flash — the copy-command fallback under the headless
+harness, since `Ctrl+Enter` folds into a bare newline on some drivers) without navigating in place.
+Discriminates "on the launch task" from "stacked over it" on the tree-only rows
+(`ANCESTOR`/`CHILDONE`/`GRANDKID`), like `single_task_tree_check.py`. `QuickOpenParser` /
+`QuickOpenRequest` are pinned by unit tests in CI; this is the rendered end-to-end proof the single-task
+host wires the surface. Self-contained (sets its own env):
+
+```bash
+timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/single_task_quick_open_check.py $DLL
+```
+
+Expected: `ok — Ctrl+O opens the surface in single-task mode; Esc cancels; OpenHere navigates + Esc walks
+back; the New tab button reaches the launch terminus`.
+
 **`other_tab_check.py`** — Task Detail **Other** tab custom-field row model (#587 §2): with
 `E2E_TASK_CUSTOM_FIELDS=1` (`DetailCustomFieldsScenario` splices a seeded `custom_fields` array — a
 checkbox / short_text / drop_down / formula — into the detail read), opens a task's detail, cycles to the

@@ -103,6 +103,20 @@ public sealed class ConfigMigrationsTests : IDisposable
     }
 
     [Fact]
+    public void Apply_NullLaunchChords_CoalescedToDefaults()
+    {
+        // A hand-edited config.json with "launchChords": null deserializes to null (the property's `= new()`
+        // default only fills a missing key). LaunchChordOverrides.FromConfig's read would NRE, so Apply must
+        // normalize it back to defaults (both chords null ⇒ shipped Ctrl+Enter/Ctrl+Alt+Enter).
+        var config = new AppConfig { LaunchChords = null! };
+
+        ConfigMigrations.Apply(config);
+
+        Assert.NotNull(config.LaunchChords);
+        Assert.True(config.LaunchChords.IsDefault);
+    }
+
+    [Fact]
     public void Apply_AbsentLegacyField_SeedsDefaultExclusions()
     {
         // A config that never carried excludedStatuses (null) is treated as a fresh install: seed the

@@ -58,23 +58,27 @@ public sealed class QuickOpenScreen : Screen
 {
     private readonly QuickOpenFormHandle _form;
     private readonly KeybindingDispatcher _commandKeys;
+    private readonly LaunchChordOverrides _launchChords;
 
     /// <summary>The submitted (trimmed) text + chosen launch intent, or null when the screen was
     /// cancelled.</summary>
     public QuickOpenRequest? Result => _form.Result;
 
-    public QuickOpenScreen()
+    public QuickOpenScreen(LaunchChordOverrides? launchChords = null)
     {
+        _launchChords = launchChords ?? LaunchChordOverrides.None;
         Title = "Open a task";
 
         // The control-building + the three submit gestures + the blank-input flash live in the shared
         // QuickOpenFormBuilder (slice E, #618), so the native-modal Dialog host mounts the identical form.
-        // Close/RequestFlash are this host's back/flash affordance.
-        _form = QuickOpenFormBuilder.Build(RequestFlash, Close);
+        // The launch-chord override (#506) threads into the builder's submit dispatcher, so a rebound
+        // Ctrl+Enter / Ctrl+Alt+Enter fires here too. Close/RequestFlash are this host's back/flash affordance.
+        _form = QuickOpenFormBuilder.Build(RequestFlash, Close, _launchChords);
 
         // Context command keys stay on the host: F1 → Help, Esc → Back, resolved from the central table
         // (#355/#398). The form owns the submit gestures; DispatchSubmit is wired at the screen level too
-        // so a chord fires from a focused button as well as from the text field.
+        // so a chord fires from a focused button as well as from the text field. Help/Back aren't launch
+        // chords, so this dispatcher needs no override.
         _commandKeys = new KeybindingDispatcher(ScreenContext.QuickOpen)
             .On(KeyAction.Help, RequestHelp)
             .On(KeyAction.Back, Close);
@@ -83,7 +87,8 @@ public sealed class QuickOpenScreen : Screen
         Add([.. _form.Controls]);
     }
 
-    public override IReadOnlyList<HelpItem> HelpItems => HelpItemSets.QuickOpen;
+    public override IReadOnlyList<HelpItem> HelpItems =>
+        HelpItemSets.WithConfiguredLaunchChords(HelpItemSets.QuickOpen, _launchChords);
 
     public override void OnShown() => _form.PrimaryFocus.SetFocus();
 

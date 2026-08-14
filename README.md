@@ -75,6 +75,15 @@ Run `clickup-todo --reset` to forget the token and settings and start over.
 > window that shrinks the fetch on a busy workspace). `0` (the default) disables it and fetches as
 > before. A task with a recent comment stays in the window, since a new comment bumps its update time.
 
+> **Optional (`config.json`) — rebind the launch chords:** the two "open in a new terminal tab"
+> (`Ctrl+Enter`) and "open in a split pane" (`Ctrl+Alt+Enter`) gestures are configurable under
+> `"launchChords"`, e.g. `{ "launchChords": { "splitPane": "Alt+Enter" } }`. Leaving a chord unset (the
+> default) keeps the shipped binding. This is what lets you point the split gesture at `Alt+Enter` after
+> unbinding Windows Terminal's `Terminal.ToggleFullscreen` on that key. An unrecognised or conflicting
+> value is ignored (the default binding is kept), never a crash. The dashboard task list and the `Ctrl+O`
+> quick-open surface honour the rebind — the footer advertises the configured chord. _(Editing these from
+> the F10 Settings screen, and honouring the rebind on the Task Detail tabs, are tracked follow-ups.)_
+
 > **Why a personal token by default?** ClickUp's OAuth flow requires a client **secret**, which
 > can't be safely shipped in a public repo (there's no PKCE/public-client flow). A personal token is
 > equally capable for your own tasks and keeps nothing secret in the repo, so it's the default path.
