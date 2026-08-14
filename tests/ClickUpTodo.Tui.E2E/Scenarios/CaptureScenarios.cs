@@ -103,3 +103,31 @@ internal sealed class CommentDeleteLogScenario : IE2EScenario
         }, 1),
     ];
 }
+
+/// <summary>#594 (task half): when E2E_TASK_DELETE_LOG is set, record a deleted task's id — one per line — so
+/// a task-delete check can assert the DELETE reached the backend keyed to the highlighted Task Tree node, and
+/// return an empty <c>{}</c> body (the shape the facade expects). If E2E_TASK_DELETE_FORBID names a task id,
+/// that id's DELETE answers 403 instead, so the check can drive the optimistic-revert leg. Overrides
+/// <c>DELETE /task/{id}</c>.</summary>
+internal sealed class TaskDeleteLogScenario : IE2EScenario
+{
+    public string Name => "task-delete-log";
+    public bool IsActive => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("E2E_TASK_DELETE_LOG"));
+
+    public IEnumerable<Route<Handler>> Routes(FakeClickUp backend) =>
+    [
+        new(HttpMethod.Delete, "task/{id}", (req, path, _, _) =>
+        {
+            _ = req;
+            var taskId = FakeClickUp.LastSegment(path);
+            if (Environment.GetEnvironmentVariable("E2E_TASK_DELETE_LOG") is { Length: > 0 } log)
+                try { File.AppendAllText(log, taskId + "\n"); }
+                catch { /* best-effort capture */ }
+            if (Environment.GetEnvironmentVariable("E2E_TASK_DELETE_FORBID") is { Length: > 0 } forbidden
+                && string.Equals(forbidden, taskId, StringComparison.Ordinal))
+                return Task.FromResult(FakeClickUp.Forbidden(
+                    """{"err":"You do not have permission to delete this task","ECODE":"OAUTH_027"}"""));
+            return FakeClickUp.OkAsync("{}");
+        }, 1),
+    ];
+}
