@@ -12,9 +12,10 @@ namespace ClickUpTodo.Configuration;
 /// Both are <b>nullable</b>: <c>null</c>/blank (the default, and an absent <c>launchChords</c> key) means
 /// "use the shipped default", so the feature is zero-config and existing configs need no migration. A
 /// non-null value is the parseable key token (what <c>Key.TryParse</c> accepts, e.g. <c>"Alt+Enter"</c>).
-/// It is <em>validated at read time</em> — an unparseable token is dropped back to the default by
+/// It is <em>validated at read time</em> — an invalid token (unparseable, a bare type-ahead letter, or one
+/// colliding with another binding) is dropped back to the default by
 /// <see cref="Tui.Screens.LaunchChordOverrides.FromConfig"/> rather than crashing the app (the #506
-/// load-time-defense requirement), and rejected at save time by
+/// load-time-defense requirement), and rejected at save time by the same rule in
 /// <see cref="Tui.Screens.SettingsForm.ValidateLaunchChord"/>.
 /// </para>
 /// The primary use is the one #502 documents: a user who unbinds Windows Terminal's

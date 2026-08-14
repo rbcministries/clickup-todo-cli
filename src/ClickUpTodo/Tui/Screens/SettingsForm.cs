@@ -108,15 +108,15 @@ public static class SettingsForm
         if (!Key.TryParse(token, out var proposed))
             return LaunchChordValidation.Invalid($"'{token}' isn't a recognised key combination.");
 
-        foreach (var context in Keybindings.ContextsBinding(action))
-            foreach (var (otherAction, otherToken) in Keybindings.EffectiveBindingsFor(context, current))
-            {
-                if (otherAction == action)
-                    continue;
-                if (Key.TryParse(otherToken, out var other) && other.KeyCode == proposed.KeyCode)
-                    return LaunchChordValidation.Invalid(
-                        $"{token} is already bound to {DescribeAction(otherAction)} on the {DescribeContext(context)}.");
-            }
+        if (LaunchChordOverrides.IsTypeAheadReserved(proposed))
+            return LaunchChordValidation.Invalid(
+                $"{token} is a bare letter/digit reserved for the list type-ahead — use a chord (Ctrl/Alt) or a function key.");
+
+        // Same collision primitive the load-time defense (LaunchChordOverrides.FromConfig) uses, so a
+        // dialog-entered chord and a hand-edited config value are held to one bar.
+        if (LaunchChordOverrides.FindCollision(action, proposed, current) is { } hit)
+            return LaunchChordValidation.Invalid(
+                $"{token} is already bound to {DescribeAction(hit.Action)} on the {DescribeContext(hit.Context)}.");
 
         return LaunchChordValidation.Ok;
     }

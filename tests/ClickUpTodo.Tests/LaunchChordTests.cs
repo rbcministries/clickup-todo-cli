@@ -46,6 +46,54 @@ public sealed class LaunchChordTests
     }
 
     [Fact]
+    public void FromConfig_DropsACollidingToken_LoadTimeDefense()
+    {
+        // config.json is hand-editable, so a parseable-but-colliding override must fall back to the default
+        // here — otherwise the dispatcher throws on the duplicate key at construction and crashes startup.
+        // Ctrl+U is Quick Update on the list; a new-tab override onto it is dropped.
+        Assert.Null(Overrides(newTab: "Ctrl+U").For(KeyAction.OpenInNewTab));
+        // Rebinding new-tab onto the split-pane sibling's default chord also collides ⇒ dropped.
+        Assert.Null(Overrides(newTab: "Ctrl+Alt+Enter").For(KeyAction.OpenInNewTab));
+        // A free chord is still kept.
+        Assert.Equal("Alt+Enter", Overrides(newTab: "Alt+Enter").For(KeyAction.OpenInNewTab));
+    }
+
+    [Fact]
+    public void FromConfig_DropsABareTypeAheadLetter_PreservingListTypeAhead()
+    {
+        // A bare letter/digit would hijack the ListView type-ahead (#12) — the dispatch runs ahead of it.
+        Assert.Null(Overrides(newTab: "a").For(KeyAction.OpenInNewTab));
+        Assert.Null(Overrides(splitPane: "5").For(KeyAction.OpenInSplitPane));
+        // A named key with no modifier is fine (not a type-ahead letter).
+        Assert.Equal("F7", Overrides(newTab: "F7").For(KeyAction.OpenInNewTab));
+    }
+
+    [Fact]
+    public void FromConfig_APairCollidingOnlyWithEachOther_DropsOne_NeverBoth_NorThrows()
+    {
+        var overrides = Overrides(newTab: "Alt+Enter", splitPane: "Alt+Enter");
+
+        // The two-pass resolution degrades the new-tab chord to its default and keeps split-pane, so the two
+        // never resolve to the same key (which is exactly what would crash the dispatcher).
+        Assert.Null(overrides.For(KeyAction.OpenInNewTab));
+        Assert.Equal("Alt+Enter", overrides.For(KeyAction.OpenInSplitPane));
+    }
+
+    // The regression the review caught: a colliding hand-edited override must not crash a dispatcher built
+    // the way TodoApp.BuildListKeyDispatcher builds it (QuickUpdate=Ctrl+U then OpenInNewTab override=Ctrl+U).
+    [Fact]
+    public void Dispatcher_BuiltFromACollidingOverride_DoesNotThrow()
+    {
+        var overrides = Overrides(newTab: "Ctrl+U");
+
+        var ex = Record.Exception(() => new KeybindingDispatcher(ScreenContext.MainList, overrides)
+            .On(KeyAction.QuickUpdate, () => { })
+            .On(KeyAction.OpenInNewTab, () => { }));
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
     public void FromConfig_TrimsWhitespace_AndTreatsBlankAsNoOverride()
     {
         Assert.Equal("Alt+Enter", Overrides(newTab: "  Alt+Enter  ").For(KeyAction.OpenInNewTab));
@@ -131,6 +179,15 @@ public sealed class LaunchChordTests
 
         Assert.False(result.IsValid);
         Assert.Contains("wat", result.Error);
+    }
+
+    [Fact]
+    public void Validate_RejectsABareTypeAheadLetter()
+    {
+        var result = SettingsForm.ValidateLaunchChord(KeyAction.OpenInNewTab, "a", LaunchChordOverrides.None);
+
+        Assert.False(result.IsValid);
+        Assert.Contains("type-ahead", result.Error);
     }
 
     [Fact]

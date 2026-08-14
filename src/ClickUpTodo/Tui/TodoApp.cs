@@ -127,10 +127,11 @@ public sealed class TodoApp
     // HelpItemSets). Movement/arrow/Tab keys and undisplayed aliases (Ctrl+R, Ctrl+C, Esc quit) stay in
     // OnListKey — they are intentionally not table-governed footer commands.
     private KeybindingDispatcher _listKeys = null!;
-    // The user's launch-chord overrides (#506), resolved from AppConfig.LaunchChords. Threaded to the list
-    // dispatcher (so a rebound Ctrl+Enter/Ctrl+Alt+Enter fires) and the main-list footer (so it advertises
-    // the rebound chord) via the same value, so the two can't drift. Rebuilt in the constructor and after an
-    // F2 settings save (like _agent), so a change takes effect without a relaunch.
+    // The user's launch-chord overrides (#506), resolved from AppConfig.LaunchChords in the constructor.
+    // Threaded to the list dispatcher (so a rebound Ctrl+Enter/Ctrl+Alt+Enter fires) and the main-list footer
+    // (so it advertises the rebound chord) via the same value, so the two can't drift. Read once at startup:
+    // a config change takes effect on the next launch until the F10 Settings fields land (#506 Phase 3), at
+    // which point a save must recompute this AND rebuild _listKeys (the dispatcher captures the value).
     private LaunchChordOverrides _launchChords = LaunchChordOverrides.None;
     private RefreshService _refresh = null!;
     // The stack of full-window screens swapped in over the list (Settings / status picker / detail /

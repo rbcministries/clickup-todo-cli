@@ -160,7 +160,9 @@ public sealed class AppConfig
     /// zero-config and no migration is needed. A hand-edited <c>"launchChords": null</c> is coalesced back
     /// to defaults by <see cref="ConfigMigrations"/> (the <see cref="SuperAgents"/> precedent). The tokens
     /// are read into the pure <see cref="Tui.Screens.LaunchChordOverrides"/> that the dispatcher and footer
-    /// resolve through, and validated at save time by <see cref="Tui.Screens.SettingsForm.ValidateLaunchChord"/>.
+    /// resolve through, which drops an unparseable, type-ahead-reserved, or colliding value back to the default
+    /// at load time. The matching save-time guard (<see cref="Tui.Screens.SettingsForm.ValidateLaunchChord"/>)
+    /// is the validator the deferred F10 Settings fields (#506 Phase 3) will call before persisting.
     /// </summary>
     public LaunchChordSettings LaunchChords { get; set; } = new();
 
