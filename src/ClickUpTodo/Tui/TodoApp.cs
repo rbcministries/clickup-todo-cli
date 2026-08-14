@@ -1496,6 +1496,21 @@ public sealed class TodoApp
     /// the entry surface rather than stacking on top of the surface itself.</summary>
     private void ShowQuickOpenSurface()
     {
+        if (NativeModalSpike.Enabled)
+        {
+            // #618 pilot: host quick-open as a native Terminal.Gui Dialog (nested Application.Run) instead
+            // of the _screens-mounted QuickOpenScreen — the #402 transient-modal migration pilot, the
+            // focusable-form sibling of #554's F3 modal. The native path pushes nothing to _screens, so the
+            // ActiveScreen guard can't serialise it; TryBeginOpenQuickOpen claims its own slot (cleared
+            // when the nested loop returns). The run is deferred out of the keypress via Application.Invoke.
+            // The nested run returns AFTER teardown, so DispatchQuickOpen runs straight from the marshal
+            // with no AddTimeout deferral (the workaround the _screens leg needs below). Flag-gated; off in
+            // production.
+            if (NativeModalSpike.TryBeginOpenQuickOpen())
+                Application.Invoke(() => NativeModalSpike.RunQuickOpenDialog(DispatchQuickOpen, Flash));
+            return;
+        }
+
         var screen = new QuickOpenScreen();
         ShowScreen(screen, () =>
         {
@@ -1503,30 +1518,45 @@ public sealed class TodoApp
             // first: doing it inline in the close handler fires it while the modal is still mounted, so
             // OpenTaskDetail captures the modal as its "requester" and then skips the mount once the modal
             // closes (observed under the tui-validate harness — "Loading details…" stuck, detail never
-            // shown). AddTimeout guarantees the later iteration. The deferral covers all three intents
-            // (#615): the OpenHere detail-open needs it, and keeping one path is simpler than branching —
-            // the NewTab/SplitPane launch flash simply lands on whatever the surface was covering, exactly
-            // as the detail-hosted Ctrl+U launch already does.
+            // shown). AddTimeout guarantees the later iteration. The native leg above needs no such
+            // deferral — its nested run returns after teardown.
             if (screen.Result is { } request)
                 Application.AddTimeout(TimeSpan.FromMilliseconds(1), () =>
                 {
-                    switch (request.Intent)
-                    {
-                        case QuickOpenIntent.OpenHere:
-                            ResolveAndOpen(request.Text);
-                            break;
-                        case QuickOpenIntent.NewTab:
-                            ResolveAndLaunch(request.Text, LaunchLocation.NewTab);
-                            break;
-                        case QuickOpenIntent.SplitPane:
-                            ResolveAndLaunch(request.Text, LaunchLocation.SplitPane);
-                            break;
-                        default:
-                            throw new InvalidOperationException($"Unhandled quick-open intent {request.Intent}.");
-                    }
+                    DispatchQuickOpen(request);
                     return false;
                 });
         });
+    }
+
+    /// <summary>
+    /// Routes a collected <see cref="QuickOpenRequest"/> to its launch terminus (launch modes B, #615):
+    /// <see cref="QuickOpenIntent.OpenHere"/> opens the resolved Task Detail in place, and
+    /// <see cref="QuickOpenIntent.NewTab"/>/<see cref="QuickOpenIntent.SplitPane"/> launch it beside the
+    /// current process. Shared by both quick-open hosts — the <c>_screens</c> surface calls it from inside
+    /// its <c>AddTimeout(1ms)</c> deferral, the native Dialog directly from its post-teardown marshal — so
+    /// the destination mapping is written once and cannot drift between hosts. A null result (the surface
+    /// was cancelled) is a no-op.
+    /// </summary>
+    private void DispatchQuickOpen(QuickOpenRequest? result)
+    {
+        if (result is not { } request)
+            return;
+
+        switch (request.Intent)
+        {
+            case QuickOpenIntent.OpenHere:
+                ResolveAndOpen(request.Text);
+                break;
+            case QuickOpenIntent.NewTab:
+                ResolveAndLaunch(request.Text, LaunchLocation.NewTab);
+                break;
+            case QuickOpenIntent.SplitPane:
+                ResolveAndLaunch(request.Text, LaunchLocation.SplitPane);
+                break;
+            default:
+                throw new InvalidOperationException($"Unhandled quick-open intent {request.Intent}.");
+        }
     }
 
     /// <summary>

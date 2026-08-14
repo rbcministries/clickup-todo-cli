@@ -49,6 +49,11 @@ internal static class NativeModalSpike
     // _screens LIFO stack. Same rationale as _open: the native path pushes nothing to _screens.
     private static bool _fsgOpen;
 
+    // The Ctrl+O quick-open (#618) modal's own slot — distinct from the Help/FSG slots for the same
+    // reason (native Help can stack over an open quick-open surface). Same rationale as _open: the native
+    // path pushes nothing to _screens, so ActiveScreen cannot serialise it.
+    private static bool _quickOpenOpen;
+
     /// <summary>
     /// Claims the single native-modal slot, returning false if one is already open or opening. Called
     /// synchronously on the UI thread from <c>ShowHelp</c> before the nested run is deferred.
@@ -119,6 +124,108 @@ internal static class NativeModalSpike
         {
             TuiTeardown.DisposeSwallowingTeardownBug(dialog, "NativeModalSpike Dialog");
             _open = false;
+        }
+    }
+
+    /// <summary>
+    /// Claims the Ctrl+O quick-open (#618) native-modal slot, returning false if one is already open or
+    /// opening. Called synchronously on the UI thread from <c>ShowQuickOpenSurface</c> before the nested
+    /// run is deferred (distinct from the Help/FSG slots so native Help can stack over the quick-open modal).
+    /// </summary>
+    public static bool TryBeginOpenQuickOpen()
+    {
+        if (_quickOpenOpen)
+            return false;
+        _quickOpenOpen = true;
+        return true;
+    }
+
+    /// <summary>
+    /// #618 pilot: opens the Ctrl+O quick-open surface as a native <see cref="Dialog"/> on its own nested
+    /// run-loop — the #402 transient-modal migration pilot, the smallest form of the category (one
+    /// <see cref="TextField"/>, a button row, a <see cref="QuickOpenRequest"/> result). The form itself is
+    /// built by the shared <see cref="Screens.QuickOpenFormBuilder"/>, so it is identical to the
+    /// <c>_screens</c> <see cref="Screens.QuickOpenScreen"/> and the A/B differs only in the hosting
+    /// mechanism (the title carries <see cref="TitleMarker"/> so the harness can prove leg B took the
+    /// native path). Esc / Cancel closes with no result; a submit gesture marshals the
+    /// <see cref="QuickOpenRequest"/> back through <paramref name="resolve"/>. F1 stacks native Help over
+    /// the modal, deferred out of the keypress via <see cref="Application.Invoke(Action)"/> like
+    /// <c>ShowHelp</c> so the nested help loop is not entered re-entrantly.
+    /// <para>
+    /// Because the nested <see cref="Application.Run(Toplevel)"/> returns <em>after</em> teardown, the
+    /// resolve is marshalled straight from the <c>finally</c> with <b>no <c>AddTimeout</c> deferral</b> —
+    /// the workaround the <c>_screens</c> leg needs because its close handler fires while the modal is
+    /// still mounted (<c>OpenTaskDetail</c> would otherwise capture the closing modal as its requester).
+    /// The dispose is routed through the shared teardown guard (#346). Must be paired with a preceding
+    /// successful <see cref="TryBeginOpenQuickOpen"/>.
+    /// </para>
+    /// </summary>
+    public static void RunQuickOpenDialog(Action<Screens.QuickOpenRequest?> resolve, Action<string> flash)
+    {
+        ArgumentNullException.ThrowIfNull(resolve);
+        ArgumentNullException.ThrowIfNull(flash);
+
+        // The slot was claimed by TryBeginOpenQuickOpen before this deferred run; the try spans the whole
+        // body (construction included) so the finally always clears it — otherwise an exception building
+        // the dialog/form would strand _quickOpenOpen true and kill Ctrl+O for the rest of the session.
+        Dialog? dialog = null;
+        Screens.QuickOpenFormHandle? form = null;
+        try
+        {
+            dialog = new Dialog
+            {
+                Title = $"Open a task {TitleMarker}",
+                Width = Dim.Fill(4),
+                // Quick-open is the small form of the category — a prompt, one field and a button row —
+                // so the dialog is short (not Dim.Fill like the FSG form), leaving the frame visible.
+                Height = 9,
+            };
+
+            var built = dialog;   // non-null capture for the close/key closures
+            form = Screens.QuickOpenFormBuilder.Build(flash, () => Application.RequestStop(built));
+            built.Add([.. form.Controls]);
+
+            // Start focus on the input field, matching the _screens host's OnShown, so the A/B measures the
+            // same intra-modal path. Deferred to Initialized so the view is part of the running toplevel.
+            var handle = form;
+            built.Initialized += (_, _) => handle.PrimaryFocus.SetFocus();
+
+            built.KeyDown += (_, key) =>
+            {
+                // The form owns the submit gestures (wired at surface level too so a chord fires from a
+                // focused button); the host owns Esc = Back and F1 = Help.
+                if (handle.DispatchSubmit(key))
+                {
+                    key.Handled = true;
+                }
+                else if (key.KeyCode == KeyCode.Esc)
+                {
+                    key.Handled = true;
+                    Application.RequestStop(built);
+                }
+                else if (key.KeyCode == KeyCode.F1)
+                {
+                    // Modal stacking: open native Help *over* the quick-open dialog (the native analogue of
+                    // the _screens LIFO stack). Deferred via Application.Invoke so the nested help loop is
+                    // not entered re-entrantly from inside KeyDown (mirrors ShowHelp), and guarded by the
+                    // help slot so a buffered double-F1 can't stack two help dialogs.
+                    key.Handled = true;
+                    if (TryBeginOpen())
+                        Application.Invoke(RunHelpDialog);
+                }
+            };
+
+            Application.Run(built);
+        }
+        finally
+        {
+            if (dialog is not null)
+                TuiTeardown.DisposeSwallowingTeardownBug(dialog, "NativeModalSpike QuickOpen Dialog");
+            _quickOpenOpen = false;
+            // Marshal the result back on the UI thread (the nested loop has returned into the outer loop's
+            // invoke, so the modal is fully torn down) — null on Esc/Cancel, the submitted request on a
+            // submit gesture (or null if the dialog never built). No AddTimeout needed: teardown is done.
+            resolve(form?.Result);
         }
     }
 
