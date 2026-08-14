@@ -188,6 +188,19 @@ def type_and_open_here(app, label):
     return key_ms
 
 
+def blank_submit_stays_open(app, label):
+    """With the surface open and the field EMPTY, Enter must NOT dismiss or navigate — the builder's
+    Submit else-branch flashes a hint and keeps the surface open (for every intent). Verifies the one bit
+    of builder-owned branching on both hosts, and on the native leg that the flash routes through
+    TodoApp.Flash onto the status line beneath the dialog. Leaves the surface open."""
+    v = app.send(ENTER, 1.0)                        # Enter on the empty field
+    assert app.alive(), f"{label}: process died on a blank submit:\n{v[:2000]}"
+    assert FORM_TITLE in v, f"{label}: a blank submit dismissed the surface (must stay open):\n{v[:2000]}"
+    assert DETAIL_MARKER not in v, f"{label}: a blank submit navigated to a detail (must be inert):\n{v[:2000]}"
+    assert "ClickUp task URL" in v, \
+        f"{label}: a blank submit did not flash the hint ('ClickUp task URL' missing):\n{v[:2000]}"
+
+
 def cancel_no_navigation(app, label):
     """Open the surface, type a throwaway id, Esc — the surface closes with no navigation (back on the
     list, no Task Detail). 'Cancel marshals nothing'."""
@@ -218,8 +231,9 @@ def run_leg(label, native, **env):
     try:
         assert app.boot(), f"{label}: app did not boot (Task 1 never rendered):\n{app.visible()[:1500]}"
 
-        # 1-3. Open + intra-modal typing + OpenHere marshal & navigate (the headline native assertion).
+        # 1-3. Open + blank-submit guard + intra-modal typing + OpenHere marshal & navigate.
         open_ms = open_surface(app, label)
+        blank_submit_stays_open(app, label)          # blank Enter flashes + stays open (both legs)
         key_ms = type_and_open_here(app, label)
         print(f"  [{label}] open {open_ms:.0f}ms · intra-modal key {key_ms:.0f}ms · OpenHere → Task Detail")
         v = app.send(ESC, 1.2)                       # detail → back to the list
