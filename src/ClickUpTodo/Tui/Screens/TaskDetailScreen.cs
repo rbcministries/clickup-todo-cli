@@ -310,6 +310,20 @@ public sealed class TaskDetailScreen : Screen
     // True once the lazy tree load has been kicked off (guarding against re-fetching on every tab cycle).
     private bool _treeLoaded;
 
+    // Delete a task/subtask (F, #594, the deferred task half of contextual Delete #543): Delete on the Task
+    // Tree tab removes the highlighted node's task over the DeleteTaskAsync facade. Null disables delete (the
+    // Delete key is inert on the tree), so a non-interactive host stays unaffected. Deleting the current task
+    // raises CurrentTaskDeleted so the host navigates per the accepted ADR (docs/navigation-model.md); a
+    // descendant subtask is removed in place (optimistic + revert), like the checklist item delete.
+    private readonly Func<string, CancellationToken, Task>? _deleteTaskAsync;
+    // Armed after Delete on a real Task Tree row on the flag-off default path: the target awaiting an Enter/Esc
+    // confirm on the tree tab — the inline armed-key confirm the checklist/comment deletes use, rather than a
+    // nested modal. Carries the kind so the confirmed delete routes (current → navigate away; subtask → in place).
+    private TaskTreeDeleteTarget? _taskDeletePending;
+    // Guards a second task delete while one is in flight (the checklist/comment-write discipline, scoped to the
+    // task-delete path so it never blocks a concurrent compose/rename).
+    private bool _taskDeleteInFlight;
+
     // ── Checklists tab (C, #456) ────────────────────────────────────────────────
     // The Checklists tab's ListView (its own scroll target). Always present — unlike the host-gated Task
     // Tree tab, the checklist data (TaskDetail.Checklists, #454) is already on the screen, so the tab
@@ -463,6 +477,17 @@ public sealed class TaskDetailScreen : Screen
     /// and a real task row — not a placeholder/message row — is highlighted.
     /// </summary>
     public event EventHandler<TreeTaskRenameRequest>? RenameTreeTaskRequested;
+
+    /// <summary>
+    /// Raised after the <em>current</em> task (the one this detail shows) is deleted from the Task Tree tab
+    /// (F, #594). The screen owns the confirmation and the off-thread <c>DeleteTaskAsync</c> write; the host
+    /// owns the navigation the accepted ADR (<c>docs/navigation-model.md</c>) prescribes — pop this detail to
+    /// the layer beneath (the dashboard, or a stacked <c>--task</c> child), or quit the tab when it is the
+    /// single-task launch root (nothing beneath). Only raised on a <em>successful</em> delete of the current
+    /// task; deleting a descendant subtask removes its row in place and raises nothing. The argument carries
+    /// the deleted task id.
+    /// </summary>
+    public event EventHandler<string>? CurrentTaskDeleted;
 
     /// <summary>
     /// Raised when the user presses Ctrl+B to open the task in the browser (#518). Like its sibling
@@ -619,7 +644,8 @@ public sealed class TaskDetailScreen : Screen
         Func<string, CancellationToken, Task>? deleteChecklistAsync = null,
         Func<string, ISet<long>, IReadOnlyList<TaskAssignee>>? assigneeMatch = null,
         Func<int, ISet<long>, IReadOnlyList<TaskAssignee>>? assigneeTopFrequent = null,
-        Func<string, string, long?, CancellationToken, Task<TaskChecklist>>? setChecklistItemAssigneeAsync = null)
+        Func<string, string, long?, CancellationToken, Task<TaskChecklist>>? setChecklistItemAssigneeAsync = null,
+        Func<string, CancellationToken, Task>? deleteTaskAsync = null)
     {
         var prefs = settings ?? new DetailViewSettings();
         _task = task;
@@ -632,6 +658,7 @@ public sealed class TaskDetailScreen : Screen
         _currentUserId = currentUserId;
         _treeBadgeDisplay = treeBadgeDisplay;
         _loadTaskTreeAsync = loadTaskTreeAsync;
+        _deleteTaskAsync = deleteTaskAsync;
         _postStructuredCommentAsync = postStructuredCommentAsync;
         _memberMatch = memberMatch;
         _memberTopFrequent = memberTopFrequent;
@@ -1400,6 +1427,30 @@ public sealed class TaskDetailScreen : Screen
             }
         }
 
+        // Answer a pending task/subtask delete confirm (F, #594), armed by Delete on a real Task Tree row on
+        // the flag-off default path: Enter deletes, Esc cancels. Guarded to the Task Tree tab being front-most,
+        // like the checklist confirms above; a tab switch leaves it armed but inert (the delete targets the
+        // named task by id). Placed before the Enter-navigate block below so an armed Enter confirms the delete
+        // rather than navigating; when nothing is armed it falls through to navigation as before. Enter/Esc
+        // reach here because the tree ListView doesn't claim them for its own bindings.
+        if (_taskDeletePending is { } delTask && _treeList is not null && ReferenceEquals(_tabs.Value, _treeList))
+        {
+            if (key.KeyCode == KeyCode.Enter)
+            {
+                key.Handled = true;
+                _taskDeletePending = null;
+                PerformTaskDelete(delTask);
+                return;
+            }
+            if (key.KeyCode == KeyCode.Esc)
+            {
+                key.Handled = true;
+                _taskDeletePending = null;
+                RequestFlash("Delete cancelled.");
+                return;
+            }
+        }
+
         // Enter on the Task Tree tab (#291) navigates the detail screen to the selected row's task
         // (the current-task row no-ops). Guarded on the tree being the front-most tab, so Enter on the
         // read-only text panes (which ignore it) is undisturbed.
@@ -1433,6 +1484,23 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             RequestTreeRename();
+            return;
+        }
+
+        // Contextual Delete, task half (F, #594): Delete on the Task Tree tab deletes the highlighted node —
+        // the current task (→ the view closes/navigates per the ADR) or a descendant subtask (→ removed in
+        // place). Ancestor rows and placeholder/message rows are inert-but-flashed. Guarded on the tree being
+        // front-most (like Enter/F6/F2 above) and routed through Keybindings.ResolveDetail (only the Task Tree
+        // sub-context binds Delete → DeleteTask) so dispatch and the per-tab footer label stay in lock-step,
+        // exactly as the checklist/comment Delete blocks below do; the confirmation surface is chosen inside
+        // DeleteSelectedTreeTask (native ConfirmDialog when the flag is on, else the inline armed confirm
+        // answered at the top of OnKey). This block precedes the comment-tab Delete block below, but that one
+        // fires only when ResolveDetail returns DeleteComment (never on the tree), so they never both claim a key.
+        if (key.KeyCode == KeyCode.Delete && _treeList is not null && ReferenceEquals(_tabs.Value, _treeList)
+            && Keybindings.ResolveDetail(CurrentDetailSubContext(), "Delete") == KeyAction.DeleteTask)
+        {
+            key.Handled = true;
+            DeleteSelectedTreeTask();
             return;
         }
 
@@ -4174,6 +4242,166 @@ public sealed class TaskDetailScreen : Screen
         RenderTreeRows(_loadedTreeRows);
         if (previous >= 0 && previous < _treeRows.Count)
             _treeList.SelectedItem = previous;
+    }
+
+    /// <summary>Delete on the Task Tree tab (F, #594): delete the highlighted node's task behind a
+    /// confirmation. <see cref="TaskTreeDeleteModel.Resolve"/> classifies the row — the current task deletes
+    /// and navigates (<see cref="CurrentTaskDeleted"/> → the host pops/quits per the ADR); a descendant subtask
+    /// is removed in place (optimistic + revert). An ancestor row (delete is downward-only here) or a
+    /// placeholder/message row is inert-but-flashed, mirroring <see cref="RequestTreeRename"/>'s guard. The
+    /// confirmation is the native <see cref="ConfirmDialog"/> when the flag is on, else the inline armed
+    /// confirm answered at the top of <see cref="OnKey"/> — the same two paths the checklist delete offers.</summary>
+    private void DeleteSelectedTreeTask()
+    {
+        if (_deleteTaskAsync is null)
+            return;
+        if (_taskDeleteInFlight)
+        {
+            RequestFlash("Still deleting…");
+            return;
+        }
+        var index = _treeList?.SelectedItem ?? -1;
+        if (TaskTreeDeleteModel.Resolve(_loadedTreeRows, index) is not { } target)
+        {
+            RequestFlash("Select this task or one of its subtasks to delete.");
+            return;
+        }
+
+        if (ConfirmDialog.Enabled)
+        {
+            var message = target.Kind == TaskTreeDeleteKind.Current
+                ? $"Delete \"{target.Name}\" and its subtasks?\nThis can't be undone."
+                : $"Delete subtask \"{target.Name}\" and its subtasks?\nThis can't be undone.";
+            ConfirmTaskDeleteNatively("Delete task", message, () => PerformTaskDelete(target));
+            return;
+        }
+        _taskDeletePending = target;
+        var noun = target.Kind == TaskTreeDeleteKind.Current ? "task" : "subtask";
+        RequestFlash($"Delete {noun} \"{target.Name}\"? (Enter = delete · Esc = cancel)");
+    }
+
+    /// <summary>Opens the native confirm dialog for a tree delete (the <see cref="ConfirmDialog"/> flag-on
+    /// path), running <paramref name="onConfirm"/> only when the user confirms. Mirrors the checklist/comment
+    /// delete's native confirm, including the single-slot <see cref="ConfirmDialog.TryBeginOpen"/> guard and the
+    /// post-teardown <c>_disposed</c> check.</summary>
+    private void ConfirmTaskDeleteNatively(string title, string message, Action onConfirm)
+    {
+        if (!ConfirmDialog.TryBeginOpen())
+            return;
+        Application.Invoke(() => ConfirmDialog.Run(title, message, "Delete", confirmed =>
+        {
+            if (_disposed)
+                return;
+            if (confirmed)
+                onConfirm();
+            else
+                RequestFlash("Delete cancelled.");
+        }));
+    }
+
+    /// <summary>Routes a confirmed tree delete: the current task navigates away
+    /// (<see cref="PerformCurrentTaskDelete"/>); a descendant subtask is removed in place
+    /// (<see cref="PerformSubtaskDelete"/>).</summary>
+    private void PerformTaskDelete(TaskTreeDeleteTarget target)
+    {
+        if (_deleteTaskAsync is null || _taskDeleteInFlight)
+            return;
+        if (target.Kind == TaskTreeDeleteKind.Current)
+            PerformCurrentTaskDelete(target.TaskId);
+        else
+            PerformSubtaskDelete(target.TaskId);
+    }
+
+    /// <summary>Deletes the task this detail shows. The view stays until the write succeeds (no optimistic
+    /// close), so a failed delete just flashes and the detail is intact; on success <see cref="CurrentTaskDeleted"/>
+    /// lets the host navigate per the accepted ADR (pop to the layer beneath, or quit a <c>--task</c> root).</summary>
+    private void PerformCurrentTaskDelete(string taskId)
+    {
+        if (_deleteTaskAsync is null || _taskDeleteInFlight)
+            return;
+
+        _taskDeleteInFlight = true;
+        RequestFlash("Deleting task…");
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await _deleteTaskAsync(taskId, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() =>
+                {
+                    _taskDeleteInFlight = false;
+                    if (_disposed)
+                        return;
+                    CurrentTaskDeleted?.Invoke(this, taskId);
+                });
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _taskDeleteInFlight = false;
+                    if (_disposed)
+                        return;
+                    RequestFlash($"Could not delete task: {ShortError(ex)}");
+                });
+            }
+        });
+    }
+
+    /// <summary>Deletes a descendant subtask, optimistically removing its row + subtree from the tree (the
+    /// checklist-item delete discipline: revert-on-failure re-inserts it and flashes). The detail's own subject
+    /// task is untouched, so the view stays put.</summary>
+    private void PerformSubtaskDelete(string taskId)
+    {
+        if (_deleteTaskAsync is null || _taskDeleteInFlight || _treeList is null)
+            return;
+
+        var index = -1;
+        for (var i = 0; i < _loadedTreeRows.Count; i++)
+            if (string.Equals(_loadedTreeRows[i].Task.Id, taskId, StringComparison.Ordinal))
+            {
+                index = i;
+                break;
+            }
+        if (index < 0)
+        {
+            RequestFlash("That subtask is no longer here.");
+            return;
+        }
+
+        var snapshot = _loadedTreeRows;
+
+        _taskDeleteInFlight = true;
+        _loadedTreeRows = TaskTreeDeleteModel.RemoveSubtree(snapshot, taskId);
+        RenderTreeRows(_loadedTreeRows);
+        var select = TaskTreeDeleteModel.SelectAfterDelete(index, _treeRows.Count);
+        if (select >= 0)
+            _treeList.SelectedItem = select;
+        RequestFlash("Deleting subtask…");
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await _deleteTaskAsync(taskId, CancellationToken.None).ConfigureAwait(false);
+                Application.Invoke(() => _taskDeleteInFlight = false);
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() =>
+                {
+                    _taskDeleteInFlight = false;
+                    if (_disposed)
+                        return;
+                    _loadedTreeRows = snapshot; // the subtask (and its subtree) reappears.
+                    RenderTreeRows(_loadedTreeRows);
+                    if (index < _treeRows.Count)
+                        _treeList.SelectedItem = index;
+                    RequestFlash($"Could not delete subtask: {ShortError(ex)}");
+                });
+            }
+        });
     }
 
     /// <summary>Double-click a tree row → navigate to its task (the mouse equivalent of Enter), resolved
