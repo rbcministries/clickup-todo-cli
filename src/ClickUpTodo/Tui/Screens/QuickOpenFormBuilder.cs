@@ -57,9 +57,11 @@ public static class QuickOpenFormBuilder
     /// <summary>
     /// Builds the form. <paramref name="flash"/> surfaces the blank-input hint on the host's status line;
     /// <paramref name="close"/> tears the host surface down (a submit sets
-    /// <see cref="QuickOpenFormHandle.Result"/> first; Cancel leaves it null).
+    /// <see cref="QuickOpenFormHandle.Result"/> first; Cancel leaves it null). <paramref name="overrides"/>
+    /// is the config launch-chord override (#506) applied to the submit dispatcher, so a rebound
+    /// <c>Ctrl+Enter</c> / <c>Ctrl+Alt+Enter</c> fires in both hosts; <c>null</c> ⇒ the shipped defaults.
     /// </summary>
-    public static QuickOpenFormHandle Build(Action<string> flash, Action close)
+    public static QuickOpenFormHandle Build(Action<string> flash, Action close, LaunchChordOverrides? overrides = null)
     {
         ArgumentNullException.ThrowIfNull(flash);
         ArgumentNullException.ThrowIfNull(close);
@@ -130,7 +132,7 @@ public static class QuickOpenFormBuilder
         // hand-rolled key switch, so the keys and their footer labels (HelpItemSets.QuickOpen) cannot
         // drift. Attached to the input field (the per-form key); the host wires DispatchSubmit at its
         // surface level too, so a chord fires from a focused button as well.
-        handle.SubmitKeys = new KeybindingDispatcher(ScreenContext.QuickOpen)
+        handle.SubmitKeys = new KeybindingDispatcher(ScreenContext.QuickOpen, overrides)
             .On(KeyAction.Open, () => Submit(QuickOpenIntent.OpenHere))
             .On(KeyAction.OpenInNewTab, () => Submit(QuickOpenIntent.NewTab))
             .On(KeyAction.OpenInSplitPane, () => Submit(QuickOpenIntent.SplitPane));

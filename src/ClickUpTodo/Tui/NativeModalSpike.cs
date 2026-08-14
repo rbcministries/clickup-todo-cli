@@ -160,7 +160,8 @@ internal static class NativeModalSpike
     /// successful <see cref="TryBeginOpenQuickOpen"/>.
     /// </para>
     /// </summary>
-    public static void RunQuickOpenDialog(Action<Screens.QuickOpenRequest?> resolve, Action<string> flash)
+    public static void RunQuickOpenDialog(
+        Action<Screens.QuickOpenRequest?> resolve, Action<string> flash, Screens.LaunchChordOverrides? launchChords = null)
     {
         ArgumentNullException.ThrowIfNull(resolve);
         ArgumentNullException.ThrowIfNull(flash);
@@ -182,7 +183,7 @@ internal static class NativeModalSpike
             };
 
             var built = dialog;   // non-null capture for the close/key closures
-            form = Screens.QuickOpenFormBuilder.Build(flash, () => Application.RequestStop(built));
+            form = Screens.QuickOpenFormBuilder.Build(flash, () => Application.RequestStop(built), launchChords);
             built.Add([.. form.Controls]);
 
             // Start focus on the input field, matching the _screens host's OnShown, so the A/B measures the
