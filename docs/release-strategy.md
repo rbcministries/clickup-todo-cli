@@ -1,6 +1,6 @@
 # Beta / Main Release Strategy
 
-Status: **Draft** · Owner: maintainer · Last updated: 2026-07-17
+Status: **Active** · Owner: maintainer · Last updated: 2026-08-17
 
 This document defines how `clickup-todo-cli` moves from continuous PR-merging into
 **named, installable releases** so it can be handed to co-workers for testing, while
@@ -40,6 +40,10 @@ never has to be hand-bumped per beta. Whether a release is a pre-release is deci
 **Version bumping rule (pre-1.0):**
 - Bug-fix-only beta → bump `-beta.N`.
 - New epic/feature completed → bump the **minor** (`0.1 → 0.2`) and restart `-beta.1`.
+- When a single cut absorbs more than one of the planned theme-minors in §5, it takes the
+  **highest** of them and the skipped number is simply never used — as `0.3.0-beta.1` did,
+  shipping the `0.2` themes (#153, #208) and the `0.3` themes (#283, #292) together. Say so in
+  the release notes so testers don't go looking for the missing tag.
 - We reserve `1.0.0` for the [1.0 bar](#6-roadmap-to-stable--10) below.
 
 ## 3. Branching model
@@ -55,51 +59,61 @@ Keep the current **trunk-based** flow — it already works and suits a small tea
 Branch protection on `main`: require the CI check to pass and require PR review
 (self-review acceptable for the solo maintainer today).
 
-## 4. What ships in the first beta (the cut line)
+## 4. Release history & the current cut line
 
-The first beta ships the **finished, coherent slice** — read, triage, detail, feed, and
-agent dispatch — and explicitly defers the in-progress creation/editing surfaces.
+Each cut ships a **finished, coherent slice** — never a half-built surface that would make a bad
+first impression on a tester.
 
-### In `v0.1.0-beta.1` (done and cohesive)
+### Shipped
 
-| Area | Epic / source | State |
+| Tag | Date | What it was |
 | --- | --- | --- |
-| Core triage list (assigned + Personal Tasks, status change, pin, group/sort/filter, refresh) | pre-epic core | ✅ shipped |
-| Task Detail view (Description / Comments / Stream tabs, contextual help) | #102 | ✅ closed |
-| Mentions & Comments feed (F-key feed, recent-activity source) | #109 | ✅ 9/9 — closed |
-| Persistent local cache & storage backend (LiteDB, staleness/TTL, closed-task prefetch) | #118 | ✅ 7/7 — closed |
-| Agent dispatch (interactive + one-off `claude` sessions, working dirs, result posting) | #23, #90 | ✅ closed |
+| `v0.1.0-beta.1` | 2026-07-17 | Notes-only. The release workflow wasn't on the default branch yet, so no binaries attached — superseded within the hour. |
+| `v0.1.0-beta.2` | 2026-07-17 | **First downloadable build.** Read + triage: core list, Task Detail (#102), Mentions & Comments feed (#109), persistent cache (#118), agent dispatch (#23/#90). |
 
-### Land-before-cut (in-flight PRs) — ✅ merged
+### The current cut — `v0.3.0-beta.1`
 
-- **PR #300** — per-dispatch launch-location override (closes #275). ✅ merged.
-- **PR #285** — `ListSelectorView` (closes #239; unblocks the New Task list selector). ✅ merged.
+Everything on `main` since `v0.1.0-beta.2` (~165 merged PRs). Four epics closed in that span,
+which is why the version skips `0.2` — see §2's bumping rule and §5:
 
-Both are now on `main`. Once the release workflow (§8) lands, confirm CI green and tag
-`v0.1.0-beta.1`.
+| Area | Epic | State |
+| --- | --- | --- |
+| Quick Updates — status / priority / assignees / **lists**, from list *and* detail | #153 | ✅ 10/10 — closed |
+| Writing New Content — New Task, comments, description editing, custom fields | #208 | ✅ 16/16 — closed |
+| Mouse interaction & UX polish — clickable list / Quick Updates / help bar, Task Tree tab | #283 | ✅ 8/8 — closed |
+| Multi-tab / multi-instance — `--task` launch mode, cross-tab nudges, nav history, exit confirm | #292 | ✅ 9/9 — closed |
 
-### Deferred to a later beta (intentionally out of the first cut)
+Riding along with them, in the same span: the Checklists tab (#456–#460), threaded comments and
+replies (#327–#330), the @-mention picker and structured mention writes (#321–#326),
+in-text link rendering / traversal / OSC-8 hyperlinks (#316–#320, #380, #430), contextual chords
+with `F2` = Rename and Settings moved to `F10` (#537, partial), multi-provider agent dispatch with
+window/tab/split destinations (#497, #502, partial), and the `--feed` host (#509).
 
-- **Quick Updates** (#153, 90% — one child, #242, remaining). Include in `beta.2`/`0.2.0`
-  once #242 lands, so status/priority/assignee editing arrives as a complete feature.
-- **Writing New Content** (#208, 75% — New Task screen #240/#241/#249 remaining). Ship New
-  Task once the list selector + create path is complete; partial creation UX is a bad first
-  impression for testers.
-- **Mouse/UX polish** (#283, 0%) and **Multi-tab / multi-instance** (#292, 0%). Large,
-  fully-scoped, not started — these define the road to `0.3+` / `1.0`, not the first beta.
+The paste-ready release body lives in
+[`docs/releases/v0.3.0-beta.1.md`](releases/v0.3.0-beta.1.md).
 
-(Epics #109 and #118 hit 100% and are now closed, so the board already reflects the beta.1
-scope.)
+### Intentionally out of this cut
+
+Nothing is half-shipped: the open epics (#613 quick-open polish, #537 contextual chords, #502
+split-pane, #490/#491 Super Agents, #312 cross-platform) are **enhancements over a working app**,
+and their in-flight children stay behind their existing surfaces rather than gating the cut.
+`linux-x64` / `osx-arm64` **binaries** remain held by #312 (§7a/§11) — running from source on
+those platforms is fully supported.
 
 ## 5. Beta phasing
 
-| Tag | Theme | Gate |
-| --- | --- | --- |
-| `v0.1.0-beta.1` | First testable build: triage + detail + feed + dispatch | PRs #300, #285 merged; CI green; §9 checklist |
-| `v0.1.0` | Promote beta.1 after soak | ≥1 week, ≥3 testers, no open P1 |
-| `v0.2.0-beta.1` | Quick Updates (#153) + New Task creation (#208) complete | epics closed |
-| `v0.2.0` | Promote | soak + no P1 |
-| `v0.3.0-beta.x` | Mouse/UX (#283) and/or Multi-tab (#292) | per epic completion |
+| Tag | Theme | Gate | State |
+| --- | --- | --- | --- |
+| `v0.1.0-beta.1` | First testable build: triage + detail + feed + dispatch | CI green; §9 checklist | ✅ shipped (no assets) |
+| `v0.1.0-beta.2` | Same scope, with binaries attached | release workflow live on `main` | ✅ shipped |
+| `v0.3.0-beta.1` | Authoring + mouse + multi-tab: #153, #208, #283, #292 | all four epics closed; CI green; §9 | ⬅️ **this cut** |
+| `v0.3.0` | Promote after soak | ≥1 week, ≥3 testers, no open P1 | planned |
+| `v0.4.0-beta.x` | Whichever open epic lands next — #613 / #537 / #502 / #490 / #491 | per epic completion | planned |
+| `v1.0.0` | See §6 | the 1.0 bar | planned |
+
+`v0.1.0` was never promoted to stable — beta.2's scope was superseded by this cut before the soak
+window closed. That's expected pre-1.0; a stable tag is worth cutting when the beta it promotes is
+the build people are actually running.
 
 Cadence during active beta: aim for a **weekly** beta tag while there's merged work worth
 testing; skip weeks with nothing user-facing.
@@ -108,12 +122,19 @@ testing; skip weeks with nothing user-facing.
 
 `0.x` stable releases are "safe to use daily, schema may still move." The bar for **`1.0.0`**:
 
-1. Creation & editing complete: Quick Updates (#153) and Writing New Content (#208) closed.
-2. Mouse/UX (#283) and Multi-tab (#292) either shipped or explicitly declared post-1.0.
+1. ✅ Creation & editing complete: Quick Updates (#153) and Writing New Content (#208) closed.
+2. ✅ Mouse/UX (#283) and Multi-tab (#292) shipped.
 3. **Name/identifier decision (#39) resolved** — see §11; the public NuGet package id is
    effectively permanent, so this must be settled before the first *public* NuGet publish.
 4. Config schema considered stable (documented migration path already exists via LiteDB).
 5. Two consecutive betas with no P1 bugs.
+6. **Cross-platform (#312) resolved either way** — macOS/Linux binaries published, or non-Windows
+   explicitly declared source-only for 1.0. Shipping a "1.0" whose install story is Windows-only
+   by accident rather than by decision is the thing to avoid.
+
+With (1) and (2) done, the remaining bar is mostly **decisions and soak time**, not features. The
+open epics are enhancements and can land in `0.4+` without holding 1.0 — which makes "what does
+1.0 mean here?" the next call worth making deliberately.
 
 ## 7. Distribution & install paths
 
@@ -127,13 +148,18 @@ dotnet publish src/ClickUpTodo/ClickUpTodo.csproj -c Release \
   -p:PublishSingleFile=true -p:Version=${TAG#v}
 ```
 
-**Beta.1 ships `win-x64` only.** It's the primary (Windows) audience, it's the best-tested
-target, and it's the only OS where the ClickUp token is **encrypted at rest** (Windows DPAPI,
-current-user scope). On non-Windows the token store falls back to an **unencrypted file** and
-macOS is untested end-to-end, so `linux-x64` and `osx-arm64` are held out of the release matrix
-(commented in `release.yml`, one line to re-enable). **Re-enabling them is gated on the
-cross-platform readiness epic (#312)** — see §11. Contributors on any OS run from source via
-`dotnet run` regardless. A one-page
+**Betas ship `win-x64` only.** It's the primary audience and the best-tested target, so
+`linux-x64` and `osx-arm64` are held out of the release matrix (commented in `release.yml`, one
+line to re-enable). **Re-enabling them is gated on the cross-platform readiness epic (#312)** —
+see §11.
+
+The original reason — the token being encrypted at rest only on Windows — **no longer applies**:
+since #306 the token goes to the OS secret store on all three platforms (DPAPI / Keychain /
+Secret Service), with an owner-only `0600` file fallback (#382). What still gates the binaries is
+packaging and terminal behaviour: Gatekeeper/quarantine and the Linux exec bit (#310), TUI
+rendering and keybindings on non-Windows terminals (#309), and a clean-machine smoke test (#311).
+Contributors on any OS run from source via `dotnet run` regardless — that path is well exercised.
+A one-page
 [beta tester guide](beta-testing.md) tells testers: download, run, paste token,
 known limitations (including the SmartScreen prompt on the unsigned exe).
 
@@ -194,14 +220,18 @@ existing Release**:
 1. All intended PRs merged; `main` CI green.
 2. `dotnet test clickup-todo.slnx` green locally; `tui-validate` run for any rendering-touching change.
 3. Close any epics that have hit 100% so the board reflects the shipped scope.
-4. In the Releases UI: draft the release, create tag `vX.Y.Z[-beta.N]` (target `main`),
-   **Generate release notes**, and add a highlights/known-limitations header (include the
-   ClickUp-token setup reminder and the mentions-automation caveat,
-   `docs/mention-assignee-automation.md`). Tick **Set as a pre-release** for a beta.
-5. **Publish** the release → the workflow builds and attaches the artifacts.
-6. Confirm the workflow's three jobs go green and the `win-x64` `.exe` (+ `.nupkg`) are attached.
-7. Verify the `win-x64` binary launches and completes first-run setup on a clean machine.
-8. Announce to testers with the download link + tester guide.
+4. Draft the release body as `docs/releases/vX.Y.Z[-beta.N].md` and merge it — it's reviewable in a
+   PR, survives as a record of what each cut claimed, and gives the next release a template. Check
+   its "upgrading" section against any keybinding that moved since the last cut; a beta tester's
+   first impression of a release is whether their muscle memory still works.
+5. In the Releases UI: draft the release, create tag `vX.Y.Z[-beta.N]` (target `main`), paste that
+   body in, then **Generate release notes** to append the PR list. Keep the ClickUp-token setup
+   reminder and the mentions-automation caveat (`docs/mention-assignee-automation.md`). Tick
+   **Set as a pre-release** for a beta.
+6. **Publish** the release → the workflow builds and attaches the artifacts.
+7. Confirm the workflow's three jobs go green and the `win-x64` `.exe` (+ `.nupkg`) are attached.
+8. Verify the `win-x64` binary launches and completes first-run setup on a clean machine.
+9. Announce to testers with the download link + tester guide.
 
 ## 10. Feedback & contribution loop
 
@@ -221,17 +251,19 @@ existing Release**:
 ## 11. Open decisions / blockers
 
 - **#312 — cross-platform (macOS/Linux) release readiness (gate for non-Windows binaries).**
-  The `linux-x64` / `osx-arm64` release artifacts stay disabled until this epic's
-  investigations are resolved or explicitly accepted as non-blocking. Children:
-  - **#306** — secure token storage at rest (today the token is stored **unencrypted** on
-    non-Windows; DPAPI is Windows-only).
-  - **#307** — agent-dispatch terminal launch (Windows-centric today).
-  - **#308** — open-in-browser (`open` / `xdg-open`).
-  - **#309** — TUI rendering & keybindings (F-keys, Option/Alt, glyph width, color).
-  - **#310** — macOS Gatekeeper/quarantine & Linux exec bit for distributed binaries.
-  - **#311** — clean-machine first-run smoke test on each OS.
+  Half done as of `v0.3.0-beta.1`: the *behavioural* children have landed, the *packaging and
+  terminal-verification* ones haven't. The `linux-x64` / `osx-arm64` release artifacts stay
+  disabled until the rest are resolved or explicitly accepted as non-blocking. Children:
+  - ✅ **#306** — secure token storage at rest: OS secret store on all three platforms
+    (DPAPI / Keychain / Secret Service), hardened `0600` plaintext fallback (#382).
+  - ✅ **#307** — agent-dispatch terminal launch: broadened Linux detection + `tmux` path.
+  - ✅ **#308** — open-in-browser (`open` / `xdg-open`).
+  - ⬜ **#309** — TUI rendering & keybindings (F-keys, Option/Alt, glyph width, color).
+  - ⬜ **#310** — macOS Gatekeeper/quarantine & Linux exec bit for distributed binaries.
+  - ⬜ **#311** — clean-machine first-run smoke test on each OS.
 
-  This gate does **not** affect the Windows beta or contributors running from source.
+  This gate does **not** affect the Windows beta or contributors running from source. #426
+  (optional passphrase-encrypted token fallback) is a deferred nice-to-have, not part of the gate.
 - **#39 — name/identifier rename.** Decide the public command name, package id, and
   namespace *before* the first public NuGet publish; the id is effectively permanent.
   Not a blocker for GitHub-Release-binary betas.

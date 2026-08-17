@@ -11,7 +11,7 @@ No developer tools required.
 ## 1. Download
 
 1. Go to the repo's **[Releases](https://github.com/rbcministries/clickup-todo-cli/releases)** page.
-2. Open the latest **Pre-release** (tagged like `v0.1.0-beta.1`).
+2. Open the latest **Pre-release** (tagged like `v0.3.0-beta.1`).
 3. Under **Assets**, download `clickup-todo-<version>-win-x64.exe`.
 
 That single file is the whole app — nothing to install.
@@ -22,7 +22,7 @@ Double-click the `.exe`, or run it from a terminal (PowerShell / Windows Termina
 see it in your usual console:
 
 ```powershell
-.\clickup-todo-0.1.0-beta.1-win-x64.exe
+.\clickup-todo-0.3.0-beta.1-win-x64.exe
 ```
 
 > **"Windows protected your PC" (SmartScreen)?** That's expected — the beta build isn't
@@ -34,8 +34,8 @@ see it in your usual console:
 The app walks you through a short setup the first time:
 
 1. **Paste a ClickUp personal API token.** In ClickUp: **Settings → Apps → API Token**; it
-   starts with `pk_`. The token is validated immediately. *(On Windows it's stored encrypted at
-   rest, tied to your Windows user.)*
+   starts with `pk_`. The token is validated immediately. *(It's kept in your OS secret store —
+   on Windows that's DPAPI, tied to your Windows user.)*
 2. **Choose your workspace.**
 3. **Pick your "Personal Tasks" list.**
 4. **Pick a refresh interval** (default 60 seconds).
@@ -51,24 +51,54 @@ background. The essentials:
 | --- | --- |
 | `↑` / `↓` | Move between tasks |
 | `Tab` | Switch between **Current Focus** and **Tasks** |
-| `Ctrl+U` | Quick Updates — status / priority / assignees |
 | `Enter` | Open the task in **Task Detail** |
+| `Ctrl+U` | Quick Updates — status / priority / assignees / lists |
+| `Ctrl+N` | New task (or subtask) |
+| `F2` | Rename whatever's highlighted |
+| `Ctrl+O` | Open any task by id, custom id, or URL |
+| `Ctrl+Enter` | Open the task in its own terminal tab |
 | `Ctrl+B` | Open the task in your browser |
 | `Ctrl+P` | Pin / unpin to the Focus pane |
 | `Ctrl+E` | Mentions & Comments feed |
-| `F5` | Refresh now · `F1` Help · `Ctrl+Q`/`Esc` Quit |
+| `F5` | Refresh now · `F1` Help · `F10` Settings · `Ctrl+Q`/`Esc` Quit (asks first) |
+
+Inside **Task Detail**, `Ctrl+←`/`Ctrl+→` switch tabs (Stream · Description · Comments · Other ·
+Checklists · Task Tree), `Ctrl+N` adds a comment, `Ctrl+E` edits the description,
+`Del` deletes the highlighted comment / checklist item / subtask, and `Ctrl+A` dispatches an
+agent session for the task. Links in a task's text are underlined and clickable — or `Tab` to
+one and press `Enter`.
 
 Press `F1` in the app for the full, per-screen shortcut list. More details are in the
 [README](../README.md).
 
+## Coming from an earlier beta? Five keys moved
+
+| You used to press | Now |
+| --- | --- |
+| `Space` — change status | **`Ctrl+U`** — Quick Updates (status, priority, assignees, lists) |
+| `F2` — Settings | **`F10`** — Settings. `F2` is now **Rename** |
+| `Tab` — switch Task Detail tab | **`Ctrl+←` / `Ctrl+→`** |
+| `Esc` / `Ctrl+Q` — instant quit | Quitting asks first (turn it off in `F10` → *Confirm on exit*) |
+| `Ctrl+B` in Task Detail — also closed the view | Keeps the task on screen (`F10` → *Detail view* to restore) |
+
+Your token, settings and pinned tasks carry over — just replace the `.exe`.
+
 ## What's in this beta
 
-**Working:** the task list & triage (status, pin, group/sort/filter), the Task Detail view,
-the Mentions & Comments feed, background refresh with local caching, and launching an agent
-session from a task (Dispatch).
+**Reading & triage:** the task list (status, pin, group / sort / filter, subtask nesting), Task
+Detail, the Mentions & Comments feed, background refresh with local caching.
 
-**Not in this beta yet:** creating new tasks and the inline Quick Updates panel (status /
-priority / assignees from the list) are still in progress and land in a later beta.
+**Writing:** new tasks and subtasks with custom fields, comments and threaded replies,
+description editing, @-mentions of real ClickUp users, checklists (add / rename / resolve /
+assign / reorder), renames, and deletes — all with a confirmation where it matters.
+
+**Getting around:** open any task by id or URL (`Ctrl+O`), park a task in its own terminal tab
+(`Ctrl+Enter` / `--task`), run several tabs at once and see each other's edits, mouse clicks
+alongside every keyboard shortcut.
+
+**Agents:** dispatch a coding-agent session from a task, into a new window, tab, or split pane.
+
+**Not yet:** managing **tags**, and the in-app agent chat surface. Both are planned.
 
 ## Known limitations
 
@@ -78,10 +108,15 @@ priority / assignees from the list) are still in progress and land in a later be
 - **Mentions feed** only shows mentions on tasks **assigned to you** unless a per-Space ClickUp
   automation turns mentions into assignments — see
   [docs/mention-assignee-automation.md](mention-assignee-automation.md).
+- **Opening a task in a new tab** (or split pane) needs `clickup-todo` on your `PATH`. When no
+  terminal can be launched, the command is copied to your clipboard instead.
+- **Two tabs editing the same field** — the later save wins, silently. ClickUp's API has no
+  version check, so there's nothing to warn on.
 
 ## Found a bug?
 
-Please [open an issue](https://github.com/rbcministries/clickup-todo-cli/issues/new) and include:
+Please [open an issue](https://github.com/rbcministries/clickup-todo-cli/issues/new?template=bug_report.yml)
+and include:
 
 - **What happened** vs. what you expected, and steps to reproduce.
 - Your **Windows version** and **terminal** (e.g. Windows Terminal, PowerShell, conhost).
