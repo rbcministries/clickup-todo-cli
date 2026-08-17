@@ -161,7 +161,7 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | Key                   | Icon | Action                                                 |
 | --------------------- | :--: | ------------------------------------------------------ |
 | `↑` / `↓`, `PgUp` / `PgDn` | | Scroll the pane                                      |
-| `Ctrl+←` / `Ctrl+→`   |      | Switch tab (Description / Comments / Other)            |
+| `Ctrl+←` / `Ctrl+→`   |      | Switch tab (Stream / Description / Comments / Other / Checklists / Task Tree) |
 | `Ctrl+PgUp` / `Ctrl+PgDn` | ▼▲ | Order the comments & activity feed                    |
 | `Ctrl+A`              | ✨   | Dispatch a Claude session for this task                |
 | `Ctrl+N`              | ➕   | Add a comment                                          |
