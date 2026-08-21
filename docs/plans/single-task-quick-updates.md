@@ -86,8 +86,8 @@ Two corrections came out of the review of this branch:
 - **The status colour has to travel with the name.** `ApplyStatusChange` folded only `StatusName`, so a
   committed status rendered in the *previous* status's colour. On the main list the next background poll
   repaints it; on the Task Tree tab it does not — `_treeLoaded` is set once per screen and never reset, so
-  a stale colour would persist for the life of that view. `ApplyStatusChange` now takes the colour
-  alongside the name (its only production caller is `ApplyFieldChanges`, which passes `updated.StatusColor`
+  a stale colour would persist for the life of that view (the one-shot tree load is now tracked on its own,
+  #632). `ApplyStatusChange` now takes the colour alongside the name (its only production caller is `ApplyFieldChanges`, which passes `updated.StatusColor`
   — a no-op for every caller that doesn't set it), and `ApplyStatus` resolves the committed colour it
   already computes for the header reflection onto the applied record, on the optimistic, confirmed and
   reverted apply alike. The list row's colour lag is fixed as a side effect.
@@ -165,10 +165,13 @@ Replaces the deferral flash with `OpenQuickUpdates(tab, request)`:
 
 ### Concurrency corrections (also from review)
 
-- **`_statusCommitGen` / `_priorityCommitGen` are now per task id**, like `TodoApp._nameCommitGen`. A
-  tree-scoped `Ctrl+U` means two writes for two *different* tasks can be in flight, and one global counter
-  each would let the later commit's generation cancel the earlier task's confirm/revert — stranding its row
-  on a value the server rejected, with no error flashed.
+- **`_statusCommitGen` / `_priorityCommitGen` are now per task id**, like `TodoApp._nameCommitGen`. One
+  `Ctrl+U` always targets exactly one task, so this is never about staging two tasks at once; it is about
+  two *sequential* commits whose (deliberately untokened) writes overlap in time. One global counter each
+  let the second one's generation cancel the first task's confirm/revert — stranding that row on a value
+  the server rejected, with no error flashed, or on a never-cleared `(sending…)` marker. **Pre-existing**:
+  the main list could already reach it (commit on row A, Esc, move, commit on row B). Tree-scoped `Ctrl+U`
+  makes it far easier to hit — same screen, no navigation — which is what surfaced it.
 - **`_armedListRemoval` is behind a lock.** It is written from the thread-pool thread inside
   `ApplyListAsync` (the writes are deliberately untokened, so one can still be in flight) and cleared from
   the UI thread in `Show`; unsynchronised, that multi-word struct can be read torn. Pre-existing in
