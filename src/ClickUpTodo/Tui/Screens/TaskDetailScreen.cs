@@ -22,6 +22,14 @@ namespace ClickUpTodo.Tui.Screens;
 /// re-reading the tree's selected row.</summary>
 public readonly record struct TreeTaskRenameRequest(string TaskId, string CurrentName);
 
+/// <summary>The target of a Ctrl+U Quick Updates launch from Task Detail (#159/#290): the highlighted
+/// Task Tree row's task when the request came from that tab, else <c>null</c> for "the task this detail
+/// shows". Carried by <see cref="TaskDetailScreen.QuickUpdatesRequested"/> so the host can seed the screen
+/// (and pick its write target) without re-reading the tree's selected row. The tree row is a fully-fetched
+/// <see cref="TaskItem"/>, so it carries the assignee ids and status <c>type</c> a
+/// <see cref="ClickUpTodo.Services.TaskItemProjection"/> of a detail cannot.</summary>
+public readonly record struct QuickUpdatesRequest(TaskItem? TreeTask);
+
 /// <summary>
 /// A full-window screen showing a task's detail (issue #17): a header (title, tags, assignees) above
 /// a tabbed, scrollable pane — Stream / Description / Comments / Other attributes. Built on the shared
@@ -559,12 +567,19 @@ public sealed class TaskDetailScreen : Screen
     public event EventHandler? RefreshRequested;
 
     /// <summary>
-    /// Raised when the user asks to open Quick Updates (Ctrl+U, #159) for this task. The host stacks the
-    /// Quick Updates screen over the detail view; on exit the screen seam pops back here, and
+    /// Raised when the user asks to open Quick Updates (Ctrl+U, #159). The host stacks the Quick Updates
+    /// screen over the detail view; on exit the screen seam pops back here, and
     /// <see cref="ApplyOptimisticStatus"/> reflects a status change made there so the returned-to detail
     /// shows it immediately.
+    /// <para>
+    /// The argument names the <em>target</em>: on the <b>Task Tree tab</b> it carries the highlighted
+    /// node's task, so Quick Updates applies to that row rather than to the task this detail shows —
+    /// uniform with the tab's other row-scoped chords (F2 rename #545/#605, Delete #594, Enter navigate
+    /// #291). On every other tab it is null, meaning this screen's own task, and
+    /// <see cref="ApplyTreeTaskFields"/> is how the host repaints a tree row it committed against.
+    /// </para>
     /// </summary>
-    public event EventHandler? QuickUpdatesRequested;
+    public event EventHandler<QuickUpdatesRequest>? QuickUpdatesRequested;
 
     /// <summary>
     /// Raised when the user asks to quick-open another task by id / custom id / URL (Ctrl+O, #353) from
@@ -1867,13 +1882,14 @@ public sealed class TaskDetailScreen : Screen
             return;
         }
 
-        // Ctrl+U opens Quick Updates for this task (#159), stacked over the detail view; Esc there pops
-        // back here. Same chord shape as Ctrl+A/B above and inert while the Dispatch prompt is open, so
-        // it never interferes with typing a prompt or a read-only pane.
+        // Ctrl+U opens Quick Updates (#159), stacked over the detail view; Esc there pops back here. Same
+        // chord shape as Ctrl+A/B above and inert while the Dispatch prompt is open, so it never
+        // interferes with typing a prompt or a read-only pane. On the Task Tree tab it targets the
+        // highlighted node instead of this screen's task — see RequestQuickUpdates.
         if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.U && !_promptBox.Visible)
         {
             key.Handled = true;
-            QuickUpdatesRequested?.Invoke(this, EventArgs.Empty);
+            RequestQuickUpdates();
             return;
         }
 
@@ -4582,6 +4598,27 @@ public sealed class TaskDetailScreen : Screen
         RenameTreeTaskRequested?.Invoke(this, new TreeTaskRenameRequest(task.Id, task.Name));
     }
 
+    /// <summary>Ctrl+U on the Task Tree tab (#159/#290): request Quick Updates for the <em>highlighted
+    /// node's</em> task, rather than the task this detail shows — uniform with the tab's other row-scoped
+    /// chords (F2 rename #545/#605, Delete #594, Enter navigate #291), and with single-task mode, which
+    /// wires the same request. On every other tab the request carries no node, meaning this screen's task.
+    /// A placeholder/message row (no task, e.g. "(no task tree)" or a load error) is inert-but-flashed
+    /// rather than a silent no-op — mirroring <see cref="RequestTreeRename"/>'s guard.</summary>
+    private void RequestQuickUpdates()
+    {
+        if (_treeList is not null && ReferenceEquals(_tabs.Value, _treeList))
+        {
+            if (SelectedTreeTask() is not { } node)
+            {
+                RequestFlash("Select a task to update.");
+                return;
+            }
+            QuickUpdatesRequested?.Invoke(this, new QuickUpdatesRequest(node));
+            return;
+        }
+        QuickUpdatesRequested?.Invoke(this, new QuickUpdatesRequest(null));
+    }
+
     /// <summary>
     /// Optimistically reflects an F2 rename made from the Task Tree tab (H, #545), called by the host on the
     /// confirmed submit (and again with the server-confirmed name, or the previous name on a failed write —
@@ -4597,6 +4634,34 @@ public sealed class TaskDetailScreen : Screen
         if (string.Equals(taskId, _task.Id, StringComparison.Ordinal))
             UpdateData(_task with { Name = newName }, _comments);
 
+        ReplaceTreeRow(taskId, task => task with { Name = newName });
+    }
+
+    /// <summary>
+    /// Optimistically reflects a Quick Updates commit against <paramref name="updated"/>'s task onto its
+    /// Task Tree row (#159/#290), called by the host through its write target on the optimistic apply, the
+    /// server-confirmed settle and a revert alike — so a status/priority/assignee set from the tree is
+    /// visible on the row the user set it on, cursor preserved. The row counterpart of the header
+    /// reflection (<see cref="ApplyOptimisticStatus"/>); the header is deliberately <b>not</b> touched
+    /// here — the host reflects it separately, and only when the committed task is the one this detail
+    /// shows.
+    /// <para>
+    /// The three committed fields are <em>folded</em> onto the row via
+    /// <see cref="TaskService.ApplyFieldChanges"/> (Quick Updates' own shared reconcile) rather than the
+    /// row being replaced wholesale: the record the host resolves may come from a different source than
+    /// the tree's own fetch (the main-list snapshot in the dashboard), so folding keeps the row's title
+    /// and ancestry intact. A no-op when the tree hasn't loaded or doesn't contain the id.
+    /// </para>
+    /// </summary>
+    public void ApplyTreeTaskFields(TaskItem updated)
+        => ReplaceTreeRow(updated.Id, row => TaskService.ApplyFieldChanges([row], updated)[0]);
+
+    /// <summary>Re-renders the loaded tree row for <paramref name="taskId"/> with
+    /// <paramref name="update"/> applied to its task, preserving the cursor. Shared by
+    /// <see cref="ApplyTreeRename"/> and <see cref="ApplyTreeTaskFields"/>; a no-op when the tree hasn't
+    /// loaded or doesn't hold the id (e.g. a mid-write refresh dropped the node).</summary>
+    private void ReplaceTreeRow(string taskId, Func<TaskItem, TaskItem> update)
+    {
         if (_treeList is null || _loadedTreeRows.Count == 0)
             return;
         var index = -1;
@@ -4610,7 +4675,7 @@ public sealed class TaskDetailScreen : Screen
             return;
 
         var rows = _loadedTreeRows.ToArray();
-        rows[index] = rows[index] with { Task = rows[index].Task with { Name = newName } };
+        rows[index] = rows[index] with { Task = update(rows[index].Task) };
         _loadedTreeRows = rows;
 
         // Assigning .Source (inside RenderTreeRows) resets the selection, so capture and restore it around
