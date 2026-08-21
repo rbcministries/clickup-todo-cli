@@ -56,111 +56,47 @@ public readonly record struct QuickOpenRequest(string Text, QuickOpenIntent Inte
 /// </summary>
 public sealed class QuickOpenScreen : Screen
 {
-    private readonly TextField _input;
-    private readonly KeybindingDispatcher _keys;
+    private readonly QuickOpenFormHandle _form;
+    private readonly KeybindingDispatcher _commandKeys;
     private readonly LaunchChordOverrides _launchChords;
 
     /// <summary>The submitted (trimmed) text + chosen launch intent, or null when the screen was
     /// cancelled.</summary>
-    public QuickOpenRequest? Result { get; private set; }
+    public QuickOpenRequest? Result => _form.Result;
 
     public QuickOpenScreen(LaunchChordOverrides? launchChords = null)
     {
         _launchChords = launchChords ?? LaunchChordOverrides.None;
         Title = "Open a task";
 
-        // #355/#398: dispatch the command shortcuts through the central table rather than a
-        // hand-rolled key switch, so the keys and their footer labels (HelpItemSets.QuickOpen)
-        // cannot drift. The three submit gestures pick the destination (launch modes B, #615);
-        // Help/Back round out the ScreenContext.QuickOpen entries.
-        _keys = new KeybindingDispatcher(ScreenContext.QuickOpen, _launchChords)
-            .On(KeyAction.Open, () => Submit(QuickOpenIntent.OpenHere))
-            .On(KeyAction.OpenInNewTab, () => Submit(QuickOpenIntent.NewTab))
-            .On(KeyAction.OpenInSplitPane, () => Submit(QuickOpenIntent.SplitPane))
+        // The control-building + the three submit gestures + the blank-input flash live in the shared
+        // QuickOpenFormBuilder (slice E, #618), so the native-modal Dialog host mounts the identical form.
+        // The launch-chord override (#506) threads into the builder's submit dispatcher, so a rebound
+        // Ctrl+Enter / Ctrl+Alt+Enter fires here too. Close/RequestFlash are this host's back/flash affordance.
+        _form = QuickOpenFormBuilder.Build(RequestFlash, Close, _launchChords);
+
+        // Context command keys stay on the host: F1 → Help, Esc → Back, resolved from the central table
+        // (#355/#398). The form owns the submit gestures; DispatchSubmit is wired at the screen level too
+        // so a chord fires from a focused button as well as from the text field. Help/Back aren't launch
+        // chords, so this dispatcher needs no override.
+        _commandKeys = new KeybindingDispatcher(ScreenContext.QuickOpen)
             .On(KeyAction.Help, RequestHelp)
             .On(KeyAction.Back, Close);
-
-        var prompt = new Label
-        {
-            X = 1,
-            Y = 1,
-            Text = "Task id, custom id, or URL:",
-            CanFocus = false,
-        };
-
-        _input = new TextField
-        {
-            X = 1,
-            Y = Pos.Bottom(prompt),
-            Width = Dim.Fill(1),
-        };
-
-        // Open stays the default (Enter); New tab / Split pane are the Tab-reachable, driver-robust path
-        // for the two chords (#615), and Cancel closes. Each button funnels through the same Submit(intent)
-        // the chords do, so the two entry paths can't drift.
-        var open = new Button { X = 1, Y = Pos.Bottom(_input) + 1, Text = "Open", IsDefault = true };
-        var newTab = new Button { X = Pos.Right(open) + 2, Y = Pos.Bottom(_input) + 1, Text = "New tab" };
-        var splitPane = new Button { X = Pos.Right(newTab) + 2, Y = Pos.Bottom(_input) + 1, Text = "Split pane" };
-        var cancel = new Button { X = Pos.Right(splitPane) + 2, Y = Pos.Bottom(_input) + 1, Text = "Cancel" };
-        open.Accepting += (_, e) =>
-        {
-            // Swallow the Accept so the default-button activation doesn't also bubble as an Enter.
-            e.Handled = true;
-            Submit(QuickOpenIntent.OpenHere);
-        };
-        newTab.Accepting += (_, e) =>
-        {
-            e.Handled = true;
-            Submit(QuickOpenIntent.NewTab);
-        };
-        splitPane.Accepting += (_, e) =>
-        {
-            e.Handled = true;
-            Submit(QuickOpenIntent.SplitPane);
-        };
-        cancel.Accepting += (_, e) =>
-        {
-            e.Handled = true;
-            Close();
-        };
-
-        // Intercept the submit chords/Esc on both the field and the screen so Enter/Ctrl+Enter/
-        // Ctrl+Alt+Enter submit from the text field (not just a focused button) and Esc always cancels.
-        _input.KeyDown += OnKey;
         KeyDown += OnKey;
 
-        Add([prompt, _input, open, newTab, splitPane, cancel]);
+        Add([.. _form.Controls]);
     }
 
     public override IReadOnlyList<HelpItem> HelpItems =>
         HelpItemSets.WithConfiguredLaunchChords(HelpItemSets.QuickOpen, _launchChords);
 
-    public override void OnShown() => _input.SetFocus();
+    public override void OnShown() => _form.PrimaryFocus.SetFocus();
 
     private void OnKey(object? sender, Key key)
     {
-        // Enter/Ctrl+Enter/Ctrl+Alt+Enter → Submit(intent), F1 → Help, Esc → Cancel, all resolved from the
-        // central table (#355/#398). A non-matching key falls through unhandled, exactly as before.
-        if (_keys.Dispatch(key))
+        // Enter/Ctrl+Enter/Ctrl+Alt+Enter → Submit(intent) (the form), F1 → Help, Esc → Back (the host).
+        // A non-matching key falls through unhandled, exactly as before.
+        if (_form.DispatchSubmit(key) || _commandKeys.Dispatch(key))
             key.Handled = true;
-    }
-
-    /// <summary>
-    /// Records the trimmed input + <paramref name="intent"/> and closes when the field is non-blank; a
-    /// blank field flashes a hint and stays open (for every intent) so the user can type rather than
-    /// dismissing the surface on an empty gesture. The parse/resolve/launch runs in the host once this
-    /// modal has closed.
-    /// </summary>
-    private void Submit(QuickOpenIntent intent)
-    {
-        if (QuickOpenRequest.From(_input.Text?.ToString(), intent) is { } request)
-        {
-            Result = request;
-            Close();
-        }
-        else
-        {
-            RequestFlash("Enter a task id, custom id, or ClickUp task URL.");
-        }
     }
 }
