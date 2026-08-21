@@ -171,7 +171,7 @@ full, per-screen help view (each screen also shows its own contextual shortcuts 
 | `Tab` / `Shift+Tab`   |      | Move the focus highlight to the next / previous link in the pane |
 | `Enter`               |      | Follow the focused link (task link → Task Detail, other → browser) |
 | Left-click a link     |      | Follow it — see [Follow links in a task's text](#follow-links-in-a-tasks-text) |
-| `Ctrl+U`              |      | Quick Updates for this task                            |
+| `Ctrl+U`              |      | Quick Updates — for this task, or for the highlighted node on the Task Tree tab |
 | `Ctrl+O`              | 🗁   | Open another task by id, custom id, or URL             |
 | `F5`                  | ↻    | Refresh                                                |
 | `F6`                  |      | Cycle status/priority badges in the Task Tree tab (opens in the list's badge state) |
@@ -192,9 +192,12 @@ and where, in a `--task` tab, it *quit the program*. For the old close-on-`Ctrl+
 **Settings (`F10`) → Detail view → `Ctrl+B` → "Open browser + close"**; a `--task` launch task always
 stays open regardless, since there is nothing to go back to.
 
-Quick Updates opens with `Ctrl+U` from both the main list and Task Detail. Pinned tasks persist
-across restarts. The list refreshes in the background on your configured interval, and your cursor
-stays on the same task across refreshes so the screen stays steady.
+Quick Updates opens with `Ctrl+U` from the main list, from Task Detail, and from a single-task
+(`--task`) tab. On Task Detail's **Task Tree** tab it applies to the node you have highlighted — the
+same row-scoped targeting `F2` (rename) and `Del` (delete) use there — so you can restatus a subtask
+without navigating to it. Pinned tasks persist across restarts. The list refreshes in the background on
+your configured interval, and your cursor stays on the same task across refreshes so the screen stays
+steady.
 
 ### Follow links in a task's text
 

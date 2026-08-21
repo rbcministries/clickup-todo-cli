@@ -182,10 +182,17 @@ if (launch.HasId)
     var singleTaskAssignees = new AssigneeFrequencyCache(
         stateStore, config.WorkspaceId, ct => client.GetWorkspaceMembersAsync(config.WorkspaceId, ct));
 
+    // The list-frequency candidate pool (#238) — the same type the dashboard uses — powers the Quick
+    // Updates List pane in the single-task tab. It owns no fetch delegate by design (the dashboard
+    // backfills it from the scheduled list-hierarchy walk, #236, which single-task mode doesn't run), so
+    // its candidates are whatever a prior dashboard session persisted for this workspace; the task's own
+    // memberships come from its detail either way.
+    var singleTaskLists = new ListFrequencyCache(stateStore, config.WorkspaceId);
+
     // Hand the single-task tab the same cross-process nudge channel the dashboard gets (#377), so an
     // edit to the launched task in another tab surfaces here promptly rather than only on the 30s tick.
     new SingleTaskApp(taskService, config, configStore, launchTask, launchComments,
-        changeMarkers: changeMarkers, assignees: singleTaskAssignees).Run(driverName);
+        changeMarkers: changeMarkers, assignees: singleTaskAssignees, lists: singleTaskLists).Run(driverName);
     return 0;
 }
 

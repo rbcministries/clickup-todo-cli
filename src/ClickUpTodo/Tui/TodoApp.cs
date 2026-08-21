@@ -2379,7 +2379,7 @@ public sealed class TodoApp
                     screen.RefreshRequested += (_, _) => RefreshDetail(screen, resolvedId);
                     // Ctrl+U opens Quick Updates for the detail's task, stacked over it; Esc pops back
                     // here (#159). Reads the screen's current task so a mid-view refresh is reflected.
-                    screen.QuickUpdatesRequested += (_, _) => OpenQuickUpdatesForDetail(screen);
+                    screen.QuickUpdatesRequested += (_, req) => OpenQuickUpdatesForDetail(screen, req);
                     // The Task Tree tab (#291): Enter/double-click a tree row opens that task's detail
                     // stacked over this one, so Esc walks back one task at a time — uniform with the
                     // canonical "Esc = Back" decision (#401/#298) and with the Ctrl+O detail→detail path
@@ -2701,349 +2701,78 @@ public sealed class TodoApp
     }
 
 
+    /// <summary>
+    /// Ctrl+U on the main list (#159/#290): opens Quick Updates for the selected task through the shared
+    /// <see cref="QuickUpdatesCoordinator"/>, committing against the list-backed write target so the
+    /// visible row repaints in place. The coordinator owns the no-list guard, the warmed-statuses fast
+    /// path and the off-thread status load.
+    /// </summary>
     private void OpenQuickUpdates()
     {
-        var task = CurrentTask();
-        if (task is null)
-            return;
-        // Quick Updates applies to any selected task, including one that isn't my own work — a context
-        // parent (#46) or a foreign subtask pulled in under my parent (#70/#179). The former ownership
-        // guards that blocked those rows were lifted in #160; only the no-list data constraint remains.
-        // The trailing "(not assigned to you)" row markers still convey the context.
-        if (string.IsNullOrWhiteSpace(task.ListId))
-        {
-            Flash("This task has no list, so its statuses can't be loaded.");
-            return;
-        }
-
-        // Fast path: statuses were warmed by the background prefetch — open instantly, no round-trip.
-        if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
-        {
-            ShowQuickUpdates(task, cached, ListTarget);
-            return;
-        }
-
-        // Cold path: fetch off the UI thread with a loading indicator, then show the screen back on it.
-        Flash("Loading statuses…");
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
-                Application.Invoke(() => ShowQuickUpdates(task, statuses, ListTarget));
-            }
-            catch (Exception ex)
-            {
-                Application.Invoke(() => Flash($"Could not load statuses: {ErrorText.Short(ex)}"));
-            }
-        });
+        if (CurrentTask() is { } task)
+            QuickUpdates.Open(task, ListTarget);
     }
 
     /// <summary>
-    /// Opens Quick Updates for the task shown in a <see cref="TaskDetailScreen"/> (#159), stacked over
-    /// it. Prefers the richer list <see cref="TaskItem"/> from the snapshot (fuller fidelity — assignee
-    /// ids, the status <c>type</c>); when the task isn't in the snapshot (e.g. opened from the feed) it
-    /// projects one from the detail. Mirrors <see cref="OpenQuickUpdates"/>'s cached-fast-path /
-    /// off-thread status load; only opens while the detail is still front-most.
+    /// Opens Quick Updates from a <see cref="TaskDetailScreen"/> (#159), stacked over it. Two targets,
+    /// chosen by where the Ctrl+U came from: on the <b>Task Tree tab</b> the request carries the
+    /// highlighted node's task and Quick Updates applies to <em>that</em> task (uniform with the tab's
+    /// other row-scoped chords — F2 rename #545/#605, Delete #594, Enter navigate #291 — and with
+    /// single-task mode, which wires the same request); on every other tab it applies to the task the
+    /// detail shows.
+    /// <para>
+    /// The record it seeds from prefers the richer list <see cref="TaskItem"/> in the snapshot (fuller
+    /// fidelity — assignee ids, the status <c>type</c>), then the tree row's own fetched item, and only
+    /// then a projection of the detail (a feed-opened task, #115, whose assignee ids are placeholders).
+    /// </para>
     /// </summary>
-    private void OpenQuickUpdatesForDetail(TaskDetailScreen detailScreen)
+    private void OpenQuickUpdatesForDetail(TaskDetailScreen detailScreen, QuickUpdatesRequest request)
     {
         if (!ReferenceEquals(ActiveScreen, detailScreen))
             return;
 
         var detail = detailScreen.Task;
-        var task = _all.FirstOrDefault(t => t.Id == detail.Id) ?? TaskItemProjection.FromDetail(detail);
-        // Mirror the list path (#160): Quick Updates applies to any task, including a context parent
-        // (#46) or foreign subtask (#70/#179) that isn't my own work; only the no-list guard remains.
-        if (string.IsNullOrWhiteSpace(task.ListId))
-        {
-            Flash("This task has no list, so its statuses can't be loaded.");
-            return;
-        }
+        var node = request.TreeTask;
+        var targetId = node?.Id ?? detail.Id;
+        // Resolve the seed the same way the write target below resolves its record — snapshot first, then
+        // the visible rows (QuickUpdatesTaskById), so a foreign subtask (#70/#179) or context parent (#46),
+        // which live in `_rows` but not `_all`, is seeded from its authoritative row rather than from the
+        // detail. That matters because a detail projection is lossy exactly where this screen writes:
+        // TaskItemProjection.FromDetail gives assignees a placeholder id of 0 (a TaskDetail carries names
+        // only), so an Assignees-pane remove seeded from one would issue a remove for id 0. A tree row is
+        // itself a fetched TaskItem, so it is the next-best seed; the projection is the last resort (a
+        // feed-opened task, #115, which has no authoritative record in hand).
+        var authoritative = QuickUpdatesTaskById(targetId) ?? node;
+        var task = authoritative ?? TaskItemProjection.FromDetail(detail);
 
-        // Decouple the write path from `_all` (#297): if the detail's task has a row/snapshot entry the
-        // list target repaints it (unchanged behaviour); otherwise — a feed-opened task (#115), and every
-        // task in single-task launch mode (#296) — the commit runs against the loaded task itself, so it
-        // no longer dead-ends at "no longer in the list" with no `_all` present.
-        // Frozen here, before the cold-path status fetch below: if an absent task materialised in `_all`
-        // during that await it would commit against the single-task target and not repaint the now-present
-        // row — benign (the write still lands; the next background refresh reconciles the row).
-        var target = QuickUpdatesTaskById(task.Id) is not null
+        // Decouple the write path from `_all` (#297): if the target task has a row/snapshot entry the
+        // list target repaints it (unchanged behaviour); otherwise — a feed-opened task (#115), a Task
+        // Tree ancestor/foreign node outside the working set, and every task in single-task launch mode
+        // (#296) — the commit runs against the loaded task itself, so it no longer dead-ends at "no
+        // longer in the list" with no `_all` present.
+        // Frozen here, before the coordinator's cold-path status fetch: if an absent task materialised in
+        // `_all` during that await it would commit against the single-task target and not repaint the
+        // now-present row — benign (the write still lands; the next background refresh reconciles it).
+        IQuickUpdateTarget target = QuickUpdatesTaskById(task.Id) is not null
             ? ListTarget
             : new SingleTaskUpdateTarget(task);
 
-        if (_tasks.TryGetCachedStatuses(task.ListId!, out var cached))
-        {
-            ShowQuickUpdates(task, cached, target, detailScreen);
-            return;
-        }
+        // Every commit from a detail also repaints the target's own Task Tree row (badges included), so a
+        // status or priority set from the tree is visible where the user set it — the row counterpart of
+        // the detail-header reflection below. Folds the committed fields onto the row, and no-ops when the
+        // tree tab hasn't been opened (its rows aren't loaded) or doesn't hold the id.
+        // Skipped for a projected seed: the fold re-applies assignees, so reflecting a projection's
+        // placeholder id-0 assignees would degrade a tree row that holds the real ids (its rows come from
+        // GetTaskItemAsync) — and the tree loads once per screen, so it would never self-heal. Such a task
+        // has no tree-tab presence worth repainting anyway; its row keeps the pre-commit values, as before.
+        if (authoritative is not null)
+            target = new ReflectingQuickUpdateTarget(target, detailScreen.ApplyTreeTaskFields);
 
-        Flash("Loading statuses…");
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var statuses = await _tasks.GetStatusesForListAsync(task.ListId!);
-                Application.Invoke(() => ShowQuickUpdates(task, statuses, target, detailScreen));
-            }
-            catch (Exception ex)
-            {
-                Application.Invoke(() => Flash($"Could not load statuses: {ErrorText.Short(ex)}"));
-            }
-        });
-    }
-
-    /// <summary>Shows the Quick Updates screen for a task and wires its Status/Priority commits. Must
-    /// run on the UI thread. Status and Priority apply on Enter (#157) — the screen stays open (Esc
-    /// exits); the Assignees pane's apply lands in #158.
-    /// <para>
-    /// <paramref name="detailOrigin"/> is the <see cref="TaskDetailScreen"/> Quick Updates was launched
-    /// from (#159), or null for the list origin. It governs the stacking guard (the list opens over
-    /// nothing; a detail launch stacks over exactly that screen) and receives an optimistic reflection of
-    /// each committed status/priority so the popped-back detail shows the change.
-    /// </para>
-    /// </summary>
-    private void ShowQuickUpdates(TaskItem task, IReadOnlyList<StatusOption> statuses,
-        IQuickUpdateTarget target, TaskDetailScreen? detailOrigin = null)
-    {
-        if (statuses.Count == 0)
-        {
-            Flash("No statuses available for this list.");
-            return;
-        }
-
-        // One screen is focused at a time (#3/#38): the list origin opens over nothing; the detail origin
-        // stacks over exactly the screen that requested it. A stale off-thread status load whose origin is
-        // no longer front-most is dropped here.
-        if (!ReferenceEquals(ActiveScreen, detailOrigin))
-            return;
-
-        // Fresh open ⇒ no armed stranding-remove carried over, so a first remove always re-warns (#365).
-        _armedListRemoval = null;
-
-        // List pane (#242/#365): seed the home list (from the snapshot TaskItem, which always carries the
-        // home list) and any additional "Tasks in Multiple Lists" locations. A detail-origin launch has
-        // the full membership on hand (detailOrigin.Task.Lists); a list-origin launch has only the home
-        // list here and is enriched in the background below.
-        var homeList = string.IsNullOrWhiteSpace(task.ListId)
-            ? null
-            : new NamedEntity(task.ListId!, task.ListName ?? task.ListId!);
-        var additionalLists = (IReadOnlyList<NamedEntity>)(detailOrigin?.Task.Lists ?? [])
-            .Where(l => !string.Equals(l.Id, task.ListId, StringComparison.Ordinal))
-            .ToList();
-
-        var screen = new QuickUpdatesScreen(
-            task.Name, statuses, task.StatusName, task.PriorityLevel, task.Assignees,
-            // Assignees pane (#158): candidate pool from the frequency cache (#155); add/remove apply
-            // immediately via ApplyAssigneeAsync (the selector owns the optimistic update + revert).
-            _assignees.Match, _assignees.TopMostFrequent,
-            (kind, person, ct) => ApplyAssigneeAsync(task.Id, kind, person, target, ct),
-            // List pane (#242/#365): candidate pool from the list frequency cache; add/remove apply
-            // immediately via ApplyListAsync, which runs the field-strand preflight + arm/confirm.
-            homeList, additionalLists,
-            _lists.Match, _lists.TopMostFrequent,
-            (kind, list, ct) => ApplyListAsync(task.Id, kind, list, ct));
-        // Status/Priority apply on Enter and reconcile the screen's ✓ from the server-confirmed value.
-        // The commit resolves against and writes back to `target` (#297) — the list snapshot in list mode,
-        // the loaded task with no list in single-task mode — decoupling the write path from `_all`.
-        // A detail-origin launch (#159) also reflects each committed value onto the detail so the
-        // popped-back detail shows it; `statuses` supplies the colour for a reflected status.
-        screen.StatusCommitted += status => ApplyStatus(task.Id, status, screen, target, detailOrigin, statuses);
-        screen.PriorityCommitted += level => ApplyPriority(task.Id, level, screen, target, detailOrigin);
-        ShowScreen(screen, static () => { });
-
-        // A list-origin launch has only the home list from the snapshot; fetch the full membership in the
-        // background and enrich the pane's additional locations (#242). A detail-origin launch already
-        // seeded them above.
-        if (detailOrigin is null)
-            EnrichListMemberships(task.Id, screen);
-    }
-
-    // The armed (taskId, listId) for a stranding List-pane remove awaiting a second-press confirmation
-    // (#365). A single field suffices: the pane is modal, one task at a time, and a fresh open re-seeds.
-    private (string TaskId, string ListId)? _armedListRemoval;
-
-    /// <summary>
-    /// Background-fetches a task's full membership and merges its additional "Tasks in Multiple Lists"
-    /// locations into an open Quick Updates List pane (#242). Only runs for a list-origin launch, where
-    /// the snapshot TaskItem carries only the home list. A failed/empty fetch leaves the pane seeded with
-    /// the home list; the enrich no-ops if the screen has moved on or the user already began editing.
-    /// </summary>
-    private void EnrichListMemberships(string taskId, QuickUpdatesScreen screen)
-    {
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var detail = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
-                if (detail.Lists.Count == 0)
-                    return;
-                Application.Invoke(() =>
-                {
-                    if (ReferenceEquals(ActiveScreen, screen))
-                        screen.SeedListMemberships(detail.Lists);
-                });
-            }
-            catch
-            {
-                // Best-effort enrich: on failure the pane keeps the home-list seed and any user
-                // add/remove still reconciles from the server truth — not worth a flash.
-            }
-        });
-    }
-
-    /// <summary>
-    /// Performs a Quick Updates List-pane add/remove (#242) behind the field-strand handling (#365).
-    /// Runs off the UI thread inside the selector's immediate-apply callback and returns the
-    /// server-confirmed membership so the embedded <see cref="ListSelectorView"/> can reconcile. The
-    /// membership endpoints echo no body, so the confirmed set is read back from a fresh
-    /// <see cref="TaskService.GetTaskDetailAsync"/> — the home list plus the additional locations.
-    /// <para><b>Add</b> is always safe and writes immediately. <b>Removing the home list</b> is a
-    /// <i>move</i> (out of scope): it's blocked with a flash and the membership returned unchanged.
-    /// <b>Removing an additional list</b> runs a preflight — comparing the task's set Custom Field values
-    /// (from the detail) against each list's field definitions
-    /// (<see cref="TaskService.GetListCustomFieldsAsync"/>) via
-    /// <see cref="ListMembershipMigration.StrandedFieldsOnRemove"/>. When nothing would be stranded it
-    /// writes silently; when set values only the removed list defines would be hidden it flashes them and
-    /// <b>arms</b> a second-press confirmation, returning the membership unchanged so the row re-shows.
-    /// The confirming press writes. See <c>docs/plans/completed/list-change-field-status-migration.md</c>.</para>
-    /// <para>Flashes (home-guard / arm) are marshalled to the UI thread; unlike
-    /// <see cref="ApplyAssigneeAsync"/> the main-list row shows only the home list, so there is no host
-    /// row to reconcile.</para>
-    /// </summary>
-    private async Task<IReadOnlyList<NamedEntity>> ApplyListAsync(
-        string taskId, ToggleKind kind, NamedEntity list, CancellationToken ct)
-    {
-        // Deliberately do NOT thread the selector's token into the write: it's cancelled when the screen
-        // is disposed (Esc), so forwarding it would drop an add/remove the user already saw applied. Same
-        // rationale as ApplyAssigneeAsync / ApplyStatus.
-        _ = ct;
-
-        // Add is always safe (it only exposes fields, never hides them) — no preflight, so skip the
-        // detail read the strand check would need and just write + read the confirmed set back.
-        if (kind == ToggleKind.Added)
-        {
-            _armedListRemoval = null;
-            await _tasks.AddTaskToListAsync(taskId, list.Id).ConfigureAwait(false);
-            return await ReadMembershipAsync(taskId).ConfigureAwait(false);
-        }
-
-        // A remove needs the current server truth (home + additional locations) to guard the home list
-        // and to return the membership unchanged on a block/arm; the task's set field values drive the
-        // strand preflight.
-        var detail = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
-        var home = HomeListOf(detail);
-        var currentMembership = ListSelectorModel.Membership(home, detail.Lists);
-
-        var armed = _armedListRemoval is { } a
-            && string.Equals(a.TaskId, taskId, StringComparison.Ordinal)
-            && string.Equals(a.ListId, list.Id, StringComparison.Ordinal);
-        var removingHome = home is { } h && string.Equals(h.Id, list.Id, StringComparison.Ordinal);
-
-        // Preflight the strand hazard only when it can change the outcome: not for the home list (blocked
-        // regardless) and not once armed (the user already confirmed, so the planner ignores the set).
-        IReadOnlyList<string> stranded = [];
-        if (!removingHome && !armed)
-        {
-            var remaining = currentMembership
-                .Select(l => l.Id)
-                .Where(id => !string.Equals(id, list.Id, StringComparison.Ordinal))
-                .ToList();
-            var perListDefs = await FetchPerListDefinitionsAsync([list.Id, .. remaining]).ConfigureAwait(false);
-            stranded = ListMembershipMigration.StrandedFieldsOnRemove(
-                detail.CustomFields, list.Id, perListDefs, remaining);
-        }
-
-        var decision = ListMembershipApplyPlanner.Plan(kind, list, home?.Id, stranded, armed);
-        switch (decision.Action)
-        {
-            case ListApplyAction.BlockHomeRemove:
-                FlashOnUi(decision.Message!);
-                return currentMembership; // unchanged → selector re-shows the (home) row
-            case ListApplyAction.ArmRemoveConfirmation:
-                _armedListRemoval = (taskId, list.Id);
-                FlashOnUi(decision.Message!);
-                return currentMembership; // unchanged → row re-shows; a second remove confirms
-            default: // WriteRemove (strand-free, or the armed confirmation)
-                _armedListRemoval = null;
-                await _tasks.RemoveTaskFromListAsync(taskId, list.Id).ConfigureAwait(false);
-                return await ReadMembershipAsync(taskId).ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>Reads a task's server-confirmed list membership (home + additional locations) back from a
-    /// fresh detail fetch — the membership endpoints echo no body, so the confirmed set comes from here.</summary>
-    private async Task<IReadOnlyList<NamedEntity>> ReadMembershipAsync(string taskId)
-    {
-        var detail = await _tasks.GetTaskDetailAsync(taskId).ConfigureAwait(false);
-        return ListSelectorModel.Membership(HomeListOf(detail), detail.Lists);
-    }
-
-    /// <summary>Fetches the Custom Field definitions of each list, keyed by list id (blank ids and
-    /// duplicates dropped). A list whose fetch fails is left absent so
-    /// <see cref="ListMembershipMigration.StrandedFieldsOnRemove"/> treats it conservatively.</summary>
-    private async Task<IReadOnlyDictionary<string, IReadOnlyList<CustomFieldDefinition>>> FetchPerListDefinitionsAsync(
-        IEnumerable<string> listIds)
-    {
-        var result = new Dictionary<string, IReadOnlyList<CustomFieldDefinition>>(StringComparer.Ordinal);
-        foreach (var id in listIds.Where(i => !string.IsNullOrWhiteSpace(i)).Distinct(StringComparer.Ordinal))
-        {
-            try
-            {
-                result[id] = await _tasks.GetListCustomFieldsAsync(id).ConfigureAwait(false);
-            }
-            catch
-            {
-                // Absent key ⇒ conservative (potentially-stranding) treatment in the migration core.
-            }
-        }
-        return result;
-    }
-
-    /// <summary>Flashes a message from a background thread by marshalling to the UI thread.</summary>
-    private void FlashOnUi(string message) => Application.Invoke(() => Flash(message));
-
-    /// <summary>The home list of a task detail as a NamedEntity, or null when it has no list. Falls the
-    /// display name back to the id if the detail carries none (the marker still shows).</summary>
-    private static NamedEntity? HomeListOf(TaskDetail detail)
-        => string.IsNullOrWhiteSpace(detail.ListId)
-            ? null
-            : new NamedEntity(detail.ListId!, string.IsNullOrWhiteSpace(detail.ListName) ? detail.ListId! : detail.ListName!);
-
-    /// <summary>
-    /// Performs a Quick Updates Assignees-pane add/remove (#158): writes the change to ClickUp off the
-    /// UI thread and returns the <b>server-confirmed</b> assignee set so the embedded
-    /// <see cref="AssigneeSelectorView"/> can reconcile its own pane display. On success it also
-    /// reconciles the task's row in the canonical snapshot + visible list (mirroring
-    /// <see cref="ApplyStatus"/>) so the main list — hidden behind the modal — and its assignee badge
-    /// (#F6) reflect the change once the screen is dismissed. The selector owns the optimistic pane
-    /// update and the revert-on-failure; a throw here propagates to it. The host row only ever moves to
-    /// a confirmed set, so a failed write leaves it untouched (nothing to revert host-side); overlapping
-    /// same-task writes settle on the last-returning confirmed set and self-heal on the next refresh.
-    /// </summary>
-    private async Task<IReadOnlyList<TaskAssignee>> ApplyAssigneeAsync(
-        string taskId, ToggleKind kind, TaskAssignee person, IQuickUpdateTarget target, CancellationToken ct)
-    {
-        // Deliberately do NOT thread the selector's cancellation token into the write: that token is
-        // cancelled when the screen is disposed (Esc), so forwarding it would cancel an in-flight
-        // add/remove the user has already seen applied — silently dropping it until the next refresh.
-        // Status/Priority commits (ApplyStatus/ApplyPriority) issue their writes untokened for the same
-        // reason; assignees match that. The token still guards the *view's* own reconcile/revert (it
-        // re-checks IsCancellationRequested), and our row reconcile below is guarded by
-        // QuickUpdatesTaskById.
-        _ = ct;
-        var confirmed = kind == ToggleKind.Added
-            ? await _tasks.AddAssigneeAsync(taskId, person.Id).ConfigureAwait(false)
-            : await _tasks.RemoveAssigneeAsync(taskId, person.Id).ConfigureAwait(false);
-        Application.Invoke(() =>
-        {
-            // Resolve/apply through the target (#297): the list target reconciles the row in place — for a
-            // foreign subtask / context parent too (#160), not just tasks in _all — while a single-task
-            // target updates the loaded task with no list present.
-            if (target.Resolve(taskId) is { } t)
-                target.Apply(t with { Assignees = confirmed }, sending: false);
-        });
-        return confirmed;
+        // Reflect committed values onto the detail only when the target IS the task that detail shows
+        // (#159) — a tree row for another task must not repaint this header (and its memberships must not
+        // seed the List pane; the coordinator background-enriches those instead).
+        var reflect = string.Equals(task.Id, detail.Id, StringComparison.Ordinal) ? detailScreen : null;
+        QuickUpdates.Open(task, target, detailScreen, reflect);
     }
 
     /// <summary>The current record for <paramref name="taskId"/> in the canonical snapshot, or null if
@@ -3070,12 +2799,18 @@ public sealed class TodoApp
     private IQuickUpdateTarget? _listTarget;
     private IQuickUpdateTarget ListTarget => _listTarget ??= new ListUpdateTarget(this);
 
-    // Monotonic per-field commit counters. The Quick Updates screen stays open, so the user can fire a
-    // second write for the same field before the first returns; each commit stamps its generation and a
-    // late continuation whose generation is no longer current is dropped, so the row + ✓ settle on the
-    // latest commit regardless of the order the responses arrive in.
-    private int _statusCommitGen;
-    private int _priorityCommitGen;
+    // The shared Quick Updates orchestration, over this host's screen stack + footer. One instance per
+    // host (it carries the per-field commit generations and the armed stranding-remove), built on first
+    // use so a session that never opens Quick Updates never builds it. SingleTaskApp builds its own the
+    // same way, which is what keeps the two hosts on one code path.
+    private QuickUpdatesCoordinator? _quickUpdates;
+    private QuickUpdatesCoordinator QuickUpdates => _quickUpdates ??= new(
+        _tasks, _assignees, _lists,
+        isFrontMost: screen => ReferenceEquals(ActiveScreen, screen),
+        isMounted: _screens.Contains,
+        flash: Flash,
+        mount: screen => ShowScreen(screen, static () => { }));
+
     // The same monotonic-generation guard for F2 renames (#545), but keyed PER TASK ID: the overlay is
     // one-shot, yet a background refresh can land between a rename's optimistic apply and its confirm, and
     // — since the main-list rename and the Task Tree rename (which can target a different task, from a
@@ -3095,124 +2830,6 @@ public sealed class TodoApp
     /// <paramref name="taskId"/> — false once a newer rename of that same task superseded it.</summary>
     private bool IsCurrentNameCommit(string taskId, int gen)
         => _nameCommitGen.GetValueOrDefault(taskId) == gen;
-
-    /// <summary>
-    /// Applies a Quick Updates status commit for <paramref name="taskId"/>: move the ✓ optimistically,
-    /// optimistic row update, then an off-thread write, confirming with the server's returned status on
-    /// success and reverting the one row on failure. The task is looked up fresh from the snapshot so
-    /// consecutive edits compose; a superseded (out-of-order) continuation is dropped; the screen's ✓ is
-    /// reconciled to the confirmed/reverted value while it's still mounted.
-    /// <para>
-    /// When launched from the Task Detail view (#159), <paramref name="detailOrigin"/> is that screen and
-    /// <paramref name="statuses"/> its list's status options; the committed/confirmed/reverted status is
-    /// reflected onto the detail (with the matching colour) so it stays in sync with the list row.
-    /// </para>
-    /// </summary>
-    private void ApplyStatus(string taskId, string status, QuickUpdatesScreen screen,
-        IQuickUpdateTarget target, TaskDetailScreen? detailOrigin = null, IReadOnlyList<StatusOption>? statuses = null)
-    {
-        var task = target.Resolve(taskId);
-        if (task is null)
-        {
-            // The screen hasn't moved its ✓ yet (it defers that to us), so just report and bail.
-            Flash("This task is no longer in the list — status unchanged.");
-            return;
-        }
-        var gen = ++_statusCommitGen;
-        var previousStatus = task.StatusName;
-        var previousColor = task.StatusColor;
-
-        ReconcileScreenStatus(screen, status); // optimistic ✓
-        ReflectDetailStatus(detailOrigin, status, ColorForStatus(statuses, status));
-        target.Apply(task with { StatusName = status }, sending: true);
-        Flash($"Setting '{status}'…");
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var confirmed = await _tasks.SetStatusAsync(taskId, status);
-                Application.Invoke(() =>
-                {
-                    if (gen != _statusCommitGen)
-                        return; // a newer status commit superseded this one
-                    var final = confirmed ?? status;
-                    if (target.Resolve(taskId) is { } t)
-                        target.Apply(t with { StatusName = final }, sending: false);
-                    ReconcileScreenStatus(screen, final);
-                    ReflectDetailStatus(detailOrigin, final, ColorForStatus(statuses, final));
-                    Flash($"Set status to '{final}'.");
-                });
-            }
-            catch (Exception ex)
-            {
-                Application.Invoke(() =>
-                {
-                    if (gen != _statusCommitGen)
-                        return;
-                    if (target.Resolve(taskId) is { } t)
-                        target.Apply(t with { StatusName = previousStatus }, sending: false); // revert
-                    ReconcileScreenStatus(screen, previousStatus);
-                    ReflectDetailStatus(detailOrigin, previousStatus, previousColor);
-                    Flash($"Could not set status: {ErrorText.Short(ex)}");
-                });
-            }
-        });
-    }
-
-    /// <summary>
-    /// Applies a Quick Updates priority commit for <paramref name="taskId"/> (<paramref name="level"/>
-    /// null = clear), mirroring <see cref="ApplyStatus"/>: optimistic ✓ + row update, off-thread write,
-    /// confirm-from-server on success, revert-the-row on failure, drop a superseded continuation.
-    /// </summary>
-    private void ApplyPriority(string taskId, int? level, QuickUpdatesScreen screen,
-        IQuickUpdateTarget target, TaskDetailScreen? detailOrigin = null)
-    {
-        var task = target.Resolve(taskId);
-        if (task is null)
-        {
-            Flash("This task is no longer in the list — priority unchanged.");
-            return;
-        }
-        var gen = ++_priorityCommitGen;
-        var previousLevel = task.PriorityLevel;
-
-        ReconcileScreenPriority(screen, level); // optimistic ✓
-        ReflectDetailPriority(detailOrigin, level);
-        target.Apply(WithPriority(task, level), sending: true);
-        Flash($"Setting priority '{ClickUpPriority.NameFromLevel(level) ?? "none"}'…");
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var confirmed = await _tasks.SetPriorityAsync(taskId, level);
-                Application.Invoke(() =>
-                {
-                    if (gen != _priorityCommitGen)
-                        return; // a newer priority commit superseded this one
-                    if (target.Resolve(taskId) is { } t)
-                        target.Apply(WithPriority(t, confirmed), sending: false);
-                    ReconcileScreenPriority(screen, confirmed);
-                    ReflectDetailPriority(detailOrigin, confirmed);
-                    Flash($"Set priority to '{ClickUpPriority.NameFromLevel(confirmed) ?? "none"}'.");
-                });
-            }
-            catch (Exception ex)
-            {
-                Application.Invoke(() =>
-                {
-                    if (gen != _priorityCommitGen)
-                        return;
-                    if (target.Resolve(taskId) is { } t)
-                        target.Apply(WithPriority(t, previousLevel), sending: false); // revert
-                    ReconcileScreenPriority(screen, previousLevel);
-                    ReflectDetailPriority(detailOrigin, previousLevel);
-                    Flash($"Could not set priority: {ErrorText.Short(ex)}");
-                });
-            }
-        });
-    }
 
     /// <summary>
     /// Applies an F2 rename commit for <paramref name="taskId"/> (contextual chords H, #545): optimistic
@@ -3338,53 +2955,6 @@ public sealed class TodoApp
                 });
             }
         });
-    }
-
-    /// <summary>A copy of <paramref name="task"/> carrying priority <paramref name="level"/> with the
-    /// canonical name + colour for that level (null clears all three).</summary>
-    private static TaskItem WithPriority(TaskItem task, int? level) => task with
-    {
-        PriorityLevel = level,
-        PriorityName = ClickUpPriority.NameFromLevel(level),
-        PriorityColor = ClickUpPriority.ColorFromLevel(level),
-    };
-
-    // The async write can resolve after the user has Esc'd or stacked another screen; only touch the
-    // screen's ✓ while it's still mounted (a disposed/detached screen's list would throw or be moot).
-    private void ReconcileScreenStatus(QuickUpdatesScreen screen, string? status)
-    {
-        if (_screens.Contains(screen))
-            screen.SetEffectiveStatus(status);
-    }
-
-    private void ReconcileScreenPriority(QuickUpdatesScreen screen, int? level)
-    {
-        if (_screens.Contains(screen))
-            screen.SetEffectivePriority(level);
-    }
-
-    /// <summary>The colour of the status option named <paramref name="status"/> in
-    /// <paramref name="statuses"/> (case-insensitive), or null when unknown — used to colour the status
-    /// reflected onto the detail view (#159).</summary>
-    private static string? ColorForStatus(IReadOnlyList<StatusOption>? statuses, string? status)
-        => status is null
-            ? null
-            : statuses?.FirstOrDefault(s => string.Equals(s.Name, status, StringComparison.OrdinalIgnoreCase))?.Color;
-
-    // Reflect a committed status/priority onto the Task Detail view Quick Updates was launched over (#159),
-    // guarded on that screen still being mounted, so the popped-back detail shows the change. A null
-    // detailOrigin (the list origin) is a no-op. Priority uses the canonical name/colour for the level,
-    // matching the list row's WithPriority.
-    private void ReflectDetailStatus(TaskDetailScreen? detailOrigin, string? status, string? color)
-    {
-        if (detailOrigin is not null && _screens.Contains(detailOrigin))
-            detailOrigin.ApplyOptimisticStatus(status, color);
-    }
-
-    private void ReflectDetailPriority(TaskDetailScreen? detailOrigin, int? level)
-    {
-        if (detailOrigin is not null && _screens.Contains(detailOrigin))
-            detailOrigin.ApplyOptimisticPriority(ClickUpPriority.NameFromLevel(level), ClickUpPriority.ColorFromLevel(level));
     }
 
     /// <summary>

@@ -166,4 +166,96 @@ public sealed class QuickUpdateTargetTests
             viaSnapshot.Assignees.Select(a => (a.Id, a.Name)),
             viaSingle.Assignees.Select(a => (a.Id, a.Name)));
     }
+
+    // ---- ReflectingQuickUpdateTarget (the extra-surface decorator) ----
+
+    /// <summary>A recording target that resolves a fixed record and remembers each apply — stands in for
+    /// whichever target the host wrapped (the main-list snapshot, or a single-task record).</summary>
+    private sealed class SpyTarget(TaskItem? resolved) : IQuickUpdateTarget
+    {
+        public TaskItem? Resolved { get; set; } = resolved;
+        public List<(TaskItem Task, bool Sending)> Applies { get; } = [];
+
+        public TaskItem? Resolve(string taskId)
+            => Resolved is { } t && t.Id == taskId ? t : null;
+
+        public void Apply(TaskItem updated, bool sending)
+        {
+            Applies.Add((updated, sending));
+            // Stand in for a real target's fold: the settled record is what a later Resolve returns.
+            if (Resolved is not null && Resolved.Id == updated.Id)
+                Resolved = updated;
+        }
+    }
+
+    [Fact]
+    public void Reflecting_ForwardsResolveToTheInnerTarget()
+    {
+        var inner = new SpyTarget(Task("abc", "to do"));
+        var target = new ReflectingQuickUpdateTarget(inner, _ => { });
+
+        Assert.Equal("to do", target.Resolve("abc")?.StatusName);
+        Assert.Null(target.Resolve("other"));
+    }
+
+    [Fact]
+    public void Reflecting_ForwardsApplyToTheInnerTarget()
+    {
+        var inner = new SpyTarget(Task("abc", "to do"));
+        var target = new ReflectingQuickUpdateTarget(inner, _ => { });
+
+        target.Apply(Task("abc", "in progress"), sending: true);
+
+        var (applied, sending) = Assert.Single(inner.Applies);
+        Assert.Equal("in progress", applied.StatusName);
+        Assert.True(sending);
+    }
+
+    [Fact]
+    public void Reflecting_ReflectsTheSettledRecord_NotTheCallersArgument()
+    {
+        // The point of reading back through the inner target: what reaches the extra surface carries the
+        // inner reconcile's fold, so a row repainted from it can't disagree with the write target.
+        var seed = Task("abc", "to do", priorityLevel: 3, 1);
+        var inner = new SingleTaskUpdateTarget(seed);
+        var reflected = new List<TaskItem>();
+        var target = new ReflectingQuickUpdateTarget(inner, t => reflected.Add(t));
+
+        // A commit that only names the status: the fold keeps the priority/assignees from the held record.
+        target.Apply(seed with { StatusName = "blocked" }, sending: true);
+
+        var settled = Assert.Single(reflected);
+        Assert.Equal("blocked", settled.StatusName);
+        Assert.Equal(3, settled.PriorityLevel);
+        Assert.Equal(["user1"], settled.Assignees.Select(a => a.Name));
+    }
+
+    [Fact]
+    public void Reflecting_ReflectsEveryApply_OptimisticConfirmedAndRevert()
+    {
+        // The host applies three times per commit — optimistic, server-confirmed, or reverted on failure.
+        // A surface that only followed the optimistic one would strand on a value the server rejected.
+        var inner = new SingleTaskUpdateTarget(Task("abc", "to do"));
+        var reflected = new List<string?>();
+        var target = new ReflectingQuickUpdateTarget(inner, t => reflected.Add(t.StatusName));
+
+        target.Apply(Task("abc", "in progress"), sending: true);   // optimistic
+        target.Apply(Task("abc", "to do"), sending: false);        // revert (the write failed)
+
+        Assert.Equal(["in progress", "to do"], reflected);
+    }
+
+    [Fact]
+    public void Reflecting_ReflectsNothing_WhenTheInnerTargetCannotResolveTheTask()
+    {
+        // Mirrors the inner apply being a no-op (e.g. a list target whose row fell out of the working
+        // set): with nothing settled there is nothing to repaint.
+        var inner = new SpyTarget(resolved: null);
+        var reflected = new List<TaskItem>();
+        var target = new ReflectingQuickUpdateTarget(inner, t => reflected.Add(t));
+
+        target.Apply(Task("abc", "in progress"), sending: true);
+
+        Assert.Empty(reflected);
+    }
 }

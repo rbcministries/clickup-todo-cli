@@ -68,6 +68,13 @@ public sealed class SingleTaskApp
     // One-shot guard so the deferred members top-up is kicked at most once (mirrors TodoApp). UI-thread-only.
     private bool _assigneeTopUpKicked;
 
+    // The Quick Updates List pane's candidate pool (#238/#242), the counterpart of _assignees above. Null
+    // when no host supplied one, which leaves the pane showing this task's memberships with nothing to add
+    // from. Unlike the assignee pool it has no fetch delegate by design (the dashboard backfills it from
+    // the scheduled list-hierarchy walk, #236, which single-task mode doesn't run), so the candidates are
+    // whatever a prior dashboard session persisted for this workspace — loaded warm in its constructor.
+    private readonly ListFrequencyCache? _lists;
+
     // The launch task's initially-fetched detail/comments, used once in Build() to construct the root
     // detail tab. After boot the live per-tab state lives on DetailTab (_root and any stacked child).
     private readonly TaskDetail _seedTask;
@@ -108,13 +115,15 @@ public sealed class SingleTaskApp
 
     public SingleTaskApp(TaskService tasks, AppConfig config, ConfigStore configStore, TaskDetail task,
         IReadOnlyList<CommentItem> comments, IBrowserLauncher? browserLauncher = null,
-        IChangeMarkerStore? changeMarkers = null, AssigneeFrequencyCache? assignees = null)
+        IChangeMarkerStore? changeMarkers = null, AssigneeFrequencyCache? assignees = null,
+        ListFrequencyCache? lists = null)
     {
         _tasks = tasks;
         _config = config;
         _configStore = configStore;
         _browser = browserLauncher ?? new SystemBrowserLauncher();
         _assignees = assignees;
+        _lists = lists;
         _seedTask = task;
         _seedComments = comments;
         _status = $"Loaded: {task.Name}";
@@ -369,11 +378,11 @@ public sealed class SingleTaskApp
 
         // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data — refetch just this tab's task.
         screen.RefreshRequested += (_, _) => RefreshTab(tab);
-        // Quick Updates stays deferred in single-task mode: it needs sub-issue (5) #297 to decouple its
-        // write path from the dashboard's working-set snapshot. Flash rather than silently no-op so the
-        // gap is legible.
-        screen.QuickUpdatesRequested += (_, _) =>
-            Flash("Quick Updates isn't available in single-task mode yet (tracked on #297).");
+        // Ctrl+U opens Quick Updates (#159/#290) — no longer deferred: #297 decoupled the status/priority/
+        // assignee write path from the dashboard's working-set snapshot, so the commit runs against the
+        // loaded task (SingleTaskUpdateTarget) with no `_all` present. Keyed to this tab, and on the Task
+        // Tree tab to the highlighted node (the request carries it).
+        screen.QuickUpdatesRequested += (_, req) => OpenQuickUpdates(tab, req);
         // Agent dispatch (Ctrl+A) runs through the shared DispatchCoordinator (#345), so a single-task tab
         // composes + launches a session with the dashboard's exact working-dir / post-to-Comments /
         // launch-location semantics — against this tab's task.
@@ -391,11 +400,12 @@ public sealed class SingleTaskApp
         // and reflects it across the root and every stacked child so the visited-task chain stays in step.
         screen.CycleBadgeDisplayRequested += (_, _) => CycleTreeBadgeDisplay(tab.Screen);
         // F2 on the Task Tree tab (H, #545) renames the highlighted node's task — the single-task
-        // counterpart of the dashboard's ShowTreeRename/ApplyTreeRename (#605), now wired in single-task
-        // mode too (#604). Unlike Quick Updates (still deferred above), rename is a snapshot-free write
-        // straight through the SetTaskNameAsync facade (slice E, #592) — it doesn't depend on #297's
-        // working-set decoupling — so it's admitted as the low-risk exception #604 decided on. Keyed to
-        // this tab so a task opened by walking the tree (#374) renames its own node.
+        // counterpart of the dashboard's ShowTreeRename/ApplyTreeRename (#605), wired in single-task mode
+        // by #604 as the low-risk exception while Quick Updates was still deferred: rename is a
+        // snapshot-free write straight through the SetTaskNameAsync facade (slice E, #592), so it never
+        // needed #297's working-set decoupling. Quick Updates has since been wired too (above), so both
+        // tree-row chords now write. Keyed to this tab so a task opened by walking the tree (#374) renames
+        // its own node.
         screen.RenameTreeTaskRequested += (_, req) => ShowTreeRename(tab, req);
         // Ctrl+Enter opens this tab's task in its own terminal tab (#435) — the single-task counterpart of
         // the dashboard's #384 gesture, reusing the exact launcher + copy-command fallback. Since #374 gave
@@ -781,6 +791,97 @@ public sealed class SingleTaskApp
             _window.Title = title;
         }
     }
+
+    // ── Quick Updates (Ctrl+U, #159/#290 — enabled by #297) ───────────────────
+
+    // The shared Quick Updates orchestration, over this host's screen stack + footer — the same
+    // coordinator the dashboard drives (QuickUpdatesCoordinator), so status/priority/assignee/list edits
+    // behave identically in both hosts. One instance per host (it carries the per-field commit generations
+    // and the armed stranding-remove), built on first use. `isMounted` spans the root plus the stack, since
+    // unlike the dashboard the root detail is not on _stack.
+    private QuickUpdatesCoordinator? _quickUpdates;
+    private QuickUpdatesCoordinator QuickUpdates => _quickUpdates ??= new(
+        _tasks, _assignees, _lists,
+        isFrontMost: screen => ReferenceEquals(ActiveScreen, screen),
+        isMounted: screen => ReferenceEquals(screen, _root.Screen) || _stack.Contains(screen),
+        flash: Flash,
+        mount: screen => ShowScreen(screen));
+
+    /// <summary>
+    /// Ctrl+U from a single-task tab: opens Quick Updates over the front-most detail, stacked so Esc pops
+    /// back to it. No longer deferred — #297 made the status/priority/assignee write path resolve against
+    /// an <see cref="IQuickUpdateTarget"/> instead of the dashboard's working-set snapshot, so the commit
+    /// runs against the one loaded task with no <c>_all</c> present.
+    /// <para>
+    /// On the <b>Task Tree tab</b> the request carries the highlighted node's task and Quick Updates
+    /// applies to <em>that</em> task (uniform with the tab's F2 rename / Delete / Enter, and with the
+    /// dashboard, which wires the same request). A tree row is already a fully-fetched
+    /// <see cref="TaskItem"/>, so it opens with no extra round-trip.
+    /// </para>
+    /// <para>
+    /// Every other tab targets this tab's own task — and there the host holds only a
+    /// <see cref="TaskDetail"/>. <see cref="TaskItemProjection.FromDetail"/> is lossy exactly where this
+    /// screen needs fidelity (a detail carries assignee <em>names</em> only, so projected ids are
+    /// placeholder <c>0</c>s and an Assignees-pane remove would write id 0); the dashboard papers over
+    /// that with its snapshot row, so with no snapshot here the authoritative
+    /// <see cref="TaskItem"/> is fetched instead — one GET, the same call the tree walk and the nudge
+    /// reconcile use — off the UI thread behind a flash.
+    /// </para>
+    /// </summary>
+    private void OpenQuickUpdates(DetailTab tab, QuickUpdatesRequest request)
+    {
+        if (!ReferenceEquals(ActiveScreen, tab.Screen))
+            return;
+
+        if (request.TreeTask is { } node)
+        {
+            ShowQuickUpdates(tab, node);
+            return;
+        }
+
+        var taskId = tab.TaskId;
+        Flash("Loading task…");
+        // Warm the statuses concurrently rather than letting the coordinator's cold path fetch them after
+        // this one returns: single-task mode runs no status prefetch, so TryGetCachedStatuses always misses
+        // on a first Ctrl+U and the two GETs would otherwise queue up serially in front of the pane. The
+        // list id is already on the loaded detail, so nothing has to be resolved first. Best-effort — a
+        // failed warm just leaves the coordinator to fetch as before.
+        if (tab.Task.ListId is { Length: > 0 } listId)
+            _ = _tasks.PrefetchStatusesAsync([listId]);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var item = await _tasks.GetTaskItemAsync(taskId);
+                Application.Invoke(() => ShowQuickUpdates(tab, item));
+            }
+            catch (Exception ex)
+            {
+                Application.Invoke(() => Flash($"Could not load task: {ErrorText.Short(ex)}"));
+            }
+        });
+    }
+
+    /// <summary>
+    /// Hands a resolved target task to the shared coordinator. The write target is a
+    /// <see cref="SingleTaskUpdateTarget"/> — single-task mode holds no list snapshot, so the loaded record
+    /// is the unit of truth (#297) — decorated so each optimistic/confirmed/reverted apply also repaints
+    /// that task's Task Tree row (a no-op when the tree tab hasn't loaded). The detail header is reflected
+    /// only when the target <em>is</em> this tab's task: a tree row for another task must not repaint this
+    /// header, and its memberships must not seed the List pane (the coordinator enriches those instead).
+    /// Runs on the UI thread. The front-most re-check the non-tree path needs after its fetch is the
+    /// coordinator's own (<see cref="QuickUpdatesCoordinator.Open"/> guards on the origin), so it isn't
+    /// repeated here.
+    /// </summary>
+    private void ShowQuickUpdates(DetailTab tab, TaskItem task)
+    {
+        var target = new ReflectingQuickUpdateTarget(
+            new SingleTaskUpdateTarget(task), tab.Screen.ApplyTreeTaskFields);
+        var reflect = string.Equals(task.Id, tab.TaskId, StringComparison.Ordinal) ? tab.Screen : null;
+        QuickUpdates.Open(task, target, tab.Screen, reflect);
+    }
+
 
     // ── Help overlay (F1) ────────────────────────────────────────────────────
 
