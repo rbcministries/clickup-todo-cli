@@ -46,8 +46,11 @@ The **current** node is not special-cased away: `Ctrl+U` on the current task's o
 same tree path (so its row repaints), and because the target task *is* the detail's task, the committed
 status/priority is still reflected onto the detail header exactly as a non-tree `Ctrl+U` would.
 
-A placeholder/message row (`(no task tree)`, `Loading…`, a load error) is inert-but-flashed
-("Select a task to update."), mirroring `RequestTreeRename`.
+A placeholder/message row (`(no task tree)`, `Loading…`, a load error) **falls back to this screen's own
+task** rather than flashing. This started as an inert-but-flashed guard mirroring `RequestTreeRename`, and
+the review caught that it turns `Ctrl+U` into a dead key while the tree is still loading and permanently
+after a load failure. Rename has no sensible fallback ("rename *what*?"); `Ctrl+U` is a context-wide Detail
+action and the task in the header is right there, so it stays live on every tab in every state.
 
 ### 3. Single-task mode seeds Quick Updates from an authoritative `TaskItem`, not a projection
 
@@ -76,9 +79,23 @@ tree tab was never opened.
 
 The three fields are **folded** onto the row through `TaskService.ApplyFieldChanges` rather than the row
 being replaced by the settled record wholesale — in the dashboard that record can come from the main-list
-snapshot, whose copy of the node may differ in title/ancestry from the tree's own fetch. Status **colour**
-is not folded (only the name), matching what the main-list row does today (`TaskService.ApplyStatusChange`);
-the badge colour reconciles on the next tree load.
+snapshot, whose copy of the node may differ in title/ancestry from the tree's own fetch.
+
+Two corrections came out of the review of this branch:
+
+- **The status colour has to travel with the name.** `ApplyStatusChange` folded only `StatusName`, so a
+  committed status rendered in the *previous* status's colour. On the main list the next background poll
+  repaints it; on the Task Tree tab it does not — `_treeLoaded` is set once per screen and never reset, so
+  a stale colour would persist for the life of that view. `ApplyStatusChange` now takes the colour
+  alongside the name (its only production caller is `ApplyFieldChanges`, which passes `updated.StatusColor`
+  — a no-op for every caller that doesn't set it), and `ApplyStatus` resolves the committed colour it
+  already computes for the header reflection onto the applied record, on the optimistic, confirmed and
+  reverted apply alike. The list row's colour lag is fixed as a side effect.
+- **A projected seed is not reflected.** The fold re-applies assignees, so reflecting a
+  `TaskItemProjection.FromDetail` record (placeholder id `0` assignees) would degrade a tree row that holds
+  the real ids — permanently, since the tree never re-fetches. The decoration is therefore applied only
+  when the seed is authoritative (a snapshot/visible row, a tree row, or single-task mode's fetched item);
+  a feed-opened task's tree row keeps its pre-commit values, exactly as before.
 
 ### 5. Single-task mode gets the Lists pane too, with a persisted-only candidate pool
 
@@ -120,9 +137,13 @@ public sealed class QuickUpdatesCoordinator(
 ### `TodoApp`
 
 Keeps `ListUpdateTarget` / `QuickUpdatesTaskById` / `UpdateTaskRow` (its own snapshot concerns) and
-delegates: the list `Ctrl+U`, the detail `Ctrl+U`, and the new tree-target case. `OpenQuickUpdatesForDetail`
-keeps its "prefer the richer `_all` row, else project / else the tree row" resolution and its
-list-target-vs-`SingleTaskUpdateTarget` choice.
+delegates: the list `Ctrl+U`, the detail `Ctrl+U`, and the new tree-target case. It seeds from the *same*
+resolution its write target uses — `QuickUpdatesTaskById` (snapshot **then visible rows**), then the tree
+row, then the detail projection as a last resort. Previously the seed consulted `_all` alone while the
+target consulted `_all` + `_rows`, so a foreign subtask (#70/#179) or context parent (#46) — which live only
+in `_rows` — was seeded from the lossy projection even with an authoritative row in hand, and an
+Assignees-pane remove there would have written id `0`. (Pre-existing; found in review of this branch and
+fixed here because the seed and the target must agree for the reflection decision above.)
 
 ### `SingleTaskApp`
 
@@ -136,9 +157,22 @@ Replaces the deferral flash with `OpenQuickUpdates(tab, request)`:
 
 - `QuickUpdatesRequested` becomes `EventHandler<QuickUpdatesRequest>`;
   `QuickUpdatesRequest(TaskItem? TreeTask)` carries the tree row's task (null ⇒ "the task I show").
-- `RequestQuickUpdates()` — the tree-tab branch + the placeholder-row flash.
+- `RequestQuickUpdates()` — the tree-tab branch, falling back to this screen's task (decision 2).
 - `ApplyTreeTaskFields(TaskItem updated)` + the shared private `ReplaceTreeRow` that `ApplyTreeRename`
-  now also uses.
+  now also uses. `ReplaceTreeRow` gained a `_disposed` guard: a write continuation reaches it through the
+  write target, which outlives the screen, so unlike every other reflection (all guarded by the
+  coordinator's `isMounted` or the hosts' own mounted checks) it can be called on a torn-down view.
+
+### Concurrency corrections (also from review)
+
+- **`_statusCommitGen` / `_priorityCommitGen` are now per task id**, like `TodoApp._nameCommitGen`. A
+  tree-scoped `Ctrl+U` means two writes for two *different* tasks can be in flight, and one global counter
+  each would let the later commit's generation cancel the earlier task's confirm/revert — stranding its row
+  on a value the server rejected, with no error flashed.
+- **`_armedListRemoval` is behind a lock.** It is written from the thread-pool thread inside
+  `ApplyListAsync` (the writes are deliberately untokened, so one can still be in flight) and cleared from
+  the UI thread in `Show`; unsynchronised, that multi-word struct can be read torn. Pre-existing in
+  `TodoApp`; fixed on the move rather than carried into a class documented as UI-thread-only.
 
 ## Tests
 
@@ -158,7 +192,11 @@ Replaces the deferral flash with `OpenQuickUpdates(tab, request)`:
   - B — `Enter` on a status row applies with no `_all` present: the screen stays open (#207), a
     `Set…`/`Setting…` flash appears and no `Could not set status` error; `Esc` returns to the detail.
   - C — on the Task Tree tab with `CHILDTWO` highlighted, `Ctrl+U` opens Quick Updates for **that** task
-    (the screen title names CHILDTWO, not ROOT) and applying it leaves the detail header on ROOT.
+    (the screen title names CHILDTWO, not ROOT); the commit repaints CHILDTWO's own row badge
+    (`(IP)` → `(C )`/`(IR)`) and no sibling's, and the launch task's header **status** — not just its title
+    — is unchanged. Both of those were vacuous in the first draft (a title-only assertion can't see a
+    wrongly-repainted header status, and nothing asserted the row moved at all); each is now verified to
+    fail against a deliberately broken build.
   - D — dashboard parity for the same gesture (no `E2E_SINGLE_TASK`): list → detail → tree tab →
     `CHILDTWO` → `Ctrl+U` names CHILDTWO.
 

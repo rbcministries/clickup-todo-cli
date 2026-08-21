@@ -4602,22 +4602,17 @@ public sealed class TaskDetailScreen : Screen
     /// node's</em> task, rather than the task this detail shows — uniform with the tab's other row-scoped
     /// chords (F2 rename #545/#605, Delete #594, Enter navigate #291), and with single-task mode, which
     /// wires the same request. On every other tab the request carries no node, meaning this screen's task.
-    /// A placeholder/message row (no task, e.g. "(no task tree)" or a load error) is inert-but-flashed
-    /// rather than a silent no-op — mirroring <see cref="RequestTreeRename"/>'s guard.</summary>
+    /// <para>
+    /// Unlike <see cref="RequestTreeRename"/>, a placeholder/message row (no task, e.g. while the tree is
+    /// still loading, "(no task tree)", or a load error) falls back to this screen's own task rather than
+    /// flashing: rename has no sensible fallback ("rename what?"), but Ctrl+U is a context-wide Detail
+    /// action (<see cref="Keybindings"/>) and the task in the header is right there — so it stays live on
+    /// every tab in every state instead of becoming a dead key while the tree loads, or permanently after
+    /// a tree load failure.
+    /// </para></summary>
     private void RequestQuickUpdates()
-    {
-        if (_treeList is not null && ReferenceEquals(_tabs.Value, _treeList))
-        {
-            if (SelectedTreeTask() is not { } node)
-            {
-                RequestFlash("Select a task to update.");
-                return;
-            }
-            QuickUpdatesRequested?.Invoke(this, new QuickUpdatesRequest(node));
-            return;
-        }
-        QuickUpdatesRequested?.Invoke(this, new QuickUpdatesRequest(null));
-    }
+        => QuickUpdatesRequested?.Invoke(this, new QuickUpdatesRequest(
+            _treeList is not null && ReferenceEquals(_tabs.Value, _treeList) ? SelectedTreeTask() : null));
 
     /// <summary>
     /// Optimistically reflects an F2 rename made from the Task Tree tab (H, #545), called by the host on the
@@ -4662,7 +4657,12 @@ public sealed class TaskDetailScreen : Screen
     /// loaded or doesn't hold the id (e.g. a mid-write refresh dropped the node).</summary>
     private void ReplaceTreeRow(string taskId, Func<TaskItem, TaskItem> update)
     {
-        if (_treeList is null || _loadedTreeRows.Count == 0)
+        // A Quick Updates write continuation can arrive after the user Esc'd this detail away and the host
+        // disposed it (ApplyTreeTaskFields is called from the write target, which outlives the screen), so
+        // never touch the ListView of a torn-down view — assigning its Source / SelectedItem would throw
+        // or repaint freed views. Mirrors this screen's own async continuations, and the `isMounted` guard
+        // the coordinator applies to every other reflection.
+        if (_disposed || _treeList is null || _loadedTreeRows.Count == 0)
             return;
         var index = -1;
         for (var i = 0; i < _loadedTreeRows.Count; i++)

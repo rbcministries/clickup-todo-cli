@@ -56,16 +56,42 @@ public sealed class QuickUpdatesCoordinator(
     Action<string> flash,
     Action<Screen> mount)
 {
-    // Monotonic per-field commit counters. The Quick Updates screen stays open, so the user can fire a
-    // second write for the same field before the first returns; each commit stamps its generation and a
-    // late continuation whose generation is no longer current is dropped, so the row + ✓ settle on the
-    // latest commit regardless of the order the responses arrive in.
-    private int _statusCommitGen;
-    private int _priorityCommitGen;
+    // Monotonic per-field commit counters, keyed PER TASK ID. The Quick Updates screen stays open, so the
+    // user can fire a second write for the same field before the first returns; each commit stamps its
+    // generation and a late continuation whose generation is no longer current is dropped, so the row + ✓
+    // settle on the latest commit regardless of the order the responses arrive in.
+    //
+    // Keyed by task id rather than one global counter each because a commit can target a task other than
+    // the one the screen was opened over: Ctrl+U on the Task Tree tab applies to the highlighted node, so
+    // closing one task's Quick Updates and committing against a different node leaves two writes for two
+    // DIFFERENT tasks in flight. A single counter would let the later one's generation cancel the earlier
+    // task's confirm/revert, stranding its row on an optimistic value the server rejected (silently, with
+    // no error flashed) — exactly the reasoning behind TodoApp's per-task `_nameCommitGen`.
+    //
+    // UI-thread-only (bumped in the commit, read in the continuation's Application.Invoke).
+    private readonly Dictionary<string, int> _statusCommitGen = [];
+    private readonly Dictionary<string, int> _priorityCommitGen = [];
+
+    private static int NextGen(Dictionary<string, int> gens, string taskId)
+        => gens[taskId] = gens.GetValueOrDefault(taskId) + 1;
+
+    private static bool IsCurrentGen(Dictionary<string, int> gens, string taskId, int gen)
+        => gens.GetValueOrDefault(taskId) == gen;
 
     // The armed (taskId, listId) for a stranding List-pane remove awaiting a second-press confirmation
     // (#365). A single field suffices: the pane is modal, one task at a time, and a fresh open re-seeds.
+    // Guarded by `_armGate`: the arm/clear inside ApplyListAsync runs on a thread-pool thread (the
+    // selector's immediate-apply callback) while a fresh Show clears it on the UI thread, and an untokened
+    // in-flight write means those can overlap — an unsynchronised multi-word struct could then be read torn
+    // (HasValue true paired with a stale id), silently confirming a strand-hazard remove nobody confirmed.
+    private readonly Lock _armGate = new();
     private (string TaskId, string ListId)? _armedListRemoval;
+
+    private (string TaskId, string ListId)? ArmedListRemoval
+    {
+        get { lock (_armGate) return _armedListRemoval; }
+        set { lock (_armGate) _armedListRemoval = value; }
+    }
 
     /// <summary>
     /// Opens Quick Updates for <paramref name="task"/>, stacked over <paramref name="origin"/> — the
@@ -145,15 +171,13 @@ public sealed class QuickUpdatesCoordinator(
             return;
 
         // Fresh open ⇒ no armed stranding-remove carried over, so a first remove always re-warns (#365).
-        _armedListRemoval = null;
+        ArmedListRemoval = null;
 
         // List pane (#242/#365): seed the home list (from the snapshot TaskItem, which always carries the
         // home list) and any additional "Tasks in Multiple Lists" locations. A launch over the detail of
         // this same task has the full membership on hand (reflect.Task.Lists); a root- or tree-row launch
         // has only the home list here and is enriched in the background below.
-        var homeList = string.IsNullOrWhiteSpace(task.ListId)
-            ? null
-            : new NamedEntity(task.ListId!, task.ListName ?? task.ListId!);
+        var homeList = HomeList(task);
         var additionalLists = AdditionalLists(task, reflect?.Task);
 
         var screen = new QuickUpdatesScreen(
@@ -266,7 +290,7 @@ public sealed class QuickUpdatesCoordinator(
         // detail read the strand check would need and just write + read the confirmed set back.
         if (kind == ToggleKind.Added)
         {
-            _armedListRemoval = null;
+            ArmedListRemoval = null;
             await tasks.AddTaskToListAsync(taskId, list.Id).ConfigureAwait(false);
             return await ReadMembershipAsync(taskId).ConfigureAwait(false);
         }
@@ -278,7 +302,7 @@ public sealed class QuickUpdatesCoordinator(
         var home = HomeListOf(detail);
         var currentMembership = ListSelectorModel.Membership(home, detail.Lists);
 
-        var armed = _armedListRemoval is { } a
+        var armed = ArmedListRemoval is { } a
             && string.Equals(a.TaskId, taskId, StringComparison.Ordinal)
             && string.Equals(a.ListId, list.Id, StringComparison.Ordinal);
         var removingHome = home is { } h && string.Equals(h.Id, list.Id, StringComparison.Ordinal);
@@ -304,11 +328,11 @@ public sealed class QuickUpdatesCoordinator(
                 FlashOnUi(decision.Message!);
                 return currentMembership; // unchanged → selector re-shows the (home) row
             case ListApplyAction.ArmRemoveConfirmation:
-                _armedListRemoval = (taskId, list.Id);
+                ArmedListRemoval = (taskId, list.Id);
                 FlashOnUi(decision.Message!);
                 return currentMembership; // unchanged → row re-shows; a second remove confirms
             default: // WriteRemove (strand-free, or the armed confirmation)
-                _armedListRemoval = null;
+                ArmedListRemoval = null;
                 await tasks.RemoveTaskFromListAsync(taskId, list.Id).ConfigureAwait(false);
                 return await ReadMembershipAsync(taskId).ConfigureAwait(false);
         }
@@ -349,9 +373,17 @@ public sealed class QuickUpdatesCoordinator(
     /// <summary>The home list of a task detail as a NamedEntity, or null when it has no list. Falls the
     /// display name back to the id if the detail carries none (the marker still shows).</summary>
     private static NamedEntity? HomeListOf(TaskDetail detail)
-        => string.IsNullOrWhiteSpace(detail.ListId)
+        => HomeList(detail.ListId, detail.ListName);
+
+    /// <summary>The same for a list item, so the pane's initial seed and its server-confirmed reconcile
+    /// label the primary row by one rule — a blank-but-present ListName falls back to the id in both,
+    /// rather than seeding an empty label that changes after the first add/remove.</summary>
+    private static NamedEntity? HomeList(TaskItem task) => HomeList(task.ListId, task.ListName);
+
+    private static NamedEntity? HomeList(string? listId, string? listName)
+        => string.IsNullOrWhiteSpace(listId)
             ? null
-            : new NamedEntity(detail.ListId!, string.IsNullOrWhiteSpace(detail.ListName) ? detail.ListId! : detail.ListName!);
+            : new NamedEntity(listId!, string.IsNullOrWhiteSpace(listName) ? listId! : listName!);
 
     /// <summary>
     /// Performs a Quick Updates Assignees-pane add/remove (#158): writes the change to ClickUp off the
@@ -411,13 +443,17 @@ public sealed class QuickUpdatesCoordinator(
             flash("This task is no longer in the list — status unchanged.");
             return;
         }
-        var gen = ++_statusCommitGen;
+        var gen = NextGen(_statusCommitGen, taskId);
         var previousStatus = task.StatusName;
         var previousColor = task.StatusColor;
 
+        var color = ColorForStatus(statuses, status);
         ReconcileScreenStatus(screen, status); // optimistic ✓
-        ReflectDetailStatus(reflect, status, ColorForStatus(statuses, status));
-        target.Apply(task with { StatusName = status }, sending: true);
+        ReflectDetailStatus(reflect, status, color);
+        // Carry the colour with the name: TaskService.ApplyStatusChange folds both, so every surface the
+        // target repaints (the main-list row, a Task Tree row) shows the new status in ITS colour rather
+        // than the previous status's.
+        target.Apply(task with { StatusName = status, StatusColor = color }, sending: true);
         flash($"Setting '{status}'…");
 
         _ = Task.Run(async () =>
@@ -427,13 +463,14 @@ public sealed class QuickUpdatesCoordinator(
                 var confirmed = await tasks.SetStatusAsync(taskId, status);
                 Application.Invoke(() =>
                 {
-                    if (gen != _statusCommitGen)
-                        return; // a newer status commit superseded this one
+                    if (!IsCurrentGen(_statusCommitGen, taskId, gen))
+                        return; // a newer status commit for this task superseded it
                     var final = confirmed ?? status;
+                    var finalColor = ColorForStatus(statuses, final);
                     if (target.Resolve(taskId) is { } t)
-                        target.Apply(t with { StatusName = final }, sending: false);
+                        target.Apply(t with { StatusName = final, StatusColor = finalColor }, sending: false);
                     ReconcileScreenStatus(screen, final);
-                    ReflectDetailStatus(reflect, final, ColorForStatus(statuses, final));
+                    ReflectDetailStatus(reflect, final, finalColor);
                     flash($"Set status to '{final}'.");
                 });
             }
@@ -441,10 +478,12 @@ public sealed class QuickUpdatesCoordinator(
             {
                 Application.Invoke(() =>
                 {
-                    if (gen != _statusCommitGen)
+                    if (!IsCurrentGen(_statusCommitGen, taskId, gen))
                         return;
                     if (target.Resolve(taskId) is { } t)
-                        target.Apply(t with { StatusName = previousStatus }, sending: false); // revert
+                        // Revert name AND colour: the optimistic apply moved both.
+                        target.Apply(t with { StatusName = previousStatus, StatusColor = previousColor },
+                            sending: false);
                     ReconcileScreenStatus(screen, previousStatus);
                     ReflectDetailStatus(reflect, previousStatus, previousColor);
                     flash($"Could not set status: {ErrorText.Short(ex)}");
@@ -467,7 +506,7 @@ public sealed class QuickUpdatesCoordinator(
             flash("This task is no longer in the list — priority unchanged.");
             return;
         }
-        var gen = ++_priorityCommitGen;
+        var gen = NextGen(_priorityCommitGen, taskId);
         var previousLevel = task.PriorityLevel;
 
         ReconcileScreenPriority(screen, level); // optimistic ✓
@@ -482,8 +521,8 @@ public sealed class QuickUpdatesCoordinator(
                 var confirmed = await tasks.SetPriorityAsync(taskId, level);
                 Application.Invoke(() =>
                 {
-                    if (gen != _priorityCommitGen)
-                        return; // a newer priority commit superseded this one
+                    if (!IsCurrentGen(_priorityCommitGen, taskId, gen))
+                        return; // a newer priority commit for this task superseded it
                     if (target.Resolve(taskId) is { } t)
                         target.Apply(WithPriority(t, confirmed), sending: false);
                     ReconcileScreenPriority(screen, confirmed);
@@ -495,7 +534,7 @@ public sealed class QuickUpdatesCoordinator(
             {
                 Application.Invoke(() =>
                 {
-                    if (gen != _priorityCommitGen)
+                    if (!IsCurrentGen(_priorityCommitGen, taskId, gen))
                         return;
                     if (target.Resolve(taskId) is { } t)
                         target.Apply(WithPriority(t, previousLevel), sending: false); // revert

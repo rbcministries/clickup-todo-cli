@@ -25,8 +25,10 @@ Four legs, each its own boot:
     load-bearing negative assertion is that "no longer in the list" never appears: that is the exact
     dead-end #297 removed, and the one a snapshot-bound write path would hit here.
   Leg C (tree targeting, single-task): on the Task Tree tab with CHILDTWO highlighted, Ctrl+U opens
-    Quick Updates for *that* task — the title names CHILDTWO, not ROOT — it commits, and the detail
-    header still shows ROOT (a tree row for another task must not repaint this header).
+    Quick Updates for *that* task — the title names CHILDTWO, not ROOT — the commit repaints CHILDTWO's
+    own tree-row badge (`(IP)` → `(C )`/`(IR)`) and no sibling's, and the launch task's header STATUS
+    (not just its title) is unchanged: a tree row for another task must not repaint this header, and the
+    tree loads once per screen so a missed row repaint would never self-heal.
   Leg D (tree targeting, dashboard parity): the same gesture in the dashboard host (no E2E_SINGLE_TASK)
     also names CHILDTWO. The tree-tab targeting lives in TaskDetailScreen, so both hosts share it —
     this leg is what pins that they can't drift.
@@ -156,6 +158,25 @@ def open_quick_updates(s, name):
     return v
 
 
+def header_status(s):
+    """The status shown on the detail HEADER line (`Release task ROOT  ○ in progress`) — the surface a
+    tree-targeted commit must not repaint. The tree rows carry `(IP)`-style abbreviation chips, not the
+    `○` text badge, so the glyph identifies the header unambiguously."""
+    for y in range(0, 8):
+        line = s.screen.display[y]
+        if "○" in line:
+            return line[line.index("○"):].strip("│ ").strip()
+    return None
+
+
+def tree_row(s, name):
+    """The rendered Task Tree row containing `name` (rows read `t0c2 (IP)   Subtask two CHILDTWO  · …`)."""
+    for y in range(ROWS):
+        if name in s.screen.display[y]:
+            return s.screen.display[y]
+    return None
+
+
 def assert_no_snapshot_deadend(s, what):
     """#297's dead-end: with the old snapshot-bound write path a commit with no `_all` present reported
     "This task is no longer in the list" and changed nothing."""
@@ -239,11 +260,19 @@ def run_tree_targets_the_highlighted_node():
             s.send(DOWN, 0.2)
         assert CHILDTWO_NAME in s.visible(), f"CHILDTWO row not present to target:\n{s.visible()}"
 
+        # Both surfaces the commit must (and must not) move, captured before it lands. The fixture serves
+        # every node as "in progress", so both read `(IP)` / `○ in progress` up front.
+        before_header = header_status(s)
+        assert before_header is not None, f"could not find the detail header's status line:\n{s.visible()}"
+        assert "in progress" in before_header, f"unexpected seeded header status: {before_header!r}"
+        assert "(IP)" in (tree_row(s, CHILDTWO_NAME) or ""), \
+            f"unexpected seeded badge on the CHILDTWO row:\n{tree_row(s, CHILDTWO_NAME)!r}"
+
         v = open_quick_updates(s, CHILDTWO_NAME)
         assert qu_title(ROOT_NAME) not in v, \
             f"Ctrl+U on the tree tab targeted the open task instead of the highlighted node:\n{v}"
 
-        for _ in range(5):
+        for _ in range(5):            # clamps on the last Status row, "complete"
             s.send(DOWN, 0.3)
         s.send(ENTER, 0.4)
         assert s.wait_for("Set status to"), \
@@ -253,9 +282,28 @@ def run_tree_targets_the_highlighted_node():
         s.send(ESC, 2.0)
         v = s.visible()
         assert qu_title(CHILDTWO_NAME) not in v, f"Esc did not close Quick Updates:\n{v}"
-        # The header follows the launch task, which we did not target — it must be untouched.
-        assert ROOT_NAME in v, f"a tree-targeted commit wrongly changed the detail header:\n{v}"
-        print("ok — Task Tree Ctrl+U targets the highlighted node and commits, header untouched")
+
+        # The targeted node's own row was repainted — the whole point of the reflecting write target,
+        # since the tree loads once per screen and never re-fetches. "complete" abbreviates to `(C )`
+        # (the optimistic value) and the backend's canned echo "in review" to `(IR)`; either proves the
+        # row followed the commit, and `(IP)` alone proves it did not.
+        row = tree_row(s, CHILDTWO_NAME)
+        assert row is not None, f"the CHILDTWO row vanished after the commit:\n{v}"
+        assert "(IP)" not in row, f"the targeted tree row was never repainted by the commit:\n{row!r}"
+        assert "(C )" in row or "(IR)" in row, f"unexpected badge on the repainted row:\n{row!r}"
+        # Its siblings are untouched — the reflection is one row, not a re-render of the tree.
+        assert "(IP)" in (tree_row(s, "CHILDONE") or ""), \
+            f"a sibling row was wrongly repainted:\n{tree_row(s, 'CHILDONE')!r}"
+
+        # And the header — which follows the LAUNCH task, not the targeted node — did not move. Asserting
+        # the status text, not just the title: a `reflect` passed unconditionally would repaint the status
+        # here while leaving the title alone, which a title-only assertion could never catch.
+        assert ROOT_NAME in v, f"the detail header lost the launch task's title:\n{v}"
+        after_header = header_status(s)
+        assert after_header == before_header, \
+            f"a tree-targeted commit repainted the launch task's header status: " \
+            f"{before_header!r} -> {after_header!r}"
+        print("ok — Task Tree Ctrl+U targets the highlighted node, repaints its row, header untouched")
     finally:
         s.close()
 

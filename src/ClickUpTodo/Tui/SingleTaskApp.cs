@@ -400,11 +400,12 @@ public sealed class SingleTaskApp
         // and reflects it across the root and every stacked child so the visited-task chain stays in step.
         screen.CycleBadgeDisplayRequested += (_, _) => CycleTreeBadgeDisplay(tab.Screen);
         // F2 on the Task Tree tab (H, #545) renames the highlighted node's task — the single-task
-        // counterpart of the dashboard's ShowTreeRename/ApplyTreeRename (#605), now wired in single-task
-        // mode too (#604). Unlike Quick Updates (still deferred above), rename is a snapshot-free write
-        // straight through the SetTaskNameAsync facade (slice E, #592) — it doesn't depend on #297's
-        // working-set decoupling — so it's admitted as the low-risk exception #604 decided on. Keyed to
-        // this tab so a task opened by walking the tree (#374) renames its own node.
+        // counterpart of the dashboard's ShowTreeRename/ApplyTreeRename (#605), wired in single-task mode
+        // by #604 as the low-risk exception while Quick Updates was still deferred: rename is a
+        // snapshot-free write straight through the SetTaskNameAsync facade (slice E, #592), so it never
+        // needed #297's working-set decoupling. Quick Updates has since been wired too (above), so both
+        // tree-row chords now write. Keyed to this tab so a task opened by walking the tree (#374) renames
+        // its own node.
         screen.RenameTreeTaskRequested += (_, req) => ShowTreeRename(tab, req);
         // Ctrl+Enter opens this tab's task in its own terminal tab (#435) — the single-task counterpart of
         // the dashboard's #384 gesture, reusing the exact launcher + copy-command fallback. Since #374 gave
@@ -840,6 +841,14 @@ public sealed class SingleTaskApp
 
         var taskId = tab.TaskId;
         Flash("Loading task…");
+        // Warm the statuses concurrently rather than letting the coordinator's cold path fetch them after
+        // this one returns: single-task mode runs no status prefetch, so TryGetCachedStatuses always misses
+        // on a first Ctrl+U and the two GETs would otherwise queue up serially in front of the pane. The
+        // list id is already on the loaded detail, so nothing has to be resolved first. Best-effort — a
+        // failed warm just leaves the coordinator to fetch as before.
+        if (tab.Task.ListId is { Length: > 0 } listId)
+            _ = _tasks.PrefetchStatusesAsync([listId]);
+
         _ = Task.Run(async () =>
         {
             try
@@ -861,13 +870,12 @@ public sealed class SingleTaskApp
     /// that task's Task Tree row (a no-op when the tree tab hasn't loaded). The detail header is reflected
     /// only when the target <em>is</em> this tab's task: a tree row for another task must not repaint this
     /// header, and its memberships must not seed the List pane (the coordinator enriches those instead).
-    /// Runs on the UI thread; re-checks the tab is still front-most because the non-tree path awaits a fetch.
+    /// Runs on the UI thread. The front-most re-check the non-tree path needs after its fetch is the
+    /// coordinator's own (<see cref="QuickUpdatesCoordinator.Open"/> guards on the origin), so it isn't
+    /// repeated here.
     /// </summary>
     private void ShowQuickUpdates(DetailTab tab, TaskItem task)
     {
-        if (!ReferenceEquals(ActiveScreen, tab.Screen))
-            return;
-
         var target = new ReflectingQuickUpdateTarget(
             new SingleTaskUpdateTarget(task), tab.Screen.ApplyTreeTaskFields);
         var reflect = string.Equals(task.Id, tab.TaskId, StringComparison.Ordinal) ? tab.Screen : null;

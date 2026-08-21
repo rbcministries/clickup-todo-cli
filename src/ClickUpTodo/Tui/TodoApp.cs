@@ -2733,9 +2733,17 @@ public sealed class TodoApp
 
         var detail = detailScreen.Task;
         var node = request.TreeTask;
-        var task = _all.FirstOrDefault(t => t.Id == (node?.Id ?? detail.Id))
-            ?? node
-            ?? TaskItemProjection.FromDetail(detail);
+        var targetId = node?.Id ?? detail.Id;
+        // Resolve the seed the same way the write target below resolves its record — snapshot first, then
+        // the visible rows (QuickUpdatesTaskById), so a foreign subtask (#70/#179) or context parent (#46),
+        // which live in `_rows` but not `_all`, is seeded from its authoritative row rather than from the
+        // detail. That matters because a detail projection is lossy exactly where this screen writes:
+        // TaskItemProjection.FromDetail gives assignees a placeholder id of 0 (a TaskDetail carries names
+        // only), so an Assignees-pane remove seeded from one would issue a remove for id 0. A tree row is
+        // itself a fetched TaskItem, so it is the next-best seed; the projection is the last resort (a
+        // feed-opened task, #115, which has no authoritative record in hand).
+        var authoritative = QuickUpdatesTaskById(targetId) ?? node;
+        var task = authoritative ?? TaskItemProjection.FromDetail(detail);
 
         // Decouple the write path from `_all` (#297): if the target task has a row/snapshot entry the
         // list target repaints it (unchanged behaviour); otherwise — a feed-opened task (#115), a Task
@@ -2745,15 +2753,20 @@ public sealed class TodoApp
         // Frozen here, before the coordinator's cold-path status fetch: if an absent task materialised in
         // `_all` during that await it would commit against the single-task target and not repaint the
         // now-present row — benign (the write still lands; the next background refresh reconciles it).
-        var target = QuickUpdatesTaskById(task.Id) is not null
+        IQuickUpdateTarget target = QuickUpdatesTaskById(task.Id) is not null
             ? ListTarget
             : new SingleTaskUpdateTarget(task);
 
         // Every commit from a detail also repaints the target's own Task Tree row (badges included), so a
         // status or priority set from the tree is visible where the user set it — the row counterpart of
-        // the detail-header reflection below. Folds the three fields onto the row, and no-ops when the
+        // the detail-header reflection below. Folds the committed fields onto the row, and no-ops when the
         // tree tab hasn't been opened (its rows aren't loaded) or doesn't hold the id.
-        target = new ReflectingQuickUpdateTarget(target, detailScreen.ApplyTreeTaskFields);
+        // Skipped for a projected seed: the fold re-applies assignees, so reflecting a projection's
+        // placeholder id-0 assignees would degrade a tree row that holds the real ids (its rows come from
+        // GetTaskItemAsync) — and the tree loads once per screen, so it would never self-heal. Such a task
+        // has no tree-tab presence worth repainting anyway; its row keeps the pre-commit values, as before.
+        if (authoritative is not null)
+            target = new ReflectingQuickUpdateTarget(target, detailScreen.ApplyTreeTaskFields);
 
         // Reflect committed values onto the detail only when the target IS the task that detail shows
         // (#159) — a tree row for another task must not repaint this header (and its memberships must not
