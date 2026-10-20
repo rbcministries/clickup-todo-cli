@@ -814,21 +814,8 @@ public sealed class TodoApp
     /// the user can open the task at <paramref name="destination"/> themselves. <paramref name="reason"/>
     /// names the failure when the launch threw (vs. simply finding no emulator).</summary>
     private void FlashLaunchFallback(AppLaunchCommand command, LaunchLocation destination, string? reason = null)
-        => Flash(AppHostLaunch.Fallback(command, destination, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+        => Flash(AppHostLaunch.Fallback(command, destination, ClipboardText.TryCopy(command.ToDisplayCommand()), reason));
 
-    /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard just yields
-    /// false so the caller shows the run-it-yourself form instead.</summary>
-    private static bool TryCopyToClipboard(string text)
-    {
-        try
-        {
-            return Clipboard.TrySetClipboardData(text);
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
 
     /// <summary>F6 — cycles how Status/Priority badges render (icons → text → hidden → icons), persists
     /// the choice, and re-renders. A pure display toggle: it re-decorates the same rows, so it keeps the
@@ -2455,6 +2442,8 @@ public sealed class TodoApp
                     // the task's current url/name (a mid-view refresh may have renamed it), mirroring the
                     // OpenInNewTabRequested sibling above.
                     screen.OpenBrowserRequested += (_, _) => OnDetailOpenBrowser(screen);
+                    screen.CopyUrlRequested += (_, _) =>
+                        Flash(ClipboardText.CopyTaskUrl(screen.Task.Url, _config.WorkspaceSubdomain, ClipboardText.TryCopy));
                     ShowScreen(screen);
                 });
             }

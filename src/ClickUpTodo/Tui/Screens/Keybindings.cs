@@ -69,6 +69,7 @@ public enum KeyAction
     QuickUpdate,
     Feed,
     OpenInBrowser,
+    CopyTaskUrl,
     ToggleCompleted,
     Open,
 
@@ -222,6 +223,8 @@ public static class Keybindings
             [(ScreenContext.Detail, KeyAction.ToggleCustomField)] = "Space",
             [(ScreenContext.Detail, KeyAction.EditCustomField)] = "Enter",
             [(ScreenContext.Detail, KeyAction.OpenInBrowser)] = "Ctrl+B",
+            // Ctrl+H was the ask but is ^H (Backspace) on many Unix terminals; Ctrl+K has no terminal alias.
+            [(ScreenContext.Detail, KeyAction.CopyTaskUrl)] = "Ctrl+K",
             [(ScreenContext.Detail, KeyAction.QuickUpdate)] = "Ctrl+U",
             [(ScreenContext.Detail, KeyAction.Refresh)] = "F5",
             [(ScreenContext.Detail, KeyAction.Help)] = "F1",
@@ -378,7 +381,7 @@ public static class Keybindings
     // vs DeleteChecklistItem) or are physically scoped to one tab (the checklist chords, already guarded to
     // the Checklists ListView in
     // TaskDetailScreen). Context-wide Detail actions (DispatchToClaude, ReplyToComment, EditDescription,
-    // OpenInBrowser, QuickUpdate, Refresh, Help, Back) resolve unconditionally and are folded in by
+    // OpenInBrowser, CopyTaskUrl, QuickUpdate, Refresh, Help, Back) resolve unconditionally and are folded in by
     // DetailBindings rather than repeated per tab.
     private static readonly IReadOnlyList<KeyAction> DetailContextWideActions =
     [
@@ -386,6 +389,7 @@ public static class Keybindings
         KeyAction.ReplyToComment,
         KeyAction.EditDescription,
         KeyAction.OpenInBrowser,
+        KeyAction.CopyTaskUrl,
         KeyAction.QuickUpdate,
         KeyAction.Refresh,
         KeyAction.Help,
