@@ -369,6 +369,8 @@ public sealed class SingleTaskApp
 
         // F5 / Ctrl+R and the screen's own 30s tick ask for fresh data — refetch just this tab's task.
         screen.RefreshRequested += (_, _) => RefreshTab(tab);
+        screen.CopyUrlRequested += (_, _) =>
+            Flash(ClipboardText.CopyTaskUrl(tab.Task.Url, _config.WorkspaceSubdomain, ClipboardText.TryCopy));
         // Quick Updates stays deferred in single-task mode: it needs sub-issue (5) #297 to decouple its
         // write path from the dashboard's working-set snapshot. Flash rather than silently no-op so the
         // gap is legible.
@@ -956,21 +958,8 @@ public sealed class SingleTaskApp
     /// <paramref name="reason"/> names the failure when the launch threw (vs. simply finding no emulator to
     /// launch).</summary>
     private void FlashLaunchFallback(AppLaunchCommand command, LaunchLocation destination, string? reason = null)
-        => Flash(AppHostLaunch.Fallback(command, destination, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+        => Flash(AppHostLaunch.Fallback(command, destination, ClipboardText.TryCopy(command.ToDisplayCommand()), reason));
 
-    /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard yields false
-    /// so the caller shows the run-it-yourself form instead (mirrors TodoApp).</summary>
-    private static bool TryCopyToClipboard(string text)
-    {
-        try
-        {
-            return Clipboard.TrySetClipboardData(text);
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
 
     // ── Quick-open (Ctrl+O, C #616 — epic #613) ───────────────────────────────
 

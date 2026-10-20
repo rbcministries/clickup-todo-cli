@@ -441,21 +441,8 @@ public sealed class FeedApp
     /// <summary>The no-terminal fallback (#301): flash the exact relaunch command and copy it to the
     /// clipboard so the user can open the task tab themselves.</summary>
     private void FlashLaunchFallback(AppLaunchCommand command, string? reason = null)
-        => Flash(AppHostLaunch.Fallback(command, LaunchLocation.NewTab, TryCopyToClipboard(command.ToDisplayCommand()), reason));
+        => Flash(AppHostLaunch.Fallback(command, LaunchLocation.NewTab, ClipboardText.TryCopy(command.ToDisplayCommand()), reason));
 
-    /// <summary>Best-effort clipboard copy for the fallback; a headless/unsupported clipboard yields false
-    /// so the caller shows the run-it-yourself form instead (mirrors the other hosts).</summary>
-    private static bool TryCopyToClipboard(string text)
-    {
-        try
-        {
-            return Clipboard.TrySetClipboardData(text);
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
 
     // ── Help overlay (F1) ─────────────────────────────────────────────────────
 

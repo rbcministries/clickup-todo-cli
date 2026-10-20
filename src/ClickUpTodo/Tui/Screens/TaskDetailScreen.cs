@@ -530,6 +530,10 @@ public sealed class TaskDetailScreen : Screen
     /// </summary>
     public event EventHandler? OpenBrowserRequested;
 
+    /// <summary>Raised on Ctrl+K to copy the task's URL; the host owns the subdomain rewrite and the
+    /// clipboard write, like <see cref="OpenBrowserRequested"/>.</summary>
+    public event EventHandler? CopyUrlRequested;
+
     /// <summary>
     /// Lets the host close this detail view (#518). Ctrl+B's "open browser + close" mode is a host
     /// decision (it reads the <see cref="OpenBrowserBehavior"/> setting and the view's root-ness), so —
@@ -1788,6 +1792,13 @@ public sealed class TaskDetailScreen : Screen
         {
             key.Handled = true;
             OpenBrowserRequested?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        if (key.IsCtrl && (key.KeyCode & ~KeyCode.CtrlMask) == KeyCode.K)
+        {
+            key.Handled = true;
+            CopyUrlRequested?.Invoke(this, EventArgs.Empty);
             return;
         }
 
