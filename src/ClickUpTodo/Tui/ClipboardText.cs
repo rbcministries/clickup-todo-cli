@@ -1,6 +1,10 @@
 using ClickUpTodo.Services;
 using Terminal.Gui.App;
 
+// The static Clipboard is obsolete in favour of IApplication.Clipboard, but this app runs on the legacy static
+// Application model (see the same suppression in TodoApp / SingleTaskApp / FeedApp), so silence CS0618 here.
+#pragma warning disable CS0618
+
 namespace ClickUpTodo.Tui;
 
 /// <summary>Best-effort clipboard writes shared by the hosts: the launch-command fallback (#301) and the
