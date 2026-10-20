@@ -310,6 +310,37 @@ timeout 120 python3 -u tests/ClickUpTodo.Tui.E2E/single_task_quick_open_check.py
 Expected: `ok — Ctrl+O opens the surface in single-task mode; Esc cancels; OpenHere navigates + Esc walks
 back; the New tab button reaches the launch terminus`.
 
+**`single_task_quickupdates_check.py`** — Quick Updates in single-task launch mode + its Task Tree tab
+targeting (#297 follow-up): single-task mode used to answer `Ctrl+U` with a deferral flash ("Quick Updates
+isn't available in single-task mode yet (tracked on #297)") because the write path was entangled with the
+dashboard's working-set snapshot; the host now drives the same shared `QuickUpdatesCoordinator` the
+dashboard does. Four legs, each its own boot (`E2E_SINGLE_TASK=t0` + `E2E_TREE=1` for the first three):
+
+- **A** — `Ctrl+U` opens Quick Updates *titled with the launch task* (the title is what pins which task a
+  launch resolved to), and `Esc` pops back to the detail without reaching the exit confirmation.
+- **B** — Status **and** Priority commit with no list snapshot present: the screen stays open (#207) and
+  the footer reports a confirmed value. The load-bearing negative assertion is that
+  "no longer in the list" never appears — the exact dead-end #297 removed, and the one a snapshot-bound
+  write path hits here. (The Priority leg moves **up** from the preselected "(no priority)" row, since an
+  unchanged commit is dropped with "Priority unchanged.")
+- **C** — on the Task Tree tab with `CHILDTWO` highlighted, `Ctrl+U` targets *that* node (title names
+  CHILDTWO, not ROOT), commits, and leaves the detail header on ROOT.
+- **D** — the same gesture in the **dashboard** host (no `E2E_SINGLE_TASK`) also names CHILDTWO: the
+  tree-tab targeting lives in `TaskDetailScreen`, so this leg is what pins that the two hosts can't drift.
+
+```bash
+timeout 400 python3 -u tests/ClickUpTodo.Tui.E2E/single_task_quickupdates_check.py $DLL
+```
+
+Self-contained (sets its own env). Expected: four `ok —` lines then `SINGLE-TASK QUICK UPDATES E2E: PASS`.
+Verified to fail on the pre-change build: leg A on the deferral flash, and leg D because the dashboard
+titled the screen with the open task instead of the highlighted node. `IQuickUpdateTarget` /
+`SingleTaskUpdateTarget` / `ReflectingQuickUpdateTarget` and the coordinator's pure helpers are pinned by
+unit tests in CI; this is the rendered proof the hosts wire them. The dashboard halves are
+`quickupdates_check.py` / `qu_from_detail_check.py` / `qu_assignees_check.py` / `qu_lists_check.py` /
+`qu_click_check.py` / `foreign_quickupdates_check.py`, all of which stay green (the coordinator lift is
+behaviour-preserving for the list and detail origins).
+
 **`other_tab_check.py`** — Task Detail **Other** tab custom-field row model (#587 §2): with
 `E2E_TASK_CUSTOM_FIELDS=1` (`DetailCustomFieldsScenario` splices a seeded `custom_fields` array — a
 checkbox / short_text / drop_down / formula — into the detail read), opens a task's detail, cycles to the

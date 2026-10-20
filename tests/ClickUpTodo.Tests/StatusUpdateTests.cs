@@ -10,14 +10,15 @@ namespace ClickUpTodo.Tests;
 /// </summary>
 public sealed class StatusUpdateTests
 {
-    private static TaskItem Task(string id, string? status) => new() { Id = id, Name = id, StatusName = status };
+    private static TaskItem Task(string id, string? status, string? color = null)
+        => new() { Id = id, Name = id, StatusName = status, StatusColor = color };
 
     [Fact]
     public void ApplyStatusChange_UpdatesOnlyTheMatchingTask()
     {
         TaskItem[] tasks = [Task("1", "to do"), Task("2", "to do"), Task("3", "to do")];
 
-        var updated = TaskService.ApplyStatusChange(tasks, "2", "in progress");
+        var updated = TaskService.ApplyStatusChange(tasks, "2", "in progress", "#4194f6");
 
         Assert.Equal("to do", updated[0].StatusName);
         Assert.Equal("in progress", updated[1].StatusName);
@@ -25,11 +26,36 @@ public sealed class StatusUpdateTests
     }
 
     [Fact]
+    public void ApplyStatusChange_CarriesTheColourWithTheName()
+    {
+        // Name and colour are one value to every renderer: a badge showing the new status name in the
+        // old status's colour is wrong, and the Task Tree tab (loaded once per screen) never gets a
+        // background repaint to correct it.
+        TaskItem[] tasks = [Task("1", "in progress", "#4194f6")];
+
+        var updated = TaskService.ApplyStatusChange(tasks, "1", "complete", "#6bc950");
+
+        Assert.Equal("complete", updated[0].StatusName);
+        Assert.Equal("#6bc950", updated[0].StatusColor);
+    }
+
+    [Fact]
+    public void ApplyStatusChange_ClearsTheColour_WhenTheCommittedStatusHasNone()
+    {
+        TaskItem[] tasks = [Task("1", "in progress", "#4194f6")];
+
+        var updated = TaskService.ApplyStatusChange(tasks, "1", "shipped", null);
+
+        Assert.Equal("shipped", updated[0].StatusName);
+        Assert.Null(updated[0].StatusColor);
+    }
+
+    [Fact]
     public void ApplyStatusChange_PreservesOrderAndCount()
     {
         TaskItem[] tasks = [Task("a", "x"), Task("b", "y"), Task("c", "z")];
 
-        var updated = TaskService.ApplyStatusChange(tasks, "b", "done");
+        var updated = TaskService.ApplyStatusChange(tasks, "b", "done", null);
 
         Assert.Equal(["a", "b", "c"], updated.Select(t => t.Id));
     }
@@ -40,7 +66,7 @@ public sealed class StatusUpdateTests
         var original = Task("1", "to do");
         TaskItem[] tasks = [original];
 
-        var updated = TaskService.ApplyStatusChange(tasks, "1", "complete");
+        var updated = TaskService.ApplyStatusChange(tasks, "1", "complete", "#6bc950");
 
         Assert.Equal("to do", original.StatusName);          // input record untouched
         Assert.NotSame(original, updated[0]);                // a new record was produced
@@ -52,7 +78,7 @@ public sealed class StatusUpdateTests
     {
         TaskItem[] tasks = [Task("1", "to do"), Task("2", "in progress")];
 
-        var updated = TaskService.ApplyStatusChange(tasks, "missing", "done");
+        var updated = TaskService.ApplyStatusChange(tasks, "missing", "done", "#6bc950");
 
         Assert.Equal(["to do", "in progress"], updated.Select(t => t.StatusName));
     }
@@ -62,7 +88,7 @@ public sealed class StatusUpdateTests
     {
         TaskItem[] tasks = [Task("1", "to do")];
 
-        var updated = TaskService.ApplyStatusChange(tasks, "1", null);
+        var updated = TaskService.ApplyStatusChange(tasks, "1", null, null);
 
         Assert.Null(updated[0].StatusName);
     }

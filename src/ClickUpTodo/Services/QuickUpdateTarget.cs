@@ -55,3 +55,31 @@ public sealed class SingleTaskUpdateTarget(TaskItem task) : IQuickUpdateTarget
         _task = TaskService.ApplyFieldChanges([_task], updated)[0];
     }
 }
+
+/// <summary>
+/// An <see cref="IQuickUpdateTarget"/> that forwards to an <paramref name="inner"/> target and
+/// additionally hands the <b>settled</b> record to <paramref name="reflect"/> — one more surface to
+/// repaint on top of whatever the inner target already does. The case it exists for: Quick Updates
+/// launched from the Task Tree tab applies to the highlighted node's task, so that node's own tree row
+/// has to follow the commit (badges included), whether the inner target is the main-list snapshot or a
+/// <see cref="SingleTaskUpdateTarget"/>.
+/// <para>
+/// The reflected record is read back from the inner target <em>after</em> the apply, so it carries the
+/// inner reconcile's fold rather than the caller's pre-fold argument. Every apply is reflected — the
+/// optimistic one, the server-confirmed one, and the revert — so a failed write puts the extra surface
+/// back. A task the inner target can't resolve reflects nothing (the inner apply was a no-op too).
+/// Pure glue: the reflection callback is the host's, and like the rest of the seam this is UI-thread-only.
+/// </para>
+/// </summary>
+public sealed class ReflectingQuickUpdateTarget(IQuickUpdateTarget inner, Action<TaskItem> reflect)
+    : IQuickUpdateTarget
+{
+    public TaskItem? Resolve(string taskId) => inner.Resolve(taskId);
+
+    public void Apply(TaskItem updated, bool sending)
+    {
+        inner.Apply(updated, sending);
+        if (inner.Resolve(updated.Id) is { } settled)
+            reflect(settled);
+    }
+}

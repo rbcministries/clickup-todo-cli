@@ -917,11 +917,22 @@ public sealed class TaskService(
 
     /// <summary>
     /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying
-    /// <paramref name="newStatus"/>, leaving every other task and the overall order untouched. Pure
-    /// (the input list is not mutated) so the TUI can update one record in place without a reload.
+    /// <paramref name="newStatus"/> and its <paramref name="newColor"/>, leaving every other task and the
+    /// overall order untouched. Pure (the input list is not mutated) so the TUI can update one record in
+    /// place without a reload.
+    /// <para>
+    /// The colour travels <em>with</em> the name because the two are one value to every renderer: a badge
+    /// showing a new status name in the old status's colour is simply wrong, and the surfaces that fold a
+    /// commit in place don't all get a second chance to correct it — the Task Detail Task Tree tab loads
+    /// once per screen (no background re-fetch), so a stale colour there would persist for the life of
+    /// that view rather than being repainted by the next poll.
+    /// </para>
     /// </summary>
-    public static IReadOnlyList<TaskItem> ApplyStatusChange(IReadOnlyList<TaskItem> tasks, string taskId, string? newStatus)
-        => tasks.Select(t => t.Id == taskId ? t with { StatusName = newStatus } : t).ToList();
+    public static IReadOnlyList<TaskItem> ApplyStatusChange(
+        IReadOnlyList<TaskItem> tasks, string taskId, string? newStatus, string? newColor)
+        => tasks.Select(t => t.Id == taskId
+            ? t with { StatusName = newStatus, StatusColor = newColor }
+            : t).ToList();
 
     /// <summary>
     /// Returns a new snapshot with the task identified by <paramref name="taskId"/> carrying the given
@@ -1022,10 +1033,13 @@ public sealed class TaskService(
     /// The <paramref name="updated"/> record always carries the current value for the fields the caller
     /// didn't touch, so applying all three never clobbers — a status/priority commit re-applies the
     /// task's existing assignees (a no-op) and an assignee change re-applies its status/priority (#158).
+    /// Status folds <em>name and colour</em> together (see <see cref="ApplyStatusChange"/>), so a caller
+    /// that resolved the committed status's colour reflects a correctly-coloured badge; one that didn't
+    /// re-applies the record's existing colour, a no-op as with every other untouched field.
     /// </summary>
     public static IReadOnlyList<TaskItem> ApplyFieldChanges(IReadOnlyList<TaskItem> tasks, TaskItem updated)
     {
-        tasks = ApplyStatusChange(tasks, updated.Id, updated.StatusName);
+        tasks = ApplyStatusChange(tasks, updated.Id, updated.StatusName, updated.StatusColor);
         tasks = ApplyPriorityChange(
             tasks, updated.Id, updated.PriorityLevel, updated.PriorityName, updated.PriorityColor);
         return ApplyAssigneesChange(tasks, updated.Id, updated.Assignees);
